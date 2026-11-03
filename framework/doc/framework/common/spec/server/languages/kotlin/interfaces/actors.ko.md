@@ -60,6 +60,10 @@ Stale attempt cancellation은 terminal result를 commit하지 못한다. 두 cal
 
 ## Kotlin source signature
 
+`ZLinkSuspendingActor`는 Java Actor callback을 같은 Actor turn에서 coroutine으로 실행한다.
+`onDuplicateBindSuspending`는 결과가 `null` 또는 빈 문자열이면 받아들이고, 비어 있지 않은 문자열이면
+그 내용을 거부 메시지로 반환한다.
+
 ```kotlin
 interface ZLinkSuspendingEntrySpotActorSendHandler<
  TEntrySpot : ZLinkEntrySpot<*>, TActor : ZLinkActor, TMessage,
@@ -119,6 +123,18 @@ abstract class ZLinkSuspendingActor : ZLinkActor {
  abstract suspend fun onJoinCompletedSuspending(
  completion: ZLinkActorJoinCompletion,
  )
+
+ final override fun onDuplicateBind(
+ current: ZLinkSessionBindingIdentity,
+ incoming: ZLinkSessionBindingIdentity,
+ cancellation: ZLinkActorCallbackCancellation,
+ ): CompletionStage<Optional<String>>
+
+ open suspend fun onDuplicateBindSuspending(
+ current: ZLinkSessionBindingIdentity,
+ incoming: ZLinkSessionBindingIdentity,
+ cancellation: ZLinkActorCallbackCancellation,
+ ): String? = null
 }
 
 abstract class ZLinkSuspendingActorFactory : ZLinkActorFactory {
@@ -182,6 +198,8 @@ public abstract class systems.zlink.framework.kotlin.ZLinkSuspendingActor implem
  public final systems.zlink.framework.actors.ZLinkActorContext context();
  public final java.util.concurrent.CompletionStage<java.lang.Void> onJoinCompleted(systems.zlink.framework.actors.ZLinkActorJoinCompletion);
  public abstract java.lang.Object onJoinCompletedSuspending(systems.zlink.framework.actors.ZLinkActorJoinCompletion, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+ public final java.util.concurrent.CompletionStage<java.util.Optional<java.lang.String>> onDuplicateBind(systems.zlink.framework.actors.ZLinkSessionBindingIdentity, systems.zlink.framework.actors.ZLinkSessionBindingIdentity, systems.zlink.framework.actors.ZLinkActorCallbackCancellation);
+ public java.lang.Object onDuplicateBindSuspending(systems.zlink.framework.actors.ZLinkSessionBindingIdentity, systems.zlink.framework.actors.ZLinkSessionBindingIdentity, systems.zlink.framework.actors.ZLinkActorCallbackCancellation, kotlin.coroutines.Continuation<? super java.lang.String>);
 }
 public interface systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpotActorSendHandler<TEntrySpot extends systems.zlink.framework.spots.ZLinkEntrySpot<?>, TActor extends systems.zlink.framework.actors.ZLinkActor, TMessage> {
  public abstract java.lang.Object handle(TEntrySpot, TActor, systems.zlink.framework.ZLinkMessageContext, TMessage, kotlin.coroutines.Continuation<? super kotlin.Unit>);

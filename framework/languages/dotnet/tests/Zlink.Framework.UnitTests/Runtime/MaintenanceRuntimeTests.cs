@@ -1,3 +1,5 @@
+using Systems.Zlink.Stream.Connector.Runtime.Protocol;
+using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
@@ -280,6 +282,66 @@ public sealed class MaintenanceRuntimeTests
         Assert.Equal(ZLinkFrameworkRuntimeState.Relocated, fixture.Runtime.Status.State);
         Assert.Null(fixture.Runtime.Status.TerminationResult);
         Assert.Equal(ZLinkFrameworkLifecycleIntent.Relocate, fixture.Executor.Intent);
+    }
+
+    [Fact]
+    public async Task Planned_maintenance_cutover_keeps_the_admission_flow_after_detach()
+    {
+        const string flowId = "0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d";
+        string? observedFlowId = null;
+        using var fixture = Create(
+            (_, _, _) =>
+            {
+                observedFlowId = ZLinkFlowContext.Current?.FlowId;
+                return ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null);
+            },
+            flowCaptureEnabled: static () => true
+        );
+        fixture.Runtime.MarkServing();
+        fixture.Executor.Complete.TrySetResult(null);
+
+        Task<ZLinkFrameworkRelocationResult> relocation;
+        using (ZLinkFlowContext.EnterExisting(flowId, ZLinkFlowOrigin.Application))
+        {
+            relocation = fixture
+                .Runtime.RelocateAsync(
+                    new ZLinkFrameworkRelocationOptions
+                    {
+                        Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+                    }
+                )
+                .AsTask();
+        }
+
+        await relocation;
+
+        Assert.Equal(flowId, observedFlowId);
+    }
+
+    [Fact]
+    public async Task Planned_maintenance_cutover_does_not_propagate_flow_when_capture_is_off()
+    {
+        const string flowId = "0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d";
+        string? observedFlowId = flowId;
+        using var fixture = Create(
+            (_, _, _) =>
+            {
+                observedFlowId = ZLinkFlowContext.Current?.FlowId;
+                return ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null);
+            }
+        );
+        fixture.Runtime.MarkServing();
+        fixture.Executor.Complete.TrySetResult(null);
+
+        using (ZLinkFlowContext.EnterExisting(flowId, ZLinkFlowOrigin.Application))
+            await fixture.Runtime.RelocateAsync(
+                new ZLinkFrameworkRelocationOptions
+                {
+                    Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+                }
+            );
+
+        Assert.Null(observedFlowId);
     }
 
     [Fact]
@@ -846,7 +908,8 @@ public sealed class MaintenanceRuntimeTests
             CancellationToken,
             ValueTask<ZLinkFrameworkRelocationReason?>
         >? preflight = null,
-        long sourceApplicationVersion = 0
+        long sourceApplicationVersion = 0,
+        Func<bool>? flowCaptureEnabled = null
     )
     {
         var executor = new MaintenanceExecutor();
@@ -861,7 +924,8 @@ public sealed class MaintenanceRuntimeTests
                 ),
             static _ => ValueTask.FromResult(true),
             static (_, _) => throw new NotSupportedException(),
-            sourceApplicationVersion
+            sourceApplicationVersion,
+            flowCaptureEnabled: flowCaptureEnabled
         );
         return new Fixture(runtime, drain, executor);
     }

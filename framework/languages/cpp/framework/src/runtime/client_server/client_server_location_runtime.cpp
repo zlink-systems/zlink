@@ -425,7 +425,7 @@ client_server_location_runtime_t::snapshot_source_locked (const std::string &cha
                                      "ClientServer channel is not configured: " + channel_name);
 
     source.role = local_role (*configured);
-    source.host_state = _stop->load (std::memory_order_acquire)
+    source.host_state = _stop->stop_requested ()
                           ? (_transport_poller ? framework_runtime_state_t::draining
                                                : framework_runtime_state_t::stopped)
                           : _framework_state ();
@@ -656,7 +656,7 @@ void client_server_location_runtime_t::start ()
         return;
     auto owner = _locations->current_owner_token ();
 
-    _stop->store (false, std::memory_order_release);
+    _stop = std::make_shared<std::stop_source> ();
     try {
         _lane.run_checked ([this] { _transport_poller = std::make_unique<zlink::poller_t> (); })
           .get ();
@@ -801,35 +801,45 @@ bool client_server_location_runtime_t::publish_descriptor_state (
     return state != framework_runtime_state_t::draining || request_publication ();
 }
 
-bool client_server_location_runtime_t::republish_after_store_recovery (
-  location_write_intent_t intent)
+task_t<bool>
+client_server_location_runtime_t::republish_after_store_recovery (location_write_intent_t intent)
 {
     // stop() owns descriptor removal, so a stopping runtime has nothing to republish.
-    return empty () || _stop->load (std::memory_order_acquire) || request_publication (intent);
+    if (empty () || _stop->stop_requested ())
+        return task_t<bool> (result_t<bool>::success (true));
+    return request_publication_task (intent);
 }
 
 bool client_server_location_runtime_t::request_publication (location_write_intent_t intent) noexcept
 {
+    try {
+        const auto result = request_publication_task (intent).result ();
+        return result && result.value ();
+    }
+    catch (...) {
+        _channel_runtime.runtime_failures ()->report (std::current_exception ());
+        return false;
+    }
+}
+
+task_t<bool>
+client_server_location_runtime_t::request_publication_task (location_write_intent_t intent)
+{
     auto request = std::make_shared<worker_request_t> ();
     request->intent = intent;
-    auto result = request->completion.task ();
+    auto pending = request->completion.task ();
     {
         std::lock_guard lock (_server_progress_mutex);
-        if (_stop->load (std::memory_order_acquire))
-            return false;
+        if (_stop->stop_requested ())
+            co_return false;
         _worker_requests.push_back (request);
     }
     _wake_timer->signal ();
-
-    std::unique_lock lock (_server_progress_mutex);
-    if (!runtime::infrastructure_wait_guard::condition_wait_for (
-          _server_progress_changed, lock, std::chrono::seconds (5),
-          [&result] { return result.await_ready (); }, "client-server/descriptor-publish",
-          runtime::infrastructure_wait_guard::wait_relation_t::dependent_completion)) {
-        return false;
-    }
-    return detail::task_result_access_t::read (result)
-           && detail::task_result_access_t::read (result).value ();
+    const auto result = co_await observe_until (
+      std::move (pending),
+      std::chrono::steady_clock::now () + _locations->options ().owner_lease_renew_timeout,
+      _stop->get_token ());
+    co_return result &&result.value ();
 }
 
 task_t<void> client_server_location_runtime_t::request_transport_turn (std::function<void ()> work)
@@ -896,15 +906,14 @@ void client_server_location_runtime_t::run ()
             if (!result)
                 _channel_runtime.runtime_failures ()->report (result.exception ());
             if (!reconcile_after_publish) {
-                {
-                    std::lock_guard lock (_server_progress_mutex);
-                    for (const auto &request : serving)
-                        request->completion.complete (result_t<bool>::success (published));
-                }
+                // Completion may resume the coordinator and enqueue its next
+                // request, so it must run outside the request-queue mutex.
+                for (const auto &request : serving)
+                    request->completion.complete (result_t<bool>::success (published));
                 serving.clear ();
                 _server_progress_changed.notify_all ();
             }
-            if (reconcile_after_publish && result && !_stop->load (std::memory_order_acquire)) {
+            if (reconcile_after_publish && result && !_stop->stop_requested ()) {
                 pending_reconcile = std::make_shared<task_t<void>> (
                   reconcile_task ([this] (std::function<void ()> work) {
                       return request_transport_turn (std::move (work));
@@ -936,7 +945,7 @@ void client_server_location_runtime_t::run ()
             }
         }
         const auto now = std::chrono::steady_clock::now ();
-        if (!_stop->load (std::memory_order_acquire) && !pending_maintenance && !pending_reconcile
+        if (!_stop->stop_requested () && !pending_maintenance && !pending_reconcile
             && !pending_worker_snapshot) {
             {
                 std::lock_guard lock (_server_progress_mutex);
@@ -959,8 +968,8 @@ void client_server_location_runtime_t::run ()
             }
         }
         try {
-            if (!_stop->load (std::memory_order_acquire) && !pending_maintenance
-                && !pending_reconcile && !pending_worker_snapshot) {
+            if (!_stop->stop_requested () && !pending_maintenance && !pending_reconcile
+                && !pending_worker_snapshot) {
                 pending_worker_snapshot =
                   std::make_shared<task_t<worker_lane_snapshot_t>> (run_worker_turn ());
                 detail::observe_task_terminal (
@@ -972,7 +981,7 @@ void client_server_location_runtime_t::run ()
                     const result_t<worker_lane_snapshot_t> &result) {
                       // The worker turn is not a new input. Only an earlier deadline,
                       // a due reconcile, failure or shutdown requires another poll turn.
-                      if (!result || stop->load (std::memory_order_acquire)
+                      if (!result || stop->stop_requested ()
                           || std::chrono::steady_clock::now () >= deadline
                           || result.value ().next_deadline ().value_or (
                                std::chrono::steady_clock::time_point::max ())
@@ -990,7 +999,7 @@ void client_server_location_runtime_t::run ()
         // The only exit. In-flight work references state that stop() releases after the
         // join, so the worker leaves only once that work has completed.
         const bool pending = pending_maintenance || pending_reconcile || pending_worker_snapshot;
-        if (_stop->load (std::memory_order_acquire) && !pending)
+        if (_stop->stop_requested () && !pending)
             break;
 
         const auto after_pump = std::chrono::steady_clock::now ();
@@ -1035,6 +1044,8 @@ task_t<bool> client_server_location_runtime_t::publish_servers_task (location_wr
     }
     bool published = true;
     for (auto &[channel_name, server] : _servers) {
+        if (_stop->stop_requested ())
+            co_return false;
         const auto weight_override = _channel_runtime.server_peer_weight_override (channel_name);
         const auto weight = weight_override.value_or (server->capability.service_weight);
         const auto state = current_state (*_locations);
@@ -1061,11 +1072,15 @@ task_t<bool> client_server_location_runtime_t::publish_servers_task (location_wr
         admission.weight = static_cast<std::uint32_t> (weight);
         admission.state = client_server_service_state (state);
         auto descriptor = to_descriptor (admission, *owner);
-        const auto written = co_await _locations->descriptor_write_confirmed ([&] {
-            return _store->update_client_server (descriptor, new_owner
-                                                               ? location_write_intent_t::new_claim
-                                                               : location_write_intent_t::renew);
-        });
+        const auto written = co_await _locations->descriptor_write_confirmed (
+          [store = _store, descriptor, new_owner] {
+              return store->update_client_server (descriptor, new_owner
+                                                                ? location_write_intent_t::new_claim
+                                                                : location_write_intent_t::renew);
+          },
+          std::chrono::steady_clock::now, _stop->get_token ());
+        if (_stop->stop_requested ())
+            co_return false;
         if (written)
             server->published_descriptor = std::move (descriptor);
         else
@@ -1383,7 +1398,7 @@ client_server_location_runtime_t::run_worker_turn ()
 task_t<void> client_server_location_runtime_t::dispatch_server_record (
   std::shared_ptr<raw_client_server_server_t> owner, mesh::service_mailbox_record_t record)
 {
-    if (_stop->load (std::memory_order_acquire)) {
+    if (_stop->stop_requested ()) {
         if (record.reply_token) {
             const framework_exception_t error (
               framework_error_kind_t::shutting_down,
@@ -1420,28 +1435,31 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
                                                   &flow, &request_envelope, &record] {
                 if (before)
                     before ();
-                flow.trace (message_flow_outcome_t::dispatched,
-                            request_envelope.flow_id ? std::string_view (*request_envelope.flow_id)
-                                                     : std::string_view{},
-                            [&] {
-                                message_flow_event_t event{message_flow_outcome_t::dispatched,
-                                                           dispatch_error_surface_t::channel,
-                                                           request_envelope.kind
-                                                               == messaging::message_kind_t::request
-                                                             ? dispatch_message_kind_t::request
-                                                             : dispatch_message_kind_t::send,
-                                                           request_envelope.message_name,
-                                                           record.owner,
-                                                           std::nullopt,
-                                                           request_envelope.correlation_id,
-                                                           std::nullopt,
-                                                           std::nullopt,
-                                                           std::nullopt,
-                                                           std::nullopt};
-                                event.flow_id = request_envelope.flow_id;
-                                event.flow_origin = request_envelope.flow_origin;
-                                return event;
-                            });
+                if (flow.enabled_for (message_flow_outcome_t::dispatched)) {
+                    flow.trace (message_flow_outcome_t::dispatched,
+                                request_envelope.flow_id
+                                  ? std::string_view (*request_envelope.flow_id)
+                                  : std::string_view{},
+                                [&] {
+                                    message_flow_event_t event{
+                                      message_flow_outcome_t::dispatched,
+                                      dispatch_error_surface_t::channel,
+                                      request_envelope.kind == messaging::message_kind_t::request
+                                        ? dispatch_message_kind_t::request
+                                        : dispatch_message_kind_t::send,
+                                      request_envelope.message_name,
+                                      record.owner,
+                                      std::nullopt,
+                                      request_envelope.correlation_id,
+                                      std::nullopt,
+                                      std::nullopt,
+                                      std::nullopt,
+                                      std::nullopt};
+                                    event.flow_id = request_envelope.flow_id;
+                                    event.flow_origin = request_envelope.flow_origin;
+                                    return event;
+                                });
+                }
             };
         }
         auto scope = zlink::framework::detail::service_scope_t::create (
@@ -1467,25 +1485,28 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
                 co_await _channel_runtime.dispatch_send_on_handler_executor (
                   record.owner, {}, request_envelope.message_name, scope.provider (), *_serializers,
                   *_handlers, message, inbound);
-                flow.trace (message_flow_outcome_t::completed,
-                            request_envelope.flow_id ? std::string_view (*request_envelope.flow_id)
-                                                     : std::string_view{},
-                            [&] {
-                                message_flow_event_t event{message_flow_outcome_t::completed,
-                                                           dispatch_error_surface_t::channel,
-                                                           dispatch_message_kind_t::send,
-                                                           request_envelope.message_name,
-                                                           record.owner,
-                                                           std::nullopt,
-                                                           inbound.message.correlation_id,
-                                                           std::nullopt,
-                                                           std::nullopt,
-                                                           std::nullopt,
-                                                           std::nullopt};
-                                event.flow_id = request_envelope.flow_id;
-                                event.flow_origin = request_envelope.flow_origin;
-                                return event;
-                            });
+                if (flow.enabled_for (message_flow_outcome_t::completed)) {
+                    flow.trace (message_flow_outcome_t::completed,
+                                request_envelope.flow_id
+                                  ? std::string_view (*request_envelope.flow_id)
+                                  : std::string_view{},
+                                [&] {
+                                    message_flow_event_t event{message_flow_outcome_t::completed,
+                                                               dispatch_error_surface_t::channel,
+                                                               dispatch_message_kind_t::send,
+                                                               request_envelope.message_name,
+                                                               record.owner,
+                                                               std::nullopt,
+                                                               inbound.message.correlation_id,
+                                                               std::nullopt,
+                                                               std::nullopt,
+                                                               std::nullopt,
+                                                               std::nullopt};
+                                    event.flow_id = request_envelope.flow_id;
+                                    event.flow_origin = request_envelope.flow_origin;
+                                    return event;
+                                });
+                }
             }
             catch (const framework_exception_t &error) {
                 report_client_server_dispatch_error (
@@ -1540,25 +1561,28 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
     if (pending_reply || pending_failure_reply) {
         detail::message_flow_tracer_t flow (_channel_runtime.dispatch_options_ref ());
         const auto &header = record.envelope_header;
-        flow.trace (message_flow_outcome_t::replied,
-                    header.flow_id ? std::string_view (*header.flow_id) : std::string_view{}, [&] {
-                        message_flow_event_t event{message_flow_outcome_t::replied,
-                                                   dispatch_error_surface_t::channel,
-                                                   header.kind == messaging::message_kind_t::request
-                                                     ? dispatch_message_kind_t::request
-                                                     : dispatch_message_kind_t::send,
-                                                   header.message_name,
-                                                   record.owner,
-                                                   std::nullopt,
-                                                   header.correlation_id,
-                                                   std::nullopt,
-                                                   std::nullopt,
-                                                   std::nullopt,
-                                                   std::nullopt};
-                        event.flow_id = header.flow_id;
-                        event.flow_origin = header.flow_origin;
-                        return event;
-                    });
+        if (flow.enabled_for (message_flow_outcome_t::replied)) {
+            flow.trace (
+              message_flow_outcome_t::replied,
+              header.flow_id ? std::string_view (*header.flow_id) : std::string_view{}, [&] {
+                  message_flow_event_t event{message_flow_outcome_t::replied,
+                                             dispatch_error_surface_t::channel,
+                                             header.kind == messaging::message_kind_t::request
+                                               ? dispatch_message_kind_t::request
+                                               : dispatch_message_kind_t::send,
+                                             header.message_name,
+                                             record.owner,
+                                             std::nullopt,
+                                             header.correlation_id,
+                                             std::nullopt,
+                                             std::nullopt,
+                                             std::nullopt,
+                                             std::nullopt};
+                  event.flow_id = header.flow_id;
+                  event.flow_origin = header.flow_origin;
+                  return event;
+              });
+        }
     }
     try {
         if (pending_reply)
@@ -1734,7 +1758,7 @@ task_t<std::shared_ptr<raw_client_server_client_t>> client_server_location_runti
 result_t<client_server_location_runtime_t::client_channel_t *>
 client_server_location_runtime_t::select_channel_locked (const std::string &channel_name)
 {
-    if (_stop->load (std::memory_order_acquire)) {
+    if (_stop->stop_requested ()) {
         return result_t<client_channel_t *>::failure (framework_error_kind_t::shutting_down,
                                                       "ClientServer runtime is stopping");
     }
@@ -1904,11 +1928,20 @@ bool client_server_location_runtime_t::wait_for_accepted_callbacks_until (
     }
 }
 
-void client_server_location_runtime_t::stop ()
+void client_server_location_runtime_t::request_stop () noexcept
 {
     seal_application_dispatch ();
+    _stop->request_stop ();
+    _wake_timer->signal ();
+}
+
+void client_server_location_runtime_t::stop (
+  std::optional<std::chrono::steady_clock::time_point> requested_deadline)
+{
+    const auto deadline = requested_deadline.value_or (
+      std::chrono::steady_clock::now () + _locations->options ().owner_lease_renew_timeout);
     runtime_failure_collector_t failures;
-    const bool was_stopped = _stop->exchange (true, std::memory_order_acq_rel);
+    request_stop ();
     {
         std::lock_guard lock (_server_progress_mutex);
         std::erase_if (_worker_requests, [] (const auto &request) {
@@ -1919,7 +1952,6 @@ void client_server_location_runtime_t::stop ()
         });
     }
     _server_progress_changed.notify_all ();
-    _wake_timer->signal ();
     failures.capture ([&] { complete_ready_waiters ().result ().value (); });
     if (_thread.joinable ())
         failures.capture ([&] {
@@ -1939,9 +1971,9 @@ void client_server_location_runtime_t::stop ()
           has_clients = !_clients.empty ();
       })
       .get ();
-    if (!was_stopped || has_servers || has_clients) {
+    if (has_servers || has_clients) {
         has_clients = !failures.capture ([&] { stop_clients (); });
-        has_servers = !failures.capture ([&] { stop_servers (); });
+        has_servers = !failures.capture ([&] { stop_servers (deadline); });
     }
     for (const auto &channel_name : client_channels)
         failures.capture ([&] { _channel_runtime.unbind_client_server_transport (channel_name); });
@@ -1950,8 +1982,7 @@ void client_server_location_runtime_t::stop ()
                 _transport_poller->close ();
         }))
         _lane.run_checked ([this] { _transport_poller.reset (); }).get ();
-    if (!was_stopped || has_servers || has_clients)
-        failures.capture ([&] { publish_snapshot_changes ().result ().value (); });
+    failures.capture ([&] { publish_snapshot_changes ().result ().value (); });
     failures.rethrow_if_failed ();
 }
 
@@ -1978,7 +2009,7 @@ void client_server_location_runtime_t::stop_clients ()
       .get ();
 }
 
-void client_server_location_runtime_t::stop_servers ()
+void client_server_location_runtime_t::stop_servers (std::chrono::steady_clock::time_point deadline)
 {
     runtime_failure_collector_t failures;
     std::map<std::string, server_entry_t *> servers;
@@ -2009,21 +2040,29 @@ void client_server_location_runtime_t::stop_servers ()
                 draining.state = framework_runtime_state_t::draining;
                 draining.weight = 0;
                 const auto written =
-                  _store->update_client_server (draining, location_write_intent_t::renew)
-                    .result ()
-                    .value ();
-                if (written.status == location_write_status_t::stored)
+                  infrastructure_result ([this, draining, deadline] {
+                      return _locations->descriptor_write_confirmed (
+                        [store = _store, draining] {
+                            return store->update_client_server (draining,
+                                                                location_write_intent_t::renew);
+                        },
+                        std::chrono::steady_clock::now, std::stop_token{}, deadline);
+                  }).value ();
+                if (written)
                     server->published_descriptor = std::move (draining);
             }
         });
         failures.capture ([&] {
-            (void) _store
-              ->remove_client_server ({server->published_descriptor->channel_name,
-                                       server->published_descriptor->server_rid},
-                                      {server->published_descriptor->owner_id,
-                                       server->published_descriptor->lease_generation})
-              .result ()
-              .value ();
+            (void) infrastructure_result ([this, descriptor = *server->published_descriptor,
+                                           deadline] {
+                return _locations->descriptor_write_confirmed (
+                  [store = _store, descriptor] {
+                      return store->remove_client_server (
+                        {descriptor.channel_name, descriptor.server_rid},
+                        {descriptor.owner_id, descriptor.lease_generation});
+                  },
+                  std::chrono::steady_clock::now, std::stop_token{}, deadline);
+            }).value ();
         });
         failures.capture ([&] { server->owner->close (); });
         if (_listener_statuses)

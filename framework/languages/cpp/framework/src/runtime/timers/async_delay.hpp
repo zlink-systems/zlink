@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stop_token>
 #include <thread>
 #include <vector>
 
@@ -30,6 +31,13 @@ class delay_owner_t
 
     task_t<void> start (std::chrono::milliseconds duration, bool accepted_relocation = false)
     {
+        return start (duration, std::stop_token{}, accepted_relocation);
+    }
+
+    task_t<void> start (std::chrono::milliseconds duration,
+                        std::stop_token cancellation,
+                        bool accepted_relocation = false)
+    {
         auto source = std::make_shared<task_completion_source_t<void>> ();
         auto pending = source->task ();
         bool rejected = false;
@@ -40,6 +48,7 @@ class delay_owner_t
             } else {
                 reap_completed_locked ();
                 auto worker = std::make_shared<worker_t> ();
+                worker->cancellation = cancellation;
                 _workers.push_back (worker);
                 try {
                     worker->thread =
@@ -110,6 +119,7 @@ class delay_owner_t
         std::thread thread;
         std::unique_ptr<zlink::timer_t> timer;
         std::unique_ptr<zlink::poller_t> poller;
+        std::stop_token cancellation;
         std::atomic_bool completed{false};
     };
 
@@ -161,7 +171,7 @@ class delay_owner_t
         failures.capture ([&] {
             {
                 std::lock_guard lock (_mutex);
-                if (stopping_locked (accepted_relocation))
+                if (stopping_locked (accepted_relocation) || worker.cancellation.stop_requested ())
                     return;
             }
             auto timer = std::make_unique<zlink::timer_t> ();
@@ -171,7 +181,7 @@ class delay_owner_t
                 std::lock_guard lock (_mutex);
                 worker.timer = std::move (timer);
                 worker.poller = std::move (poller);
-                if (stopping_locked (accepted_relocation))
+                if (stopping_locked (accepted_relocation) || worker.cancellation.stop_requested ())
                     return;
                 auto interval = std::chrono::duration_cast<std::chrono::steady_clock::duration> (
                   duration > std::chrono::milliseconds::zero () ? duration
@@ -186,7 +196,8 @@ class delay_owner_t
             for (;;) {
                 {
                     std::lock_guard lock (_mutex);
-                    if (stopping_locked (accepted_relocation))
+                    if (stopping_locked (accepted_relocation)
+                        || worker.cancellation.stop_requested ())
                         break;
                 }
                 if (worker.poller->wait (events.data (), events.size (),
@@ -235,6 +246,14 @@ inline task_t<void>
 delay (delay_owner_t &owner, std::chrono::milliseconds duration, bool accepted_relocation = false)
 {
     return owner.start (duration, accepted_relocation);
+}
+
+inline task_t<void> delay (delay_owner_t &owner,
+                           std::chrono::milliseconds duration,
+                           std::stop_token cancellation,
+                           bool accepted_relocation = false)
+{
+    return owner.start (duration, cancellation, accepted_relocation);
 }
 
 inline task_t<void>

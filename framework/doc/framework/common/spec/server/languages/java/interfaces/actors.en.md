@@ -9,7 +9,22 @@ context, messaging, manager, and relocation adapter in Java. A regular
 message targets with ActorId, and an operation that changes a specific
 incarnation uses an `ActorRef`.
 
+For a bind with another Session current, the Actor runs
+`onDuplicateBind(current, incoming, cancellation)` in its handler order. The inputs are immutable
+binding identities. An empty result or empty string accepts the bind; a non-empty string rejects it
+with that content message. The default `ZLinkActor` callback returns an empty result, so an Actor that doesn't
+override it accepts a new Session as before.
+
 ```java
+public record ZLinkSessionBindingIdentity(
+ systems.zlink.contracts.core.RoutingId sessionOwnerNodeRid,
+ long sessionOwnerNodeGeneration,
+ long bindingGeneration) {}
+
+public interface ZLinkActorCallbackCancellation {
+ boolean isCancellationRequested();
+}
+
 public interface ZLinkActorFactory {
  CompletionStage<ZLinkActor> create(ZLinkActorContext context);
 }
@@ -199,9 +214,19 @@ public final class systems.zlink.framework.actors.ActorRef extends java.lang.Rec
  public java.lang.String meshName();
  public systems.zlink.contracts.core.RoutingId nodeRid();
 }
+public record systems.zlink.framework.actors.ZLinkSessionBindingIdentity(systems.zlink.contracts.core.RoutingId, long, long) {
+ public systems.zlink.framework.actors.ZLinkSessionBindingIdentity(systems.zlink.contracts.core.RoutingId, long, long);
+ public systems.zlink.contracts.core.RoutingId sessionOwnerNodeRid();
+ public long sessionOwnerNodeGeneration();
+ public long bindingGeneration();
+}
+public interface systems.zlink.framework.actors.ZLinkActorCallbackCancellation {
+ public abstract boolean isCancellationRequested();
+}
 public interface systems.zlink.framework.actors.ZLinkActor {
  public abstract systems.zlink.framework.actors.ZLinkActorContext context();
  public default void configure();
+ public default java.util.concurrent.CompletionStage<java.util.Optional<java.lang.String>> onDuplicateBind(systems.zlink.framework.actors.ZLinkSessionBindingIdentity, systems.zlink.framework.actors.ZLinkSessionBindingIdentity, systems.zlink.framework.actors.ZLinkActorCallbackCancellation);
  public default java.util.concurrent.CompletionStage<java.lang.Void> onJoinCompleted(systems.zlink.framework.actors.ZLinkActorJoinCompletion);
 }
 public interface systems.zlink.framework.actors.ZLinkActorClient {

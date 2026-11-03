@@ -6,6 +6,7 @@
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
+#include "runtime/execution/task_result.hpp"
 
 #include <exception>
 #include <optional>
@@ -174,11 +175,15 @@ route_packet_dispatcher_t::dispatch (const route_received_packet_t &received,
       flow_origin_t::inbound, std::nullopt);
     if (_send_dispatch_kind != handler_dispatch_kind_t::channel_send
         && _request_dispatch_kind != handler_dispatch_kind_t::channel_request) {
-        trace_route_flow (_dispatch_options, _router_channel_id, message_flow_outcome_t::received,
-                          header.kind == runtime::messaging::message_kind_t::request
-                            ? dispatch_message_kind_t::request
-                            : dispatch_message_kind_t::send,
-                          received, header);
+        if (message_flow_tracer_t (_dispatch_options)
+              .enabled_for (message_flow_outcome_t::received)) {
+            trace_route_flow (_dispatch_options, _router_channel_id,
+                              message_flow_outcome_t::received,
+                              header.kind == runtime::messaging::message_kind_t::request
+                                ? dispatch_message_kind_t::request
+                                : dispatch_message_kind_t::send,
+                              received, header);
+        }
     }
 
     switch (header.kind) {
@@ -202,17 +207,27 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
 {
     if (_internal_packets != nullptr && _internal_packets->can_handle_send (header.message_name)) {
         auto dispatched = _internal_packets->dispatch_send (received, header, *_services);
-        if (!dispatched) {
-            return task_t<std::optional<route_dispatch_reply_t>> (
-              detail::propagate_failure<std::optional<route_dispatch_reply_t>> (
-                dispatched, "route internal send failed"));
-        }
-        trace_route_flow (_dispatch_options, _router_channel_id, message_flow_outcome_t::dispatched,
-                          dispatch_message_kind_t::send, received, header);
-        trace_route_flow (_dispatch_options, _router_channel_id, message_flow_outcome_t::completed,
-                          dispatch_message_kind_t::send, received, header);
-        return task_t<std::optional<route_dispatch_reply_t>> (
-          result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt));
+        return runtime::continue_task<std::optional<route_dispatch_reply_t>> (
+          std::move (dispatched),
+          [received =
+             route_received_packet_t{received.source_node_rid, {}, {}, {}, received.received_at},
+           header = std::move (header), options = _dispatch_options,
+           channel_id = _router_channel_id, terminal = std::move (terminal)] (
+            result_t<void> dispatched) -> task_t<std::optional<route_dispatch_reply_t>> {
+              if (!dispatched)
+                  co_return detail::propagate_failure<std::optional<route_dispatch_reply_t>> (
+                    dispatched, "route internal send failed");
+              if (message_flow_tracer_t (options).enabled_for (
+                    message_flow_outcome_t::dispatched)) {
+                  trace_route_flow (options, channel_id, message_flow_outcome_t::dispatched,
+                                    dispatch_message_kind_t::send, received, header);
+              }
+              if (message_flow_tracer_t (options).enabled_for (message_flow_outcome_t::completed)) {
+                  trace_route_flow (options, channel_id, message_flow_outcome_t::completed,
+                                    dispatch_message_kind_t::send, received, header);
+              }
+              co_return std::nullopt;
+          });
     }
     const auto *handler =
       _handlers != nullptr
@@ -279,9 +294,11 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
                   router = _router_channel_id, source = received.source_node_rid, header] {
             if (callback)
                 callback ();
-            trace_route_flow (options, router, message_flow_outcome_t::dispatched,
-                              dispatch_message_kind_t::send,
-                              route_received_packet_t{source, {}, {}, {}}, header);
+            if (message_flow_tracer_t (options).enabled_for (message_flow_outcome_t::dispatched)) {
+                trace_route_flow (options, router, message_flow_outcome_t::dispatched,
+                                  dispatch_message_kind_t::send,
+                                  route_received_packet_t{source, {}, {}, {}}, header);
+            }
         };
     auto complete = [options = _dispatch_options, router = _router_channel_id,
                      registration = _registration, submit_reply = _submit_reply,
@@ -316,8 +333,10 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
             return detail::propagate_failure<std::optional<route_dispatch_reply_t>> (
               dispatched, "routed send handler failed");
         }
-        trace_route_flow (options, router, message_flow_outcome_t::completed,
-                          dispatch_message_kind_t::send, received, header);
+        if (message_flow_tracer_t (options).enabled_for (message_flow_outcome_t::completed)) {
+            trace_route_flow (options, router, message_flow_outcome_t::completed,
+                              dispatch_message_kind_t::send, received, header);
+        }
         return result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt);
     };
     return _invoker.invoke (*handler, filters, _send_dispatch_kind, *_services, *_serializers,
@@ -341,8 +360,12 @@ task_t<std::optional<route_dispatch_reply_t>> route_packet_dispatcher_t::dispatc
             return task_t<std::optional<route_dispatch_reply_t>> (reply_route_error (
               _dispatch_options, _router_channel_id, _submit_reply, received, header, error));
         }
-        trace_route_flow (_dispatch_options, _router_channel_id, message_flow_outcome_t::replied,
-                          dispatch_message_kind_t::response, received, header);
+        if (message_flow_tracer_t (_dispatch_options)
+              .enabled_for (message_flow_outcome_t::replied)) {
+            trace_route_flow (_dispatch_options, _router_channel_id,
+                              message_flow_outcome_t::replied, dispatch_message_kind_t::response,
+                              received, header);
+        }
         channel_reply_writer_t writer;
         return task_t<std::optional<route_dispatch_reply_t>> (
           result_t<std::optional<route_dispatch_reply_t>>::success (route_dispatch_reply_t{
@@ -383,9 +406,11 @@ task_t<std::optional<route_dispatch_reply_t>> route_packet_dispatcher_t::dispatc
                   router = _router_channel_id, source = received.source_node_rid, header] {
             if (callback)
                 callback ();
-            trace_route_flow (options, router, message_flow_outcome_t::dispatched,
-                              dispatch_message_kind_t::request,
-                              route_received_packet_t{source, {}, {}, {}}, header);
+            if (message_flow_tracer_t (options).enabled_for (message_flow_outcome_t::dispatched)) {
+                trace_route_flow (options, router, message_flow_outcome_t::dispatched,
+                                  dispatch_message_kind_t::request,
+                                  route_received_packet_t{source, {}, {}, {}}, header);
+            }
         };
     auto complete = [options = _dispatch_options, router = _router_channel_id,
                      registration = _registration, submit_reply = _submit_reply,
@@ -401,8 +426,10 @@ task_t<std::optional<route_dispatch_reply_t>> route_packet_dispatcher_t::dispatc
                                                                 : "routed request handler failed");
             return reply_route_error (options, router, submit_reply, received, header, error);
         }
-        trace_route_flow (options, router, message_flow_outcome_t::replied,
-                          dispatch_message_kind_t::response, received, header);
+        if (message_flow_tracer_t (options).enabled_for (message_flow_outcome_t::replied)) {
+            trace_route_flow (options, router, message_flow_outcome_t::replied,
+                              dispatch_message_kind_t::response, received, header);
+        }
         channel_reply_writer_t writer;
         auto response =
           route_dispatch_reply_t{received.source_node_rid, received.request_seq,

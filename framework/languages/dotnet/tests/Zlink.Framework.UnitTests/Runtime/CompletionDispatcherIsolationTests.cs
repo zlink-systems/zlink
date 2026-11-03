@@ -90,19 +90,21 @@ public sealed class CompletionDispatcherIsolationTests
     }
 
     [Fact]
-    public async Task TableRequestContinuationRunsInTheThreadPoolDispatcherTurn()
+    public async Task MessagingHotPathCompletionTransitionCountIsOne()
     {
         await using var fixture = await ActorRequests.StartAsync();
         var (first, second) = await fixture.SubmitAsync();
-        var observed = new TaskCompletionSource<(bool Dispatcher, bool ThreadPool)>(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
+        var observed = new TaskCompletionSource<(
+            int TransitionCount,
+            bool Dispatcher,
+            bool ThreadPool
+        )>(TaskCreationOptions.RunContinuationsAsynchronously);
         first
-            .ConfigureAwait(false)
             .GetAwaiter()
             .UnsafeOnCompleted(() =>
                 observed.SetResult(
                     (
+                        ZLinkCompletionDispatcher.IsCurrentExecution ? 1 : 0,
                         ZLinkCompletionDispatcher.IsCurrentExecution,
                         Thread.CurrentThread.IsThreadPoolThread
                     )
@@ -111,7 +113,7 @@ public sealed class CompletionDispatcherIsolationTests
         fixture.Reply(0);
         fixture.Reply(1);
         var turn = await observed.Task.WaitAsync(TestGuard);
-        Assert.Equal((true, true), turn);
+        Assert.Equal((1, true, true), turn);
         await Task.WhenAll(first, second).WaitAsync(TestGuard);
     }
 

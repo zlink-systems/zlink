@@ -1,7 +1,10 @@
+using System.Reflection;
 using Bingo.Server.Play.Domain.Bingo;
 using Bingo.Server.Play.Infrastructure.ZLink.Actors;
 using Bingo.Server.Play.Infrastructure.ZLink.Spots.BingoRoomSpot;
 using Bingo.Server.Play.Infrastructure.ZLink.Spots.BingoRoomSpot.Notifications;
+using Bingo.Server.Play.Infrastructure.ZLink.Spots.EntrySpot;
+using Bingo.Server.Play.Infrastructure.ZLink.Spots.EntrySpot.Handlers;
 using Bingo.Shared.Contracts;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -20,14 +23,93 @@ namespace Zlink.Framework.UnitTests.Runtime;
 // The sample itself uses only public Framework contracts.
 public sealed class BingoObserverBehaviorTests
 {
+    [Fact]
+    public async Task Finished_room_observation_request_returns_not_subscribed_before_room_creation()
+    {
+        var observation = new GetBingoObservationRes
+        {
+            State = new BingoRoomState { RoomId = "room", Status = BingoRoomStatus.Finished },
+        };
+        var request = Proxy<IZLinkSpotRequestCall>(method =>
+        {
+            Assert.Equal("Async", method.Name);
+            return new ZLinkRequest<GetBingoObservationRes>(
+                ValueTask.CompletedTask,
+                ValueTask.FromResult(observation)
+            );
+        });
+        var outbound = Proxy<IZLinkSpotOutbound>(method =>
+        {
+            Assert.Equal("RequestToSpot", method.Name);
+            return request;
+        });
+        var context = Proxy<IZLinkEntrySpotContext>(method =>
+        {
+            Assert.Equal("get_Outbound", method.Name);
+            return outbound;
+        });
+        var entrySpot = new BingoEntrySpot(context, NullLogger<BingoEntrySpot>.Instance);
+        var actor = new PlayerActor("observer", null!, NullLogger<PlayerActor>.Instance);
+        var handler = new ObserveBingoEventsHandler(null!);
+
+        var response = await handler.HandleAsync(
+            entrySpot,
+            actor,
+            null!,
+            new ObserveBingoEventsReq { RoomId = "room" },
+            default
+        );
+
+        Assert.False(response.Subscribed);
+    }
+
+    [Fact]
+    public async Task Player_join_notification_failure_does_not_reject_admission_or_stop_recipients()
+    {
+        var state = new BingoRoomState { RoomId = "room", Status = "WaitingForPlayers" };
+        var failingSession = new ObservationSession(message => message is PlayerJoinedNotify);
+        var receivingSession = new ObservationSession();
+        var failingActor = new PlayerActor(
+            "disconnected",
+            new ObserverContext(failingSession),
+            NullLogger<PlayerActor>.Instance
+        );
+        var receivingActor = new PlayerActor(
+            "connected",
+            new ObserverContext(receivingSession),
+            NullLogger<PlayerActor>.Instance
+        );
+        var notification = new BingoRoomEvent(
+            BingoRoomEventKind.PlayerJoined,
+            failingActor,
+            state,
+            "new-player",
+            "New Player",
+            1,
+            false
+        );
+        var followingNotification = notification with { Recipient = receivingActor };
+        var publisher = new BingoNotificationPublisher(
+            NullLogger<BingoNotificationPublisher>.Instance
+        );
+
+        await publisher.PublishAsync([notification, followingNotification], default);
+
+        Assert.Empty(failingSession.Messages);
+        Assert.Collection(
+            receivingSession.Messages,
+            message => Assert.IsType<PlayerJoinedNotify>(message)
+        );
+    }
+
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
+    [InlineData(false, null)]
+    [InlineData(true, null)]
     [InlineData(false, ZLinkFrameworkErrorKind.NotFound)]
     [InlineData(false, ZLinkFrameworkErrorKind.Unavailable)]
-    public async Task Finished_room_reward_is_sent_after_observer_membership_commits(
+    public async Task Finished_room_snapshot_does_not_compensate_a_late_observer(
         bool earlyEvent,
-        ZLinkFrameworkErrorKind? failureKind = null
+        ZLinkFrameworkErrorKind? failureKind
     )
     {
         var reward = new BingoRewardAcquiredEvent
@@ -55,7 +137,7 @@ public sealed class BingoObserverBehaviorTests
         var room = new BingoRoom(
             context,
             new BingoRoomEventMapper(),
-            new BingoNotificationPublisher(),
+            new BingoNotificationPublisher(NullLogger<BingoNotificationPublisher>.Instance),
             NullLogger<BingoRoom>.Instance
         );
         room.ApplySettings(BingoRoomSettings.CreateObserver("room", "observer"));
@@ -99,9 +181,7 @@ public sealed class BingoObserverBehaviorTests
         Assert.Equal(1, context.ReadinessSignals);
         Assert.Collection(
             session.Messages,
-            value => Assert.Equal(state, Assert.IsType<BingoObservationStateNotify>(value).State),
-            value =>
-                Assert.Equal("winner", Assert.IsType<BingoRewardAnnouncedNotify>(value).ActorId)
+            value => Assert.Equal(state, Assert.IsType<BingoObservationStateNotify>(value).State)
         );
         await room.AnnounceRewardAsync(reward, default);
         Assert.Equal(2, session.Messages.Count);
@@ -114,7 +194,7 @@ public sealed class BingoObserverBehaviorTests
         var room = new BingoRoom(
             context,
             new BingoRoomEventMapper(),
-            new BingoNotificationPublisher(),
+            new BingoNotificationPublisher(NullLogger<BingoNotificationPublisher>.Instance),
             NullLogger<BingoRoom>.Instance
         );
         var settings = BingoRoomSettings.Create(BingoSampleModes.TwoPlayer, 0);
@@ -165,20 +245,54 @@ public sealed class BingoObserverBehaviorTests
         public ValueTask DisposeAsync() => CancelAsync();
     }
 
+    private static T Proxy<T>(Func<MethodInfo, object?> invoke)
+        where T : class
+    {
+        var proxy = DispatchProxy.Create<T, TestProxy>();
+        ((TestProxy)(object)proxy).InvokeHandler = invoke;
+        return proxy;
+    }
+
+    public class TestProxy : DispatchProxy
+    {
+        internal Func<MethodInfo, object?> InvokeHandler { get; set; } = null!;
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args) =>
+            InvokeHandler(targetMethod!);
+    }
+
     private sealed class ObservationSession : IZLinkBoundSession, IZLinkBoundSessionSendCall
     {
         internal List<object> Messages { get; } = new();
+        private readonly Func<object, bool>? _shouldFail;
+
+        internal ObservationSession(Func<object, bool>? shouldFail = null)
+        {
+            _shouldFail = shouldFail;
+        }
 
         public IZLinkBoundSessionSendCall Send<T>(T message)
         {
-            Messages.Add(message!);
+            _failCurrentSend = _shouldFail?.Invoke(message!) == true;
+            if (!_failCurrentSend)
+                Messages.Add(message!);
             return this;
         }
 
         public ValueTask DisconnectAsync(CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public ValueTask Async() => ValueTask.CompletedTask;
+        private bool _failCurrentSend;
+
+        public ValueTask Async() =>
+            _failCurrentSend
+                ? ValueTask.FromException(
+                    new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.Unavailable,
+                        "The recipient session is closed."
+                    )
+                )
+                : ValueTask.CompletedTask;
 
         public IZLinkBoundSessionSendCall Metadata(string key, string value) => this;
 

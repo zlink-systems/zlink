@@ -1465,8 +1465,8 @@ try {
         throw framework_exception_t (framework_error_kind_t::shutting_down,
                                      "raw mesh request registry is closed");
     }
-    auto admitted = start->admitted->task ();
-    return await_request_admission (std::move (admitted));
+    auto admission = start->admitted->task ();
+    return await_request_admission (std::move (admission));
 }
 catch (...) {
     return task_t<bool> (detail::current_exception_result<bool> ());
@@ -2161,7 +2161,7 @@ raw_mesh_node_owner_t::request_to_spot (const std::vector<std::uint8_t> &target_
                                                        source_spot_id, target, exact, correlation,
                                                        message_follow_hop_count);
       },
-      application_payload, deadline, std::move (callback), correlation, false,
+      application_payload, deadline, std::move (callback), correlation, true,
       mesh_request_metric_t (_request_metrics, mesh_request_surface_t::spot),
       request_identity (operation));
 }
@@ -3168,16 +3168,20 @@ raw_mesh_node_owner_t::enqueue_received (service_mailbox_record_t record,
                     event->flow_origin = header.flow_origin;
                     event->mesh_name = _options.descriptor.mesh_name;
                     event->channel_route_kind = "route_mesh";
-                    flow.trace (message_flow_outcome_t::received,
-                                event->flow_id ? std::string_view (*event->flow_id)
-                                               : std::string_view{},
-                                [&] { return *event; });
-                    admitted = [&] {
-                        event->outcome = message_flow_outcome_t::admitted;
-                        flow.trace (message_flow_outcome_t::admitted,
+                    if (flow.enabled_for (message_flow_outcome_t::received)) {
+                        flow.trace (message_flow_outcome_t::received,
                                     event->flow_id ? std::string_view (*event->flow_id)
                                                    : std::string_view{},
                                     [&] { return *event; });
+                    }
+                    admitted = [&] {
+                        event->outcome = message_flow_outcome_t::admitted;
+                        if (flow.enabled_for (message_flow_outcome_t::admitted)) {
+                            flow.trace (message_flow_outcome_t::admitted,
+                                        event->flow_id ? std::string_view (*event->flow_id)
+                                                       : std::string_view{},
+                                        [&] { return *event; });
+                        }
                     };
                 }
             }

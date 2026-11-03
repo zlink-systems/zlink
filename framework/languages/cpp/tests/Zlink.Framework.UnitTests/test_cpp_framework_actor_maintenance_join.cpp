@@ -6615,8 +6615,8 @@ TEST (ActorMaintenanceJoin, RejectsWhilePreviousSourceLeaveIsPending)
               .commit_relocation_materialization (objects);
         },
         [target_state] (const auto &objects) {
-            fw::detail::spot_node_runtime_t (target_state)
-              .abort_relocation_materialization (objects);
+            return fw::detail::spot_node_runtime_t (target_state)
+              .abort_relocation_materialization_async (objects);
         });
     auto &routes = services.get_required<fw::route_mesh_runtime_t> ();
     ASSERT_TRUE (peer_ready (routes));
@@ -6750,11 +6750,12 @@ TEST_P (ActorRestoreCommitFailure, DiscardsPublishedIdentity)
               throw std::runtime_error ("injected restore commit failure");
           return false;
       },
-      [&, state, weak_target] (const auto &objects) {
+      [&, state, weak_target] (const auto &objects) -> fw::task_t<void> {
           const auto node = weak_target.lock ();
           const auto removed =
-            !candidate || !node || !node->resolve_actor_async (*candidate).result ().value ();
-          fw::detail::spot_node_runtime_t (state).abort_relocation_materialization (objects);
+            !candidate || !node || !(co_await node->resolve_actor_async (*candidate));
+          co_await fw::detail::spot_node_runtime_t (state).abort_relocation_materialization_async (
+            objects);
           {
               std::lock_guard lock (evidence.mutex);
               discarded = true;

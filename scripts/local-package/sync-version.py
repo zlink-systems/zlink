@@ -859,9 +859,354 @@ def synchronize_framework(sync: Synchronizer, versions: dict[str, str]) -> None:
         )
 
 
+# Genre templates use only published packages (framework/templates/TEMPLATE-AUTHORING.ko.md),
+# so their pins are independent of framework/languages/<lang>/VERSION. Each language's
+# templates/TEMPLATE_VERSIONS owns them, and values flow only from that file into the
+# templates. The Java file owns both the Java and the Kotlin templates.
+TEMPLATE_FRAMEWORK_KEY = "ZLINK_TEMPLATE_FRAMEWORK_VERSION"
+TEMPLATE_BINDING_KEY = "ZLINK_TEMPLATE_BINDING_VERSION"
+# C++ templates take the binding from the Framework prebuilt, so they pin no binding.
+TEMPLATE_BINDING_LANGUAGES = ("dotnet", "java", "node")
+
+
+def template_versions_path(language: str) -> str:
+    return f"framework/languages/{language}/templates/TEMPLATE_VERSIONS"
+
+
+def template_versions() -> dict[str, dict[str, str]]:
+    """Read every TEMPLATE_VERSIONS file as {language: {"framework": v[, "binding": v]}}."""
+    result: dict[str, dict[str, str]] = {}
+    for language in FRAMEWORK_LANGUAGES:
+        relative = template_versions_path(language)
+        keys = {TEMPLATE_FRAMEWORK_KEY: "framework"}
+        if language in TEMPLATE_BINDING_LANGUAGES:
+            keys[TEMPLATE_BINDING_KEY] = "binding"
+        layout = ", ".join(f"{key}=X.Y.Z" for key in keys)
+        values: dict[str, str] = {}
+        for line in (REPO_ROOT / relative).read_text(encoding="utf-8").splitlines():
+            key, separator, value = line.partition("=")
+            if (
+                not separator
+                or key not in keys
+                or keys[key] in values
+                or not re.fullmatch(SEMVER, value)
+            ):
+                raise SyncError(f"{relative} must contain exactly {layout}")
+            values[keys[key]] = value
+        if len(values) != len(keys):
+            raise SyncError(f"{relative} must contain exactly {layout}")
+        result[language] = values
+    return result
+
+
+@dataclass(frozen=True)
+class TemplateField:
+    """One pinned version field in a template's package configuration."""
+
+    relative: str
+    kind: str
+    pattern: str
+    expected: int = 1
+
+
+TEMPLATE_CONFIG_FIELDS = {
+    "cpp": (
+        TemplateField(
+            "bootstrap.cmake",
+            "framework",
+            rf'(set\(ZLINK_FRAMEWORK_CPP_VERSION ")(?P<version>{SEMVER})("\))',
+        ),
+    ),
+    "dotnet": (
+        TemplateField(
+            "Directory.Packages.props",
+            "framework",
+            rf'(<PackageVersion Include="Zlink\.[A-Za-z.]+" Version=")(?P<version>{SEMVER})(")',
+            4,
+        ),
+        TemplateField(
+            "Directory.Packages.props",
+            "binding",
+            rf'(<PackageVersion Include="Zlink" Version=")(?P<version>{SEMVER})(")',
+        ),
+    ),
+    "java": (
+        TemplateField(
+            "build.gradle.kts",
+            "framework",
+            rf'(extra\["frameworkVersion"\] = ")(?P<version>{SEMVER})(")',
+        ),
+        TemplateField(
+            "build.gradle.kts",
+            "binding",
+            rf'(extra\["bindingVersion"\] = ")(?P<version>{SEMVER})(")',
+        ),
+    ),
+    "node": (
+        TemplateField(
+            "package.json",
+            "framework",
+            node_internal_dependency_pattern(),
+            4,
+        ),
+        TemplateField(
+            "package.json",
+            "binding",
+            rf'("@zlink-systems/zlink"\s*:\s*")(?P<version>{SEMVER})(")',
+        ),
+    ),
+}
+
+# These .NET templates receive the binding transitively from Zlink.Framework and
+# pin no Zlink package.
+TEMPLATE_TRANSITIVE_BINDING = (
+    "framework/languages/dotnet/templates/board-tables",
+    "framework/languages/dotnet/templates/mmo-seamless",
+    "framework/languages/dotnet/templates/starter",
+)
+
+# Node templates that commit a lockfile: Framework dependency pins, and the installed
+# Framework packages whose registry entries follow the template pin.
+TEMPLATE_NODE_LOCKS = {
+    "framework/languages/node/templates/board-tables": (
+        10,
+        (
+            "@zlink-systems/framework",
+            "@zlink-systems/framework-locations-redis",
+            "@zlink-systems/http-client",
+            "@zlink-systems/nestjs",
+            "@zlink-systems/stream-connector",
+            "@zlink-systems/stream-wire",
+        ),
+    ),
+}
+
+TEMPLATE_ROOTS = {
+    "cpp": ("framework/languages/cpp/templates",),
+    "dotnet": ("framework/languages/dotnet/templates",),
+    "java": (
+        "framework/languages/java/templates/java",
+        "framework/languages/java/templates/kotlin",
+    ),
+    "node": ("framework/languages/node/templates",),
+}
+
+TEMPLATE_DOCUMENTS = ("README.md", "AGENTS.md", "AGENTS.ko.md")
+
+# The complete template registry. Each value lists the (Framework, binding) version
+# mentions expected in README.md, AGENTS.md and AGENTS.ko.md of that template's my-game.
+TEMPLATE_DOCUMENT_MENTIONS = {
+    "framework/languages/cpp/templates/board-tables": ((3, 0), (0, 0), (0, 0)),
+    "framework/languages/cpp/templates/fps-entry-lobby": ((4, 0), (2, 0), (2, 0)),
+    "framework/languages/cpp/templates/fps-http-lobby": ((4, 0), (2, 0), (2, 0)),
+    "framework/languages/cpp/templates/match-entry-lobby": ((3, 0), (0, 0), (0, 0)),
+    "framework/languages/cpp/templates/match-http-lobby": ((4, 0), (0, 0), (0, 0)),
+    "framework/languages/cpp/templates/mmo-megaserver": ((3, 0), (0, 0), (0, 0)),
+    "framework/languages/cpp/templates/mmo-seamless": ((3, 0), (0, 0), (0, 0)),
+    "framework/languages/cpp/templates/mmo-world-channels": ((3, 0), (0, 0), (0, 0)),
+    "framework/languages/cpp/templates/morpg-channel-town": ((3, 0), (0, 0), (0, 0)),
+    "framework/languages/cpp/templates/morpg-fields-instances": ((3, 0), (0, 0), (0, 0)),
+    "framework/languages/cpp/templates/morpg-lobby-instances": ((3, 0), (0, 0), (0, 0)),
+    "framework/languages/cpp/templates/starter": ((3, 0), (0, 0), (0, 0)),
+    "framework/languages/dotnet/templates/board-tables": ((3, 0), (2, 0), (2, 0)),
+    "framework/languages/dotnet/templates/fps-entry-lobby": ((2, 0), (1, 0), (1, 0)),
+    "framework/languages/dotnet/templates/fps-http-lobby": ((2, 0), (1, 0), (1, 0)),
+    "framework/languages/dotnet/templates/match-entry-lobby": ((2, 0), (2, 0), (2, 0)),
+    "framework/languages/dotnet/templates/match-http-lobby": ((2, 1), (2, 0), (2, 0)),
+    "framework/languages/dotnet/templates/mmo-megaserver": ((1, 0), (2, 0), (2, 0)),
+    "framework/languages/dotnet/templates/mmo-seamless": ((3, 0), (2, 0), (2, 0)),
+    "framework/languages/dotnet/templates/mmo-world-channels": ((3, 1), (2, 0), (2, 0)),
+    "framework/languages/dotnet/templates/morpg-channel-town": ((2, 1), (2, 0), (2, 0)),
+    "framework/languages/dotnet/templates/morpg-fields-instances": ((3, 1), (2, 0), (2, 0)),
+    "framework/languages/dotnet/templates/morpg-lobby-instances": ((2, 1), (2, 0), (2, 0)),
+    "framework/languages/dotnet/templates/starter": ((1, 0), (0, 0), (0, 0)),
+    "framework/languages/java/templates/java/board-tables": ((2, 1), (1, 1), (1, 1)),
+    "framework/languages/java/templates/java/fps-entry-lobby": ((1, 1), (1, 0), (1, 0)),
+    "framework/languages/java/templates/java/fps-http-lobby": ((1, 1), (1, 0), (1, 0)),
+    "framework/languages/java/templates/java/match-entry-lobby": ((2, 1), (1, 1), (1, 1)),
+    "framework/languages/java/templates/java/match-http-lobby": ((2, 1), (1, 1), (1, 1)),
+    "framework/languages/java/templates/java/mmo-megaserver": ((2, 1), (1, 1), (1, 1)),
+    "framework/languages/java/templates/java/mmo-seamless": ((2, 0), (1, 1), (1, 1)),
+    "framework/languages/java/templates/java/mmo-world-channels": ((2, 1), (1, 1), (1, 1)),
+    "framework/languages/java/templates/java/morpg-channel-town": ((2, 1), (1, 1), (1, 1)),
+    "framework/languages/java/templates/java/morpg-fields-instances": ((3, 0), (1, 1), (1, 1)),
+    "framework/languages/java/templates/java/morpg-lobby-instances": ((2, 1), (1, 1), (1, 1)),
+    "framework/languages/java/templates/java/starter": ((2, 1), (0, 0), (0, 0)),
+    "framework/languages/java/templates/kotlin/board-tables": ((0, 0), (2, 1), (2, 1)),
+    "framework/languages/java/templates/kotlin/fps-entry-lobby": ((0, 0), (0, 0), (0, 0)),
+    "framework/languages/java/templates/kotlin/fps-http-lobby": ((0, 0), (0, 0), (0, 0)),
+    "framework/languages/java/templates/kotlin/match-entry-lobby": ((1, 0), (2, 1), (2, 1)),
+    "framework/languages/java/templates/kotlin/match-http-lobby": ((1, 0), (2, 1), (2, 1)),
+    "framework/languages/java/templates/kotlin/mmo-megaserver": ((1, 0), (2, 1), (2, 1)),
+    "framework/languages/java/templates/kotlin/mmo-seamless": ((1, 0), (2, 1), (2, 1)),
+    "framework/languages/java/templates/kotlin/mmo-world-channels": ((1, 0), (2, 1), (2, 1)),
+    "framework/languages/java/templates/kotlin/morpg-channel-town": ((1, 0), (2, 1), (2, 1)),
+    "framework/languages/java/templates/kotlin/morpg-fields-instances": ((3, 0), (3, 1), (3, 1)),
+    "framework/languages/java/templates/kotlin/morpg-lobby-instances": ((1, 0), (2, 1), (2, 1)),
+    "framework/languages/java/templates/kotlin/starter": ((2, 1), (0, 0), (0, 0)),
+    "framework/languages/node/templates/board-tables": ((3, 2), (2, 0), (2, 0)),
+    "framework/languages/node/templates/fps-entry-lobby": ((2, 0), (1, 0), (1, 0)),
+    "framework/languages/node/templates/fps-http-lobby": ((2, 0), (1, 0), (1, 0)),
+    "framework/languages/node/templates/match-entry-lobby": ((2, 0), (2, 0), (2, 0)),
+    "framework/languages/node/templates/match-http-lobby": ((2, 0), (2, 0), (2, 0)),
+    "framework/languages/node/templates/mmo-megaserver": ((3, 0), (2, 0), (2, 0)),
+    "framework/languages/node/templates/mmo-seamless": ((3, 0), (2, 0), (2, 0)),
+    "framework/languages/node/templates/mmo-world-channels": ((2, 0), (2, 0), (2, 0)),
+    "framework/languages/node/templates/morpg-channel-town": ((2, 0), (2, 0), (2, 0)),
+    "framework/languages/node/templates/morpg-fields-instances": ((2, 1), (2, 0), (2, 0)),
+    "framework/languages/node/templates/morpg-lobby-instances": ((3, 1), (2, 0), (2, 0)),
+    "framework/languages/node/templates/starter": ((1, 0), (0, 0), (0, 0)),
+}
+
+
+def template_directories(language: str) -> list[str]:
+    """Registered template directories of one language; unregistered ones are an error."""
+    registered: list[str] = []
+    for root in TEMPLATE_ROOTS[language]:
+        present = {
+            path.parent.relative_to(REPO_ROOT).as_posix()
+            for path in (REPO_ROOT / root).glob("*/my-game")
+        }
+        listed = {
+            template
+            for template in TEMPLATE_DOCUMENT_MENTIONS
+            if template.startswith(f"{root}/")
+        }
+        if present != listed:
+            raise SyncError(
+                f"{root}: templates {sorted(present ^ listed)} are not both present and "
+                "registered in TEMPLATE_DOCUMENT_MENTIONS"
+            )
+        registered.extend(sorted(listed))
+    return registered
+
+
+# A document mention of a milestone ("planned for", "scheduled for", "fixed in") or a
+# past validation run names a release, not the pinned package version.
+def template_document_pattern(values: set[str]) -> str:
+    alternatives = "|".join(re.escape(value) for value in sorted(values))
+    return (
+        r"(?<![0-9.])(?<!planned for )(?<!scheduled for )(?<!fixed in )"
+        rf"(?P<version>{alternatives})(?!\.?[0-9])(?! validation)"
+    )
+
+
+def update_template_node_lock(
+    source: str, pins: dict[str, str], relative: str, expected: int, packages: tuple[str, ...]
+) -> str:
+    source = update_node_registry_consumer_lock(
+        source, pins["framework"], relative, expected, packages
+    )
+    # The root dependency list, @zlink-systems/framework and framework-locations-redis.
+    source = update_framework_node_dependency(source, pins["binding"], 3)
+    return update_node_registry_package_block(
+        source, "@zlink-systems/zlink", pins["binding"]
+    )
+
+
+def synchronize_templates(sync: Synchronizer, pins: dict[str, dict[str, str]]) -> None:
+    for language, fields in TEMPLATE_CONFIG_FIELDS.items():
+        templates = template_directories(language)
+        # Documents name the version that the configuration pinned before this run.
+        previous: dict[str, set[str]] = {"framework": set(), "binding": set()}
+        for template in templates:
+            for field in fields:
+                source = (REPO_ROOT / template / "my-game" / field.relative).read_text(
+                    encoding="utf-8"
+                )
+                previous[field.kind].update(
+                    match.group("version") for match in re.finditer(field.pattern, source)
+                )
+        if previous["framework"] & previous["binding"]:
+            raise SyncError(
+                f"{language} templates pin the same version as Framework and binding: "
+                f"{sorted(previous['framework'] & previous['binding'])}"
+            )
+        kinds = {version: kind for kind, versions in previous.items() for version in versions}
+
+        for template in templates:
+            game = f"{template}/my-game"
+            for field in fields:
+                version = pins[language][field.kind]
+                sync.regex(
+                    f"{game}/{field.relative}",
+                    field.pattern,
+                    lambda match, version=version: replace_version_group(match, version),
+                    0
+                    if field.kind == "binding" and template in TEMPLATE_TRANSITIVE_BINDING
+                    else field.expected,
+                )
+            lock = f"{game}/package-lock.json"
+            if template in TEMPLATE_NODE_LOCKS:
+                expected, packages = TEMPLATE_NODE_LOCKS[template]
+                sync.transform(
+                    lock,
+                    lambda source, lock=lock, expected=expected, packages=packages: (
+                        update_template_node_lock(
+                            source, pins[language], lock, expected, packages
+                        )
+                    ),
+                )
+            elif (REPO_ROOT / lock).exists():
+                raise SyncError(f"{lock} is not registered in TEMPLATE_NODE_LOCKS")
+            for document, expected in zip(
+                TEMPLATE_DOCUMENTS, TEMPLATE_DOCUMENT_MENTIONS[template]
+            ):
+                sync.transform(
+                    f"{game}/{document}",
+                    lambda source, relative=f"{game}/{document}", expected=expected: (
+                        update_template_document(
+                            source, relative, kinds, pins[language], expected
+                        )
+                    ),
+                )
+
+
+def update_template_document(
+    source: str,
+    relative: str,
+    kinds: dict[str, str],
+    pins: dict[str, str],
+    expected: tuple[int, int],
+) -> str:
+    found = {"framework": 0, "binding": 0}
+
+    def replace(match: re.Match[str]) -> str:
+        kind = kinds[match.group("version")]
+        found[kind] += 1
+        return pins[kind]
+
+    result = source
+    if kinds:
+        result = re.sub(template_document_pattern(set(kinds)), replace, source)
+    if (found["framework"], found["binding"]) != expected:
+        raise SyncError(
+            f"{relative}: expected {expected[0]} Framework and {expected[1]} binding "
+            f"version mention(s), found {found['framework']} and {found['binding']}"
+        )
+    return result
+
+
+def synchronize_template_versions(
+    write: bool,
+) -> tuple[dict[str, dict[str, str]], list[Path]]:
+    templates = template_versions()
+    sync = Synchronizer(write)
+    synchronize_templates(sync, templates)
+    return templates, sync.changed
+
+
 def synchronize(
     write: bool,
-) -> tuple[str, dict[str, str], dict[str, str], list[Path], list[Path]]:
+) -> tuple[
+    str,
+    dict[str, str],
+    dict[str, str],
+    dict[str, dict[str, str]],
+    list[Path],
+    list[Path],
+    list[Path],
+]:
     major, minor, patch, core_version, _abi_soversion = repository_version()
     bindings = binding_versions()
     frameworks = framework_versions()
@@ -1176,6 +1521,9 @@ def synchronize(
     for relative in (
         "framework/languages/dotnet/contract/packages/Zlink.Framework.package.txt",
         "framework/languages/dotnet/contract/packages/Zlink.Framework.AspNetCore.package.txt",
+        # PACKAGE_TARGET_FRAMEWORK가 net10.0이면 verify_packaged_contract.sh가 이 폴더와 비교한다.
+        "framework/languages/dotnet/contract/packages/net10.0/Zlink.Framework.package.txt",
+        "framework/languages/dotnet/contract/packages/net10.0/Zlink.Framework.AspNetCore.package.txt",
     ):
         sync.regex(
             relative,
@@ -1226,12 +1574,15 @@ def synchronize(
     )
     framework_sync = Synchronizer(write)
     synchronize_framework(framework_sync, frameworks)
+    templates, template_changed = synchronize_template_versions(write)
     return (
         core_version,
         bindings,
         frameworks,
+        templates,
         sync.changed,
         framework_sync.changed,
+        template_changed,
     )
 
 
@@ -1246,13 +1597,15 @@ def main() -> int:
             core_version,
             bindings,
             frameworks,
+            templates,
             changed,
             framework_changed,
+            template_changed,
         ) = synchronize(args.write)
     except (OSError, SyncError) as error:
         print(f"version sync failed: {error}", file=sys.stderr)
         return 1
-    if args.check and (changed or framework_changed):
+    if args.check and (changed or framework_changed or template_changed):
         if changed:
             print(
                 "Core/binding versions must be synchronized "
@@ -1269,6 +1622,13 @@ def main() -> int:
             )
             for path in framework_changed:
                 print(f"  {path.relative_to(REPO_ROOT)}", file=sys.stderr)
+        if template_changed:
+            print(
+                f"Template versions must be synchronized (templates={templates}):",
+                file=sys.stderr,
+            )
+            for path in template_changed:
+                print(f"  {path.relative_to(REPO_ROOT)}", file=sys.stderr)
         return 1
     action = "synchronized" if args.write else "verified"
     print(
@@ -1278,6 +1638,10 @@ def main() -> int:
     print(
         f"Framework packages {frameworks} {action} "
         f"({len(framework_changed)} changed file(s))"
+    )
+    print(
+        f"Template versions {templates} {action} "
+        f"({len(template_changed)} changed file(s))"
     )
     return 0
 

@@ -23,7 +23,7 @@ internal sealed class ZLinkActorRuntimeState(
         2
     );
     private static readonly AsyncLocal<DispatchOwnership?> AmbientDispatch = new();
-    private readonly ZLinkActorSerialExecutor _dispatchMailbox = dispatchMailbox ?? new();
+    internal readonly ZLinkActorSerialExecutor _dispatchMailbox = dispatchMailbox ?? new();
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ZLinkStateLane _lane = new();
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
@@ -309,7 +309,7 @@ internal sealed class ZLinkActorRuntimeState(
 
     private volatile ZLinkActorDestroyPhase _destroyPhase;
     private volatile bool _reservedCreationPending;
-    private int _deferredJoinPending;
+    internal int _deferredJoinPending;
 
     public bool IsDispatchBlocked =>
         _destroyPhase != ZLinkActorDestroyPhase.None || _reservedCreationPending;
@@ -1969,18 +1969,14 @@ internal readonly record struct ZLinkActorBoundSession(
     internal bool IsSamePhysicalSessionOwner(
         RoutingId sessionNodeRid,
         ulong sessionOwnerNodeGeneration,
-        RoutingId sessionRid,
-        string sessionOwnerId,
-        ulong sessionOwnerLeaseGeneration
+        RoutingId sessionRid
     )
     {
         if (SessionNodeRid is not { } previousNodeRid)
             return false;
         return previousNodeRid == sessionNodeRid
             && SessionOwnerNodeGeneration == sessionOwnerNodeGeneration
-            && SessionRid == sessionRid
-            && string.Equals(SessionOwnerId, sessionOwnerId, StringComparison.Ordinal)
-            && SessionOwnerLeaseGeneration == sessionOwnerLeaseGeneration;
+            && SessionRid == sessionRid;
     }
 }
 

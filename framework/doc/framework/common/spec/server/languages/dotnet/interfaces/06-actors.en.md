@@ -17,6 +17,19 @@ message only takes ActorId and resolves current authority. `ActorRef` is
 the immutable location snapshot used to change an specified incarnation or
 bind to a session.
 
+`OnDuplicateBindAsync` accepts when it returns `null` or an empty string and rejects with a returned
+non-empty string as its message. Its default implementation returns `null`, so an Actor that doesn't override it accepts a
+new Session as before. When the timeout expires, the framework cancels the `CancellationToken`.
+
+`ZLinkSessionBindingIdentity` is the read-only identity passed to the duplicate-bind callback.
+
+```csharp
+public readonly record struct ZLinkSessionBindingIdentity(
+ RoutingId SessionOwnerNodeRid,
+ ulong SessionOwnerNodeGeneration,
+ ulong BindingGeneration);
+```
+
 ```csharp
 public readonly record struct ActorRef(
  string ActorId,
@@ -28,6 +41,13 @@ public interface IZLinkActor
 {
  IZLinkActorContext Context { get; }
  void Configure() { }
+ ValueTask<string?> OnDuplicateBindAsync(
+ ZLinkSessionBindingIdentity current,
+ ZLinkSessionBindingIdentity incoming,
+ CancellationToken cancellationToken)
+ {
+ return ValueTask.FromResult<string?>(null);
+ }
  ValueTask OnJoinCompletedAsync(
  ZLinkActorJoinCompletion completion,
  CancellationToken cancellationToken)

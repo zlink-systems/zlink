@@ -1983,6 +1983,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-unit;framework-contract;framework-actor;framework-monitoring"
     TIER contract
     TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_duplicate_bind_policy
+    COMMAND test_cpp_framework_actor_gateway --duplicate-bind-policy
+    LABELS "framework-unit;framework-contract;framework-actor;stream"
+    TIER contract
+    TIMEOUT 30)
   target_include_directories(test_cpp_framework_actor_gateway PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   foreach(termination_case physical logical disconnect-then-shutdown)
@@ -2474,13 +2480,22 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_compile_definitions(test_cpp_framework_spot_close_conformance PRIVATE
     ZLINK_TEST_CHECK_CORE_CONTEXTS
     ZLINK_SPOT_CLOSE_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/spot-close-v1.json")
-  zlink_framework_cpp_add_test(
-    NAME test_cpp_framework_spot_close_conformance
-    COMMAND test_cpp_framework_spot_close_conformance
-    LABELS "framework-unit;framework-regression;spot"
-    TIMEOUT 120
-    PROPERTIES
-      RESOURCE_LOCK zlink_cpp_heavy_runtime)
+  # Split the cases into GoogleTest shards, so unrelated cases cannot consume
+  # the next case's execution budget under CPU load.
+  set(spot_close_shards 8)
+  math(EXPR spot_close_last_shard "${spot_close_shards} - 1")
+  foreach(shard RANGE ${spot_close_last_shard})
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_spot_close_conformance_shard_${shard}
+      COMMAND test_cpp_framework_spot_close_conformance
+      ENVIRONMENT
+        GTEST_TOTAL_SHARDS=${spot_close_shards}
+        GTEST_SHARD_INDEX=${shard}
+      LABELS "framework-unit;framework-regression;spot"
+      TIMEOUT 120
+      PROPERTIES
+        RESOURCE_LOCK zlink_cpp_heavy_runtime)
+  endforeach()
   find_program(ZLINK_FRAMEWORK_CPP_VALGRIND_EXECUTABLE NAMES valgrind)
   if(ZLINK_FRAMEWORK_CPP_VALGRIND_EXECUTABLE)
     zlink_framework_cpp_add_test(

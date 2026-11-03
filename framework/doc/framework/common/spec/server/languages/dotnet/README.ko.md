@@ -47,6 +47,14 @@ Contract test는 source assembly와 실제 NuGet package의 public export를 이
 | `ContractSurfaceCoverage.Fixed_spec_snapshot_matches_every_exported_contract_signature` | 정식 spec snapshot과 source·package의 공개 서명이 일치하는지 확인한다. |
 | `RegressionTests.DotNetContractRegressionTestReferences_Resolve_ToActiveTestMethods` | 문서가 가리키는 회귀 테스트와 E2E 시나리오가 현재 test tree에 존재하는지 확인한다. |
 
+## Messaging hot path 전환 수 계측
+
+[Messaging hot path §3](../../01-execution/08-messaging-hot-path.ko.md)는 binding 완료 알림부터 caller continuation의 첫 instruction까지 Framework가 만드는 전환을 최대 1회로 제한한다. unit 시험은 caller continuation이 completion dispatcher turn 표식 안에서 실행되는지 확인해 그 전환을 센다. task 게시와 깨우기는 실행 자원 전환 수에 더하지 않는다.
+
+| 구간 | 상한 | 계측 지점 | 시험 식별자 |
+|---|---:|---|---|
+| binding 완료 알림 → caller continuation 첫 instruction | 1회 이하 | dispatcher turn 표식 [CompletionDispatcherIsolationTests.cs:107](../../../../../../../languages/dotnet/tests/Zlink.Framework.UnitTests/Runtime/CompletionDispatcherIsolationTests.cs#L107); [ZLinkCompletionDispatcher.cs:27](../../../../../../../languages/dotnet/src/Zlink.Framework/Runtime/Backend/DotNet/ZLinkCompletionDispatcher.cs#L27) | `unit:CompletionDispatcherIsolationTests.MessagingHotPathCompletionTransitionCountIsOne` (기대 1회) |
+
 ---
 <!-- framework-adapter-nav:bottom:start -->
 [언어별 interface 목차](../README.ko.md) | [스펙 목차](../../README.ko.md)

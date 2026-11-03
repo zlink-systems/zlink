@@ -35,11 +35,15 @@ internal sealed class ZLinkSerialWorkQueue : IEnumerable<ZLinkSerialWorkItem>
             return;
         while (Volatile.Read(ref _publicationCursor.PublicationNext) is { } item)
         {
-            Volatile.Write(ref _publicationCursor, item);
             if (import is null)
                 Enqueue(item);
             else
                 import(item);
+            // Keep the publication visible until import hands it to the queue.
+            // The callback can adopt the sealed publisher's remaining records;
+            // only advance if this is still the cursor's next publication.
+            if (ReferenceEquals(Volatile.Read(ref _publicationCursor.PublicationNext), item))
+                Volatile.Write(ref _publicationCursor, item);
         }
         // Managed readers retain their own immutable publication links. Only
         // the gate advances this cursor; a publisher never edits old links.
@@ -69,14 +73,15 @@ internal sealed class ZLinkSerialWorkQueue : IEnumerable<ZLinkSerialWorkItem>
         return false;
     }
 
-    // A sealed publisher has stopped. The gate can adopt its nodes into this
-    // mailbox, including the publication cursor used by admission readers.
+    // The sealed publisher has stopped and its preceding records have been
+    // imported (or handed to the current import callback). Attach restored
+    // records before recording their handoff in the publication cursor.
     internal void Adopt(ZLinkSerialWorkItem item)
     {
         item.PublicationNext = null;
         Publish(item);
-        Volatile.Write(ref _publicationCursor, item);
         Enqueue(item);
+        Volatile.Write(ref _publicationCursor, item);
     }
 
     public int Count { get; private set; }

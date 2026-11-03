@@ -24,7 +24,7 @@ const {
 } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
 const {
   RawServiceMeshRuntime
-} = require('../../packages/framework/dist/runtime/foundation/raw-service-mesh-runtime');
+} = require('../../packages/framework/dist/internal');
 const {
   ZLinkNodeRawMeshBackend
 } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
@@ -59,7 +59,7 @@ const {
   runWithApplicationJobPermit
 } = require('../../packages/framework/dist/runtime/application-jobs/application-job-queue-scope');
 
-/** @param {import('../../packages/framework/dist/runtime/foundation/raw-service-mesh-runtime').RawServiceMeshRuntimeOptions} options */
+/** @param {import('../../packages/framework/dist/internal').RawServiceMeshRuntimeOptions} options */
 function startRawRuntime(options, router) {
   const runtime = new RawServiceMeshRuntime({
     ...options,

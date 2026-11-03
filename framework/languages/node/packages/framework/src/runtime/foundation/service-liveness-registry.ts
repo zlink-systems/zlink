@@ -60,7 +60,7 @@ const NO_LIVENESS_WORK: ServiceLivenessTick = Object.freeze({
 });
 
 export class ServiceLivenessRegistry {
-  private readonly peers = new Map<string, ServiceLivenessConnection>();
+  readonly peers = new Map<string, ServiceLivenessConnection>();
   private nextProbeId = 1n;
   /**
    * The earliest probe or timeout among admitted peers. Received traffic only

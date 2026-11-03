@@ -6,7 +6,6 @@ import type { ZLinkDomainLocationStore as ZLinkLocationStore } from './domain-st
 import type { ZLinkOwnerLeaseTracker } from './lease-tracker';
 import type { ZLinkAutoConnectLocal } from './auto-connect-types';
 import type { ZLinkAutoConnectReconciler } from './auto-connect-reconciler';
-import { ZLinkStateLane } from '../execution/state-lane';
 
 export interface ZLinkAutoConnectLoopOptions {
   readonly reconciler: ZLinkAutoConnectReconciler;
@@ -19,7 +18,6 @@ export interface ZLinkAutoConnectLoopOptions {
 }
 
 export class ZLinkAutoConnectLoop {
-  private readonly lane = new ZLinkStateLane();
   private readonly reconciler: ZLinkAutoConnectReconciler;
   private readonly options: Required<ZLinkLocationOptionOverrides>;
   private readonly meshName: string;
@@ -46,15 +44,19 @@ export class ZLinkAutoConnectLoop {
   }
 
   async start(signal?: AbortSignal): Promise<void> {
-    if (await this.lane.run(() => this.controller !== undefined)) return;
-    await this.tick(signal);
-    const started = await this.lane.run(() => {
-      if (this.controller !== undefined) return false;
-      this.controller = new AbortController();
-      return true;
-    });
-    if (!started) return;
-    this.scheduleNext();
+    if (this.controller !== undefined) return;
+    // Reserve the lifecycle before yielding so stop also owns the first publication.
+    const controller = new AbortController();
+    this.controller = controller;
+    try {
+      await this.tick(signal);
+    } catch (error) {
+      if (this.controller === controller) {
+        await this.prepareTransportShutdown();
+      }
+      throw error;
+    }
+    this.scheduleNext(controller);
   }
 
   async requestPeerReconcile(meshName: string, _peerRid: string): Promise<void> {
@@ -91,8 +93,14 @@ export class ZLinkAutoConnectLoop {
 
   async tick(signal?: AbortSignal): Promise<void> {
     const controller = this.controller;
+    const tickSignal =
+      controller === undefined
+        ? signal
+        : signal === undefined
+          ? controller.signal
+          : AbortSignal.any([signal, controller.signal]);
     await this.enqueueTick(async () => {
-      if (controller?.signal.aborted !== true) await this.tickCore(signal ?? controller?.signal);
+      if (tickSignal?.aborted !== true) await this.tickCore(tickSignal);
     });
   }
 
@@ -144,15 +152,15 @@ export class ZLinkAutoConnectLoop {
     return this.lastTickFailed;
   }
 
-  private scheduleNext(): void {
-    if (this.controller === undefined || this.controller.signal.aborted) {
+  private scheduleNext(controller: AbortController): void {
+    if (this.controller !== controller || controller.signal.aborted) {
       return;
     }
     this.timer = this.setTimer(() => {
       this.timer = undefined;
-      void this.tick(this.controller?.signal)
+      void this.tick(controller.signal)
         .catch(() => undefined)
-        .finally(() => this.scheduleNext());
+        .finally(() => this.scheduleNext(controller));
     }, this.options.pollingIntervalMs);
   }
 }

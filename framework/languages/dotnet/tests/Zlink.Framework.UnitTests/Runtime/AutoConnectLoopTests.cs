@@ -341,6 +341,330 @@ public sealed class AutoConnectLoopTests
         Assert.Empty(reconciler.ActiveTargets);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Publication_awaits_without_blocking_and_preserves_snapshot_order(
+        bool recovery
+    )
+    {
+        await using var fixture = await PublicationFixture.CreateAsync(TimeSpan.FromSeconds(5));
+        if (recovery)
+        {
+            await fixture.Loop.TickAsync();
+            await fixture.Reconciler.NoteStoreFailureAsync();
+        }
+        var reads = fixture.Peers.ListCalls;
+        fixture.Store.HoldWrites = true;
+
+        // The invoking thread must return the pending task before the Store completes.
+        var invocation = Task.Factory.StartNew(
+            () => fixture.Loop.TickAsync().AsTask(),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default
+        );
+        var first = await invocation.WaitAsync(TimeSpan.FromSeconds(1));
+        var firstWrite = await fixture.Store.NextWriteAsync();
+        Assert.False(first.IsCompleted);
+        Assert.Equal(reads, fixture.Peers.ListCalls);
+
+        fixture.Reconciler.SetLocalWeight(2);
+        var second = fixture.Loop.TickAsync().AsTask();
+        Assert.False(second.IsCompleted);
+        Assert.Equal(reads, fixture.Peers.ListCalls);
+        firstWrite.Complete();
+        await first.WaitAsync(TimeSpan.FromSeconds(1));
+        var secondWrite = await fixture.Store.NextWriteAsync();
+        Assert.Equal(reads + 1, fixture.Peers.ListCalls);
+        Assert.Equal(2, secondWrite.Row.ChannelWeights["play"]);
+        secondWrite.Complete();
+        await second.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(reads + 2, fixture.Peers.ListCalls);
+        Assert.Equal(
+            Enumerable.Range(1, reads + 2).Select(index => $"r{index}"),
+            fixture.Executor.Connected.Select(target => target.NodeRid.ToString())
+        );
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Unresponsive_publication_times_out_and_next_tick_republishes(bool recovery)
+    {
+        await using var fixture = await PublicationFixture.CreateAsync(
+            TimeSpan.FromMilliseconds(100)
+        );
+        if (recovery)
+        {
+            await fixture.Loop.TickAsync();
+            await fixture.Reconciler.NoteStoreFailureAsync();
+        }
+        var reads = fixture.Peers.ListCalls;
+        fixture.Store.HoldWrites = true;
+        var tick = fixture.Loop.TickAsync().AsTask();
+        var pending = await fixture.Store.NextWriteAsync();
+
+        await tick.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(pending.Token.IsCancellationRequested);
+        Assert.False(pending.Result.Task.IsCompleted);
+        Assert.True(fixture.Reconciler.StoreFailed);
+        Assert.Null(fixture.Reconciler.LocalWriteStatus);
+        Assert.Equal(reads, fixture.Peers.ListCalls);
+        var renewal = fixture.Loop.TickAsync().AsTask();
+        var retry = await fixture.Store.NextWriteAsync();
+        retry.Complete();
+        await renewal.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.False(fixture.Reconciler.StoreFailed);
+        Assert.Equal(ZLinkLocationWriteStatus.Stored, fixture.Reconciler.LocalWriteStatus);
+        Assert.Equal(reads + 1, fixture.Peers.ListCalls);
+        pending.Complete();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Stop_cancels_unresponsive_publication_and_late_completion_cannot_resume_it(
+        bool lateFailure
+    )
+    {
+        await using var fixture = await PublicationFixture.CreateAsync(TimeSpan.FromSeconds(2));
+        await fixture.Loop.StartAsync();
+        await fixture.Reconciler.NoteStoreFailureAsync();
+        fixture.Store.HoldWrites = true;
+        fixture.Loop.Wake();
+        var pending = await fixture.Store.NextWriteAsync();
+        var reads = fixture.Peers.ListCalls;
+        var writes = fixture.Store.WriteCalls;
+
+        await fixture.Loop.StopAsync().AsTask().WaitAsync(fixture.Options.OwnerLeaseRenewTimeout);
+
+        Assert.True(pending.Token.IsCancellationRequested);
+        Assert.False(pending.Result.Task.IsCompleted);
+        Assert.Equal(reads, fixture.Peers.ListCalls);
+        Assert.Equal(writes, fixture.Store.WriteCalls);
+        Assert.Empty(fixture.Reconciler.ActiveTargets);
+        if (lateFailure)
+            pending.Result.SetException(new InvalidOperationException("late Store failure"));
+        else
+            pending.Complete();
+        await pending.Returned.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        // A second stop is a barrier after the late Store completion as well.
+        await fixture.Loop.StopAsync();
+        Assert.Equal(reads, fixture.Peers.ListCalls);
+        Assert.Equal(writes, fixture.Store.WriteCalls);
+        Assert.Null(fixture.Reconciler.LocalWriteStatus);
+        Assert.Empty(fixture.Reconciler.ActiveTargets);
+    }
+
+    [Fact]
+    public async Task Completion_after_stop_cancellation_does_not_process_another_snapshot()
+    {
+        await using var fixture = await PublicationFixture.CreateAsync(TimeSpan.FromSeconds(2));
+        await fixture.Loop.StartAsync();
+        await fixture.Reconciler.NoteStoreFailureAsync();
+        fixture.Store.HoldWrites = true;
+        fixture.Loop.Wake();
+        var pending = await fixture.Store.NextWriteAsync();
+        var reads = fixture.Peers.ListCalls;
+        var writes = fixture.Store.WriteCalls;
+        var cancelled = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        using var registration = pending.Token.Register(() => cancelled.TrySetResult());
+
+        var stop = fixture.Loop.StopAsync().AsTask();
+        await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        pending.Complete();
+        await stop.WaitAsync(fixture.Options.OwnerLeaseRenewTimeout);
+
+        Assert.Equal(reads, fixture.Peers.ListCalls);
+        Assert.Equal(writes, fixture.Store.WriteCalls);
+        Assert.Empty(fixture.Reconciler.ActiveTargets);
+    }
+
+    [Fact]
+    public async Task Publication_rejects_result_when_Store_completes_synchronously_after_cancellation()
+    {
+        using var stop = new CancellationTokenSource();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            ZLinkDescriptorPublicationUnconfirmedException
+                .WriteAsync(
+                    _ =>
+                    {
+                        // Cancellation can arrive before the provider returns its completed ValueTask.
+                        stop.Cancel();
+                        return ValueTask.FromResult(ZLinkLocationWriteResult.Stored(1, default));
+                    },
+                    TimeSpan.FromSeconds(2),
+                    stop.Token
+                )
+                .AsTask()
+        );
+    }
+
+    private sealed class PublicationFixture : IAsyncDisposable
+    {
+        internal ZLinkLocationOptions Options { get; }
+        internal ControlledPublicationStore Store { get; } = new();
+        internal OrderedPeerResolver Peers { get; } = new();
+        internal RecordingAutoConnectExecutor Executor { get; } = new();
+        internal ZLinkLocationRuntime Runtime { get; }
+        internal ZLinkAutoConnectReconciler Reconciler { get; }
+        internal ZLinkAutoConnectLoop Loop { get; }
+
+        private PublicationFixture(TimeSpan timeout)
+        {
+            Options = new ZLinkLocationOptions
+            {
+                OwnerLeaseRenewTimeout = timeout,
+                PollingInterval = TimeSpan.FromHours(1),
+            };
+            Runtime = new ZLinkLocationRuntime(Options, Store);
+            var local = new ZLinkAutoConnectLocal(
+                ZLinkLocationAutoConnectType.ClientServer,
+                Mesh("play"),
+                ZLinkLocationRole.Dealer,
+                RoutingId.From("local"),
+                "tcp://l:1"
+            );
+            Reconciler = new ZLinkAutoConnectReconciler(
+                local,
+                InMemoryLocationStoreTests.MeshNode("ignored", "tcp://l:1", "local"),
+                Runtime,
+                Peers,
+                Executor,
+                Options
+            );
+            Loop = new ZLinkAutoConnectLoop(
+                new ZLinkRuntimeErrorSink(),
+                Reconciler,
+                local,
+                Options,
+                Store
+            );
+        }
+
+        internal static async Task<PublicationFixture> CreateAsync(TimeSpan timeout)
+        {
+            var fixture = new PublicationFixture(timeout);
+            Assert.True(await fixture.Runtime.RenewOwnerLeaseOnceAsync());
+            return fixture;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            foreach (var pending in Store.Pending)
+                pending.Complete();
+            await Loop.DisposeAsync();
+            await Runtime.DisposeAsync();
+        }
+    }
+
+    private sealed class OrderedPeerResolver : IZLinkMeshNodeLocationResolver
+    {
+        internal int ListCalls { get; private set; }
+
+        public ValueTask<IReadOnlyList<ZLinkMeshNodeDescriptor>> ListLiveMeshNodesAsync(
+            string meshName,
+            CancellationToken cancellationToken = default
+        )
+        {
+            var index = ++ListCalls;
+            return ValueTask.FromResult<IReadOnlyList<ZLinkMeshNodeDescriptor>>([
+                InMemoryLocationStoreTests.MeshNode("peer", $"tcp://r:{index}", $"r{index}"),
+            ]);
+        }
+    }
+
+    private sealed class PendingPublication(ZLinkMeshNodeDescriptor row, CancellationToken token)
+    {
+        internal ZLinkMeshNodeDescriptor Row { get; } = row;
+        internal CancellationToken Token { get; } = token;
+        internal TaskCompletionSource<ZLinkLocationWriteResult> Result { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Returned { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal void Complete() =>
+            Result.TrySetResult(
+                new ZLinkLocationWriteResult(ZLinkLocationWriteStatus.Stored, 1, default)
+            );
+
+        internal async ValueTask<ZLinkLocationWriteResult> WaitAsync()
+        {
+            try
+            {
+                // Deliberately ignore cancellation, like an unresponsive Store provider.
+                return await Result.Task;
+            }
+            finally
+            {
+                Returned.TrySetResult();
+            }
+        }
+    }
+
+    private sealed class ControlledPublicationStore : ZLinkLocationStoreTestDouble
+    {
+        private readonly ZLinkInMemoryLocationStore _inner = new();
+        private readonly System.Threading.Channels.Channel<PendingPublication> _writes =
+            System.Threading.Channels.Channel.CreateUnbounded<PendingPublication>();
+        internal System.Collections.Concurrent.ConcurrentBag<PendingPublication> Pending { get; } =
+        [];
+        internal bool HoldWrites { get; set; }
+        internal int WriteCalls { get; private set; }
+
+        internal Task<PendingPublication> NextWriteAsync() =>
+            _writes.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1));
+
+        public override ValueTask<ZLinkLocationWriteResult> UpdateMeshNodeAsync(
+            ZLinkMeshNodeDescriptor descriptor,
+            ZLinkLocationWriteIntent intent,
+            CancellationToken cancellationToken = default
+        )
+        {
+            WriteCalls++;
+            if (!HoldWrites)
+                return ValueTask.FromResult(
+                    new ZLinkLocationWriteResult(ZLinkLocationWriteStatus.Stored, 1, default)
+                );
+            var pending = new PendingPublication(descriptor, cancellationToken);
+            Pending.Add(pending);
+            _writes.Writer.TryWrite(pending);
+            return pending.WaitAsync();
+        }
+
+        public override ValueTask<ulong?> GetMeshNodeChangeStampAsync(
+            string meshName,
+            CancellationToken cancellationToken = default
+        ) => ValueTask.FromResult<ulong?>(null);
+
+        public override ValueTask<ZLinkLocationWriteStatus> RemoveMeshNodeAsync(
+            ZLinkMeshNodeDescriptorKey key,
+            ZLinkLocationOwnerToken owner,
+            CancellationToken cancellationToken = default
+        ) => ValueTask.FromResult(ZLinkLocationWriteStatus.Stored);
+
+        public override ValueTask<ZLinkOwnerLeaseClaimResult> ClaimOwnerLeaseAsync(
+            string ownerId,
+            TimeSpan leaseTtl,
+            CancellationToken cancellationToken = default
+        ) => _inner.ClaimOwnerLeaseAsync(ownerId, leaseTtl, cancellationToken);
+
+        public override ValueTask<ZLinkOwnerLeaseReleaseResult> ReleaseOwnerLeaseAsync(
+            ZLinkLocationOwnerToken token,
+            CancellationToken cancellationToken = default
+        ) => _inner.ReleaseOwnerLeaseAsync(token, cancellationToken);
+
+        public override ValueTask<long> RemoveAllByOwnerAsync(
+            ZLinkLocationOwnerToken owner,
+            CancellationToken cancellationToken = default
+        ) => ValueTask.FromResult(0L);
+    }
+
     private sealed class CountingPeerResolver(IZLinkMeshNodeLocationResolver inner)
         : IZLinkMeshNodeLocationResolver
     {

@@ -93,11 +93,7 @@ struct fanout_location_runtime_test_access_t
     static state_lane_t &lane (fanout_location_runtime_t &runtime) { return runtime._lane; }
     static void pump (fanout_location_runtime_t &runtime) { runtime.pump (); }
     static void run (fanout_location_runtime_t &runtime) { runtime.run (); }
-    static void request_stop (fanout_location_runtime_t &runtime)
-    {
-        runtime._stop.store (true, std::memory_order_release);
-        runtime._wake_timer.signal ();
-    }
+    static void request_stop (fanout_location_runtime_t &runtime) { runtime.request_stop (); }
 };
 }
 
@@ -375,6 +371,46 @@ bool verify_timer_handler_activation_lifetime ()
     }
     return timer_activation_handler_t::destroyed.load () == 2
            && timer_activation_dependency_t::destroyed.load () == 2;
+}
+
+bool verify_throwing_timer_callback_preserves_default_policy ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+
+    serializer_registry_t serializers;
+    auto state = std::make_shared<spot_context_state_t> ();
+    state->spot_instance = std::make_shared<int> (1);
+    state->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
+    state->channel_runtime->serializers = &serializers;
+
+    auto timer_state = std::make_shared<timer_state_t> ();
+    timer_state->name = "throwing-callback";
+    timer_state->handler_type = std::type_index (typeid (int));
+    auto handler_instance = std::make_shared<int> (1);
+    timer_state->handler_instance = handler_instance;
+    timer_state->handler_invoker = [] (void *, void *, serializer_registry_t &,
+                                       const timer_tick_t &) -> task_t<zlink::message_t> {
+        throw std::runtime_error ("timer callback failed");
+        co_return zlink::message_t{};
+    };
+
+    auto timer = timer_test_access_t::create (timer_state);
+    timer_runtime_t runtime (state);
+    const auto first = runtime.dispatch_fire_count_async (timer, 1).result ();
+    const auto first_failures = runtime.failure_events (timer);
+    if (first || first.error_kind () != framework_error_kind_t::internal_failure
+        || timer.is_disposed () || first_failures.size () != 1 || first_failures[0].stopped
+        || first_failures[0].message != "timer callback failed") {
+        return false;
+    }
+
+    const auto second = runtime.dispatch_fire_count_async (timer, 1).result ();
+    const auto second_failures = runtime.failure_events (timer);
+    return !second && second.error_kind () == framework_error_kind_t::internal_failure
+           && !timer.is_disposed () && second_failures.size () == 2
+           && second_failures[1].delivery_index == first_failures[0].delivery_index + 1;
 }
 
 struct timer_cleanup_probe_t
@@ -5651,8 +5687,11 @@ bool verify_relocation_abort_does_not_hold_receive_worker ()
     std::promise<void> following_frame;
     auto following = following_frame.get_future ();
     std::thread receiver ([&] {
-        owner.abort_relocation_materialization (
-          {{.kind = runtime::stateful::object_kind_t::user_spot, .key = "abort-target"}});
+        owner
+          .abort_relocation_materialization_async (
+            {{.kind = runtime::stateful::object_kind_t::user_spot, .key = "abort-target"}})
+          .result ()
+          .value ();
         owner.dispatch_wire_actor_join_admission (
           spot_id_t ("following-target"), std::string_view{}, [] () -> task_t<void> { co_return; },
           [&] (result_t<void>) { following_frame.set_value (); });
@@ -6752,9 +6791,13 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     if (!dispatcher.can_handle_send (spot_actor_commit_route_request_t::packet_name)) {
         return false;
     }
-    const auto submitted = dispatcher.dispatch_send (
-      route_received_packet_t{zlink::routing_id_t::from ("source-node"), 1, parts}, header,
-      provider);
+    const auto submitted =
+      dispatcher
+        .dispatch_send (
+          route_received_packet_t{zlink::routing_id_t::from ("source-node"), 1, parts}, header,
+          provider)
+        .result ()
+        .value ();
     const auto join_completion_deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (1);
     while (!join_completion_entered.load (std::memory_order_acquire)
@@ -7812,7 +7855,8 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
                 return spot_node_runtime_t (spot_state).commit_relocation_materialization (objects);
             },
             [spot_state = state->spot_state] (const std::vector<stateful::object_ref_t> &objects) {
-                spot_node_runtime_t (spot_state).abort_relocation_materialization (objects);
+                return spot_node_runtime_t (spot_state)
+                  .abort_relocation_materialization_async (objects);
             });
       };
     configure_materialization (source, source_state);
@@ -11629,8 +11673,77 @@ int verify_actor_join_completion_observations ()
     return 0;
 }
 
+bool verify_bulk_deferred_actor_joins ()
+{
+    namespace fw = zlink::framework;
+    fw::runtime::offload_executor_t deferred_executor (1);
+    fw::runtime::serial_execution_queue_t deferred_queue (deferred_executor);
+    fw::runtime::offload_executor_t target_executor (1);
+    fw::runtime::serial_execution_queue_t target_queue (target_executor);
+    fw::detail::actor_gateway_runtime_t actor_gateway;
+    fw::serializer_registry_t actor_serializers;
+    actor_gateway.bind_serializers (actor_serializers);
+    const auto actor = fw::detail::actor_ref_access_t::make (
+      fw::node_rid_t::from_string ("barrier-node"), "player", "barrier-actor", 1);
+    auto actor_context = actor_gateway.actor_context (actor);
+    constexpr std::size_t bulk_join_count = 65;
+    const std::string bulk_request (129u * 1024u, 'x');
+    std::size_t completed_bulk_joins = 0;
+    std::size_t completed_bulk_request_bytes = 0;
+    std::set<std::string> completed_bulk_targets;
+    std::vector<std::shared_ptr<zlink::framework::detail::deferred_barrier_t>> bulk_barriers;
+    actor_gateway.on_join_barrier ([&] (const auto &) {
+        auto reserved = target_queue.reserve_barrier_next ("bulk-join-barrier", true);
+        if (reserved)
+            bulk_barriers.push_back (reserved.value ());
+        return reserved;
+    });
+    actor_gateway.on_join_spot (
+      [&] (const auto &actor, const auto &spot_id, const auto &request, auto, auto,
+           auto) -> zlink::framework::task_t<zlink::framework::detail::actor_join_reply_t> {
+          ++completed_bulk_joins;
+          completed_bulk_request_bytes += request.to_string ().size ();
+          completed_bulk_targets.emplace (spot_id);
+          co_return zlink::framework::result_t<
+            zlink::framework::detail::actor_join_reply_t>::success ({1, actor, zlink::message_t{}});
+      });
+    // Defer starts each call's deadline. Prepare the distinct typed payloads
+    // before the handler so later serialization cannot consume earlier calls' budgets.
+    std::vector<fw::actor_join_call_t> calls;
+    calls.reserve (bulk_join_count);
+    for (std::size_t index = 0; index < bulk_join_count; ++index)
+        calls.push_back (actor_context.join_spot ("bulk-target-" + std::to_string (index),
+                                                  fw::message_t::from (bulk_request)));
+    deferred_queue.run ("bulk-deferred-actor-joins", [&] {
+        for (auto &call : calls)
+            call.defer ();
+    });
+    bool passed = bulk_barriers.size () == bulk_join_count;
+    for (const auto &barrier : bulk_barriers) {
+        const auto terminal = barrier->terminal ().result ();
+        if (!terminal)
+            std::cerr << "bulk deferred join terminal failed: "
+                      << (terminal.error () ? terminal.error ()->what () : "no error") << '\n';
+        passed = static_cast<bool> (terminal) && passed;
+    }
+    target_queue.drain ();
+    if (!passed || completed_bulk_joins != bulk_join_count
+        || completed_bulk_targets.size () != bulk_join_count
+        || completed_bulk_request_bytes <= 8u * 1024u * 1024u) {
+        std::cerr << "bulk deferred joins completed=" << completed_bulk_joins
+                  << " targets=" << completed_bulk_targets.size ()
+                  << " bytes=" << completed_bulk_request_bytes << '\n';
+        return false;
+    }
+
+    return true;
+}
+
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--throwing-timer-callback-default-policy")
+        return verify_throwing_timer_callback_preserves_default_policy () ? EXIT_SUCCESS
+                                                                          : EXIT_FAILURE;
     if (argc == 2 && std::string_view (argv[1]) == "--session-control-priority")
         return verify_session_control_lifecycle_priority () ? 0 : 1;
     if (argc == 2 && std::string_view (argv[1]) == "--fanout-state-owner")
@@ -11640,6 +11753,8 @@ int main (int argc, char **argv)
             || !verify_fanout_snapshot_state_owner ()))
         return 1;
     zlink::framework::completion_owner_t completion_owner;
+    if (argc == 2 && std::string_view (argv[1]) == "--bulk-deferred-actor-joins")
+        return verify_bulk_deferred_actor_joins () ? EXIT_SUCCESS : EXIT_FAILURE;
     if (argc == 2 && std::string_view (argv[1]) == "--telemetry-completion")
         return verify_actor_join_completion_observations ();
     if (argc == 2 && std::string_view (argv[1]) == "--handler-origin-terminals")
@@ -12244,6 +12359,10 @@ int main (int argc, char **argv)
 
     if (!verify_timer_handler_activation_lifetime ()) {
         return 40;
+    }
+    if (!verify_throwing_timer_callback_preserves_default_policy ()) {
+        std::cerr << "throwing timer callback changed the default exception policy\n";
+        return 137;
     }
     if (!verify_timer_cancel_generation_contract ()) {
         return 114;
@@ -12955,35 +13074,8 @@ int main (int argc, char **argv)
             barrier_events.clear ();
         }
 
-        constexpr std::size_t bulk_join_count = 65;
-        const std::string bulk_request (129u * 1024u, 'x');
-        std::size_t completed_bulk_joins = 0;
-        std::size_t completed_bulk_request_bytes = 0;
-        std::set<std::string> completed_bulk_targets;
-        actor_gateway.on_join_spot (
-          [&] (const auto &actor, const auto &spot_id, const auto &request, auto, auto,
-               auto) -> zlink::framework::task_t<zlink::framework::detail::actor_join_reply_t> {
-              ++completed_bulk_joins;
-              completed_bulk_request_bytes += request.to_string ().size ();
-              completed_bulk_targets.emplace (spot_id);
-              co_return zlink::framework::result_t<
-                zlink::framework::detail::actor_join_reply_t>::success ({1, actor,
-                                                                         zlink::message_t{}});
-          });
-        deferred_queue.run ("bulk-deferred-actor-joins", [&] {
-            for (std::size_t index = 0; index < bulk_join_count; ++index) {
-                actor_context
-                  .join_spot ("bulk-target-" + std::to_string (index),
-                              zlink::framework::message_t::from (bulk_request))
-                  .defer ();
-            }
-        });
-        target_queue.drain ();
-        if (completed_bulk_joins != bulk_join_count
-            || completed_bulk_targets.size () != bulk_join_count
-            || completed_bulk_request_bytes <= 8u * 1024u * 1024u) {
+        if (!verify_bulk_deferred_actor_joins ())
             return 74;
-        }
 
         deferred_queue.run ("failed-production-cross-actor-barrier", [&] {
             actor_context.join_spot ("target-spot").defer ();

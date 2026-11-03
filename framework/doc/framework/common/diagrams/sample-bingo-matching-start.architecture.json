@@ -63,7 +63,8 @@
         "참여자 원문 라벨 — Player 1/2: Player Client 1/2 · Actor 1/2: Play / Player Actor 1/2 · Matchmaker: Matchmaking · Room: Play / Room.",
         "`[par]` 표시 메시지는 원문 par/and 블록으로 두 그룹이 병렬 실행된다: (Matching 응답) Actor2→Session→Player2 MatchBingoRes 와 (Handler 반환 뒤 deferred join) Actor2→Room 참가 뒤 State=Running·BingoGameStartedNotify fan-out.",
         "원문 Note(Actor1~Room): Handler 반환 뒤 deferred join이 실행된다.",
-        "Room owner 조회와 remote join은 Location Store가 처리한다. Concurrent GetOrCreate caller는 하나의 Creating authority가 Ready가 될 때까지 기다리며 별도 factory를 실행하지 않는다. Player join callback은 API record 조회를 Yield로 기다린 뒤 room이 Finished인지·Actor가 여전히 member인지 재확인하고 state를 바꾼다."
+        "Room owner 조회와 remote join은 Location Store가 처리한다. Concurrent GetOrCreate caller는 하나의 Creating authority가 Ready가 될 때까지 기다리며 별도 factory를 실행하지 않는다. Player join callback은 API record 조회를 Yield로 기다린 뒤 room이 Finished인지·Actor가 여전히 member인지 재확인하고 state를 바꾼다.",
+        "PlayerJoinedNotify 전송 실패는 수신자와 오류를 기록하고 다른 수신자에게 계속 전달한다. 실패가 새 player의 입장을 취소하지 않는다."
       ]
     }
   ]

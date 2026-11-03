@@ -2584,23 +2584,26 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             target.setRemoteSessionBindingOwner(
                     (spotNode, ref, transition) ->
                             CompletableFuture.completedFuture(
-                                    transition.apply(
-                                            new ZLinkInternalSpotNode
-                                                    .RemoteSessionBindingTransition() {
-                                                @Override
-                                                public void bind(
-                                                        ZLinkInternalSpotNode.BoundSessionRoute
-                                                                bound) {
-                                                    actorBinding.set(bound);
-                                                }
+                                            transition.apply(
+                                                    new ZLinkInternalSpotNode
+                                                            .RemoteSessionBindingTransition() {
+                                                        @Override
+                                                        public void bind(
+                                                                ZLinkInternalSpotNode
+                                                                                .BoundSessionRoute
+                                                                        bound) {
+                                                            actorBinding.set(bound);
+                                                        }
 
-                                                @Override
-                                                public void retire(
-                                                        ZLinkInternalSpotNode.BoundSessionRoute
-                                                                retired) {
-                                                    actorBinding.set(null);
-                                                }
-                                            })));
+                                                        @Override
+                                                        public void retire(
+                                                                ZLinkInternalSpotNode
+                                                                                .BoundSessionRoute
+                                                                        retired) {
+                                                            actorBinding.set(null);
+                                                        }
+                                                    }))
+                                    .thenCompose(stage -> stage));
             var command =
                     new ZLinkServiceM6BWireCodec.BoundSessionBind(
                             1, route, RoutingId.from("jvm-m6b-linearized-session"), true, 3);
@@ -2695,11 +2698,14 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             ZLinkStateLane ownerTurn = new ZLinkStateLane();
             target.setRemoteSessionBindingOwner(
                     (spotNode, ref, transition) ->
-                            ownerTurn.runAsync(
-                                    () ->
-                                            transition.apply(
-                                                    ZLinkInternalSpotNode
-                                                            .RemoteSessionBindingTransition.NONE)));
+                            ownerTurn
+                                    .runAsync(
+                                            () ->
+                                                    transition.apply(
+                                                            ZLinkInternalSpotNode
+                                                                    .RemoteSessionBindingTransition
+                                                                    .NONE))
+                                    .thenCompose(stage -> stage));
 
             CompletableFuture<Void> release = new CompletableFuture<>();
             ownerTurn.runAsync(
@@ -2750,11 +2756,14 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             ZLinkStateLane ownerTurn = new ZLinkStateLane();
             target.setRemoteSessionBindingOwner(
                     (spotNode, ref, transition) ->
-                            ownerTurn.runAsync(
-                                    () ->
-                                            transition.apply(
-                                                    ZLinkInternalSpotNode
-                                                            .RemoteSessionBindingTransition.NONE)));
+                            ownerTurn
+                                    .runAsync(
+                                            () ->
+                                                    transition.apply(
+                                                            ZLinkInternalSpotNode
+                                                                    .RemoteSessionBindingTransition
+                                                                    .NONE))
+                                    .thenCompose(stage -> stage));
             CompletableFuture<Void> release = new CompletableFuture<>();
             ownerTurn.runAsync(
                     () -> {
@@ -2855,6 +2864,219 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                     5, route, sessionB, false, 1)));
             assertBoundIngressRejected(target, ownerB, 1, route, sessionB, 1, 2);
             assertBoundIngressAccepted(target, ownerB, 2, route, sessionB, 1, 1);
+        }
+    }
+
+    @Test
+    void duplicateBindCallbackAcceptsRejectsTimesOutAndDefaultsToLaterSession() throws Exception {
+        try (var context = Zlink.createContext();
+                var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            RoutingId ownerRid = RoutingId.from("jvm-m6b-duplicate-owner");
+            node.setRoutingId(RoutingId.from("jvm-m6b-duplicate-actor-node"));
+            node.setBind("inproc://jvm-m6b-duplicate-" + System.nanoTime());
+            node.start();
+            ZLinkJavaRawSpotNode target = (ZLinkJavaRawSpotNode) node.spotNode();
+            ZLinkBackendActorRef actor;
+            try (Message create = Message.from("create")) {
+                actor = target.createActor("duplicate-bind-actor", create);
+            }
+            target.rememberActorAuthority(actor, 41, 1);
+            var route =
+                    new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                            actor, node.lifecycleGeneration(), 41, 1);
+            var ownerTurn = new ZLinkStateLane();
+            var callbackPresent = new AtomicBoolean();
+            var callbackDecision =
+                    new AtomicReference<CompletionStage<Optional<String>>>(
+                            CompletableFuture.completedFuture(Optional.empty()));
+            var callbackCancellation =
+                    new AtomicReference<
+                            systems.zlink.framework.actors.ZLinkActorCallbackCancellation>();
+            var currentIdentity =
+                    new AtomicReference<
+                            systems.zlink.framework.actors.ZLinkSessionBindingIdentity>();
+            var incomingIdentity =
+                    new AtomicReference<
+                            systems.zlink.framework.actors.ZLinkSessionBindingIdentity>();
+            target.setRemoteSessionBindingOwner(
+                    (spotNode, actorRef, transition) ->
+                            ownerTurn
+                                    .runAsync(
+                                            () ->
+                                                    transition.apply(
+                                                            new ZLinkInternalSpotNode
+                                                                    .RemoteSessionBindingTransition() {
+                                                                @Override
+                                                                public void bind(
+                                                                        ZLinkInternalSpotNode
+                                                                                        .BoundSessionRoute
+                                                                                accepted) {}
+
+                                                                @Override
+                                                                public void retire(
+                                                                        ZLinkInternalSpotNode
+                                                                                        .BoundSessionRoute
+                                                                                retired) {}
+
+                                                                @Override
+                                                                public CompletionStage<
+                                                                                Optional<String>>
+                                                                        decideDuplicateBind(
+                                                                                systems.zlink
+                                                                                                .framework
+                                                                                                .actors
+                                                                                                .ZLinkSessionBindingIdentity
+                                                                                        incoming,
+                                                                                RoutingId
+                                                                                        incomingSessionRid,
+                                                                                Runnable
+                                                                                        callbackStarted,
+                                                                                systems.zlink
+                                                                                                .framework
+                                                                                                .actors
+                                                                                                .ZLinkActorCallbackCancellation
+                                                                                        cancellation) {
+                                                                    assertTrue(
+                                                                            ownerTurn.isOnLane());
+                                                                    currentIdentity.set(
+                                                                            target.boundSessionRoute(
+                                                                                            actorRef)
+                                                                                    .orElseThrow()
+                                                                                    .sessionBindingIdentity());
+                                                                    incomingIdentity.set(incoming);
+                                                                    callbackCancellation.set(
+                                                                            cancellation);
+                                                                    if (callbackPresent.get()) {
+                                                                        callbackStarted.run();
+                                                                        return callbackDecision
+                                                                                .get();
+                                                                    }
+                                                                    return ZLinkInternalSpotNode
+                                                                            .RemoteSessionBindingTransition
+                                                                            .super
+                                                                            .decideDuplicateBind(
+                                                                                    incoming,
+                                                                                    incomingSessionRid,
+                                                                                    callbackStarted,
+                                                                                    cancellation);
+                                                                }
+                                                            }))
+                                    .thenCompose(stage -> stage),
+                    Duration.ofMillis(40));
+
+            var replies = new LinkedBlockingQueue<ZLinkServiceM6BWireCodec.BoundSessionBindReply>();
+            var first =
+                    target.applyRemoteStreamBinding(
+                            ownerRid,
+                            7,
+                            ownerRid.toString(),
+                            1,
+                            new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                                    1, route, RoutingId.from("session-current"), true, 1),
+                            replies::add);
+            assertTrue(first.toCompletableFuture().get(5, TimeUnit.SECONDS));
+            assertEquals(
+                    RequestResult.OK.value(), replies.poll(5, TimeUnit.SECONDS).terminalResult());
+
+            callbackPresent.set(true);
+            callbackDecision.set(CompletableFuture.completedFuture(Optional.empty()));
+            var accepted =
+                    target.applyRemoteStreamBinding(
+                            ownerRid,
+                            7,
+                            ownerRid.toString(),
+                            1,
+                            new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                                    2, route, RoutingId.from("session-accepted"), true, 2),
+                            replies::add);
+            assertTrue(accepted.toCompletableFuture().get(5, TimeUnit.SECONDS));
+            assertEquals(
+                    RequestResult.OK.value(), replies.poll(5, TimeUnit.SECONDS).terminalResult());
+            assertEquals(
+                    new systems.zlink.framework.actors.ZLinkSessionBindingIdentity(ownerRid, 7, 1),
+                    currentIdentity.get());
+            assertEquals(
+                    new systems.zlink.framework.actors.ZLinkSessionBindingIdentity(ownerRid, 7, 2),
+                    incomingIdentity.get());
+            assertEquals(
+                    RoutingId.from("session-accepted"),
+                    target.boundSessionRoute(actor).orElseThrow().sessionRid());
+
+            callbackDecision.set(
+                    CompletableFuture.completedFuture(Optional.of("already signed in")));
+            var rejected =
+                    target.applyRemoteStreamBinding(
+                            ownerRid,
+                            7,
+                            ownerRid.toString(),
+                            1,
+                            new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                                    3, route, RoutingId.from("session-rejected"), true, 3),
+                            replies::add);
+            assertFalse(rejected.toCompletableFuture().get(5, TimeUnit.SECONDS));
+            var rejection = replies.poll(5, TimeUnit.SECONDS);
+            assertEquals(RequestResult.REJECTED.value(), rejection.terminalResult());
+            assertEquals("already signed in", rejection.rejectionMessage());
+            assertEquals(
+                    RoutingId.from("session-accepted"),
+                    target.boundSessionRoute(actor).orElseThrow().sessionRid());
+
+            callbackDecision.set(CompletableFuture.completedFuture(Optional.of("")));
+            var emptyMessageAccepted =
+                    target.applyRemoteStreamBinding(
+                            ownerRid,
+                            7,
+                            ownerRid.toString(),
+                            1,
+                            new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                                    4, route, RoutingId.from("session-empty-acceptance"), true, 4),
+                            replies::add);
+            assertTrue(emptyMessageAccepted.toCompletableFuture().get(5, TimeUnit.SECONDS));
+            assertEquals(
+                    RequestResult.OK.value(), replies.poll(5, TimeUnit.SECONDS).terminalResult());
+            assertEquals(
+                    RoutingId.from("session-empty-acceptance"),
+                    target.boundSessionRoute(actor).orElseThrow().sessionRid());
+
+            var lateDecision = new CompletableFuture<Optional<String>>();
+            callbackDecision.set(lateDecision);
+            var timedOut =
+                    target.applyRemoteStreamBinding(
+                            ownerRid,
+                            7,
+                            ownerRid.toString(),
+                            1,
+                            new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                                    6, route, RoutingId.from("session-timeout"), true, 6),
+                            replies::add);
+            var timeoutReply = replies.poll(5, TimeUnit.SECONDS);
+            assertEquals(RequestResult.TIMED_OUT.value(), timeoutReply.terminalResult());
+            assertTrue(callbackCancellation.get().isCancellationRequested());
+            assertEquals(
+                    RoutingId.from("session-empty-acceptance"),
+                    target.boundSessionRoute(actor).orElseThrow().sessionRid());
+            lateDecision.complete(Optional.empty());
+            assertFalse(timedOut.toCompletableFuture().get(5, TimeUnit.SECONDS));
+            assertEquals(
+                    RoutingId.from("session-empty-acceptance"),
+                    target.boundSessionRoute(actor).orElseThrow().sessionRid());
+
+            callbackPresent.set(false);
+            var withoutCallback =
+                    target.applyRemoteStreamBinding(
+                            ownerRid,
+                            7,
+                            ownerRid.toString(),
+                            1,
+                            new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                                    7, route, RoutingId.from("session-without-callback"), true, 7),
+                            replies::add);
+            assertTrue(withoutCallback.toCompletableFuture().get(5, TimeUnit.SECONDS));
+            assertEquals(
+                    RequestResult.OK.value(), replies.poll(5, TimeUnit.SECONDS).terminalResult());
+            assertEquals(
+                    RoutingId.from("session-without-callback"),
+                    target.boundSessionRoute(actor).orElseThrow().sessionRid());
         }
     }
 

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Contracts.Actors;
 using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Identifiers;
@@ -3105,7 +3106,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         RoutingId sourceNodeRid,
         ulong sourceNodeGeneration,
         ServiceWireCodec.BoundSessionBind38 request,
-        Action reply,
+        Action<RequestResult, uint, string?> reply,
         CancellationToken cancellationToken
     )
     {
@@ -3175,7 +3176,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 actorId,
                 expected,
                 ValidateAuthority,
-                reply
+                () => reply(RequestResult.Ok, 0, null)
             );
             return;
         }
@@ -3187,35 +3188,163 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ZLinkFrameworkErrorKind.Unavailable,
                 $"Actor '{actorId}' authority is unavailable."
             );
-        var replacement = _actorBoundSessionCoordinator.ReplaceActorSessionBinding(
-            actorId,
-            sourceNodeRid,
-            sessionRid,
-            token,
-            bindingGeneration,
-            actorRef.Generation,
-            request.Actor.ExpectedAuthorityOwnerGeneration.Value,
-            meshName,
-            request.Actor.TargetNodeGeneration.Value,
-            ownerLease,
-            sourceNodeGeneration,
-            0,
-            sessionOwner.OwnerId,
-            sessionOwner.LeaseGeneration,
-            ValidateAuthority,
-            reply
+        using var callbackCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken
         );
+        var callbackStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var decision = 0;
+        var callbackTask = state
+            .ExecuteDispatchAsync(
+                async _ =>
+                {
+                    ZLinkActorSessionBindingTransition ReplaceBinding() =>
+                        _actorBoundSessionCoordinator.ReplaceActorSessionBinding(
+                            actorId,
+                            sourceNodeRid,
+                            sessionRid,
+                            token,
+                            bindingGeneration,
+                            actorRef.Generation,
+                            request.Actor.ExpectedAuthorityOwnerGeneration.Value,
+                            meshName,
+                            request.Actor.TargetNodeGeneration.Value,
+                            ownerLease,
+                            sourceNodeGeneration,
+                            0,
+                            sessionOwner.OwnerId,
+                            sessionOwner.LeaseGeneration,
+                            ValidateAuthority,
+                            () => reply(RequestResult.Ok, 0, null)
+                        );
+
+                    if (
+                        !state.TryGetBoundSession(out var currentBinding)
+                        || currentBinding.IsSamePhysicalSessionOwner(
+                            sourceNodeRid,
+                            sourceNodeGeneration,
+                            sessionRid
+                        )
+                    )
+                    {
+                        return (
+                            Transition: (ZLinkActorSessionBindingTransition?)ReplaceBinding(),
+                            Rejected: false
+                        );
+                    }
+
+                    var actor =
+                        state.Actor
+                        ?? throw new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.Unavailable,
+                            $"Actor '{actorId}' is unavailable for duplicate bind."
+                        );
+                    var currentIdentity =
+                        new Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity(
+                            currentBinding.SessionNodeRid
+                                ?? throw new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.Unavailable,
+                                    $"Actor '{actorId}' current Session owner is unavailable."
+                                ),
+                            currentBinding.SessionOwnerNodeGeneration,
+                            currentBinding.BindingGeneration
+                        );
+                    callbackStarted.TrySetResult();
+                    string? rejectionMessage;
+                    try
+                    {
+                        rejectionMessage = await actor
+                            .OnDuplicateBindAsync(
+                                currentIdentity,
+                                new Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity(
+                                    sourceNodeRid,
+                                    sourceNodeGeneration,
+                                    bindingGeneration
+                                ),
+                                callbackCancellation.Token
+                            )
+                            .ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (Volatile.Read(ref decision) == 2)
+                    {
+                        return (
+                            Transition: (ZLinkActorSessionBindingTransition?)null,
+                            Rejected: false
+                        );
+                    }
+                    if (Interlocked.CompareExchange(ref decision, 1, 0) != 0)
+                        return (
+                            Transition: (ZLinkActorSessionBindingTransition?)null,
+                            Rejected: false
+                        );
+                    if (!string.IsNullOrEmpty(rejectionMessage))
+                    {
+                        reply(RequestResult.Rejected, 0, rejectionMessage);
+                        return (
+                            Transition: (ZLinkActorSessionBindingTransition?)null,
+                            Rejected: true
+                        );
+                    }
+                    return (
+                        Transition: (ZLinkActorSessionBindingTransition?)ReplaceBinding(),
+                        Rejected: false
+                    );
+                },
+                countAsPendingRequest: false,
+                cancellationToken
+            )
+            .AsTask();
+        async Task<bool> WaitCallbackTimeoutAsync()
+        {
+            if (
+                await Task.WhenAny(callbackStarted.Task, callbackTask).ConfigureAwait(false)
+                != callbackStarted.Task
+            )
+                return false;
+            await Task.Delay(
+                    Registration.SessionReplacementCallbackTimeout,
+                    Registration.TimeProvider,
+                    CancellationToken.None
+                )
+                .ConfigureAwait(false);
+            return true;
+        }
+        var callbackTimeout = WaitCallbackTimeoutAsync();
+        if (
+            await Task.WhenAny(callbackTask, callbackTimeout).ConfigureAwait(false)
+            == callbackTimeout
+        )
+        {
+            if (
+                await callbackTimeout.ConfigureAwait(false)
+                && Interlocked.CompareExchange(ref decision, 2, 0) == 0
+            )
+            {
+                callbackCancellation.Cancel();
+                reply(RequestResult.TimedOut, 0, null);
+                ZLinkUnawaitedSubmit.Observe(
+                    new ValueTask(callbackTask),
+                    $"duplicate-bind-callback:{actorId}",
+                    ErrorSink
+                );
+                return;
+            }
+        }
+        var callbackResult = await callbackTask.ConfigureAwait(false);
+        if (callbackResult.Rejected)
+            return;
+        var replacement =
+            callbackResult.Transition
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.DeadlineExceeded,
+                $"Actor '{actorId}' duplicate bind callback timed out."
+            );
         if (
             replacement.Changed
             && replacement.Previous is { } previous
             && previous.SessionNodeRid is { } previousSessionNodeRid
-            && !previous.IsSamePhysicalSessionOwner(
-                sourceNodeRid,
-                sourceNodeGeneration,
-                sessionRid,
-                sessionOwner.OwnerId,
-                sessionOwner.LeaseGeneration
-            )
+            && !previous.IsSamePhysicalSessionOwner(sourceNodeRid, sourceNodeGeneration, sessionRid)
         )
         {
             var notification = new ZLinkServiceWireCodec.BoundSessionReplacedRecord(
@@ -4766,7 +4895,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         return GetOrCreateActorState(actorId).TryGetAnyStagedRelocationSessionRoute(out route);
     }
 
-    private async ValueTask ResetActorRuntimeGenerationAsync(
+    internal async ValueTask ResetActorRuntimeGenerationAsync(
         CancellationToken cancellationToken = default,
         Action<Exception>? detachedCleanupFailure = null
     )

@@ -14,7 +14,7 @@ import {
   ZLinkFrameworkInternalErrorKind,
   internalFrameworkErrorKind
 } from '../../packages/framework/src/runtime/framework-errors-internal';
-import { DefaultZLinkSpotManager } from '../../packages/framework/src/runtime/spots';
+import { DefaultZLinkSpotManager } from '../../packages/framework/src/internal';
 import { ZLinkSpotActivationRegistry } from '../../packages/framework/src/runtime/spots/spot-activation-registry';
 import { ZLinkSpotActivation } from '../../packages/framework/src/runtime/spots/spot-activation-state';
 import { ZLinkSpotSerialExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-executor';

@@ -154,9 +154,9 @@ export class ZLinkActorSessionBindingRegistry<
   TContext extends ZLinkActorSessionBindingContext<TActor>,
   TActor extends ZLinkActorSessionBindingActor
 > {
-  private readonly lane = new ZLinkStateLane();
+  readonly lane = new ZLinkStateLane();
   private readonly routes = new Map<string, ZLinkActorSessionRoute<TContext, TActor>>();
-  private readonly nextActorSlots = new WeakMap<TContext, number>();
+  readonly nextActorSlots = new WeakMap<TContext, number>();
   private readonly sealWaiters = new Map<
     string,
     Set<{
@@ -167,7 +167,7 @@ export class ZLinkActorSessionBindingRegistry<
   >();
   private readonly activeFrameWaiters = new Map<string, Set<ZLinkActorSessionActiveFrameWaiter>>();
   private readonly relocations = new Map<string, ZLinkActorSessionRelocationQueue>();
-  private readonly absentSessionRelocationResults = new Map<
+  readonly absentSessionRelocationResults = new Map<
     string,
     {
       readonly result: SessionRelocationResult;

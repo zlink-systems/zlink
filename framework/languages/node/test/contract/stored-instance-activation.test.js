@@ -15,7 +15,7 @@ const {
 } = require('../../packages/framework/dist/runtime/foundation/service-authority-payload-codec');
 const {
   ServiceStatefulRuntime
-} = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
+} = require('../../packages/framework/dist/internal');
 
 for (const state of ['reserved', 'active']) {
   for (const field of [

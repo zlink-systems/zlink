@@ -847,13 +847,14 @@ void mesh_node_runtime_t::start (
                     const runtime::stateful::object_ref_t &target,
                     const runtime::protocol::relocation_prepare_t &prepare) {
           return spot_node_runtime_t (spot_state)
-            .consume_actor_join_recovery (frozen, target, prepare);
+            .consume_actor_join_recovery_async (frozen, target, prepare);
       },
       [spot_state] (const runtime::stateful::object_ref_t &target) {
           return spot_node_runtime_t (spot_state).actor_relocation_authority (target);
       },
       [spot_state] (const std::string &stable_type, const runtime::stateful::object_ref_t &target) {
-          spot_node_runtime_t (spot_state).discard_actor_join_recovery (stable_type, target);
+          return spot_node_runtime_t (spot_state)
+            .discard_actor_join_recovery_async (stable_type, target);
       },
       [spot_state] (const runtime::stateful::object_ref_t &target,
                     std::uint64_t target_node_generation,
@@ -3848,6 +3849,19 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
             co_return result_t<runtime::protocol::stream_bind_reply_tail_t>::success (
               *reply.binding);
         }
+        if (reply.header.terminal_result
+            == static_cast<std::uint32_t> (runtime::protocol::request_terminal_result::rejected)) {
+            co_return result_t<runtime::protocol::stream_bind_reply_tail_t>::failure (
+              framework_error_kind_t::rejected, reply.binding && reply.binding->rejection_message
+                                                  ? *reply.binding->rejection_message
+                                                  : "Remote Actor rejected the Session binding");
+        }
+        if (reply.header.terminal_result
+            == static_cast<std::uint32_t> (runtime::protocol::request_terminal_result::timedOut)) {
+            co_return result_t<runtime::protocol::stream_bind_reply_tail_t>::failure (
+              framework_error_kind_t::deadline_exceeded,
+              "Remote Actor duplicate-bind callback timed out");
+        }
         const auto stale_route =
           reply.header.terminal_result
             == static_cast<std::uint32_t> (runtime::protocol::request_terminal_result::conflict)
@@ -4567,6 +4581,7 @@ void mesh_node_runtime_t::configure_relocation_metric_context (
     // metrics never participate in the authority or dispatch decision.
     const auto &catalog = *_state->spot_state;
     wire.monitoring = catalog.monitoring;
+    wire.dispatch = &catalog.dispatch;
     wire.mesh_name = _state->mesh_name;
     if (kind == runtime::stateful::object_kind_t::actor) {
         const auto factory = catalog.actor_factories.find (stable_type);

@@ -703,7 +703,7 @@ export class ZLinkActorTransferRuntime {
     );
   }
 
-  private async sealBoundSessionRoute(
+  async sealBoundSessionRoute(
     actor: ZLinkActor,
     state: ZLinkActorRuntimeState,
     signal?: AbortSignal,
@@ -814,7 +814,7 @@ export class ZLinkActorTransferRuntime {
     };
   }
 
-  private async abortBoundSessionRouteSeal(
+  async abortBoundSessionRouteSeal(
     actor: ZLinkActor,
     state: ZLinkActorRuntimeState,
     target: ZLinkRemoteBoundSessionTarget
@@ -1336,7 +1336,7 @@ export class ZLinkActorTransferRuntime {
     return actorManager;
   }
 
-  private async publishBoundSessionOwnership(
+  async publishBoundSessionOwnership(
     actorId: string,
     actorRef: ZLinkBackendActorRef,
     ownershipGeneration: bigint,

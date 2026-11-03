@@ -1,7 +1,10 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.DotNet;
+using Zlink.Framework.Runtime.Diagnostics;
+using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
@@ -28,55 +31,40 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             MeshName,
             deadlineTimeProvider: clock
         );
-        const System.Reflection.BindingFlags flags =
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
-        var begin = typeof(ZLinkManagedMeshNode)
-            .GetMethods(flags)
-            .Single(method =>
-                method.Name == "TryBeginOperation" && method.GetParameters().Length == 3
-            );
-        var expire = typeof(ZLinkManagedMeshNode).GetMethod("ExpireOperations", flags)!;
         Assert.True(
-            (bool)
-                begin.Invoke(
-                    node,
-                    [MeshOperationKind.NodeRequest, TimeSpan.FromMilliseconds(20), null]
-                )!
+            node.TryBeginOperation(
+                MeshOperationKind.NodeRequest,
+                TimeSpan.FromMilliseconds(20),
+                out _
+            )
         );
         Assert.True(
-            (bool)
-                begin.Invoke(
-                    node,
-                    [
-                        MeshOperationKind.NodeRequest,
-                        TimeSpan.FromMilliseconds(10) + TimeSpan.FromTicks(1),
-                        null,
-                    ]
-                )!
+            node.TryBeginOperation(
+                MeshOperationKind.NodeRequest,
+                TimeSpan.FromMilliseconds(10) + TimeSpan.FromTicks(1),
+                out _
+            )
         );
 
         // Approved §10.1 schedules the earliest absolute deadline in L+R,
         // rather than a rounds-only slot. It must never expire before that value.
         Assert.Equal(
             TimeSpan.FromMilliseconds(10) + TimeSpan.FromTicks(1),
-            expire.Invoke(node, null)
+            node.ExpireOperations()
         );
         clock.Timestamp = 9 * TimeSpan.TicksPerMillisecond;
-        Assert.Equal(
-            TimeSpan.FromMilliseconds(1) + TimeSpan.FromTicks(1),
-            expire.Invoke(node, null)
-        );
+        Assert.Equal(TimeSpan.FromMilliseconds(1) + TimeSpan.FromTicks(1), node.ExpireOperations());
         Assert.Equal(2, node.PendingOperationCount);
         clock.Timestamp = 10 * TimeSpan.TicksPerMillisecond;
-        Assert.Equal(TimeSpan.FromTicks(1), expire.Invoke(node, null));
+        Assert.Equal(TimeSpan.FromTicks(1), node.ExpireOperations());
         Assert.Equal(2, node.PendingOperationCount);
         clock.Timestamp = 11 * TimeSpan.TicksPerMillisecond;
-        Assert.Equal(TimeSpan.FromMilliseconds(9), expire.Invoke(node, null));
+        Assert.Equal(TimeSpan.FromMilliseconds(9), node.ExpireOperations());
         Assert.Equal(1, node.PendingOperationCount);
         clock.Timestamp = 20 * TimeSpan.TicksPerMillisecond;
-        Assert.Equal(Timeout.InfiniteTimeSpan, expire.Invoke(node, null));
+        Assert.Equal(Timeout.InfiniteTimeSpan, node.ExpireOperations());
         Assert.Equal(0, node.PendingOperationCount);
-        Assert.Equal(Timeout.InfiniteTimeSpan, expire.Invoke(node, null));
+        Assert.Equal(Timeout.InfiniteTimeSpan, node.ExpireOperations());
         Assert.Equal(0, node.PendingOperationCount);
     }
 
@@ -748,24 +736,6 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
 
     private sealed class OperationDeadlineAccess
     {
-        private const System.Reflection.BindingFlags Flags =
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
-        private static readonly Type NodeType = typeof(ZLinkManagedMeshNode);
-        private static readonly System.Reflection.MethodInfo BeginMethod = NodeType
-            .GetMethods(Flags)
-            .Single(method =>
-                method.Name == "TryBeginOperation" && method.GetParameters().Length == 3
-            );
-        private static readonly System.Reflection.MethodInfo ExpireMethod = NodeType.GetMethod(
-            "ExpireOperations",
-            Flags
-        )!;
-        private static readonly System.Reflection.MethodInfo TakeMethod = NodeType
-            .GetMethods(Flags)
-            .Single(method =>
-                method.Name == "TryRemoveOperation"
-                && method.GetParameters()[0].ParameterType == typeof(ulong)
-            );
         private readonly ZLinkManagedMeshNode _node;
 
         private OperationDeadlineAccess(ZLinkManagedMeshNode node)
@@ -777,26 +747,22 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
 
         internal int Count => _node.PendingOperationCount;
 
-        internal object Begin(TimeSpan timeout)
+        internal ZLinkManagedMeshNode.PendingOperation Begin(TimeSpan timeout)
         {
-            object?[] registration = [MeshOperationKind.NodeRequest, timeout, null];
-            Assert.True((bool)BeginMethod.Invoke(_node, registration)!);
-            return registration[2]!;
+            Assert.True(
+                _node.TryBeginOperation(MeshOperationKind.NodeRequest, timeout, out var operation)
+            );
+            return operation;
         }
 
-        internal TimeSpan Expire() => (TimeSpan)ExpireMethod.Invoke(_node, null)!;
+        internal TimeSpan Expire() => _node.ExpireOperations();
 
         // The reply path's atomic take (spec E5): exactly one terminal owner.
-        internal bool TakeForReply(object operation)
-        {
-            var identity = (MeshOperationId)
-                operation.GetType().GetProperty("OperationId", Flags)!.GetValue(operation)!;
-            return (bool)TakeMethod.Invoke(_node, [identity.Low, null])!;
-        }
+        internal bool TakeForReply(ZLinkManagedMeshNode.PendingOperation operation) =>
+            _node.TryRemoveOperation(operation.OperationId.Low, out _);
 
-        internal CancellationToken Token(object operation) =>
-            (CancellationToken)
-                operation.GetType().GetProperty("Token", Flags)!.GetValue(operation)!;
+        internal CancellationToken Token(ZLinkManagedMeshNode.PendingOperation operation) =>
+            operation.Token;
     }
 
     [Fact]
@@ -809,41 +775,31 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             MeshName,
             deadlineTimeProvider: clock
         );
-        const System.Reflection.BindingFlags flags =
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
-        var type = typeof(ZLinkManagedMeshNode);
-        var begin = type.GetMethods(flags)
-            .Single(method =>
-                method.Name == "TryBeginOperation" && method.GetParameters().Length == 3
-            );
-        var expire = type.GetMethod("ExpireOperations", flags)!;
-        object?[] longRegistration =
-        [
-            MeshOperationKind.NodeRequest,
-            TimeSpan.FromMilliseconds(513),
-            null,
-        ];
-        Assert.True((bool)begin.Invoke(node, longRegistration)!);
+        Assert.True(
+            node.TryBeginOperation(
+                MeshOperationKind.NodeRequest,
+                TimeSpan.FromMilliseconds(513),
+                out _
+            )
+        );
         // §10.1: skipped rotations cannot expire an entry before its absolute deadline.
         foreach (var tick in new[] { 1, 257, 512 })
         {
             clock.Timestamp = tick * TimeSpan.TicksPerMillisecond;
-            expire.Invoke(node, null);
+            node.ExpireOperations();
             Assert.Equal(1, node.PendingOperationCount);
         }
         clock.Timestamp = 513 * TimeSpan.TicksPerMillisecond;
-        expire.Invoke(node, null);
+        node.ExpireOperations();
         Assert.Equal(0, node.PendingOperationCount);
-        object?[] firstRegistration =
-        [
-            MeshOperationKind.NodeRequest,
-            TimeSpan.FromMilliseconds(1),
-            null,
-        ];
-        Assert.True((bool)begin.Invoke(node, firstRegistration)!);
-        var first = firstRegistration[2]!;
-        var token = (CancellationToken)
-            first.GetType().GetProperty("Token", flags)!.GetValue(first)!;
+        Assert.True(
+            node.TryBeginOperation(
+                MeshOperationKind.NodeRequest,
+                TimeSpan.FromMilliseconds(1),
+                out var first
+            )
+        );
+        var token = first.Token;
         // The first terminal spends the whole management budget on the injected clock.
         using var slowTerminal = token.Register(() =>
             clock.Timestamp +=
@@ -852,16 +808,16 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         );
         for (var index = 0; index < 2; index++)
             Assert.True(
-                (bool)
-                    begin.Invoke(
-                        node,
-                        [MeshOperationKind.NodeRequest, TimeSpan.FromMilliseconds(1), null]
-                    )!
+                node.TryBeginOperation(
+                    MeshOperationKind.NodeRequest,
+                    TimeSpan.FromMilliseconds(1),
+                    out _
+                )
             );
         clock.Timestamp = 514 * TimeSpan.TicksPerMillisecond;
-        expire.Invoke(node, null);
+        node.ExpireOperations();
         Assert.Equal(2, node.PendingOperationCount);
-        expire.Invoke(node, null);
+        node.ExpireOperations();
         Assert.Equal(0, node.PendingOperationCount);
     }
 
@@ -875,45 +831,37 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             MeshName,
             deadlineTimeProvider: clock
         );
-        const System.Reflection.BindingFlags flags =
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
-        var type = typeof(ZLinkManagedMeshNode);
-        var begin = type.GetMethods(flags)
-            .Single(method =>
-                method.Name == "TryBeginOperation" && method.GetParameters().Length == 3
-            );
-        var expire = type.GetMethod("ExpireOperations", flags)!;
         for (var index = 0; index < 8; index++)
             Assert.True(
-                (bool)
-                    begin.Invoke(
-                        node,
-                        [MeshOperationKind.NodeRequest, TimeSpan.FromMilliseconds(257), null]
-                    )!
+                node.TryBeginOperation(
+                    MeshOperationKind.NodeRequest,
+                    TimeSpan.FromMilliseconds(257),
+                    out _
+                )
             );
         Assert.True(
-            (bool)
-                begin.Invoke(
-                    node,
-                    [MeshOperationKind.NodeRequest, TimeSpan.FromMilliseconds(1), null]
-                )!
+            node.TryBeginOperation(
+                MeshOperationKind.NodeRequest,
+                TimeSpan.FromMilliseconds(1),
+                out _
+            )
         );
         // §4.2: every slot visit, a rounds-only one included, reads the management budget
         // counted from entry; four reads exhaust it.
         clock.Timestamp = TimeSpan.TicksPerMillisecond;
         clock.Step = TimeSpan.TicksPerMillisecond / 4;
-        expire.Invoke(node, null);
+        node.ExpireOperations();
         Assert.Equal(9, node.PendingOperationCount);
         var turns = 1;
         while (node.PendingOperationCount == 9)
         {
             Assert.True(++turns < 9);
-            expire.Invoke(node, null);
+            node.ExpireOperations();
         }
         Assert.Equal(8, node.PendingOperationCount);
         clock.Step = 0;
         clock.Timestamp = 257 * TimeSpan.TicksPerMillisecond;
-        expire.Invoke(node, null);
+        node.ExpireOperations();
         Assert.Equal(0, node.PendingOperationCount);
     }
 
@@ -1110,7 +1058,19 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         bool expireOwner
     )
     {
+        var stages = new ConcurrentBag<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = stages.Add,
+        };
+        ActivitySource.AddActivityListener(listener);
+        var options = new ZLinkDispatchOptionsModel();
+        options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Detailed);
         await using var fixture = new CanonicalPhysicalRequest();
+        fixture.Node.SetFlowTracer(new ZLinkMessageFlowTracer(options));
         await fixture.MakeReadyAsync();
         var expectedReady = new ZLinkServiceWireCodec.RelocationReadyRecord(
             fixture.Prepare.RelocationId,
@@ -1186,6 +1146,10 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         Assert.Equal(0, fixture.Node.PendingOperationCount);
         Assert.Equal(0, fixture.Node.PendingCanonicalRelocationPrepareCount);
         Assert.Equal(2, fixture.Context.NativeRequests);
+        await WaitForFlowDeliveryAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Single(
+            stages.Where(stage => Equals(stage.GetTagItem("detail"), "relay_ready_received"))
+        );
         if (expireOwner)
             Assert.Same(
                 originalFailure,
@@ -1196,6 +1160,12 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             Assert.True(first.IsCanceled);
             var unchanged = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
             Assert.Equal(cancellation.Token, unchanged.CancellationToken);
+        }
+
+        static async Task WaitForFlowDeliveryAsync()
+        {
+            while (ZLinkMessageFlowDelivery.Shared.State is not { Pending: 0, Executing: false })
+                await Task.Yield();
         }
     }
 
@@ -1776,30 +1746,18 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var node = new ZLinkManagedMeshNode(context, MeshName);
-        const System.Reflection.BindingFlags flags =
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
-        var type = typeof(ZLinkManagedMeshNode);
-        var begin = type.GetMethods(flags)
-            .Single(method =>
-                method.Name == "TryBeginOperation" && method.GetParameters().Length == 3
-            );
-        object?[] registration = [MeshOperationKind.NodeRequest, TimeSpan.FromHours(1), null];
-        Assert.True((bool)begin.Invoke(node, registration)!);
-        var pending = registration[2]!;
-        var pendingType = pending.GetType();
-        var identity = (MeshOperationId)
-            pendingType.GetProperty("OperationId", flags)!.GetValue(pending)!;
-        var take = type.GetMethods(flags)
-            .Single(method =>
-                method.Name == "TryRemoveOperation"
-                && method.GetParameters()[0].ParameterType == typeof(ulong)
-            );
-        object?[] terminal = [identity.Low, null];
-        Assert.True((bool)take.Invoke(node, terminal)!);
-        type.GetMethod("RemoveManagedOperation", flags)!.Invoke(node, [pending]);
-        var token = (CancellationToken)pendingType.GetProperty("Token", flags)!.GetValue(pending)!;
+        Assert.True(
+            node.TryBeginOperation(
+                MeshOperationKind.NodeRequest,
+                TimeSpan.FromHours(1),
+                out var pending
+            )
+        );
+        Assert.True(node.TryRemoveOperation(pending.OperationId.Low, out _));
+        node.RemoveManagedOperation(pending);
+        var token = pending.Token;
         Assert.False(token.IsCancellationRequested);
-        pendingType.GetMethod("Complete", flags)!.Invoke(pending, null);
+        pending.Complete();
         Assert.True(token.IsCancellationRequested);
     }
 
@@ -2050,6 +2008,72 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     }
 
     [Fact]
+    public async Task ContextDispose_CompletesAfterMeshNodesWithIntentsAndAdmittedPeers()
+    {
+        var context = Systems.Zlink.Zlink.CreateContext();
+        var contextDisposeStarted = false;
+        try
+        {
+            await using (var left = new ZLinkManagedMeshNode(context, MeshName))
+            await using (var right = new ZLinkManagedMeshNode(context, MeshName))
+            {
+                var suffix = Guid.NewGuid().ToString("N");
+                var leftRid = RoutingId.From($"dispose-intent-left-{suffix}");
+                var rightRid = RoutingId.From($"dispose-intent-right-{suffix}");
+                left.SetRoutingId(leftRid);
+                left.SetBind(EphemeralTcpEndpoint);
+                left.AddChannel(MeshName);
+                right.SetRoutingId(rightRid);
+                right.SetBind(EphemeralTcpEndpoint);
+                right.AddChannel(MeshName);
+                left.Start();
+                right.Start();
+
+                var rightIntent = right.ConnectPeer(left.Status().LocalEndpoint, leftRid);
+                await WaitUntilAsync(() =>
+                    left.Status().AdmittedPeerCount == 1
+                    && right.Status().AdmittedPeerCount == 1
+                    && right
+                        .Peers()
+                        .Any(peer =>
+                            peer.ConnectionIntentId == rightIntent
+                            && peer.State == MeshPeerState.Admitted
+                        )
+                );
+
+                var leftIntent = left.ConnectPeer(right.Status().LocalEndpoint);
+                MeshNodePeer[]? admittedPeers = null;
+                await WaitUntilAsync(() =>
+                {
+                    var peers = left.Peers();
+                    if (
+                        peers.Length != 1
+                        || peers[0].RoutingId != rightRid
+                        || peers[0].ConnectionIntentId != leftIntent
+                        || peers[0].State != MeshPeerState.Admitted
+                    )
+                        return false;
+                    admittedPeers = peers;
+                    return true;
+                });
+
+                // Keep both endpoint intents and the admitted peer until node teardown.
+                var peer = Assert.Single(admittedPeers!);
+                Assert.Equal(leftIntent, peer.ConnectionIntentId);
+                Assert.Equal(MeshPeerState.Admitted, peer.State);
+            }
+
+            contextDisposeStarted = true;
+            await Task.Run(context.Dispose).WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            if (!contextDisposeStarted)
+                context.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task SelectedRouteLoss_KeepsConfiguredNotRequiredPeer()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -2104,21 +2128,13 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         await using var node = new ZLinkManagedMeshNode(context, MeshName);
         var rid = RoutingId.From("handover-control-peer");
         node.ConnectPeer("tcp://127.0.0.1:20004", rid);
-        const System.Reflection.BindingFlags Private =
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
-        var routes = (ZLinkMeshSelectedRoutes)
-            typeof(ZLinkManagedMeshNode).GetField("_selectedRoutes", Private)!.GetValue(node)!;
+        var routes = node._selectedRoutes;
         routes.Apply([new RouterRoute(rid, 11)]);
-        var index =
-            (Dictionary<RoutingId, ZLinkMeshPeer>)
-                typeof(ZLinkManagedMeshNode).GetField("_peersByRid", Private)!.GetValue(node)!;
+        var index = node._peersByRid;
         index.Add(rid, new ZLinkMeshPeer(999) { RoutingId = rid, RouteGeneration = 12 });
-        var hasTarget = typeof(ZLinkManagedMeshNode).GetMethod("HasCurrentControlTarget", Private)!;
 
-        Assert.False(
-            (bool)hasTarget.Invoke(node, [rid, 11UL, ServiceWireConstants.Command.Admit])!
-        );
-        Assert.True((bool)hasTarget.Invoke(node, [rid, 12UL, ServiceWireConstants.Command.Admit])!);
+        Assert.False(node.HasCurrentControlTarget(rid, 11UL, ServiceWireConstants.Command.Admit));
+        Assert.True(node.HasCurrentControlTarget(rid, 12UL, ServiceWireConstants.Command.Admit));
     }
 
     [Fact]
@@ -2129,14 +2145,9 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         var rid = RoutingId.From("rejected-handover-peer");
         const string endpoint = "tcp://127.0.0.1:20005";
         node.ConnectPeer(endpoint, rid);
-        const System.Reflection.BindingFlags Private =
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
-        var routes = (ZLinkMeshSelectedRoutes)
-            typeof(ZLinkManagedMeshNode).GetField("_selectedRoutes", Private)!.GetValue(node)!;
+        var routes = node._selectedRoutes;
         routes.Apply([new RouterRoute(rid, 11)]);
-        var index =
-            (Dictionary<RoutingId, ZLinkMeshPeer>)
-                typeof(ZLinkManagedMeshNode).GetField("_peersByRid", Private)!.GetValue(node)!;
+        var index = node._peersByRid;
         index.Add(
             rid,
             new ZLinkMeshPeer(999)
@@ -2166,17 +2177,10 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             new Dictionary<byte, byte[]>(),
             []
         );
-        typeof(ZLinkManagedMeshNode)
-            .GetMethod("ProcessAdmissionCore", Private)!
-            .Invoke(node, [rid, 12UL, ServiceWireConstants.Command.Hello, wrongMesh, null]);
+        node.ProcessAdmissionCore(rid, 12UL, ServiceWireConstants.Command.Hello, wrongMesh, null);
 
-        var hasTarget = typeof(ZLinkManagedMeshNode).GetMethod("HasCurrentControlTarget", Private)!;
-        Assert.False(
-            (bool)hasTarget.Invoke(node, [rid, 11UL, ServiceWireConstants.Command.Admit])!
-        );
-        Assert.False(
-            (bool)hasTarget.Invoke(node, [rid, 12UL, ServiceWireConstants.Command.Admit])!
-        );
+        Assert.False(node.HasCurrentControlTarget(rid, 11UL, ServiceWireConstants.Command.Admit));
+        Assert.False(node.HasCurrentControlTarget(rid, 12UL, ServiceWireConstants.Command.Admit));
         Assert.True(index.TryGetValue(rid, out var disconnected));
         Assert.Equal(0UL, disconnected.RouteGeneration);
         Assert.False(disconnected.Admitted);
@@ -2308,12 +2312,8 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         node.SetBind(EphemeralTcpEndpoint);
         node.AddChannel(MeshName);
         var peerRid = RoutingId.From($"record-route-peer-{suffix}");
-        const System.Reflection.BindingFlags Private =
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
-        var routes = (ZLinkMeshSelectedRoutes)
-            typeof(ZLinkManagedMeshNode).GetField("_selectedRoutes", Private)!.GetValue(node)!;
-        var lane = (Zlink.Framework.Runtime.Execution.ZLinkStateLane)
-            typeof(ZLinkManagedMeshNode).GetField("_lane", Private)!.GetValue(node)!;
+        var routes = node._selectedRoutes;
+        var lane = node._lane;
         try
         {
             node.Start();

@@ -40,11 +40,11 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     > _postResume;
     private readonly Func<Func<CancellationToken, ValueTask>, bool> _tryPostCallback;
     private readonly Action<Exception> _reportHandlerException;
-    private readonly ZLinkSerialWorkQueue _applicationQueue = new();
+    internal readonly ZLinkSerialWorkQueue _applicationQueue = new();
     private readonly ZLinkSerialWorkQueue _lifecycleQueue = new();
     private readonly ZLinkRuntimeTaskRunner _taskRunner;
     private ZLinkProcessExecutionPool.ApplicationSource? _drainSource;
-    private ZLinkSerialWorkItem? _active;
+    internal ZLinkSerialWorkItem? _active;
     private ZLinkSerialWorkItem? _activeLifecycle;
     private int _completed;
     private bool _applicationAdmissionClosed;
@@ -1800,7 +1800,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         return true;
     }
 
-    private bool TryDequeueNextUnderLock(out ZLinkSerialWorkItem item)
+    internal bool TryDequeueNextUnderLock(out ZLinkSerialWorkItem item)
     {
         if (
             _relocation?.PreparationOwner is not null
@@ -1857,7 +1857,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         return false;
     }
 
-    private bool HasRunnableApplicationUnderLock() =>
+    internal bool HasRunnableApplicationUnderLock() =>
         SelectApplicationUnderLock(out _, out _) is not null;
 
     private ZLinkSerialWorkItem? SelectApplicationUnderLock(
