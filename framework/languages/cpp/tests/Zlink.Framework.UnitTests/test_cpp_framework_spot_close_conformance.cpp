@@ -1258,6 +1258,31 @@ std::string error_name (zf::framework_error_kind_t kind)
     }
 }
 
+zf::task_t<void>
+join_queued_behind_close_task (nlohmann::json *actual,
+                               std::shared_ptr<zf::detail::spot_node_builder_state_t> node,
+                               std::string spot_id,
+                               bool remote,
+                               zf::detail::spot_node_runtime_t runtime,
+                               zf::actor_ref_t actor_ref,
+                               zf::authority_snapshot_t authority)
+{
+    (*actual)["removedBeforeJoin"] =
+      node->lane.run ([&] { return !node->spot_contexts_by_id.contains (spot_id); }).get ();
+    if (remote) {
+        const auto result = co_await zf::runtime::await_result (runtime.admit_remote_actor_to_spot (
+          "queued-close-transfer", actor_ref, zf::spot_id_t ("source"), zf::spot_id_t (spot_id), {},
+          0, 0, authority.authority_owner_generation,
+          authority.allocation.target.node_lifecycle_generation,
+          static_cast<std::uint64_t> (authority.owner.lease_generation)));
+        (*actual)["joinResult"] = result ? "Accepted" : error_name (result.error_kind ());
+    } else {
+        const auto result = co_await zf::runtime::await_result (
+          runtime.join_actor_to_spot_erased (actor_ref, zf::spot_id_t (spot_id), {}));
+        (*actual)["joinResult"] = result ? "Accepted" : error_name (result.error_kind ());
+    }
+}
+
 template <typename T> nlohmann::json close_result (const zf::result_t<T> &result)
 {
     if (result)
@@ -2102,24 +2127,8 @@ class scenario_client_t final : public zf::hosted_service_t
             runtime.dispatch_wire_actor_join_admission (
               zf::spot_id_t (spot_id), {},
               [&, actor_ref] () -> zf::task_t<void> {
-                  actual["removedBeforeJoin"] =
-                    node->lane.run ([&] { return !node->spot_contexts_by_id.contains (spot_id); })
-                      .get ();
-                  if (remote) {
-                      const auto result =
-                        co_await zf::runtime::await_result (runtime.admit_remote_actor_to_spot (
-                          "queued-close-transfer", actor_ref, zf::spot_id_t ("source"),
-                          zf::spot_id_t (spot_id), {}, 0, 0, authority.authority_owner_generation,
-                          authority.allocation.target.node_lifecycle_generation,
-                          static_cast<std::uint64_t> (authority.owner.lease_generation)));
-                      actual["joinResult"] =
-                        result ? "Accepted" : error_name (result.error_kind ());
-                  } else {
-                      const auto result = co_await zf::runtime::await_result (
-                        runtime.join_actor_to_spot_erased (actor_ref, zf::spot_id_t (spot_id), {}));
-                      actual["joinResult"] =
-                        result ? "Accepted" : error_name (result.error_kind ());
-                  }
+                  return join_queued_behind_close_task (&actual, node, spot_id, remote, runtime,
+                                                        actor_ref, authority);
               },
               [join_done] (zf::result_t<void> result) { join_done->complete (std::move (result)); },
               [join_done] { join_done->complete (zf::result_t<void>::success ()); });
