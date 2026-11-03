@@ -22,6 +22,7 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
     private readonly ZLinkLocationOptions _options;
     private readonly TimeProvider _time;
     private readonly ZLinkStateLane _lane = new();
+    internal ZLinkStateLane Lane => _lane;
     private readonly Dictionary<
         ZLinkSpotLocationKey,
         CachedRoute<ZLinkResolvedSpotLocation>

@@ -9686,15 +9686,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var route = Assert.IsType<ZLinkResolvedActorLocation>(
                 await rows.ResolveActorRowAsync(key)
             );
-            var resolverLane = Assert.IsType<ZLinkStateLane>(
-                typeof(ZLinkStoreLocationResolvers)
-                    .GetField(
-                        "_lane",
-                        System.Reflection.BindingFlags.Instance
-                            | System.Reflection.BindingFlags.NonPublic
-                    )!
-                    .GetValue(rows)
-            );
+            var resolverLane = rows.Lane;
             var entered = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously
             );
