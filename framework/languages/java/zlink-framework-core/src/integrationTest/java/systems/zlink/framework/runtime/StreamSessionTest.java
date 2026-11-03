@@ -172,13 +172,62 @@ final class StreamSessionTest {
 
             client.getOutputStream().write(frame(requestHeader(1L, "Bind"), bytes("\"player-1\"")));
             client.getOutputStream().flush();
-            assertBoundControl(client.getInputStream(), "player-1");
+            assertBoundControl(client, "player-1");
             assertReply(client, 1L, "\"bound\"");
 
             client.getOutputStream()
                     .write(frame(requestHeader(2L, "StreamActorEcho"), bytes("\"hello\"")));
             client.getOutputStream().flush();
             assertReply(client, 2L, "\"player-1:hello\"");
+        }
+    }
+
+    @Test
+    void assertBoundControlRespondsToHeartbeatPing() throws Exception {
+        try (var listener = new java.net.ServerSocket(0);
+                var client = new Socket("127.0.0.1", listener.getLocalPort());
+                var peer = listener.accept()) {
+            client.setSoTimeout(CLIENT_TIMEOUT_MILLIS);
+            peer.setSoTimeout(CLIENT_TIMEOUT_MILLIS);
+
+            var ping =
+                    new ZLinkStreamHeader(
+                            ZLinkStreamMessageKind.CONTROL,
+                            ZLinkStreamCodec.RAW,
+                            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                            Optional.empty(),
+                            HEARTBEAT_PING_PACKET,
+                            Map.of());
+            byte[] actorId = bytes("player-1");
+            byte[] boundBody =
+                    ByteBuffer.allocate(4 + actorId.length)
+                            .put((byte) 1)
+                            .putShort((short) 1)
+                            .put((byte) actorId.length)
+                            .put(actorId)
+                            .array();
+            var bound =
+                    new ZLinkStreamHeader(
+                            ZLinkStreamMessageKind.CONTROL,
+                            ZLinkStreamCodec.RAW,
+                            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                            Optional.empty(),
+                            "$zlink.actor.bound",
+                            Map.of());
+            peer.getOutputStream().write(frame(ZLinkStreamHeaderCodec.encode(ping), new byte[0]));
+            peer.getOutputStream().write(frame(ZLinkStreamHeaderCodec.encode(bound), boundBody));
+            peer.getOutputStream().flush();
+
+            assertBoundControl(client, "player-1");
+
+            ByteBuffer pongSizes = ByteBuffer.wrap(readExact(peer.getInputStream(), 6));
+            byte[] pongHeaderBytes =
+                    readExact(peer.getInputStream(), Short.toUnsignedInt(pongSizes.getShort()));
+            byte[] pongBody = readExact(peer.getInputStream(), pongSizes.getInt());
+            var pong = ZLinkStreamHeaderCodec.decodeOrPlain(pongHeaderBytes);
+            assertEquals(ZLinkStreamMessageKind.CONTROL, pong.kind());
+            assertEquals(HEARTBEAT_PONG_PACKET, pong.packetName());
+            assertEquals(0, pongBody.length);
         }
     }
 
@@ -281,7 +330,7 @@ final class StreamSessionTest {
                     client.getOutputStream()
                             .write(frame(requestHeader(1L, "Bind"), bytes("\"remote-player\"")));
                     client.getOutputStream().flush();
-                    assertBoundControl(client.getInputStream(), "remote-player");
+                    assertBoundControl(client, "remote-player");
                     assertReply(client, 1L, "\"bound\"");
                     client.getOutputStream()
                             .write(frame(requestHeader(2L, "StreamActorEcho"), bytes("\"live\"")));
@@ -309,7 +358,7 @@ final class StreamSessionTest {
                                                 requestHeader(3L, "Bind"),
                                                 bytes("\"remote-player\"")));
                         replacement.getOutputStream().flush();
-                        assertBoundControl(replacement.getInputStream(), "remote-player");
+                        assertBoundControl(replacement, "remote-player");
                         assertReply(replacement, 3L, "\"bound\"");
                         release.complete(null);
                         assertEventually(
@@ -523,7 +572,7 @@ final class StreamSessionTest {
                     previous.getOutputStream()
                             .write(frame(requestHeader(1L, "Bind"), bytes("\"player-1\"")));
                     previous.getOutputStream().flush();
-                    assertBoundControl(previous.getInputStream(), "player-1");
+                    assertBoundControl(previous, "player-1");
                     assertReply(previous, 1L, "\"bound\"");
                     ActorRelaySession previousSession = ActorRelaySession.lastConnected;
                     previous.close();
@@ -535,7 +584,7 @@ final class StreamSessionTest {
                         next.getOutputStream()
                                 .write(frame(requestHeader(1L, "Bind"), bytes("\"player-1\"")));
                         next.getOutputStream().flush();
-                        assertBoundControl(next.getInputStream(), "player-1");
+                        assertBoundControl(next, "player-1");
                         assertReply(next, 1L, "\"bound\"");
                         ActorRelaySession nextSession = ActorRelaySession.lastConnected;
                         assertFalse(releaseDisconnect.isDone());
@@ -576,7 +625,7 @@ final class StreamSessionTest {
             client.setSoTimeout(CLIENT_TIMEOUT_MILLIS);
             client.getOutputStream().write(frame(requestHeader(1L, "Bind"), bytes("\"player-1\"")));
             client.getOutputStream().flush();
-            assertBoundControl(client.getInputStream(), "player-1");
+            assertBoundControl(client, "player-1");
             assertReply(client, 1L, "\"bound\"");
             for (int iteration = 0; iteration < REPLACEMENT_ATTEMPTS; iteration++) {
                 CompletableFuture<Void> completed = new CompletableFuture<>();
@@ -605,7 +654,7 @@ final class StreamSessionTest {
             client.setSoTimeout(CLIENT_TIMEOUT_MILLIS);
             client.getOutputStream().write(frame(requestHeader(1L, "Bind"), bytes("\"player-1\"")));
             client.getOutputStream().flush();
-            assertBoundControl(client.getInputStream(), "player-1");
+            assertBoundControl(client, "player-1");
             assertReply(client, 1L, "\"bound\"");
             client.getOutputStream()
                     .write(frame(requestHeader(2L, "StreamActorEcho"), bytes("\"hello\"")));
@@ -657,7 +706,7 @@ final class StreamSessionTest {
                                             });
                             previous = null;
                         }
-                        assertBoundControl(next.getInputStream(), "player-1");
+                        assertBoundControl(next, "player-1");
                         assertReply(next, 1L, "\"bound\"");
                         if (previous != null) {
                             previous.close();
@@ -680,7 +729,7 @@ final class StreamSessionTest {
                     previous.getOutputStream()
                             .write(frame(requestHeader(1L, "Bind"), bytes("\"player-1\"")));
                     previous.getOutputStream().flush();
-                    assertBoundControl(previous.getInputStream(), "player-1");
+                    assertBoundControl(previous, "player-1");
                     assertReply(previous, 1L, "\"bound\"");
                     previous.getOutputStream()
                             .write(frame(requestHeader(2L, "StreamActorEcho"), bytes("\"hello\"")));
@@ -1203,20 +1252,40 @@ final class StreamSessionTest {
         }
     }
 
-    private static void assertBoundControl(InputStream input, String actorId) throws Exception {
-        byte[] prefix = readExact(input, 6);
-        ByteBuffer sizes = ByteBuffer.wrap(prefix);
-        byte[] headerBytes = readExact(input, Short.toUnsignedInt(sizes.getShort()));
-        byte[] body = readExact(input, sizes.getInt());
-        ZLinkStreamHeader header = ZLinkStreamHeaderCodec.decodeOrPlain(headerBytes);
-        assertEquals(ZLinkStreamMessageKind.CONTROL, header.kind());
-        assertEquals("$zlink.actor.bound", header.packetName());
-        ByteBuffer payload = ByteBuffer.wrap(body);
-        assertEquals(1, Byte.toUnsignedInt(payload.get()));
-        assertTrue(Short.toUnsignedInt(payload.getShort()) > 0);
-        int idLength = Byte.toUnsignedInt(payload.get());
-        assertEquals(idLength, payload.remaining());
-        assertEquals(actorId, new String(body, 4, idLength, StandardCharsets.UTF_8));
+    private static void assertBoundControl(Socket client, String actorId) throws Exception {
+        InputStream input = client.getInputStream();
+        java.io.OutputStream output = client.getOutputStream();
+        while (true) {
+            byte[] prefix = readExact(input, 6);
+            ByteBuffer sizes = ByteBuffer.wrap(prefix);
+            byte[] headerBytes = readExact(input, Short.toUnsignedInt(sizes.getShort()));
+            byte[] body = readExact(input, sizes.getInt());
+            ZLinkStreamHeader header = ZLinkStreamHeaderCodec.decodeOrPlain(headerBytes);
+            if (header.kind() == ZLinkStreamMessageKind.CONTROL
+                    && HEARTBEAT_PING_PACKET.equals(header.packetName())) {
+                assertEquals(0, body.length);
+                ZLinkStreamHeader pong =
+                        new ZLinkStreamHeader(
+                                ZLinkStreamMessageKind.CONTROL,
+                                ZLinkStreamCodec.RAW,
+                                EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                                Optional.empty(),
+                                HEARTBEAT_PONG_PACKET,
+                                Map.of());
+                output.write(frame(ZLinkStreamHeaderCodec.encode(pong), new byte[0]));
+                output.flush();
+                continue;
+            }
+            assertEquals(ZLinkStreamMessageKind.CONTROL, header.kind());
+            assertEquals("$zlink.actor.bound", header.packetName());
+            ByteBuffer payload = ByteBuffer.wrap(body);
+            assertEquals(1, Byte.toUnsignedInt(payload.get()));
+            assertTrue(Short.toUnsignedInt(payload.getShort()) > 0);
+            int idLength = Byte.toUnsignedInt(payload.get());
+            assertEquals(idLength, payload.remaining());
+            assertEquals(actorId, new String(body, 4, idLength, StandardCharsets.UTF_8));
+            return;
+        }
     }
 
     private static void assertErrorReply(
