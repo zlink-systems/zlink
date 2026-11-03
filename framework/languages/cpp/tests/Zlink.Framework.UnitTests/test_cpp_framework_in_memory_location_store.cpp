@@ -1,13 +1,22 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/locations/in_memory_location_store.hpp"
+#include "runtime/locations/in_memory_store_providers.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/live_location_reader.hpp"
 #include "runtime/stateful/public_store_adapters.hpp"
 
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <cstdlib>
+#include <future>
 #include <limits>
+
+#if defined(__linux__)
+#include <sched.h>
+#include <unistd.h>
+#endif
 
 namespace
 {
@@ -1130,3 +1139,195 @@ TEST (ZLinkFrameworkInMemoryLocationStore, SignedWeightBoundariesAreValidatedWit
 }
 
 } // namespace
+
+#if defined(__linux__)
+namespace zlink::framework::runtime
+{
+struct in_memory_store_continuation_test_access_t
+{
+    static state_lane_t &lane (in_memory_location_repository_t &store) { return store._lane; }
+    static state_lane_t &lane (in_memory_location_store_t &store) { return store._lane; }
+};
+} // namespace zlink::framework::runtime
+
+namespace
+{
+using namespace zlink::framework;
+using namespace zlink::framework::runtime;
+
+// The child owns a process-wide one-CPU affinity mask before constructing any
+// lane, so the production infrastructure factory creates one fixed worker.
+template <typename Work> void single_worker_store_child (Work work)
+{
+    alarm (10); // Watchdog only: barriers below establish the dependency order.
+    cpu_set_t allowed;
+    CPU_ZERO (&allowed);
+    if (sched_getaffinity (getpid (), sizeof (allowed), &allowed) != 0)
+        std::_Exit (2);
+    cpu_set_t single;
+    CPU_ZERO (&single);
+    for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
+        if (CPU_ISSET (cpu, &allowed)) {
+            CPU_SET (cpu, &single);
+            break;
+        }
+    }
+    if (sched_setaffinity (getpid (), sizeof (single), &single) != 0)
+        std::_Exit (3);
+    work ();
+    std::_Exit (::testing::Test::HasFailure () ? 1 : 0);
+}
+
+template <typename Work>
+void probe_store_continuation (state_lane_t &target, bool pending, Work work)
+{
+    EXPECT_EQ (1u, target.executor ().live_worker_count ());
+    std::promise<void> entered, release, sentinel;
+    auto released = release.get_future ();
+    auto sent = sentinel.get_future ();
+    std::promise<task_t<void>> returned;
+    auto result = returned.get_future ();
+    std::atomic<int> drains{0};
+    target.executor ().submit ([&] {
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+        EXPECT_EQ (&target.executor (), offload_executor_t::current_worker_executor ());
+#endif
+        entered.set_value ();
+        released.wait (); // External controller holds the caller before submission.
+        auto task = work ();
+        EXPECT_EQ (!pending, task.await_ready ());
+        returned.set_value (std::move (task));
+    });
+    entered.get_future ().wait ();
+    if (pending)
+        EXPECT_TRUE (target.try_post ([&] { ++drains; }));
+    target.executor ().submit ([&] { sentinel.set_value (); });
+    release.set_value ();
+    auto task = result.get (); // Must return before the queued target drain can run.
+    task.result ().value ();
+    sent.get ();
+    EXPECT_EQ (pending ? 1 : 0, drains.load ());
+}
+
+class InMemoryStoreContinuationDeathTest : public ::testing::TestWithParam<bool>
+{
+};
+
+TEST_P (InMemoryStoreContinuationDeathTest, ScanKeepsCursorAndVersions)
+{
+    const bool pending = GetParam ();
+    ASSERT_EXIT (
+      single_worker_store_child ([&] {
+          in_memory_location_store_t store;
+          store_write_request_t write;
+          write.mutations.push_back (store_put_t{store_key_t{"scan/a"}, {std::byte{1}}, {}});
+          write.mutations.push_back (store_put_t{store_key_t{"scan/b"}, {std::byte{2}}, {}});
+          const auto written = store.write (std::move (write)).result ().value ();
+          const auto version =
+            std::get<store_write_applied_t> (written).put_versions.front ().version;
+          auto operation = [&] () -> task_t<void> {
+              const auto first = co_await store.scan ({"scan/", {}, 1});
+              const auto &page = std::get<store_scan_page_t> (first);
+              EXPECT_EQ (1u, page.items.size ());
+              EXPECT_EQ ("scan/a", page.items.front ().key.value);
+              EXPECT_EQ (version.value, page.items.front ().value.version.value);
+              EXPECT_TRUE (page.next_cursor.has_value ());
+              const auto second = co_await store.scan ({"scan/", page.next_cursor, 1});
+              const auto &last = std::get<store_scan_page_t> (second);
+              EXPECT_EQ ("scan/b", last.items.front ().key.value);
+              EXPECT_FALSE (last.next_cursor.has_value ());
+              EXPECT_EQ (nullptr, state_lane_t::current ());
+          };
+          probe_store_continuation (in_memory_store_continuation_test_access_t::lane (store),
+                                    pending, operation);
+      }),
+      ::testing::ExitedWithCode (0), "");
+}
+
+TEST_P (InMemoryStoreContinuationDeathTest, MeshPublicationKeepsLeaseAndConflict)
+{
+    const bool pending = GetParam ();
+    ASSERT_EXIT (
+      single_worker_store_child ([&] {
+          in_memory_location_repository_t store;
+          const auto owner = claim_owner (store, "mesh-continuation");
+          auto operation = [&] () -> task_t<void> {
+              const auto result = co_await store.update_mesh_node (
+                make_mesh_node ("continuation", owner), location_write_intent_t::new_claim);
+              EXPECT_EQ (location_write_status_t::stored, result.status);
+              EXPECT_EQ (1, result.generation);
+              const auto conflict = co_await store.update_mesh_node (
+                make_mesh_node ("continuation", owner, 1), location_write_intent_t::new_claim);
+              EXPECT_EQ (location_write_status_t::rejected_conflict, conflict.status);
+              auto stale = make_mesh_node ("stale", owner);
+              ++stale.lease_generation;
+              const auto rejected = co_await store.update_mesh_node (
+                std::move (stale), location_write_intent_t::new_claim);
+              EXPECT_EQ (location_write_status_t::ignored_stale, rejected.status);
+              EXPECT_EQ (nullptr, state_lane_t::current ());
+          };
+          probe_store_continuation (in_memory_store_continuation_test_access_t::lane (store),
+                                    pending, operation);
+          EXPECT_EQ (1u, store.list_mesh_nodes ("play").result ().value ().items.size ());
+      }),
+      ::testing::ExitedWithCode (0), "");
+}
+
+TEST_P (InMemoryStoreContinuationDeathTest, FanoutPublicationKeepsLeaseAndConflict)
+{
+    const bool pending = GetParam ();
+    ASSERT_EXIT (
+      single_worker_store_child ([&] {
+          in_memory_location_repository_t store;
+          const auto owner = claim_owner (store, "fanout-continuation");
+          auto operation = [&] () -> task_t<void> {
+              fanout_publisher_descriptor_t descriptor{.channel_name = "events",
+                                                       .publisher_rid =
+                                                         zlink::routing_id_t::from ("continuation"),
+                                                       .lifecycle_generation = 1,
+                                                       .descriptor_revision = 1,
+                                                       .endpoint = "tcp://127.0.0.1:7500",
+                                                       .state = framework_runtime_state_t::serving,
+                                                       .security_identity = "test",
+                                                       .owner_id = owner.owner_id,
+                                                       .lease_generation = owner.lease_generation};
+              const auto result = co_await store.update_fanout_publisher (
+                descriptor, location_write_intent_t::new_claim);
+              EXPECT_EQ (location_write_status_t::stored, result.status);
+              EXPECT_EQ (1, result.generation);
+              descriptor.endpoint = "tcp://127.0.0.1:7501";
+              const auto conflict = co_await store.update_fanout_publisher (
+                descriptor, location_write_intent_t::new_claim);
+              EXPECT_EQ (location_write_status_t::rejected_conflict, conflict.status);
+              ++descriptor.lease_generation;
+              const auto rejected = co_await store.update_fanout_publisher (
+                std::move (descriptor), location_write_intent_t::renew);
+              EXPECT_EQ (location_write_status_t::ignored_stale, rejected.status);
+              EXPECT_EQ (nullptr, state_lane_t::current ());
+          };
+          probe_store_continuation (in_memory_store_continuation_test_access_t::lane (store),
+                                    pending, operation);
+          EXPECT_EQ (1u, store.list_fanout_publishers ("events").result ().value ().items.size ());
+      }),
+      ::testing::ExitedWithCode (0), "");
+}
+
+INSTANTIATE_TEST_SUITE_P (ReadyAndPending,
+                          InMemoryStoreContinuationDeathTest,
+                          ::testing::Values (false, true));
+
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+TEST (InMemoryStoreContinuationDeathTest, OldDependentWaitIsDiagnosed)
+{
+    ASSERT_DEATH (single_worker_store_child ([] {
+                      state_lane_t target;
+                      probe_store_continuation (target, true, [&] () -> task_t<void> {
+                          target.run_checked ([] {}).get ();
+                          co_return;
+                      });
+                  }),
+                  "infrastructure wait guard: state-lane/get");
+}
+#endif
+} // namespace
+#endif

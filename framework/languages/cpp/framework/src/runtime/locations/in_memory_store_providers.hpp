@@ -28,6 +28,8 @@ namespace zlink::framework::runtime
 
 class in_memory_location_store_t final : public location_store_t
 {
+    friend struct in_memory_store_continuation_test_access_t;
+
   public:
     task_t<store_read_result_t> read (store_key_t key) override
     {
@@ -95,75 +97,73 @@ class in_memory_location_store_t final : public location_store_t
         if (request.limit == 0 || request.limit > location_page_item_limit)
             throw std::invalid_argument ("location scan limit must be 1..1000");
 
-        return _lane
-          .run ([&] {
-              const auto now = std::chrono::system_clock::now ();
-              std::uint64_t snapshot_id = 0;
-              std::size_t offset = 0;
-              if (request.cursor) {
-                  const auto first_separator = request.cursor->value.find (':');
-                  const auto second_separator =
-                    first_separator == std::string::npos
-                      ? std::string::npos
-                      : request.cursor->value.find (':', first_separator + 1);
-                  if (first_separator == std::string::npos || second_separator == std::string::npos)
-                      return completed<store_scan_result_t> (store_scan_expired_t{});
-                  try {
-                      const auto epoch =
-                        std::stoull (request.cursor->value.substr (0, first_separator));
-                      if (epoch != _scan_epoch)
-                          return completed<store_scan_result_t> (store_scan_expired_t{});
-                      snapshot_id = std::stoull (request.cursor->value.substr (
-                        first_separator + 1, second_separator - first_separator - 1));
-                      offset = static_cast<std::size_t> (
-                        std::stoull (request.cursor->value.substr (second_separator + 1)));
-                  }
-                  catch (...) {
-                      return completed<store_scan_result_t> (store_scan_expired_t{});
-                  }
-              } else {
-                  if (_snapshots.size () >= max_scan_snapshots)
-                      _snapshots.erase (_snapshots.begin ());
-                  snapshot_id = ++_next_snapshot;
-                  auto &snapshot = _snapshots[snapshot_id];
-                  for (auto iterator = _values.begin (); iterator != _values.end ();) {
-                      if (expired (iterator->second, now)) {
-                          iterator = _values.erase (iterator);
-                          continue;
-                      }
-                      if (iterator->first.starts_with (request.prefix))
-                          snapshot.push_back ({{iterator->first}, iterator->second});
-                      ++iterator;
-                  }
-              }
+        return _lane.run_task ([this, request = std::move (request)] {
+            const auto now = std::chrono::system_clock::now ();
+            std::uint64_t snapshot_id = 0;
+            std::size_t offset = 0;
+            if (request.cursor) {
+                const auto first_separator = request.cursor->value.find (':');
+                const auto second_separator =
+                  first_separator == std::string::npos
+                    ? std::string::npos
+                    : request.cursor->value.find (':', first_separator + 1);
+                if (first_separator == std::string::npos || second_separator == std::string::npos)
+                    return completed<store_scan_result_t> (store_scan_expired_t{});
+                try {
+                    const auto epoch =
+                      std::stoull (request.cursor->value.substr (0, first_separator));
+                    if (epoch != _scan_epoch)
+                        return completed<store_scan_result_t> (store_scan_expired_t{});
+                    snapshot_id = std::stoull (request.cursor->value.substr (
+                      first_separator + 1, second_separator - first_separator - 1));
+                    offset = static_cast<std::size_t> (
+                      std::stoull (request.cursor->value.substr (second_separator + 1)));
+                }
+                catch (...) {
+                    return completed<store_scan_result_t> (store_scan_expired_t{});
+                }
+            } else {
+                if (_snapshots.size () >= max_scan_snapshots)
+                    _snapshots.erase (_snapshots.begin ());
+                snapshot_id = ++_next_snapshot;
+                auto &snapshot = _snapshots[snapshot_id];
+                for (auto iterator = _values.begin (); iterator != _values.end ();) {
+                    if (expired (iterator->second, now)) {
+                        iterator = _values.erase (iterator);
+                        continue;
+                    }
+                    if (iterator->first.starts_with (request.prefix))
+                        snapshot.push_back ({{iterator->first}, iterator->second});
+                    ++iterator;
+                }
+            }
 
-              const auto snapshot = _snapshots.find (snapshot_id);
-              if (snapshot == _snapshots.end () || offset > snapshot->second.size ())
-                  return completed<store_scan_result_t> (store_scan_expired_t{});
+            const auto snapshot = _snapshots.find (snapshot_id);
+            if (snapshot == _snapshots.end () || offset > snapshot->second.size ())
+                return completed<store_scan_result_t> (store_scan_expired_t{});
 
-              store_scan_page_t page;
-              page.store_now = now;
-              auto end = offset;
-              std::size_t encoded_size = 0;
-              while (end < snapshot->second.size () && end - offset < request.limit) {
-                  const auto item_size = encoded_scan_item_size (snapshot->second[end]);
-                  if (end != offset && encoded_size + item_size > max_scan_page_bytes)
-                      break;
-                  encoded_size += item_size;
-                  ++end;
-              }
-              page.items.insert (page.items.end (),
-                                 snapshot->second.begin () + static_cast<std::ptrdiff_t> (offset),
-                                 snapshot->second.begin () + static_cast<std::ptrdiff_t> (end));
-              if (end < snapshot->second.size ())
-                  page.next_cursor = store_scan_cursor_t{std::to_string (_scan_epoch) + ":"
-                                                         + std::to_string (snapshot_id) + ":"
-                                                         + std::to_string (end)};
-              else
-                  _snapshots.erase (snapshot);
-              return completed<store_scan_result_t> (std::move (page));
-          })
-          .get ();
+            store_scan_page_t page;
+            page.store_now = now;
+            auto end = offset;
+            std::size_t encoded_size = 0;
+            while (end < snapshot->second.size () && end - offset < request.limit) {
+                const auto item_size = encoded_scan_item_size (snapshot->second[end]);
+                if (end != offset && encoded_size + item_size > max_scan_page_bytes)
+                    break;
+                encoded_size += item_size;
+                ++end;
+            }
+            page.items.insert (page.items.end (),
+                               snapshot->second.begin () + static_cast<std::ptrdiff_t> (offset),
+                               snapshot->second.begin () + static_cast<std::ptrdiff_t> (end));
+            if (end < snapshot->second.size ())
+                page.next_cursor =
+                  store_scan_cursor_t{std::to_string (_scan_epoch) + ":"
+                                      + std::to_string (snapshot_id) + ":" + std::to_string (end)};
+            else
+                _snapshots.erase (snapshot);
+            return completed<store_scan_result_t> (std::move (page));
+        });
     }
 
   private:
