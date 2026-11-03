@@ -42,6 +42,11 @@ struct state_lane_test_access_t
         const std::lock_guard lock (lane._mailbox_mutex);
         return lane._mailbox.size ();
     }
+    static bool pending_synchronous_turn (state_lane_t &lane)
+    {
+        const std::lock_guard lock (lane._mailbox_mutex);
+        return !lane._mailbox.empty () && !lane._mailbox.front ().work;
+    }
     static bool owns_turn (state_lane_t &lane)
     {
         return lane._scheduled.load (std::memory_order_acquire);
@@ -2969,6 +2974,84 @@ void check_synchronous_stop (bool mesh, bool raw_owner)
     node->stop ();
 }
 
+// Keep every infrastructure worker occupied until the synchronous caller
+// returns. A contended lane must grant that caller its turn rather than run
+// the disconnect on the thread releasing the predecessor's turn.
+void check_mesh_stop_without_infrastructure (int operation)
+{
+    auto executor = infrastructure_executor ();
+    auto reserved = test::reserve_single_infrastructure_worker (*executor);
+    auto state = test::runtime_failure_fixture<detail::mesh_node_builder_state_t> ("l4-mesh");
+    state->routing_id = zlink::routing_id_t::from ("local");
+    state->core_context = std::make_shared<zlink::context_t> ();
+    auto node = std::make_shared<detail::mesh_node_runtime_t> (state);
+    node->start ();
+    auto &raw = node->native_node ().transport ();
+    const auto rid = zlink::routing_id_t::from ("remote");
+    const std::string endpoint = "inproc://l4-peer";
+    node->expect_peer (rid, endpoint, 1, "default");
+    node->connect_peer (rid, endpoint, 1, "default", true);
+    auto peer = raw.topology ().local_descriptor ();
+    peer.node_routing_id = rid.to_bytes ();
+    peer.advertised_endpoint = endpoint;
+    peer.state = mesh::service_node_state_t::serving;
+    ASSERT_EQ (mesh::peer_admission_result_t::admitted,
+               raw.admit_peer (peer, {1}, mesh::service_liveness_registry_t::clock_t::now ()));
+    production_auto_fixture_t fixture ({node});
+    detail::route_channel_runtime_t route ("l4-mesh");
+    location_auto_connect_test_access_t::register_stop_probe (fixture.service, route, node, true);
+    auto &lane = operation == 0 ? state->lane : auto_connect_owner_lane (raw);
+    std::promise<void> entered, release;
+    auto released = release.get_future ().share ();
+    auto held = std::async (std::launch::async, [&] {
+        lane.run_sync ([&] {
+            entered.set_value ();
+            released.wait ();
+        });
+    });
+    entered.get_future ().get ();
+    std::latch occupied (1), release_executor (1), returned_executor (1);
+    executor->submit ([&] {
+        occupied.count_down ();
+        release_executor.wait ();
+        returned_executor.count_down ();
+    });
+    occupied.wait ();
+    auto invocation = std::async (std::launch::async, [&] {
+        if (operation < 2)
+            fixture.service.stop ();
+        else if (operation == 2)
+            raw.disconnect_peer_intent (endpoint);
+        else if (operation == 3)
+            raw.disconnect_peer_intent (rid, endpoint, true);
+        else
+            raw.forget_peer (rid.to_bytes (), endpoint);
+    });
+    const auto deadline = std::chrono::steady_clock::now () + auto_connect_wait;
+    while (state_lane_test_access_t::pending_work (lane) == 0
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::yield ();
+    EXPECT_GT (state_lane_test_access_t::pending_work (lane), 0u);
+    const bool caller_turn = state_lane_test_access_t::pending_synchronous_turn (lane);
+    if (!caller_turn)
+        std::fprintf (stderr, "mesh stop operation=%d did not grant the synchronous caller\n",
+                      operation);
+    EXPECT_TRUE (caller_turn);
+    release.set_value ();
+    const auto returned = invocation.wait_for (auto_connect_wait);
+    // Always release resources before reporting a failed return bound.
+    release_executor.count_down ();
+    returned_executor.wait ();
+    held.get ();
+    invocation.get ();
+    EXPECT_EQ (std::future_status::ready, returned);
+    if (operation < 4)
+        EXPECT_EQ (nullptr, raw.topology ().peer (rid.to_bytes ()));
+    fixture.failures->rethrow_if_failed ();
+    fixture.service.stop ();
+    node->stop ();
+}
+
 void check_synchronous_auto_wrappers ()
 {
     detail::route_channel_runtime_t route ("l4-mesh");
@@ -3114,6 +3197,19 @@ TEST (AutoConnectSyncTest, DestructorDrainsPendingLoopAfterStopTimeout)
     destroying.get ();
     EXPECT_TRUE (finished.result ());
     EXPECT_TRUE (route.list_connections ().empty ());
+}
+
+TEST (AutoConnectSyncDeathTest, MeshStopCompletesWithoutInfrastructureExecutor)
+{
+    ASSERT_EXIT (
+      {
+          for (int operation : {0, 1, 2, 3, 4}) {
+              SCOPED_TRACE (operation);
+              check_mesh_stop_without_infrastructure (operation);
+          }
+          std::_Exit (::testing::Test::HasFailure () ? 1 : 0);
+      },
+      ::testing::ExitedWithCode (0), "");
 }
 
 TEST (AutoConnectSyncDeathTest, StopCompletesWithoutCompletionDispatcher)
