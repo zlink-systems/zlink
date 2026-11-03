@@ -1276,8 +1276,26 @@ final class StreamSessionTest {
                 output.flush();
                 continue;
             }
-            assertEquals(ZLinkStreamMessageKind.CONTROL, header.kind());
-            assertEquals("$zlink.actor.bound", header.packetName());
+            assertEquals(
+                    ZLinkStreamMessageKind.CONTROL,
+                    header.kind(),
+                    () ->
+                            "unexpected stream frame header="
+                                    + header
+                                    + " bodyUtf8="
+                                    + new String(body, StandardCharsets.UTF_8)
+                                    + " bodyHex="
+                                    + java.util.HexFormat.of().formatHex(body));
+            assertEquals(
+                    "$zlink.actor.bound",
+                    header.packetName(),
+                    () ->
+                            "unexpected control packet header="
+                                    + header
+                                    + " bodyUtf8="
+                                    + new String(body, StandardCharsets.UTF_8)
+                                    + " bodyHex="
+                                    + java.util.HexFormat.of().formatHex(body));
             ByteBuffer payload = ByteBuffer.wrap(body);
             assertEquals(1, Byte.toUnsignedInt(payload.get()));
             assertTrue(Short.toUnsignedInt(payload.getShort()) > 0);

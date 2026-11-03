@@ -2869,7 +2869,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     private boolean clearSessionBindingOnLane(
             DefaultActorContext context, long bindingToken, RoutingId routeSessionRid) {
-        boolean cleared = context.clearBoundSession(bindingToken);
+        boolean cleared = context.clearBoundSession(bindingToken, routeSessionRid);
         if (cleared) {
             ZLinkHandlerStages.fromStageSupplier(
                             () -> locations.removeSessionRoute(routeSessionRid))
@@ -2971,6 +2971,20 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     return CompletableFuture.failedFuture(
                             new ZLinkConfigurationException(
                                     "Actor is not registered: " + actorRef.actorId()));
+                }
+                try {
+                    if (actor.getClass()
+                                    .getMethod(
+                                            "onDuplicateBind",
+                                            ZLinkSessionBindingIdentity.class,
+                                            ZLinkSessionBindingIdentity.class,
+                                            ZLinkActorCallbackCancellation.class)
+                                    .getDeclaringClass()
+                            == ZLinkActor.class) {
+                        return CompletableFuture.completedFuture(Optional.empty());
+                    }
+                } catch (NoSuchMethodException failure) {
+                    return CompletableFuture.failedFuture(failure);
                 }
                 return enqueueActorDispatchTurn(
                         actorRef.actorId(),
@@ -5176,8 +5190,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             return state.boundSessionRoute();
         }
 
-        boolean clearBoundSession(long bindingToken) {
-            return state.clearBoundSession(bindingToken);
+        boolean clearBoundSession(long bindingToken, RoutingId expectedSessionRid) {
+            return state.clearBoundSession(bindingToken, expectedSessionRid);
         }
 
         CompletionStage<Void> rebindNativeActor(
