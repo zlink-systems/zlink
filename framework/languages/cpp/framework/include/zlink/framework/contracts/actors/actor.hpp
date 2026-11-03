@@ -997,7 +997,9 @@ spot_node_builder_t &spot_node_builder_t::add_actor_factory (
             outcome, operation_id_high, operation_id_low, committed, reply, error_kind);
           return static_cast<TActor *> (actor)->on_join_completed (completion);
       },
-      relocation, std::move (capture), std::move (restore));
+      relocation, std::move (capture), std::move (restore),
+      std::is_same_v<decltype (&TActor::on_duplicate_bind),
+                     decltype (&actor_t::on_duplicate_bind)>);
 }
 
 } // namespace zlink::framework

@@ -1175,6 +1175,74 @@ apply_bound_session_bind_async (
       false,
       session_owner_token.owner_id,
       static_cast<std::uint64_t> (session_owner_token.lease_generation)};
+    auto replace_binding =
+      [actor_gateway_runtime, actor, bind, incoming_route, sink = std::move (sink),
+       submit_terminal_reply] () mutable -> ::zlink::framework::result_t<bind_result_t> {
+        const auto transition = actor_gateway_runtime.replace_session_route (
+          actor, std::move (sink), incoming_route, stream_codec_t::message_pack,
+          [submit_terminal_reply] (const actor_bound_session_route_t &accepted) {
+              return submit_terminal_reply (
+                static_cast<std::uint32_t> (runtime::protocol::request_terminal_result::ok),
+                static_cast<std::uint32_t> (runtime::protocol::framework_error_code::none),
+                runtime::protocol::stream_bind_reply_tail_t{accepted.binding_generation,
+                                                            accepted.authority_owner_generation});
+          });
+        if (!transition)
+            return ::zlink::framework::result_t<bind_result_t>::failure (
+              transition.error_kind (), transition.error ()
+                                          ? transition.error ()->what ()
+                                          : "Actor bound Session route replacement failed");
+
+        std::optional<runtime::protocol::bound_session_replaced_t> replacement;
+        const auto &change = transition.value ();
+        if (actor_gateway_runtime.trace_bound_session_send_stage_enabled ()) {
+            actor_gateway_runtime.trace_bound_session_send_stage (
+              std::string (actor.actor_id ().value ()), "actor_owner_route_publish",
+              [&] {
+                  return "session_rid=" + incoming_route.session_rid->to_hex ()
+                         + " binding_generation="
+                         + std::to_string (incoming_route.binding_generation)
+                         + " replaced=" + (change.changed ? "true" : "false");
+              },
+              &*incoming_route.session_rid);
+        }
+        if (change.changed && change.previous && change.previous->session_rid
+            && change.previous->node_generation != 0 && change.previous->binding_generation != 0
+            && !change.previous->session_owner_id.empty ()
+            && change.previous->session_owner_lease_generation != 0) {
+            replacement = runtime::protocol::bound_session_replaced_t{
+              bind.actor,
+              runtime::protocol::retired_bound_session_route_fence_t{
+                change.previous->node_rid.to_bytes (), change.previous->node_generation,
+                change.previous->session_owner_id, change.previous->session_owner_lease_generation,
+                change.previous->session_rid->to_bytes (), change.previous->binding_generation}};
+        }
+        return ::zlink::framework::result_t<bind_result_t>::success (
+          bind_result_t{runtime::stateful::stateful_error_t::none, std::move (replacement)});
+    };
+    const bool callback_absent = co_await spot_state->lane.run_task ([spot_state, actor] {
+        auto actor_type = std::string (actor_ref_access_t::actor_type (actor));
+        if (actor_type.empty ()) {
+            const auto type =
+              spot_state->actor_types_by_id.find (std::string (actor.actor_id ().value ()));
+            if (type == spot_state->actor_types_by_id.end ())
+                return false;
+            actor_type = type->second;
+        }
+        const auto factory = spot_state->actor_factories.find (actor_type);
+        const auto instance = spot_state->actor_instances.find (
+          actor_type + ":" + std::string (actor.actor_id ().value ()));
+        if (factory == spot_state->actor_factories.end ()
+            || !factory->second.duplicate_bind_is_default || !factory->second.as_actor
+            || instance == spot_state->actor_instances.end () || !instance->second)
+            return false;
+        const auto *actor_instance = factory->second.as_actor (instance->second.get ());
+        // A factory may return a subtype with an override absent from its registered type.
+        return actor_instance
+               && std::type_index (typeid (*actor_instance)) == factory->second.actor_type;
+    });
+    if (callback_absent)
+        co_return replace_binding ();
     struct callback_race_t
     {
         std::atomic<std::uint8_t> decision{0};
@@ -1206,11 +1274,11 @@ apply_bound_session_bind_async (
     auto spot_runtime = spot_node_runtime_t (std::move (spot_state));
     auto turn = spot_runtime.run_actor_turn (
       actor,
-      [actor_gateway_runtime, actor, bind, incoming_route,
+      [actor_gateway_runtime, actor, incoming_route, replace_binding = std::move (replace_binding),
        incoming_identity =
          actor_session_binding_identity_t{node_rid_t::from_string (session_owner.to_string ()),
                                           session_owner_generation, bind.binding.generation},
-       sink = std::move (sink), submit_terminal_reply, race, completion, start_callback_timeout] (
+       race, completion, start_callback_timeout] (
         actor_t &actor_instance,
         std::stop_token cancellation) mutable -> task_t<::zlink::framework::result_t<bool>> {
           const auto current = co_await actor_gateway_runtime.bound_session_route_async (actor);
@@ -1247,48 +1315,13 @@ apply_bound_session_bind_async (
           if (cancellation.stop_requested ())
               co_return ::zlink::framework::result_t<bool>::success (false);
 
-          const auto transition = actor_gateway_runtime.replace_session_route (
-            actor, std::move (sink), incoming_route, stream_codec_t::message_pack,
-            [submit_terminal_reply] (const actor_bound_session_route_t &accepted) {
-                return submit_terminal_reply (
-                  static_cast<std::uint32_t> (runtime::protocol::request_terminal_result::ok),
-                  static_cast<std::uint32_t> (runtime::protocol::framework_error_code::none),
-                  runtime::protocol::stream_bind_reply_tail_t{accepted.binding_generation,
-                                                              accepted.authority_owner_generation});
-            });
+          auto transition = replace_binding ();
           if (!transition)
               co_return ::zlink::framework::result_t<bool>::failure (
                 transition.error_kind (), transition.error ()
                                             ? transition.error ()->what ()
                                             : "Actor bound Session route replacement failed");
-
-          std::optional<runtime::protocol::bound_session_replaced_t> replacement;
-          const auto &change = transition.value ();
-          if (actor_gateway_runtime.trace_bound_session_send_stage_enabled ()) {
-              actor_gateway_runtime.trace_bound_session_send_stage (
-                std::string (actor.actor_id ().value ()), "actor_owner_route_publish",
-                [&] {
-                    return "session_rid=" + incoming_route.session_rid->to_hex ()
-                           + " binding_generation="
-                           + std::to_string (incoming_route.binding_generation)
-                           + " replaced=" + (change.changed ? "true" : "false");
-                },
-                &*incoming_route.session_rid);
-          }
-          if (change.changed && change.previous && change.previous->session_rid
-              && change.previous->node_generation != 0 && change.previous->binding_generation != 0
-              && !change.previous->session_owner_id.empty ()
-              && change.previous->session_owner_lease_generation != 0) {
-              replacement = runtime::protocol::bound_session_replaced_t{
-                bind.actor,
-                runtime::protocol::retired_bound_session_route_fence_t{
-                  change.previous->node_rid.to_bytes (), change.previous->node_generation,
-                  change.previous->session_owner_id,
-                  change.previous->session_owner_lease_generation,
-                  change.previous->session_rid->to_bytes (), change.previous->binding_generation}};
-          }
-          completion->complete (::zlink::framework::result_t<bind_result_t>::success (
-            bind_result_t{runtime::stateful::stateful_error_t::none, std::move (replacement)}));
+          completion->complete (std::move (transition));
           co_return ::zlink::framework::result_t<bool>::success (true);
       },
       race->cancellation.get_token ());

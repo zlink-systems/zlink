@@ -6196,6 +6196,24 @@ class callback_duplicate_bind_test_actor_t final : public duplicate_bind_test_ac
     callback_t _callback;
 };
 
+template <typename TActor>
+class duplicate_bind_test_factory_t final : public zlink::framework::actor_factory_t<TActor>
+{
+  public:
+    explicit duplicate_bind_test_factory_t (std::shared_ptr<TActor> instance) :
+        _instance (std::move (instance))
+    {
+    }
+
+    task_t<std::shared_ptr<TActor>> create (actor_context_t, std::stop_token) override
+    {
+        co_return _instance;
+    }
+
+  private:
+    std::shared_ptr<TActor> _instance;
+};
+
 task_t<std::optional<std::string>>
 wait_for_duplicate_bind_decision (task_t<std::optional<std::string>> decision,
                                   std::stop_token cancellation,
@@ -6221,7 +6239,8 @@ int duplicate_bind_callback_policy ()
         accept_empty,
         reject,
         timeout,
-        no_callback
+        no_callback,
+        factory_subtype
     };
 
     const auto run_case = [] (case_t test_case) -> int {
@@ -6251,7 +6270,7 @@ int duplicate_bind_callback_policy ()
                           ? std::optional<std::string> (std::string{})
                           : std::nullopt));
                 };
-            } else if (test_case == case_t::reject) {
+            } else if (test_case == case_t::reject || test_case == case_t::factory_subtype) {
                 callback = [] (const auto &, const auto &, std::stop_token) {
                     return task_t<std::optional<std::string>> (
                       result_t<std::optional<std::string>>::success (
@@ -6281,17 +6300,33 @@ int duplicate_bind_callback_policy ()
           runtime::serial_execution_queue_t::error_handler_t{},
           runtime::serial_lane_policy_t::per_actor_spot ());
         observation->expected_serial_queue = spot_context->serial_queue.get ();
-        auto spot_state =
-          test::runtime_failure_fixture<spot_node_builder_state_t> ("duplicate-bind-owner");
-        spot_node_builder_state_t::actor_factory_registration_t factory;
-        factory.actor_type = std::type_index (typeid (duplicate_bind_test_actor_t));
-        factory.as_actor = [] (void *instance) {
-            return static_cast<actor_t *> (static_cast<duplicate_bind_test_actor_t *> (instance));
-        };
+        spot_node_builder_t actor_builder;
+        if (test_case == case_t::no_callback || test_case == case_t::factory_subtype) {
+            actor_builder
+              .add_actor_factory<duplicate_bind_test_actor_t,
+                                 duplicate_bind_test_factory_t<duplicate_bind_test_actor_t>> (
+                "player",
+                std::make_shared<duplicate_bind_test_factory_t<duplicate_bind_test_actor_t>> (
+                  actor_instance),
+                [] (auto &factory) { factory.recreate_on_relocation (); });
+        } else {
+            actor_builder.add_actor_factory<
+              callback_duplicate_bind_test_actor_t,
+              duplicate_bind_test_factory_t<callback_duplicate_bind_test_actor_t>> (
+              "player",
+              std::make_shared<
+                duplicate_bind_test_factory_t<callback_duplicate_bind_test_actor_t>> (
+                std::static_pointer_cast<callback_duplicate_bind_test_actor_t> (actor_instance)),
+              [] (auto &factory) { factory.recreate_on_relocation (); });
+        }
+        auto spot_runtime = spot_node_runtime_t::from (actor_builder);
+        auto spot_state = spot_runtime.weak_state ().lock ();
+        spot_state->monitoring = test::runtime_failure_monitoring ();
         const std::string actor_key = "player:duplicate-bind-actor";
-        spot_state->actor_factories.emplace ("player", std::move (factory));
+        auto &factory = spot_state->actor_factories.at ("player");
+        spot_state->actor_instances.emplace (
+          actor_key, factory.create_context_instance (gateway.actor_context (actor)));
         spot_state->actor_types_by_id.emplace ("duplicate-bind-actor", "player");
-        spot_state->actor_instances.emplace (actor_key, actor_instance);
         spot_state->actor_spot_ids.emplace (actor_key, spot_name);
         spot_state->spot_contexts_by_id.emplace (std::string (spot_name),
                                                  spot_context_access_t::create (spot_context));
@@ -6342,15 +6377,58 @@ int duplicate_bind_callback_policy ()
             terminal.emplace (result, failure_code, std::move (tail));
             return true;
         };
+        auto disconnect_entered = std::make_shared<task_completion_source_t<void>> ();
+        auto release_disconnect = std::make_shared<task_completion_source_t<void>> ();
+        std::optional<task_t<result_t<bool>>> disconnect;
+        const bool hold_disconnect = test_case == case_t::no_callback || test_case == case_t::reject
+                                     || test_case == case_t::factory_subtype;
+        if (hold_disconnect) {
+            // The previous Session disconnect owns the Actor turn until explicitly released.
+            disconnect.emplace (spot_runtime.run_actor_turn (
+              actor,
+              [disconnect_entered, release_disconnect] (actor_t &,
+                                                        std::stop_token) -> task_t<result_t<bool>> {
+                  disconnect_entered->complete (result_t<void>::success ());
+                  co_await release_disconnect->task ();
+                  co_return result_t<bool>::success (true);
+              }));
+            if (!finite_task_result (disconnect_entered->task ())) {
+                release_disconnect->complete (result_t<void>::success ());
+                (void) finite_task_result (std::move (*disconnect));
+                return 8;
+            }
+        }
         auto pending = apply_bound_session_bind_async (
           gateway.weak_state (), {}, spot_state, std::move (stream_runtime), wire_actor, bind,
           incoming_owner, 9, incoming_owner_token, std::move (submit_terminal_reply), delays,
           std::chrono::milliseconds (25));
+        if (hold_disconnect && test_case != case_t::no_callback) {
+            const bool waited_for_gate =
+              !pending.await_ready () && observation->callback_calls.load () == 0;
+            release_disconnect->complete (result_t<void>::success ());
+            (void) finite_task_result (std::move (*disconnect));
+            if (!waited_for_gate)
+                return 9;
+        }
         if (test_case == case_t::timeout
             && cancelled_result.wait_for (std::chrono::milliseconds (500))
                  != std::future_status::ready)
             return 2;
+        auto bind_finished = std::make_shared<std::promise<void>> ();
+        auto bind_finished_result = bind_finished->get_future ();
+        observe_task_completion (pending,
+                                 [bind_finished] (const auto &) { bind_finished->set_value (); });
         auto result = finite_task_result (std::move (pending), std::chrono::milliseconds (500));
+        if (test_case == case_t::no_callback) {
+            const bool disconnect_still_held = !disconnect->await_ready ();
+            release_disconnect->complete (result_t<void>::success ());
+            const auto disconnected = finite_task_result (std::move (*disconnect));
+            // Drain the bind on RED too, before destroying its reply captures and timer owner.
+            if (!result)
+                (void) bind_finished_result.wait_for (std::chrono::milliseconds (500));
+            if (!disconnect_still_held || !disconnected || !*disconnected)
+                return 10;
+        }
         if (!result || !*result)
             return 3;
         const auto &bind_result = result->value ();
@@ -6361,7 +6439,7 @@ int duplicate_bind_callback_policy ()
         const bool route_is_previous = current_route && current_route->session_rid
                                        && *current_route->session_rid == previous_session
                                        && current_route->binding_generation == 19;
-        if (test_case == case_t::reject) {
+        if (test_case == case_t::reject || test_case == case_t::factory_subtype) {
             return bind_result.terminal_result
                          == static_cast<std::uint32_t> (protocol::request_terminal_result::rejected)
                        && bind_result.reply_tail && bind_result.reply_tail->rejection_message
@@ -6425,9 +6503,12 @@ int duplicate_bind_callback_policy ()
     };
 
     for (const auto test_case : {case_t::accept, case_t::accept_empty, case_t::reject,
-                                 case_t::timeout, case_t::no_callback}) {
-        if (const auto result = run_case (test_case); result != 0)
+                                 case_t::timeout, case_t::no_callback, case_t::factory_subtype}) {
+        if (const auto result = run_case (test_case); result != 0) {
+            std::cerr << "duplicate bind case=" << static_cast<int> (test_case)
+                      << " failure=" << result << '\n';
             return result;
+        }
     }
     return 0;
 }
