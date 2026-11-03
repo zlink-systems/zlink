@@ -322,6 +322,7 @@ class spot_node_builder_state_t
         actor_join_completion_callback_t on_join_completed;
         std::function<task_t<std::vector<std::byte>> (void *, std::stop_token)> capture;
         std::function<task_t<void> (void *, std::vector<std::byte>, std::stop_token)> restore;
+        bool duplicate_bind_is_default = false;
     };
     std::function<task_t<result_t<void>> (actor_ref_t)> destroy_actor_registry;
     std::function<result_t<void> (const actor_ref_t &)> update_actor_registry_ref;
