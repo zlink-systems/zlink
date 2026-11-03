@@ -42,6 +42,7 @@ struct owner_lease_row_t
 
 class in_memory_location_repository_t : public location_repository_t
 {
+    friend struct in_memory_store_continuation_test_access_t;
     friend struct in_memory_location_repository_test_access_t;
 
   public:
@@ -57,61 +58,59 @@ class in_memory_location_repository_t : public location_repository_t
     {
         if (!valid_mesh_node_descriptor (descriptor))
             throw std::invalid_argument ("mesh node descriptor is incomplete");
-        return _lane
-          .run ([&] {
-              const auto now = clock_t::now ();
-              const auto key = mesh_node_key (descriptor.mesh_name, descriptor.rid);
-              const auto found = _mesh_nodes.find (key);
-              const auto token =
-                location_owner_token_t{descriptor.owner_id, descriptor.lease_generation};
-              if (!owner_token_is_live (token, now))
-                  return completed (
-                    location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
+        return _lane.run_task ([this, descriptor = std::move (descriptor), intent] () mutable {
+            const auto now = clock_t::now ();
+            const auto key = mesh_node_key (descriptor.mesh_name, descriptor.rid);
+            const auto found = _mesh_nodes.find (key);
+            const auto token =
+              location_owner_token_t{descriptor.owner_id, descriptor.lease_generation};
+            if (!owner_token_is_live (token, now))
+                return completed (
+                  location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
 
-              if (found != _mesh_nodes.end ()
-                  && (intent == location_write_intent_t::new_claim
-                      || intent == location_write_intent_t::renew)
-                  && same_mesh_node_descriptor (found->second, descriptor))
-                  return completed (location_write_result_t::stored (
-                    static_cast<std::int64_t> (found->second.descriptor_revision),
-                    found->second.updated_at));
+            if (found != _mesh_nodes.end ()
+                && (intent == location_write_intent_t::new_claim
+                    || intent == location_write_intent_t::renew)
+                && same_mesh_node_descriptor (found->second, descriptor))
+                return completed (location_write_result_t::stored (
+                  static_cast<std::int64_t> (found->second.descriptor_revision),
+                  found->second.updated_at));
 
-              if (intent == location_write_intent_t::new_claim) {
-                  if (found != _mesh_nodes.end ()
-                      && owner_token_is_live (
-                        {found->second.owner_id, found->second.lease_generation}, now))
-                      return completed (
-                        location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
-              } else if (intent == location_write_intent_t::renew) {
-                  if (found == _mesh_nodes.end () || found->second.owner_id != descriptor.owner_id
-                      || found->second.lease_generation != descriptor.lease_generation
-                      || descriptor.descriptor_revision < found->second.descriptor_revision)
-                      return completed (
-                        location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
-                  if (!same_mesh_node_identity (found->second, descriptor))
-                      return completed (
-                        location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
-                  if (descriptor.descriptor_revision == found->second.descriptor_revision)
-                      return completed (
-                        location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
-              } else {
-                  return completed (
-                    location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
-              }
-              if (!can_publish_entry_spot_id (descriptor, key, now))
-                  return completed (
-                    location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
+            if (intent == location_write_intent_t::new_claim) {
+                if (found != _mesh_nodes.end ()
+                    && owner_token_is_live (
+                      {found->second.owner_id, found->second.lease_generation}, now))
+                    return completed (
+                      location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
+            } else if (intent == location_write_intent_t::renew) {
+                if (found == _mesh_nodes.end () || found->second.owner_id != descriptor.owner_id
+                    || found->second.lease_generation != descriptor.lease_generation
+                    || descriptor.descriptor_revision < found->second.descriptor_revision)
+                    return completed (
+                      location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
+                if (!same_mesh_node_identity (found->second, descriptor))
+                    return completed (
+                      location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
+                if (descriptor.descriptor_revision == found->second.descriptor_revision)
+                    return completed (
+                      location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
+            } else {
+                return completed (
+                  location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
+            }
+            if (!can_publish_entry_spot_id (descriptor, key, now))
+                return completed (
+                  location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
 
-              descriptor.updated_at = now;
-              const auto previous = found == _mesh_nodes.end ()
-                                      ? std::optional<mesh_node_descriptor_t>{}
-                                      : std::make_optional (found->second);
-              _mesh_nodes[key] = descriptor;
-              publish_entry_spot_id (previous, descriptor, key);
-              return completed (location_write_result_t::stored (
-                static_cast<std::int64_t> (descriptor.descriptor_revision), now));
-          })
-          .get ();
+            descriptor.updated_at = now;
+            const auto previous = found == _mesh_nodes.end ()
+                                    ? std::optional<mesh_node_descriptor_t>{}
+                                    : std::make_optional (found->second);
+            _mesh_nodes[key] = descriptor;
+            publish_entry_spot_id (previous, descriptor, key);
+            return completed (location_write_result_t::stored (
+              static_cast<std::int64_t> (descriptor.descriptor_revision), now));
+        });
     }
 
     task_t<location_write_status_t> remove_mesh_node (mesh_node_descriptor_key_t key,
@@ -267,65 +266,62 @@ class in_memory_location_repository_t : public location_repository_t
     {
         if (!valid_fanout_descriptor (descriptor))
             throw std::invalid_argument ("fanout publisher descriptor is incomplete");
-        return _lane
-          .run ([&] {
-              const auto now = clock_t::now ();
-              const auto key = fanout_key (descriptor.channel_name, descriptor.publisher_rid);
-              const auto found = _fanout_publishers.find (key);
-              const auto token =
-                location_owner_token_t{descriptor.owner_id, descriptor.lease_generation};
-              if (!owner_token_is_live (token, now))
-                  return completed (
-                    location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
+        return _lane.run_task ([this, descriptor = std::move (descriptor), intent] () mutable {
+            const auto now = clock_t::now ();
+            const auto key = fanout_key (descriptor.channel_name, descriptor.publisher_rid);
+            const auto found = _fanout_publishers.find (key);
+            const auto token =
+              location_owner_token_t{descriptor.owner_id, descriptor.lease_generation};
+            if (!owner_token_is_live (token, now))
+                return completed (
+                  location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
 
-              if (intent == location_write_intent_t::new_claim
-                  || intent == location_write_intent_t::takeover) {
-                  if (found != _fanout_publishers.end ()
-                      && owner_token_is_live (
-                        {found->second.owner_id, found->second.lease_generation}, now)
-                      && (intent == location_write_intent_t::new_claim
-                          || found->second.owner_id != descriptor.owner_id
-                          || found->second.lease_generation != descriptor.lease_generation))
-                      return completed (
-                        same_fanout_descriptor (found->second, descriptor)
-                          ? location_write_result_t::stored (
-                              static_cast<std::int64_t> (found->second.descriptor_revision),
-                              found->second.updated_at)
-                          : location_write_result_t{
-                              location_write_status_t::rejected_conflict, 0, {}});
-              } else if (intent != location_write_intent_t::renew) {
-                  return completed (
-                    location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
-              }
-
-              if (found != _fanout_publishers.end ()
-                  && found->second.owner_id == descriptor.owner_id
-                  && found->second.lease_generation == descriptor.lease_generation) {
-                  if (!same_fanout_identity (found->second, descriptor))
-                      return completed (
-                        location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
-                  if (descriptor.descriptor_revision < found->second.descriptor_revision)
-                      return completed (
-                        location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
-                  if (descriptor.descriptor_revision == found->second.descriptor_revision) {
-                      if (!same_fanout_descriptor (found->second, descriptor))
-                          return completed (location_write_result_t{
+            if (intent == location_write_intent_t::new_claim
+                || intent == location_write_intent_t::takeover) {
+                if (found != _fanout_publishers.end ()
+                    && owner_token_is_live (
+                      {found->second.owner_id, found->second.lease_generation}, now)
+                    && (intent == location_write_intent_t::new_claim
+                        || found->second.owner_id != descriptor.owner_id
+                        || found->second.lease_generation != descriptor.lease_generation))
+                    return completed (
+                      same_fanout_descriptor (found->second, descriptor)
+                        ? location_write_result_t::stored (
+                            static_cast<std::int64_t> (found->second.descriptor_revision),
+                            found->second.updated_at)
+                        : location_write_result_t{
                             location_write_status_t::rejected_conflict, 0, {}});
-                      return completed (location_write_result_t::stored (
-                        static_cast<std::int64_t> (descriptor.descriptor_revision),
-                        found->second.updated_at));
-                  }
-              } else if (intent == location_write_intent_t::renew) {
-                  return completed (
-                    location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
-              }
+            } else if (intent != location_write_intent_t::renew) {
+                return completed (
+                  location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
+            }
 
-              descriptor.updated_at = now;
-              _fanout_publishers[key] = descriptor;
-              return completed (location_write_result_t::stored (
-                static_cast<std::int64_t> (descriptor.descriptor_revision), now));
-          })
-          .get ();
+            if (found != _fanout_publishers.end () && found->second.owner_id == descriptor.owner_id
+                && found->second.lease_generation == descriptor.lease_generation) {
+                if (!same_fanout_identity (found->second, descriptor))
+                    return completed (
+                      location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
+                if (descriptor.descriptor_revision < found->second.descriptor_revision)
+                    return completed (
+                      location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
+                if (descriptor.descriptor_revision == found->second.descriptor_revision) {
+                    if (!same_fanout_descriptor (found->second, descriptor))
+                        return completed (location_write_result_t{
+                          location_write_status_t::rejected_conflict, 0, {}});
+                    return completed (location_write_result_t::stored (
+                      static_cast<std::int64_t> (descriptor.descriptor_revision),
+                      found->second.updated_at));
+                }
+            } else if (intent == location_write_intent_t::renew) {
+                return completed (
+                  location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
+            }
+
+            descriptor.updated_at = now;
+            _fanout_publishers[key] = descriptor;
+            return completed (location_write_result_t::stored (
+              static_cast<std::int64_t> (descriptor.descriptor_revision), now));
+        });
     }
 
     task_t<location_write_status_t> remove_fanout_publisher (fanout_publisher_descriptor_key_t key,
