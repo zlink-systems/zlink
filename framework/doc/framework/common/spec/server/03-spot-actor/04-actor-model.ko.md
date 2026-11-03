@@ -221,7 +221,7 @@ Caller는 다음 값을 Actor message target으로 지정하지 않는다.
 - Ready 상태인 현재 위치를 보관하는 positive cache도 current owner lease의 local
   admission deadline과 공개 `RouteCacheMaxAge` 안에서만 사용한다.
 - 더 큰 StoreVersion, stale result 또는 Store recovery event를 확인하면 positive
-  cache를 즉시 무효화한다. 세부 조건은 [Routing §2.2](08-routing.ko.md#22-최근-ready-route를-사용하는-조건)를 따른다.
+  cache를 즉시 무효화한다.
 - `ObjectGeneration`은 Actor direct message의 target 일치 조건이 아니다.
 - Resolve 뒤 같은 owner에서 Actor가 destroy되고 같은 `ActorId`로 다시 만들어졌다면,
   target queue가 수락하는 시점의 current Ready Actor가 message를 처리한다.

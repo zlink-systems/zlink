@@ -1161,7 +1161,6 @@ generation, and route. `RouteCacheMaxAge` defaults to 15 seconds and can't excee
 last time the owner can accept new work. `Missing`, `Creating`, and Store errors aren't
 cached. It's removed immediately on confirming a higher `StoreVersion` or owner lease
 expiry. A runtime change to `RouteCacheMaxAge` applies only to new cache entries and does not extend an existing entry’s lifetime.
-The detailed Actor route-cache invalidation conditions follow [Routing §2.2](../03-spot-actor/08-routing.en.md#22-the-condition-for-using-a-recent-ready-route).
 
 A message arriving at the previous owner right after a move can be delivered to the new
 owner. This feature is called Message Follow, and its period, `MessageFollowDuration`,

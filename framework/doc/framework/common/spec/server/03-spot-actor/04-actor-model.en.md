@@ -254,8 +254,7 @@ The caller doesn't specify the following values as an Actor message target.
   within the current owner lease's local admission deadline and the public
   `RouteCacheMaxAge`.
 - The positive cache is invalidated immediately on confirming a larger
-  StoreVersion, a stale result, or a Store recovery event. The detailed conditions follow
-  [Routing §2.2](08-routing.en.md#22-the-condition-for-using-a-recent-ready-route).
+  StoreVersion, a stale result, or a Store recovery event.
 - `ObjectGeneration` isn't a target-match condition for an Actor direct
   message.
 - If, after resolve, an Actor is destroyed by the same owner and re-created
