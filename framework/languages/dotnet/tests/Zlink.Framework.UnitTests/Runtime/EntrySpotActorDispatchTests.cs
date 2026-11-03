@@ -9674,6 +9674,37 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task Actor_Route_Invalidation_Enqueues_From_ResolverLane()
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, actor) = await CreateStartedRuntimeAsync(node);
+        try
+        {
+            var rows = runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>();
+            var key = new ZLinkActorLocationKey(actor.ActorId);
+            var route = Assert.IsType<ZLinkResolvedActorLocation>(
+                await rows.ResolveActorRowAsync(key)
+            );
+            await rows.Lane.RunAsync(() =>
+            {
+                rows.InvalidateActorRoute(
+                    key,
+                    route.ActorRef,
+                    route.OwnerNodeGeneration,
+                    route.AuthorityOwnerGeneration,
+                    (ulong)route.LeaseGeneration
+                );
+                return ValueTask.CompletedTask;
+            });
+            Assert.False(rows.HasCachedActorRoute(key));
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task Actor_Route_Invalidation_DoesNotBlock_AnotherLaneTurn()
     {
         var node = new CapturingSpotNode();

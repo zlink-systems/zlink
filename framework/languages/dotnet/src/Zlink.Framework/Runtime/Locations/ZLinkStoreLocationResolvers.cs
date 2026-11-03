@@ -310,35 +310,26 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         ulong ownerLeaseGeneration
     )
     {
-        ValueTask<bool> invalidation;
-        try
+        var invalidation = _lane.RunAsync(() =>
         {
-            invalidation = _lane.RunAsync(() =>
-            {
-                if (!_actorRoutes.TryGetValue(key, out var cached))
-                    return false;
-                var row = cached.Row;
-                if (
-                    row.ActorRef != actorRef
-                    || row.OwnerNodeGeneration != ownerNodeGeneration
-                    || row.AuthorityOwnerGeneration != authorityOwnerGeneration
-                    || row.LeaseGeneration <= 0
-                    || (ulong)row.LeaseGeneration != ownerLeaseGeneration
-                )
-                    return false;
-                return _actorRoutes.Remove(key);
-            });
-        }
-        catch (Exception failure)
-            when (failure is ObjectDisposedException or InvalidOperationException)
-        {
-            ZLinkFrameworkDebugLog.TaskFailure("actor-route-invalidation", failure);
-            return;
-        }
+            if (!_actorRoutes.TryGetValue(key, out var cached))
+                return ValueTask.CompletedTask;
+            var row = cached.Row;
+            if (
+                row.ActorRef != actorRef
+                || row.OwnerNodeGeneration != ownerNodeGeneration
+                || row.AuthorityOwnerGeneration != authorityOwnerGeneration
+                || row.LeaseGeneration <= 0
+                || (ulong)row.LeaseGeneration != ownerLeaseGeneration
+            )
+                return ValueTask.CompletedTask;
+            _actorRoutes.Remove(key);
+            return ValueTask.CompletedTask;
+        });
         _ = ObserveActorRouteInvalidationAsync(invalidation);
     }
 
-    private static async Task ObserveActorRouteInvalidationAsync(ValueTask<bool> invalidation)
+    private static async Task ObserveActorRouteInvalidationAsync(ValueTask invalidation)
     {
         try
         {

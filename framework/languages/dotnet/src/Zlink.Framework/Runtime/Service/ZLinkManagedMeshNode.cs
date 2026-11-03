@@ -3741,6 +3741,21 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         Action<Exception>? physicalFailure = null
     )
     {
+        void ReportPhysicalFailure(Exception error)
+        {
+            try
+            {
+                physicalFailure?.Invoke(error);
+            }
+            catch (Exception callbackFailure)
+            {
+                ZLinkFrameworkDebugLog.TaskFailure(
+                    "actor-request-physical-failure",
+                    callbackFailure
+                );
+            }
+        }
+
         TReply Decode(ManagedRequestCompletion completion)
         {
             var reply = DecodeDeadlineReply(completion);
@@ -3771,7 +3786,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     }
                     catch (Exception error)
                     {
-                        physicalFailure?.Invoke(error);
+                        ReportPhysicalFailure(error);
                         FailNativeDeadline(operation, error);
                     }
                 }
@@ -3792,7 +3807,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 }
                 catch (Exception error)
                 {
-                    physicalFailure?.Invoke(error);
+                    ReportPhysicalFailure(error);
                     throw;
                 }
             },
