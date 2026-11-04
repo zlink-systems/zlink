@@ -2924,6 +2924,14 @@ bool verify_application_terminal_drain_waits_for_capture_destruction ()
 }
 
 #if defined(__unix__)
+// A child process reports each step's result to the parent as one status byte. A
+// short write exits with the step's own code so the parent's exit-code check names it.
+void write_status_byte (int fd_, char value_, int exit_code_)
+{
+    if (write (fd_, &value_, sizeof (value_)) != static_cast<ssize_t> (sizeof (value_)))
+        _exit (exit_code_);
+}
+
 // A node process binds "tcp://127.0.0.1:*" and passes the endpoint it resolved to
 // the other process through a pipe, so no port is reserved before the bind.
 bool write_endpoint (int fd_, const std::string &endpoint_)
@@ -3063,7 +3071,7 @@ int run_cross_process_delivery ()
 
         const bool multi_peer_admitted = wait_until_admitted_count (node, 2);
         const char reciprocal_ready = multi_peer_admitted ? 1 : 0;
-        (void) write (reciprocal_ready_pipe[1], &reciprocal_ready, sizeof (reciprocal_ready));
+        write_status_byte (reciprocal_ready_pipe[1], reciprocal_ready, 15);
         close (reciprocal_ready_pipe[1]);
 
         const std::map<std::string, std::string> metadata{{"trace-id", "vertical-1"},
@@ -3075,39 +3083,41 @@ int run_cross_process_delivery ()
           receive_one (node, zlink::framework::runtime::host::record_kind_t::node_send, "direct",
                        encoded_metadata);
         const char direct_ack = direct ? 1 : 0;
-        (void) write (direct_ack_pipe[1], &direct_ack, sizeof (direct_ack));
+        write_status_byte (direct_ack_pipe[1], direct_ack, 16);
         close (direct_ack_pipe[1]);
         const bool channel =
           receive_one (node, zlink::framework::runtime::host::record_kind_t::channel_send,
                        "channel", encoded_metadata);
         const char channel_ack = channel ? 1 : 0;
-        (void) write (channel_ack_pipe[1], &channel_ack, sizeof (channel_ack));
+        write_status_byte (channel_ack_pipe[1], channel_ack, 17);
         close (channel_ack_pipe[1]);
         const bool request = reply_to_one_request (
           node, zlink::framework::runtime::host::record_kind_t::node_request, "request", "reply");
         const char request_ack = request ? 1 : 0;
-        (void) write (request_ack_pipe[1], &request_ack, sizeof (request_ack));
+        write_status_byte (request_ack_pipe[1], request_ack, 18);
         close (request_ack_pipe[1]);
         char completion_ack = 0;
-        if (request)
-            (void) read (completion_ack_pipe[0], &completion_ack, sizeof (completion_ack));
+        if (request
+            && read (completion_ack_pipe[0], &completion_ack, sizeof (completion_ack))
+                 != static_cast<ssize_t> (sizeof (completion_ack)))
+            _exit (19);
         close (completion_ack_pipe[0]);
         const bool spot =
           receive_one (node, zlink::framework::runtime::host::record_kind_t::spot_send, "spot",
                        encoded_metadata);
         const char spot_ack = spot ? 1 : 0;
-        (void) write (formal_ack_pipe[1], &spot_ack, sizeof (spot_ack));
+        write_status_byte (formal_ack_pipe[1], spot_ack, 20);
         const bool spot_request =
           reply_to_one_request (node, zlink::framework::runtime::host::record_kind_t::spot_request,
                                 "spot-request", "spot-reply");
         const char spot_request_ack = spot_request ? 1 : 0;
-        (void) write (spot_request_ack_pipe[1], &spot_request_ack, sizeof (spot_request_ack));
+        write_status_byte (spot_request_ack_pipe[1], spot_request_ack, 21);
         close (spot_request_ack_pipe[1]);
         const bool actor =
           receive_one (node, zlink::framework::runtime::host::record_kind_t::actor_send, "actor",
                        encoded_metadata);
         const char actor_ack = actor ? 1 : 0;
-        (void) write (formal_ack_pipe[1], &actor_ack, sizeof (actor_ack));
+        write_status_byte (formal_ack_pipe[1], actor_ack, 22);
         close (formal_ack_pipe[1]);
         node.stop ();
         int exit_code = 0;
@@ -3170,7 +3180,7 @@ int run_cross_process_delivery ()
                                                    reciprocal_node.status ().local_endpoint ());
         close (reciprocal_child_endpoint_pipe[1]);
         const char ready = endpoint_sent && wait_until_admitted (reciprocal_node) ? 1 : 0;
-        (void) write (reciprocal_child_ready_pipe[1], &ready, sizeof (ready));
+        write_status_byte (reciprocal_child_ready_pipe[1], ready, 14);
         close (reciprocal_child_ready_pipe[1]);
         char stop = 0;
         (void) read_byte_while_dispatching (reciprocal_node, reciprocal_child_stop_pipe[0], stop);
