@@ -9,6 +9,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
@@ -75,6 +76,9 @@ final class ZLinkRelocatedTimerLifecycleTest {
             try {
                 var context =
                         ConstructorTimerSpot.entered.get(3, java.util.concurrent.TimeUnit.SECONDS);
+                var due = controlled.scheduler.due.poll(3, java.util.concurrent.TimeUnit.SECONDS);
+                assertNotNull(due);
+                due.run();
                 assertFalse(
                         preparing.isDone(), "the factory must still be held inside construction");
                 assertEquals(
@@ -167,6 +171,9 @@ final class ZLinkRelocatedTimerLifecycleTest {
             try {
                 var context =
                         ConstructorTimerSpot.entered.get(3, java.util.concurrent.TimeUnit.SECONDS);
+                var due = controlled.scheduler.due.poll(3, java.util.concurrent.TimeUnit.SECONDS);
+                assertNotNull(due);
+                due.run();
                 assertFalse(first.isDone(), "the constructor must still be held");
                 assertEquals(
                         0,
@@ -399,6 +406,7 @@ final class ZLinkRelocatedTimerLifecycleTest {
                             factory.executionMode(mode);
                         });
         try (var controlled = new ControlledTimerRuntime(options, configured.serial())) {
+            var scheduler = controlled.scheduler;
             var lifecycle = controlled.lifecycle;
             ZLinkSpotLifecycle.PreparedUserSpot prepared = null;
             CompletionStage<ZLinkSpotLifecycle.PreparedUserSpot> preparing = null;
@@ -409,6 +417,9 @@ final class ZLinkRelocatedTimerLifecycleTest {
                         lifecycle.prepareReserved(
                                 "mesh", ReadyTimerSpot.class, "ready-timer", 1, null);
                 var spot = ReadyTimerSpot.entered.get(3, java.util.concurrent.TimeUnit.SECONDS);
+                var due = scheduler.due.poll(3, java.util.concurrent.TimeUnit.SECONDS);
+                assertNotNull(due, "registered timer must have a platform expiration");
+                due.run();
                 assertFalse(
                         preparing.toCompletableFuture().isDone(),
                         "creation callback must still be held");
@@ -624,6 +635,9 @@ final class ZLinkRelocatedTimerLifecycleTest {
                 var spot =
                         ReadyTimerInstance.initialized.get(
                                 3, java.util.concurrent.TimeUnit.SECONDS);
+                var due = controlled.scheduler.due.poll(3, java.util.concurrent.TimeUnit.SECONDS);
+                assertNotNull(due);
+                due.run();
                 assertEquals(0, spot.ticks);
                 assertFalse(ReadyTimerInstance.handlerStarted.isDone());
                 if (requestClose) assertFalse(spot.closeRequested.toCompletableFuture().isDone());
@@ -899,6 +913,8 @@ final class ZLinkRelocatedTimerLifecycleTest {
         final systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime framework;
         final ZLinkSpotRuntime host;
         final ZLinkSpotLifecycle lifecycle;
+        final ZLinkRelocatedTimerRebindTest.ManualScheduler scheduler =
+                new ZLinkRelocatedTimerRebindTest.ManualScheduler();
         final DirectExecutor serial;
 
         ControlledTimerRuntime(DefaultZLinkFrameworkOptions options, DirectExecutor serial)
@@ -913,7 +929,11 @@ final class ZLinkRelocatedTimerLifecycleTest {
                         locationStore)
                 throws Exception {
             this.serial = serial;
-            var construction = new ZLinkFrameworkRuntimeTestAccess.Construction();
+            var construction =
+                    new ZLinkFrameworkRuntimeTestAccess.Construction()
+                            .spotTimerExecutor(scheduler)
+                            .spotHandlerExecutor(serial)
+                            .spotTimerStateLaneFactory(() -> new ZLinkStateLane(serial));
             if (locationStore != null) construction.spotLocationStore(locationStore);
             framework =
                     ZLinkFrameworkRuntimeTestAccess.startHostWithConstruction(
@@ -937,6 +957,7 @@ final class ZLinkRelocatedTimerLifecycleTest {
             try {
                 framework.close();
             } finally {
+                scheduler.close();
                 serial.close();
             }
         }

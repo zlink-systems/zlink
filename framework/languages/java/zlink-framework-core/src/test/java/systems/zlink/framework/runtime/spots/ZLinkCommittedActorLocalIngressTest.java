@@ -495,42 +495,17 @@ final class ZLinkCommittedActorLocalIngressTest {
     }
 
     private static ZLinkFrameworkRuntime start(DefaultZLinkFrameworkOptions options) {
-        var runtime =
-                ZLinkFrameworkRuntimeTestAccess.startHostWithConstruction(
-                        options,
-                        new ZLinkJavaBackendAdapterFactory(),
-                        systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
-                                .reflection(),
-                        null,
-                        new ZLinkFrameworkRuntimeTestAccess.Construction());
-        var registration = options.registration();
-        var locations = ZLinkFrameworkRuntimeTestAccess.authorityStore(runtime);
-        var retireRuntime =
-                ZLinkSpotRuntimeTestAccess.userSpotRetireRuntimeWithStateMachines(
-                        (ZLinkSpotRuntime) runtime.spotManager(),
-                        (ZLinkActorRuntime) runtime.actorManager(),
-                        registration.meshNodes(),
-                        ZLinkFrameworkRuntimeTestAccess.meshNodes(runtime),
-                        locations,
-                        ZLinkFrameworkRuntimeTestAccess.storeLocationResolvers(runtime),
-                        locations,
-                        registration.locations().options(),
-                        new systems.zlink.framework.runtime.internal.relocation
-                                .ZLinkRelocationAdapterRegistry(
-                                registration,
-                                systems.zlink.framework.runtime.internal.handlers
-                                        .ZLinkHandlerActivator.reflection()),
-                        registration.applicationVersion(),
-                        registration.maintenanceWave(),
-                        registration.locations().options().sessionRelocationSealTimeout(),
-                        ZLinkFrameworkRuntimeTestAccess.meshDrains(runtime)::isSealed,
-                        null,
-                        systems.zlink.framework.runtime.internal.locations
-                                        .ZLinkAggregateRelocationCoordinatorTestAccess
-                                ::interceptingStore,
-                        null);
-        ZLinkFrameworkRuntimeTestAccess.replaceSpotRetire(runtime, retireRuntime);
-        return runtime;
+        return ZLinkFrameworkRuntimeTestAccess.startHostWithConstruction(
+                options,
+                new ZLinkJavaBackendAdapterFactory(),
+                systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
+                        .reflection(),
+                null,
+                new ZLinkFrameworkRuntimeTestAccess.Construction()
+                        .aggregateRelocationAuthorityStoreDecorator(
+                                systems.zlink.framework.runtime.internal.locations
+                                                .ZLinkAggregateRelocationCoordinatorTestAccess
+                                        ::interceptingStore));
     }
 
     private static DefaultZLinkFrameworkOptions options(

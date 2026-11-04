@@ -1,10 +1,19 @@
 package systems.zlink.framework.runtime.spots;
 
+import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
+import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
+import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterOptions;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapterRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
@@ -16,9 +25,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 
 /** Test-only access to package-owned spot runtime collaborators. */
@@ -27,6 +39,36 @@ public final class ZLinkSpotRuntimeTestAccess {
 
     public static ThreadPoolExecutor multicastExecutor(ZLinkSpotRuntime runtime) {
         return runtime.publishers.multicastExecutor;
+    }
+
+    public static ZLinkSpotRuntime withTimerCollaborators(
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkFrameworkRegistration registration,
+            ZLinkChannelRuntime channels,
+            ZLinkBackendContext context,
+            ZLinkMessageSerializer serializer,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkRuntimeEventDispatcher eventDispatcher,
+            Map<String, ZLinkInternalMeshNode> meshNodes,
+            ScheduledExecutorService timerExecutor,
+            ThreadPoolExecutor multicastExecutor,
+            Executor handlerExecutor,
+            Supplier<ZLinkStateLane> timerStateLaneFactory) {
+        return new ZLinkSpotRuntime(
+                backendFactory,
+                adapterOptions,
+                registration,
+                channels,
+                context,
+                serializer,
+                handlerFactory,
+                eventDispatcher,
+                meshNodes,
+                timerExecutor,
+                multicastExecutor,
+                handlerExecutor,
+                timerStateLaneFactory);
     }
 
     public static boolean actorQueuesEmpty(ZLinkSpotSerialExecutor executor) {
@@ -75,10 +117,6 @@ public final class ZLinkSpotRuntimeTestAccess {
             List<?> stateMachines,
             UnaryOperator<ZLinkLocationRepository> authorityStoreDecorator,
             UnaryOperator<Function<Object, CompletionStage<Void>>> targetNormalizerDecorator) {
-        ZLinkLocationRepository effectiveAuthorities =
-                authorityStoreDecorator == null
-                        ? authorities
-                        : authorityStoreDecorator.apply(authorities);
         return new ZLinkUserSpotRetireRuntime(
                 spots,
                 actors,
@@ -86,7 +124,7 @@ public final class ZLinkSpotRuntimeTestAccess {
                 nodes,
                 locations,
                 locationResolvers,
-                effectiveAuthorities,
+                authorities,
                 options,
                 adapters,
                 applicationVersion,
@@ -94,7 +132,7 @@ public final class ZLinkSpotRuntimeTestAccess {
                 sessionRelocationSealTimeout,
                 targetAdmissionSealed,
                 stateMachines,
-                null,
+                authorityStoreDecorator,
                 targetNormalizerDecorator);
     }
 

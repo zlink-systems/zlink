@@ -12,6 +12,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkMonitoringBackendAd
 import systems.zlink.framework.runtime.internal.backend.ZLinkSpotBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkStreamBackendAdapter;
 import systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
@@ -20,9 +21,15 @@ import systems.zlink.framework.runtime.locations.ZLinkLocationRuntime;
 import systems.zlink.framework.runtime.locations.ZLinkStatefulAuthorityRouteRuntime;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 
+import java.util.List;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 
 /** Test-only access to the package-owned runtime bootstrap. */
 public final class ZLinkFrameworkRuntimeTestAccess {
@@ -30,16 +37,30 @@ public final class ZLinkFrameworkRuntimeTestAccess {
 
     public static final class Construction {
         private Supplier<ZLinkMeshDrainCoordinator> meshDrains;
+        private ExecutorService channelInfrastructureExecutor;
         private SpotTransportAddressResolver channelSpotAddressResolver;
         private ZLinkLocationRuntime locationRuntime;
+        private ScheduledExecutorService spotTimerExecutor;
+        private ThreadPoolExecutor spotMulticastExecutor;
+        private Executor spotHandlerExecutor;
+        private Supplier<ZLinkStateLane> spotTimerStateLaneFactory;
         private java.util.function.UnaryOperator<ZLinkLocationRepository>
                 spotOperationAuthorityStore;
         private ZLinkLocationRepository spotLocationStore;
         private ZLinkLocationRuntime spotLocationRuntime;
         private ZLinkStoreLocationResolvers spotLocationResolvers;
+        private List<?> relocationStateMachines;
+        private java.util.function.UnaryOperator<ZLinkLocationRepository>
+                aggregateRelocationAuthorityStoreDecorator;
+        private UnaryOperator<Function<Object, CompletionStage<Void>>> targetNormalizerDecorator;
 
         public Construction meshDrains(Supplier<ZLinkMeshDrainCoordinator> value) {
             meshDrains = value;
+            return this;
+        }
+
+        public Construction channelInfrastructureExecutor(ExecutorService value) {
+            channelInfrastructureExecutor = value;
             return this;
         }
 
@@ -50,6 +71,26 @@ public final class ZLinkFrameworkRuntimeTestAccess {
 
         public Construction locationRuntime(ZLinkLocationRuntime value) {
             locationRuntime = value;
+            return this;
+        }
+
+        public Construction spotTimerExecutor(ScheduledExecutorService value) {
+            spotTimerExecutor = value;
+            return this;
+        }
+
+        public Construction spotMulticastExecutor(ThreadPoolExecutor value) {
+            spotMulticastExecutor = value;
+            return this;
+        }
+
+        public Construction spotHandlerExecutor(Executor value) {
+            spotHandlerExecutor = value;
+            return this;
+        }
+
+        public Construction spotTimerStateLaneFactory(Supplier<ZLinkStateLane> value) {
+            spotTimerStateLaneFactory = value;
             return this;
         }
 
@@ -79,15 +120,122 @@ public final class ZLinkFrameworkRuntimeTestAccess {
             return this;
         }
 
+        public Construction relocationStateMachines(List<?> value) {
+            relocationStateMachines = value;
+            return this;
+        }
+
+        public Construction aggregateRelocationAuthorityStoreDecorator(
+                java.util.function.UnaryOperator<ZLinkLocationRepository> value) {
+            aggregateRelocationAuthorityStoreDecorator = value;
+            return this;
+        }
+
+        public Construction targetNormalizerDecorator(
+                UnaryOperator<Function<Object, CompletionStage<Void>>> value) {
+            targetNormalizerDecorator = value;
+            return this;
+        }
+
         private ZLinkFrameworkRuntimeConstruction toRuntimeConstruction() {
             return new ZLinkFrameworkRuntimeConstruction(
                     meshDrains,
+                    channelInfrastructureExecutor,
                     channelSpotAddressResolver,
                     locationRuntime,
+                    spotTimerExecutor,
+                    spotMulticastExecutor,
+                    spotHandlerExecutor,
+                    spotTimerStateLaneFactory,
                     spotOperationAuthorityStore,
                     spotLocationStore,
                     spotLocationRuntime,
-                    spotLocationResolvers);
+                    spotLocationResolvers,
+                    relocationStateMachines,
+                    aggregateRelocationAuthorityStoreDecorator,
+                    targetNormalizerDecorator,
+                    (backend,
+                            context,
+                            backendFactory,
+                            adapterOptions,
+                            registration,
+                            serializer,
+                            handlerFactory,
+                            eventDispatcher,
+                            infrastructureExecutor) ->
+                            systems.zlink.framework.runtime.channels.ZLinkChannelRuntimeTestAccess
+                                    .withInfrastructureExecutor(
+                                            backend,
+                                            context,
+                                            backendFactory,
+                                            adapterOptions,
+                                            registration,
+                                            serializer,
+                                            handlerFactory,
+                                            eventDispatcher,
+                                            infrastructureExecutor),
+                    (backendFactory,
+                            adapterOptions,
+                            registration,
+                            channels,
+                            context,
+                            serializer,
+                            handlerFactory,
+                            eventDispatcher,
+                            meshNodes,
+                            timerExecutor,
+                            multicastExecutor,
+                            handlerExecutor,
+                            timerStateLaneFactory) ->
+                            systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTestAccess
+                                    .withTimerCollaborators(
+                                            backendFactory,
+                                            adapterOptions,
+                                            registration,
+                                            channels,
+                                            context,
+                                            serializer,
+                                            handlerFactory,
+                                            eventDispatcher,
+                                            meshNodes,
+                                            timerExecutor,
+                                            multicastExecutor,
+                                            handlerExecutor,
+                                            timerStateLaneFactory),
+                    (spots,
+                            actors,
+                            registrations,
+                            nodes,
+                            locations,
+                            locationResolvers,
+                            authorities,
+                            options,
+                            adapters,
+                            applicationVersion,
+                            maintenanceWave,
+                            sessionRelocationSealTimeout,
+                            targetAdmissionSealed,
+                            stateMachines,
+                            aggregateRelocationAuthorityStoreDecorator,
+                            targetNormalizerDecorator) ->
+                            systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTestAccess
+                                    .userSpotRetireRuntimeWithStateMachines(
+                                            spots,
+                                            actors,
+                                            registrations,
+                                            nodes,
+                                            locations,
+                                            locationResolvers,
+                                            authorities,
+                                            options,
+                                            adapters,
+                                            applicationVersion,
+                                            maintenanceWave,
+                                            sessionRelocationSealTimeout,
+                                            targetAdmissionSealed,
+                                            stateMachines,
+                                            aggregateRelocationAuthorityStoreDecorator,
+                                            targetNormalizerDecorator));
         }
     }
 
@@ -139,25 +287,9 @@ public final class ZLinkFrameworkRuntimeTestAccess {
         return runtime.spotRetire;
     }
 
-    public static java.util.Map<
-                    String, systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode>
-            meshNodes(ZLinkFrameworkRuntime runtime) {
-        return runtime.meshNodes.nodesByName();
-    }
-
-    public static void replaceSpotRetire(
-            ZLinkFrameworkRuntime runtime,
-            systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireRuntime spotRetire) {
-        runtime.spotRetire = java.util.Objects.requireNonNull(spotRetire, "spotRetire");
-    }
-
     public static ZLinkStoreLocationResolvers storeLocationResolvers(
             ZLinkFrameworkRuntime runtime) {
         return runtime.storeLocationResolvers;
-    }
-
-    public static ZLinkLocationRepository authorityStore(ZLinkFrameworkRuntime runtime) {
-        return runtime.authorityStoreForRuntimeConstruction();
     }
 
     public static boolean ownerAdmissionOpen(ZLinkFrameworkRuntime runtime) {
@@ -176,33 +308,6 @@ public final class ZLinkFrameworkRuntimeTestAccess {
             ZLinkRuntimeEventDispatcher eventDispatcher) {
         return ZLinkFrameworkRuntime.start(
                 options, backendProvider, handlerActivator, eventDispatcher);
-    }
-
-    public static ZLinkFrameworkRuntime startWithChannelInfrastructureExecutor(
-            DefaultZLinkFrameworkOptions options,
-            ZLinkBackendAdapterProvider backendProvider,
-            ExecutorService infrastructureExecutor) {
-        var runtime = start(options, backendProvider);
-        var adapterOptions = new ZLinkBackendAdapterOptions(options.defaultRequestTimeout());
-        var backend = backendProvider.createChannelAdapter(adapterOptions);
-        var context = runtime.backendContextForRuntimeConstruction();
-        var replacement =
-                systems.zlink.framework.runtime.channels.ZLinkChannelRuntimeTestAccess
-                        .withInfrastructureExecutor(
-                                backend,
-                                context,
-                                backendProvider,
-                                adapterOptions,
-                                options.registration(),
-                                ZLinkFrameworkRuntime.serializerFor(options),
-                                ZLinkHandlerActivator.reflection(),
-                                null,
-                                infrastructureExecutor);
-        replacement.setHostStateSupplier(() -> runtime.status().state());
-        var previous = runtime.channels;
-        runtime.channels = replacement;
-        previous.close();
-        return runtime;
     }
 
     public static ZLinkFrameworkRuntime startWithConstruction(

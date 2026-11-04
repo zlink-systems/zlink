@@ -19,6 +19,8 @@ import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -44,10 +46,13 @@ final class ZLinkInfrastructureShutdownDeadlineTest {
     void closePreservesShutdownTerminalAfterTeardownFailure() throws Exception {
         var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
         var runtime =
-                ZLinkFrameworkRuntimeTestAccess.startWithChannelInfrastructureExecutor(
+                ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
                         new DefaultZLinkFrameworkOptions(),
                         new ZLinkJavaBackendAdapterFactory(),
-                        failChannelCleanup(executor));
+                        ZLinkHandlerActivator.reflection(),
+                        null,
+                        new ZLinkFrameworkRuntimeTestAccess.Construction()
+                                .channelInfrastructureExecutor(failChannelCleanup(executor)));
         runtime.startupCompletion().toCompletableFuture().get(WAIT_SECONDS, TimeUnit.SECONDS);
         var terminal =
                 runtime.shutdown(Duration.ofSeconds(WAIT_SECONDS))
@@ -70,10 +75,13 @@ final class ZLinkInfrastructureShutdownDeadlineTest {
     void directCloseStillPropagatesCleanupFailure() throws Exception {
         var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
         var runtime =
-                ZLinkFrameworkRuntimeTestAccess.startWithChannelInfrastructureExecutor(
+                ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
                         new DefaultZLinkFrameworkOptions(),
                         new ZLinkJavaBackendAdapterFactory(),
-                        failChannelCleanup(executor));
+                        ZLinkHandlerActivator.reflection(),
+                        null,
+                        new ZLinkFrameworkRuntimeTestAccess.Construction()
+                                .channelInfrastructureExecutor(failChannelCleanup(executor)));
         runtime.startupCompletion().toCompletableFuture().get(WAIT_SECONDS, TimeUnit.SECONDS);
         var failure = assertThrows(ZLinkFrameworkShutdown.Failure.class, runtime::close);
         assertEquals("injected executor cleanup failure", failure.getCause().getMessage());
@@ -111,30 +119,33 @@ final class ZLinkInfrastructureShutdownDeadlineTest {
         var release = new CountDownLatch(1);
         var waiting = new CompletableFuture<Void>();
         ExecutorService executor;
-        ZLinkFrameworkRuntime runtime;
+        var construction = new ZLinkFrameworkRuntimeTestAccess.Construction();
         if (spotPublisher) {
-            runtime =
-                    ZLinkFrameworkRuntimeTestAccess.startHostWithConstruction(
-                            options,
-                            new ZLinkJavaBackendAdapterFactory(),
-                            ZLinkHandlerActivator.reflection(),
-                            null,
-                            new ZLinkFrameworkRuntimeTestAccess.Construction());
             executor =
-                    systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTestAccess
-                            .multicastExecutor(
-                                    (systems.zlink.framework.runtime.spots.ZLinkSpotRuntime)
-                                            runtime.spotManager());
+                    new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new LinkedBlockingQueue<>()) {
+                        @Override
+                        public boolean awaitTermination(long timeout, TimeUnit unit)
+                                throws InterruptedException {
+                            waiting.complete(null);
+                            return super.awaitTermination(timeout, unit);
+                        }
+                    };
+            construction.spotMulticastExecutor((ThreadPoolExecutor) executor);
         } else {
             executor =
                     observeExecutor(
                             java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor(),
                             waiting,
                             executorDeadline);
-            runtime =
-                    ZLinkFrameworkRuntimeTestAccess.startWithChannelInfrastructureExecutor(
-                            options, new ZLinkJavaBackendAdapterFactory(), executor);
+            construction.channelInfrastructureExecutor(executor);
         }
+        var runtime =
+                ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                        options,
+                        new ZLinkJavaBackendAdapterFactory(),
+                        ZLinkHandlerActivator.reflection(),
+                        null,
+                        construction);
         runtime.startupCompletion().toCompletableFuture().get(WAIT_SECONDS, TimeUnit.SECONDS);
         executor.execute(
                 () -> {
@@ -149,10 +160,6 @@ final class ZLinkInfrastructureShutdownDeadlineTest {
         try {
             assertTrue(entered.await(WAIT_SECONDS, TimeUnit.SECONDS));
             shutdown = runtime.shutdown(Duration.ofSeconds(WAIT_SECONDS)).toCompletableFuture();
-            if (spotPublisher) {
-                awaitShutdown(executor);
-                waiting.complete(null);
-            }
             CompletableFuture.anyOf(waiting, shutdown).get(WAIT_SECONDS, TimeUnit.SECONDS);
             assertFalse(shutdown.isDone());
             if (!executorDeadline) {
@@ -192,13 +199,5 @@ final class ZLinkInfrastructureShutdownDeadlineTest {
                                 throw error.getCause();
                             }
                         });
-    }
-
-    private static void awaitShutdown(ExecutorService executor) {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_SECONDS);
-        while (!executor.isShutdown()) {
-            assertTrue(System.nanoTime() < deadline, "runtime did not shut down its executor");
-            Thread.onSpinWait();
-        }
     }
 }
