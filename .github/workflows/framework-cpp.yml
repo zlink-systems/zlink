@@ -81,6 +81,9 @@ env:
   SCCACHE_CACHE_SIZE: 2G
   SCCACHE_GHA_ENABLED: "false"
   ZLINK_SCCACHE_LAUNCHER: sccache
+  # A compile whose sccache server stops answering mid-build compiles locally
+  # instead of failing the gate (#3810: the server can stop after the setup check).
+  SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
   # GitHub-hosted runners have 4 cores; the self-hosted build PC has 20 shared by
   # up to six concurrent jobs.
   BUILD_PARALLEL: ${{ vars.ZLINK_CPP_BUILD_PARALLEL || '2' }}
