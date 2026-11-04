@@ -429,7 +429,7 @@ class local_actor_receiver_t : public testing::Test
               co_return rt::stateful::accepted_record_authority_t{
                 {"owner", 1, query.source_node_routing_id, query.source_node_generation}, 1};
           });
-        runtime->start ();
+        runtime->start ().result ().value ();
         const auto actor = runtime->create_actor ("late-result", "actor");
         fence = {"actor",
                  actor.ref ().object_generation (),

@@ -545,7 +545,7 @@ TEST (CppFrameworkRouteMeshWeightUpdate, SoleTargetStopsAndResumesAfterLiveWeigh
     target_state->channels.emplace (
       "X", zlink::framework::detail::mesh_channel_registration_t{100, {}, true, true});
     zlink::framework::detail::mesh_node_runtime_t target_node (target_state);
-    target_node.start ();
+    target_node.start ().result ().value ();
     auto &target = target_node.native_node ().transport ();
 
     mesh::service_node_descriptor_t source_descriptor;
@@ -610,7 +610,7 @@ TEST (CppFrameworkRouteMeshWeightUpdate, ConcurrentWeightChangesReachPeerInRevis
     target_state->channels.emplace (
       "X", zlink::framework::detail::mesh_channel_registration_t{100, {}, true, true});
     zlink::framework::detail::mesh_node_runtime_t target_node (target_state);
-    target_node.start ();
+    target_node.start ().result ().value ();
     auto &target = target_node.native_node ().transport ();
 
     mesh::service_node_descriptor_t source_descriptor;

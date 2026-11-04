@@ -1644,7 +1644,8 @@ TEST (ZLinkFrameworkSpotReincarnateConformance, IntentAfterReleaseDecisionFollow
     EXPECT_EQ (static_cast<std::uint32_t> (zf::runtime::protocol::framework_error_code::spotMoving),
                evidence->physical_refusal_code);
     ASSERT_TRUE (exercise->intent_result);
-    ASSERT_TRUE (*exercise->intent_result);
+    ASSERT_TRUE (*exercise->intent_result)
+      << (exercise->intent_result->error () ? exercise->intent_result->error ()->what () : "");
     EXPECT_NE (exercise->original_reply->generation, exercise->intent_result->value ().generation);
     ASSERT_TRUE (exercise->final_authority);
     EXPECT_EQ (exercise->final_authority->object_generation,

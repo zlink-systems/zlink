@@ -203,7 +203,7 @@ int main ()
         source_state->listen_port.reset ();
         source_state->routing_id = zlink::routing_id_t::from ("source");
         fw::detail::mesh_node_runtime_t source (source_state);
-        source.start ();
+        source.start ().result ().value ();
         source.connect_peer (*registration->routing_id, target->status ().local_endpoint ());
         const auto deadline = std::chrono::steady_clock::now () + 5s;
         while (source.admitted_peer_count () == 0 || target->admitted_peer_count () == 0) {

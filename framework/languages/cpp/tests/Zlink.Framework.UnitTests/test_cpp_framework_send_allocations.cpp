@@ -541,7 +541,7 @@ TEST (SendAllocations, LocalRoutingIdentityUsesTheNativeStartUntilShutdown)
     state->lane.run_sync ([&] { state->routing_id = next; });
     check_identity (next);
     state->lane.run_sync ([&] { state->routing_id = first; });
-    node.start ();
+    node.start ().result ().value ();
     check_identity (first);
     state->lane.run_sync ([&] { state->routing_id = next; });
     check_identity (first);
@@ -561,7 +561,7 @@ TEST (SendAllocations, LocalRoutingIdentityUsesTheNativeStartUntilShutdown)
     state->lane.run_sync ([&] { state->routing_id.reset (); });
     check_identity (std::nullopt);
     state->lane.run_sync ([&] { state->routing_id = next; });
-    node.start ();
+    node.start ().result ().value ();
     check_identity (next);
     EXPECT_EQ (node.native_node ().transport ().topology ().local_descriptor ().node_routing_id,
                next.to_bytes ());
@@ -575,7 +575,7 @@ TEST (SendAllocations, RunningIdentityDoesNotEnterTheConfigurationLane)
 {
     auto state = mesh_state ();
     detail::mesh_node_runtime_t node (state);
-    node.start ();
+    node.start ().result ().value ();
     state->lane.run_sync ([&] {
         EXPECT_NO_THROW (EXPECT_EQ (node.routing_id (), state->routing_id));
         EXPECT_NO_THROW (
@@ -590,7 +590,7 @@ TEST (SendAllocations, LocalSendIdentityReadsKeepOnlyTheReadyResultAllocations)
 {
     auto state = mesh_state ();
     detail::mesh_node_runtime_t node (state);
-    node.start ();
+    node.start ().result ().value ();
     const auto identity = node.routing_id ();
     using identity_task_t = fw::task_t<std::optional<zlink::routing_id_t>>;
     std::array<std::optional<identity_task_t>, 2> baseline_tasks, actual_tasks;
@@ -629,7 +629,7 @@ TEST (SendAllocations, LocalSendIdentityReadsKeepOnlyTheReadyResultAllocations)
 TEST (SendAllocations, KnownTargetForwardsTheNativeTaskWithoutAnotherResult)
 {
     detail::mesh_node_runtime_t node (mesh_state ());
-    node.start ();
+    node.start ().result ().value ();
     const auto target = zlink::routing_id_t::from ("target");
     auto peer = node.native_node ().transport ().topology ().local_descriptor ();
     peer.node_routing_id = target.to_bytes ();
@@ -682,7 +682,7 @@ TEST (SendAllocations, UnknownTargetPreservesLocationLookupAndFailureClassificat
             detail::mesh_node_runtime_t node (mesh_state ());
             auto store = std::make_shared<pending_listing_t> ();
             node.configure_user_spot_operations (store, {});
-            node.start ();
+            node.start ().result ().value ();
             const auto target = zlink::routing_id_t::from ("unknown");
             std::vector<zlink::message_t> parts;
             parts.push_back (zlink::message_t::from ("payload"));
@@ -718,7 +718,7 @@ TEST (SendAllocations, UnknownTargetKeepsValuesAndFailuresAcrossLocationSuspensi
             detail::mesh_node_runtime_t node (mesh_state ());
             auto store = std::make_shared<pending_listing_t> ();
             node.configure_user_spot_operations (store, {});
-            node.start ();
+            node.start ().result ().value ();
             auto target = zlink::routing_id_t::from ("unknown");
             const auto submitted_target = target;
             std::vector<zlink::message_t> parts;
@@ -769,7 +769,7 @@ TEST (SendAllocations, StoppedNodeKeepsItsTaskFailureBoundary)
 TEST (SendAllocations, ReceiveTurnForwardsTheNativeTaskWithoutAnotherResult)
 {
     detail::mesh_node_runtime_t node (mesh_state ());
-    node.start ();
+    node.start ().result ().value ();
     const auto native = [&] {
         return node.native_node ()
           .dispatch_ready ([] (const auto &, const auto &, auto, auto) {}, false)
@@ -799,7 +799,7 @@ TEST (SendAllocations, ReceiveTurnForwardsTheNativeTaskWithoutAnotherResult)
 TEST (SendAllocations, ReceiveTurnValidationKeepsItsTaskFailureBoundary)
 {
     detail::mesh_node_runtime_t node (mesh_state ());
-    node.start ();
+    node.start ().result ().value ();
     auto invalid = node.dispatch_ready ({}, false);
     EXPECT_TRUE (invalid.await_ready ());
     const auto &result = invalid.result ();
@@ -845,7 +845,7 @@ TEST (SendAllocations, ReceiveTurnRetainsCallbacksAcrossNativeSuspension)
                  ADD_FAILURE () << "unexpected relocation preparation";
                  return false;
              }});
-        node.start ();
+        node.start ().result ().value ();
         auto &runtime = node.native_node ();
         const auto descriptor = runtime.transport ().topology ().local_descriptor ();
         const stateful::object_ref_t actor{

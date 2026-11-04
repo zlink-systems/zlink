@@ -2585,6 +2585,7 @@ void execute_actor_create_operation_target (
 
 task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
 {
+    std::exception_ptr failure;
     try {
         _completion_dispatcher = detail::borrow_completion_dispatcher ();
         _services = &services;
@@ -2689,64 +2690,80 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                            : std::shared_ptr<const location_owner_token_t>{};
               },
               _location_runtime ? &services.get_required<live_location_reader_t> () : nullptr);
-            _nodes[index]->configure_user_spot_operations (
-              store,
-              [this, weak_registration = std::weak_ptr (registration),
-               weak_source = std::weak_ptr (source)] (const stateful::object_ref_t &object,
-                                                      const std::string &stable_type,
-                                                      const std::vector<std::byte> &payload) {
-                  const auto source = detail::lock_runtime_owner (weak_source);
-                  const auto registration = detail::lock_runtime_owner (weak_registration);
-                  std::vector<std::uint8_t> rid_bytes;
-                  rid_bytes.reserve (object.key.size ());
-                  for (const auto value : object.key)
-                      rid_bytes.push_back (
-                        static_cast<std::uint8_t> (static_cast<unsigned char> (value)));
-                  std::vector<std::uint8_t> request_bytes;
-                  request_bytes.reserve (payload.size ());
-                  for (const auto value : payload)
-                      request_bytes.push_back (std::to_integer<std::uint8_t> (value));
-                  auto spot_id = spot_id_t (zlink::routing_id_t::from (rid_bytes).to_string ());
-                  const auto native_id = std::string (spot_id);
-                  auto native_spot = std::make_shared<host::spot_handle_t> (
-                    source->native_node ().shared_from_this (), object);
-                  registration->spot_state->lane
-                    .run_checked ([&] {
+            struct materialize_user_spot_t
+            {
+                static task_t<host::user_spot_materialize_result_t>
+                run (std::decay_t<decltype (source)> source,
+                     std::decay_t<decltype (registration)> registration,
+                     serializer_registry_t *serializers,
+                     stateful::object_ref_t object,
+                     std::string stable_type,
+                     std::vector<std::byte> payload)
+                {
+                    std::vector<std::uint8_t> rid_bytes;
+                    rid_bytes.reserve (object.key.size ());
+                    for (const auto value : object.key)
+                        rid_bytes.push_back (
+                          static_cast<std::uint8_t> (static_cast<unsigned char> (value)));
+                    std::vector<std::uint8_t> request_bytes;
+                    request_bytes.reserve (payload.size ());
+                    for (const auto value : payload)
+                        request_bytes.push_back (std::to_integer<std::uint8_t> (value));
+                    auto spot_id = spot_id_t (zlink::routing_id_t::from (rid_bytes).to_string ());
+                    const auto native_id = std::string (spot_id);
+                    auto native_spot = std::make_shared<host::spot_handle_t> (
+                      source->native_node ().shared_from_this (), object);
+                    co_await registration->spot_state->lane.run_task ([&] {
                         registration->spot_state->native_spots_by_id.insert_or_assign (native_id,
                                                                                        native_spot);
-                    })
-                    .get ();
-                  detail::spot_node_runtime_t spots (registration->spot_state);
-                  std::optional<detail::local_spot_create_result_t> created;
-                  std::function<task_t<void> (bool)> preparation_terminal;
-                  try {
-                      created.emplace (spots.get_or_create_spot (
-                        stable_type, std::move (spot_id), zlink::message_t::from (request_bytes),
-                        object.object_generation, object.mesh_name,
-                        object.authority_owner_generation, &preparation_terminal));
-                  }
-                  catch (...) {
-                      registration->spot_state->lane
-                        .run_checked ([&] {
+                    });
+                    detail::spot_node_runtime_t spots (registration->spot_state);
+                    std::optional<detail::local_spot_create_result_t> created;
+                    std::function<task_t<void> (bool)> preparation_terminal;
+                    std::exception_ptr failure;
+                    try {
+                        auto creation = co_await spots.get_or_create_spot_async (
+                          stable_type, std::move (spot_id), zlink::message_t::from (request_bytes),
+                          object.object_generation, object.mesh_name,
+                          object.authority_owner_generation, &preparation_terminal);
+                        created.emplace (std::move (*creation));
+                    }
+                    catch (...) {
+                        failure = std::current_exception ();
+                    }
+                    if (failure) {
+                        co_await registration->spot_state->lane.run_task ([&] {
                             const auto found =
                               registration->spot_state->native_spots_by_id.find (native_id);
                             if (found != registration->spot_state->native_spots_by_id.end ()
                                 && found->second == native_spot)
                                 registration->spot_state->native_spots_by_id.erase (found);
-                        })
-                        .get ();
-                      throw;
-                  }
-                  std::optional<protocol::application_payload_t> application_reply;
-                  if (created->reply) {
-                      application_reply = protocol::application_payload_t{
-                        stable_type, "application/octet-stream",
-                        detail::message_to_raw (*created->reply, *_serializers).to_bytes ()};
-                  }
-                  return host::user_spot_materialize_result_t{
-                    created->state == spot_create_state_t::created
-                      || created->state == spot_create_state_t::existing,
-                    std::move (application_reply), std::move (preparation_terminal)};
+                        });
+                        std::rethrow_exception (failure);
+                    }
+                    std::optional<protocol::application_payload_t> application_reply;
+                    if (created->reply) {
+                        application_reply = protocol::application_payload_t{
+                          stable_type, "application/octet-stream",
+                          detail::message_to_raw (*created->reply, *serializers).to_bytes ()};
+                    }
+                    co_return host::user_spot_materialize_result_t{
+                      created->state == spot_create_state_t::created
+                        || created->state == spot_create_state_t::existing,
+                      std::move (application_reply), std::move (preparation_terminal)};
+                }
+            };
+            _nodes[index]->configure_user_spot_operations (
+              store,
+              [this, weak_registration = std::weak_ptr (registration),
+               weak_source = std::weak_ptr (source)] (const stateful::object_ref_t &object,
+                                                      const std::string &stable_type,
+                                                      const std::vector<std::byte> &payload)
+                -> task_t<host::user_spot_materialize_result_t> {
+                  return materialize_user_spot_t::run (
+                    detail::lock_runtime_owner (weak_source),
+                    detail::lock_runtime_owner (weak_registration), _serializers, object,
+                    stable_type, payload);
               },
               [weak_registration = std::weak_ptr (registration)] (
                 const std::string &spot_id, std::uint64_t object_generation,
@@ -2788,14 +2805,14 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                         std::string (stable_type), std::string (spot_id), object_generation,
                         authority_owner_generation);
                   };
-                _nodes[index]->configure_instance_spot_operations (
-                  store, instance_relocations, [this] { return current_location_owner (); },
-                  host::instance_spot_activation_materializer_t{
-                    [weak_registration = std::weak_ptr (registration)] (
-                      const protocol::instance_spot_activation_header_t &request,
-                      const authority_snapshot_t &snapshot,
-                      std::function<task_t<void> (bool)> &preparation_terminal) {
-                        const auto registration = detail::lock_runtime_owner (weak_registration);
+                struct prepare_instance_spot_t
+                {
+                    static task_t<bool>
+                    run (std::decay_t<decltype (registration)> registration,
+                         protocol::instance_spot_activation_header_t request,
+                         authority_snapshot_t snapshot,
+                         std::function<task_t<void> (bool)> &preparation_terminal)
+                    {
                         if (snapshot.allocation.object_kind
                               != placement_object_kind_t::instance_spot
                             || snapshot.allocation.stable_type != request.target.stable_type
@@ -2806,16 +2823,28 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                       .to_string ()
                             || snapshot.allocation.target.node_lifecycle_generation
                                  != request.target.target_node_generation)
-                            return false;
+                            co_return false;
                         const auto created =
-                          detail::spot_node_runtime_t (registration->spot_state)
-                            .get_or_create_spot (
+                          co_await detail::spot_node_runtime_t (registration->spot_state)
+                            .get_or_create_spot_async (
                               request.target.stable_type, spot_id_t (request.target.spot_id),
                               zlink::message_t{}, snapshot.object_generation,
                               request.target.mesh_name, snapshot.authority_owner_generation,
                               &preparation_terminal);
-                        return created.state == spot_create_state_t::created
-                               || created.state == spot_create_state_t::existing;
+                        co_return created->state == spot_create_state_t::created
+                          || created->state == spot_create_state_t::existing;
+                    }
+                };
+                _nodes[index]->configure_instance_spot_operations (
+                  store, instance_relocations, [this] { return current_location_owner (); },
+                  host::instance_spot_activation_materializer_t{
+                    [weak_registration = std::weak_ptr (registration)] (
+                      const protocol::instance_spot_activation_header_t &request,
+                      const authority_snapshot_t &snapshot,
+                      std::function<task_t<void> (bool)> &preparation_terminal) -> task_t<bool> {
+                        return prepare_instance_spot_t::run (
+                          detail::lock_runtime_owner (weak_registration), request, snapshot,
+                          preparation_terminal);
                     },
                     [this, weak_registration = std::weak_ptr (registration), &services] (
                       std::shared_ptr<const protocol::instance_activation_recovery_t>
@@ -3026,7 +3055,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   execute_actor_create_operation_target (node, store, registration, request,
                                                          completion);
               });
-            node->start (
+            co_await node->start (
               [registration] (const stateful::object_ref_t &participant)
                 -> task_t<std::shared_ptr<runtime::serial_execution_queue_t>> {
                   if (participant.kind == stateful::object_kind_t::actor)
@@ -3211,12 +3240,10 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   });
             }
             if (owner) {
-                const auto written = infrastructure_result ([&] {
-                                         return _location_runtime->descriptor_write_confirmed ([&] {
-                                             return _location_store->update_mesh_node (
-                                               descriptor, location_write_intent_t::new_claim);
-                                         });
-                                     }).value ();
+                const auto written = co_await _location_runtime->descriptor_write_confirmed ([&] {
+                    return _location_store->update_mesh_node (descriptor,
+                                                              location_write_intent_t::new_claim);
+                });
                 if (written)
                     _published_mesh_nodes.push_back ({descriptor.mesh_name, descriptor.rid});
             }
@@ -3356,8 +3383,13 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
         }
     }
     catch (...) {
+        failure = std::current_exception ();
+    }
+    if (failure) {
+        // Rollback drains workers as well as closing completion owners.
+        co_await external_lifecycle_turn_t{};
         stop ();
-        throw;
+        std::rethrow_exception (failure);
     }
     co_return;
 }
@@ -3411,7 +3443,6 @@ void mesh_node_host_service_t::visit_relocation_nodes (
 
 bool mesh_node_host_service_t::publish_descriptor_state (framework_runtime_state_t state) noexcept
 {
-    std::lock_guard lock (_descriptor_publish_mutex);
     try {
         if (state == framework_runtime_state_t::draining) {
             for (const auto &node : _nodes) {
@@ -3419,6 +3450,10 @@ bool mesh_node_host_service_t::publish_descriptor_state (framework_runtime_state
                 node->native_node ().transport ().publish_draining ().result ().value ();
             }
         }
+        // Native publication belongs to the raw owner. Take the Store publication
+        // mutex only after that executor completes, before reading any descriptor
+        // state, so recovery can progress while native draining is pending.
+        std::lock_guard lock (_descriptor_publish_mutex);
         const auto owner = current_location_owner ();
         if (!_location_store || !owner)
             return _published_mesh_descriptors.empty ();

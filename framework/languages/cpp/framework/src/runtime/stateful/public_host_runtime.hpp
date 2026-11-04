@@ -288,7 +288,7 @@ struct user_spot_materialize_result_t
     std::function<task_t<void> (bool)> preparation_terminal;
 };
 
-using user_spot_materializer_t = std::function<user_spot_materialize_result_t (
+using user_spot_materializer_t = std::function<task_t<user_spot_materialize_result_t> (
   const stateful::object_ref_t &, const std::string &, const std::vector<std::byte> &)>;
 
 /* Close step 1 of one authority kind (Spot address messaging §7). An empty
@@ -474,9 +474,9 @@ struct instance_spot_activation_result_t
 
 struct instance_spot_activation_materializer_t
 {
-    std::function<bool (const protocol::instance_spot_activation_header_t &,
-                        const authority_snapshot_t &,
-                        std::function<task_t<void> (bool)> &)>
+    std::function<task_t<bool> (const protocol::instance_spot_activation_header_t &,
+                                const authority_snapshot_t &,
+                                std::function<task_t<void> (bool)> &)>
       prepare;
     std::function<task_t<instance_spot_activation_result_t> (
       std::shared_ptr<const protocol::instance_activation_recovery_t>,
@@ -777,7 +777,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     void configure_bound_session_operations (bound_session_operations_t operations);
     void configure_late_session_route_update (
       std::function<void (const protocol::session_relocation_route_t &)> reporter);
-    task_t<bool> seal_session_remote (const zlink::routing_id_t &session_owner_node,
+    task_t<bool> seal_session_remote (zlink::routing_id_t session_owner_node,
                                       protocol::session_relocation_seal_t seal,
                                       std::chrono::milliseconds timeout,
                                       std::chrono::steady_clock::time_point operation_deadline,
@@ -808,12 +808,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                             protocol::relocation_cutover_t cutover);
     task_t<bool> route_session_remote (const zlink::routing_id_t &session_owner_node,
                                        protocol::session_relocation_route_t route);
-    std::size_t recover_instance_spot_activations ();
+    task_t<std::size_t> recover_instance_spot_activations ();
     task_t<bool> create_user_spot_remote (const zlink::routing_id_t &target_node,
                                           protocol::user_spot_create_header_t request,
                                           std::chrono::milliseconds timeout,
                                           user_spot_create_completion_t completion);
-    task_t<bool> create_actor_remote (const zlink::routing_id_t &target_node,
+    task_t<bool> create_actor_remote (zlink::routing_id_t target_node,
                                       protocol::actor_create_header_t request,
                                       std::chrono::milliseconds timeout,
                                       actor_create_operation_completion_t completion);

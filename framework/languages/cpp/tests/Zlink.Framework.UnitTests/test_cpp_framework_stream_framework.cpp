@@ -1104,7 +1104,7 @@ int core_connected_rejection_cleanup (
         }
     } cleanup{host, *mesh, provider};
     host.bind_monitoring (test::runtime_failure_monitoring ());
-    mesh->start ();
+    mesh->start ().result ().value ();
     host.start (provider);
 
     // Reject admission before any connected callback can execute.
@@ -1247,7 +1247,7 @@ int descriptor_unavailable_replacement_records_drop ()
     auto provider = services.build_provider ();
     auto mesh = detail::mesh_node_runtime_t::from (builder, "drop-mesh");
     mesh->bind_serializers (serializers);
-    mesh->start ();
+    mesh->start ().result ().value ();
     auto runtime = detail::stream_runtime_t::from (builder);
     auto listeners = std::make_shared<runtime::listener_status_registry_t> ();
     runtime::stream_host_service_t host (
@@ -1371,7 +1371,7 @@ int reader_retirement_is_tracked_until_complete ()
           disconnect_entered->set_value ();
           return disconnect->task ();
       });
-    mesh->start ();
+    mesh->start ().result ().value ();
     auto runtime = detail::stream_runtime_t::from (builder);
     auto listeners = std::make_shared<runtime::listener_status_registry_t> ();
     runtime::stream_host_service_t host (
@@ -1473,7 +1473,7 @@ int transport_bound_close (bool tls, bool remote = false)
         registration->core_context = detail::zlink_builder_access_t::shared_core_context (builder);
     auto mesh = detail::mesh_node_runtime_t::from (builder, "transport-close-mesh");
     mesh->bind_serializers (serializers);
-    mesh->start ();
+    mesh->start ().result ().value ();
     auto provider = services.build_provider ();
     auto runtime = detail::stream_runtime_t::from (builder);
     close_probe_session_t session;
@@ -3567,7 +3567,7 @@ int main (int argc, char **argv)
         return 38;
     }
     core_mesh->bind_serializers (core_serializers);
-    core_mesh->start ();
+    core_mesh->start ().result ().value ();
     auto core_stream_runtime = zlink::framework::detail::stream_runtime_t::from (core_zlink);
     auto core_listeners =
       std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();
@@ -3711,7 +3711,7 @@ int main (int argc, char **argv)
         return 310;
     }
     error_close_mesh->bind_serializers (error_close_serializers);
-    error_close_mesh->start ();
+    error_close_mesh->start ().result ().value ();
     auto error_close_runtime = zlink::framework::detail::stream_runtime_t::from (error_close_zlink);
     auto error_close_listeners =
       std::make_shared<zlink::framework::runtime::listener_status_registry_t> ();

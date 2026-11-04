@@ -270,7 +270,9 @@ static void verify_same_target_activation_order (
     target->configure_instance_spot_operations (
       store, relocations, [owner] { return owner; },
       host::instance_spot_activation_materializer_t{
-        [] (const auto &, const auto &, auto &) { return true; },
+        [] (const auto &, const auto &, auto &) -> zlink::framework::task_t<bool> {
+            co_return true;
+        },
         [&] (auto command, auto,
              auto accept_activation) -> fw::task_t<host::instance_spot_activation_result_t> {
             queued.push_back (command->activation.operation.low);
@@ -1262,9 +1264,9 @@ void verify_reserve_loser (bool expire_deadline, bool one_way)
     target->configure_instance_spot_operations (
       store, relocations, [] { return fw::location_owner_token_t{"target-owner", 1}; },
       host::instance_spot_activation_materializer_t{
-        [&] (const auto &, const auto &, auto &) {
+        [&] (const auto &, const auto &, auto &) -> zlink::framework::task_t<bool> {
             ++prepares;
-            return true;
+            co_return true;
         },
         [&] (auto, auto,
              auto accept_activation) -> fw::task_t<host::instance_spot_activation_result_t> {
@@ -2420,9 +2422,9 @@ TEST (ZLinkFrameworkInstanceSpotActivation, StoredActivationMismatchPreservesAut
                 target->configure_instance_spot_operations (
                   store, relocations, [owner] { return owner; },
                   host::instance_spot_activation_materializer_t{
-                    [&] (const auto &, const auto &, auto &) {
+                    [&] (const auto &, const auto &, auto &) -> zlink::framework::task_t<bool> {
                         ++factories;
-                        return true;
+                        co_return true;
                     },
                     [] (auto, auto, auto accept_activation)
                       -> fw::task_t<host::instance_spot_activation_result_t> {
@@ -2681,9 +2683,9 @@ TEST (CppFrameworkInstanceSpotActivation, StartupReleasesPreviousLifecycleBefore
     target->configure_instance_spot_operations (
       store, roots, [owner] { return owner; },
       host::instance_spot_activation_materializer_t{
-        [] (const auto &, const auto &, auto &) {
+        [] (const auto &, const auto &, auto &) -> zlink::framework::task_t<bool> {
             ADD_FAILURE () << "Old lifecycle must not prepare";
-            return false;
+            co_return false;
         },
         [] (auto, auto,
             auto accept_activation) -> fw::task_t<host::instance_spot_activation_result_t> {
@@ -2693,7 +2695,7 @@ TEST (CppFrameworkInstanceSpotActivation, StartupReleasesPreviousLifecycleBefore
         }});
     ASSERT_TRUE (roots->exists);
     target->start ();
-    target->recover_instance_spot_activations ();
+    target->recover_instance_spot_activations ().result ().value ();
     EXPECT_FALSE (roots->exists);
 }
 
@@ -2801,13 +2803,13 @@ static void verify_ready_recovery_root_deletion (bool local_available)
     target->configure_instance_spot_operations (
       store, relocations, [owner] { return owner; },
       host::instance_spot_activation_materializer_t{
-        [&] (const auto &request, const auto &snapshot, auto &) {
-            const auto created = local_spots->get_or_create_spot (
+        [&] (const auto &request, const auto &snapshot, auto &) -> zlink::framework::task_t<bool> {
+            const auto created = co_await local_spots->get_or_create_spot_async (
               request.target.stable_type, fw::spot_id_t (request.target.spot_id),
               zlink::message_t{}, snapshot.object_generation, request.target.mesh_name,
               snapshot.authority_owner_generation);
-            return created.state == fw::spot_create_state_t::created
-                   || created.state == fw::spot_create_state_t::existing;
+            co_return created->state == fw::spot_create_state_t::created
+              || created->state == fw::spot_create_state_t::existing;
         },
         [&] (auto command, auto,
              auto accept_activation) -> fw::task_t<host::instance_spot_activation_result_t> {
@@ -3049,7 +3051,7 @@ static void verify_activation_failure_terminal (bool local,
     target->configure_instance_spot_operations (
       store, relocations, [owner] { return owner; },
       host::instance_spot_activation_materializer_t{
-        [&] (const auto &request, const auto &, auto &cleanup) {
+        [&] (const auto &request, const auto &, auto &cleanup) -> zlink::framework::task_t<bool> {
             cleanup = [&] (bool) -> fw::task_t<void> {
                 ++cleanups;
                 preparation_cleaned.set_value ();
@@ -3067,11 +3069,11 @@ static void verify_activation_failure_terminal (bool local,
                 throw fw::framework_exception_t (expected_kind, "typed activation failure");
             if (failure == activation_failure_t::initialization) {
                 initialization_entered.set_value ();
-                (void) initialization_release->task ().result ();
+                co_await initialization_release->task ();
             }
             if (failure == activation_failure_t::deadline)
                 advance_activation_deadline (request.target.deadline_unix_ms).get ();
-            return true;
+            co_return true;
         },
         [&] (auto, auto,
              auto accept_activation) -> fw::task_t<host::instance_spot_activation_result_t> {

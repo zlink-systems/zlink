@@ -254,9 +254,9 @@ void verify_pending_creation_terminal_precedes_worker_stop ()
         std::_Exit (2);
     auto barrier = reserved.value ();
     barrier->run ([] { return task_t<void> (result_t<void>::success ()); }).result ().value ();
-    std::promise<void> creation;
+    auto creation = std::make_shared<task_completion_source_t<void>> ();
     detail::spot_node_builder_state_t::pending_spot_creation_t pending;
-    pending.future = creation.get_future ().share ();
+    pending.completion = creation;
     pending.context = context;
     node->pending_spot_creations_by_id.emplace ("creation", std::move (pending));
     auto stopped =
@@ -266,7 +266,7 @@ void verify_pending_creation_terminal_precedes_worker_stop ()
     while (!terminal.await_ready () && std::chrono::steady_clock::now () < deadline)
         std::this_thread::yield ();
     const bool kept_worker = terminal.await_ready () && worker->try_submit_internal ([] {});
-    creation.set_value ();
+    creation->complete (result_t<void>::success ());
     const bool drained = stopped.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
     const bool stopped_worker = drained && !worker->try_submit_internal ([] {});
     std::cerr << "creation_terminal_order kept_worker=" << kept_worker << " drained=" << drained
@@ -702,3 +702,128 @@ TEST (ZLinkFrameworkSharedSerialTurn, ActiveFailureRemainsOwnedByHandlerTerminal
     EXPECT_EQ (0, completions);
     EXPECT_EQ (0, cancellations);
 }
+
+#include "../support/runtime_failure_fixture.hpp"
+#include "runtime/dispatch/blocking_task.hpp"
+
+namespace zlink::framework::detail
+{
+struct spot_node_runtime_test_access_t
+{
+    template <typename Node>
+    static task_t<void> create (Node &node,
+                                std::shared_ptr<spot_serial_executor_t::preparation_t> preparation,
+                                std::shared_ptr<runtime::serial_execution_queue_t> queue)
+    {
+        if constexpr (std::is_same_v<decltype (node.create_spot_context (
+                                       "preparing", spot_id_t ("cancelled"), {}, 1, {}, {}, 1,
+                                       queue, nullptr, preparation)),
+                                     local_spot_create_result_t>)
+            (void) node.create_spot_context ("preparing", spot_id_t ("cancelled"), {}, 1, {}, {}, 1,
+                                             queue, nullptr, preparation);
+        else
+            (void) co_await node.create_spot_context ("preparing", spot_id_t ("cancelled"), {}, 1,
+                                                      {}, {}, 1, queue, nullptr, preparation);
+        co_return;
+    }
+};
+}
+
+#ifdef __linux__
+#include <sched.h>
+
+TEST (SpotPreparationDeathTest, CancelledCreationReleasesBlockingWorkerWhileDiscardPending)
+{
+    ::testing::FLAGS_gtest_death_test_style = "threadsafe";
+    EXPECT_EXIT (
+      {
+          using namespace zlink::framework;
+          using namespace zlink::framework::runtime;
+          cpu_set_t allowed;
+          CPU_ZERO (&allowed);
+          if (sched_getaffinity (getpid (), sizeof (allowed), &allowed) != 0)
+              std::_Exit (2);
+          const auto cpu = [&] {
+              for (int value = 0; value != CPU_SETSIZE; ++value)
+                  if (CPU_ISSET (value, &allowed))
+                      return value;
+              return -1;
+          }();
+          CPU_ZERO (&allowed);
+          CPU_SET (cpu, &allowed);
+          if (sched_setaffinity (getpid (), sizeof (allowed), &allowed) != 0)
+              std::_Exit (2);
+          auto state =
+            test::runtime_failure_fixture<detail::spot_node_builder_state_t> ("cancelled-creation");
+          state->worker_executor = std::make_shared<offload_executor_t> (1);
+          serializer_registry_t serializers;
+          state->channel_runtime =
+            test::runtime_failure_fixture<detail::channel_runtime_state_t> ();
+          state->channel_runtime->serializers = &serializers;
+          state->spot_factories.emplace ("preparing", std::type_index (typeid (int)));
+          auto coordinator = std::make_shared<detail::spot_serial_executor_t> (
+            state->worker_executor, state->lane, serial_lane_policy_t::spot_wide ());
+          auto preparation = coordinator->begin_preparation ();
+          std::shared_ptr<detail::spot_context_state_t> context;
+          std::promise<void> entered;
+          std::promise<void> sentinel;
+          task_completion_source_t<spot_create_response_t> initializer;
+          detail::spot_lifecycle_callbacks_t lifecycle;
+          lifecycle.create_spot_context_instance = [&] (spot_context_t value,
+                                                        service_provider_t &) {
+              context = detail::spot_context_access_t::state (value);
+              // Model an admitted callback that discard must join.
+              context->enter_callback ();
+              return std::make_shared<int> (1);
+          };
+          lifecycle.on_create = [&] (void *, const zlink::message_t &, serializer_registry_t &) {
+              entered.set_value ();
+              return initializer.task ();
+          };
+          state->spot_lifecycles.emplace ("preparing", std::move (lifecycle));
+          detail::spot_node_runtime_t node (state);
+          auto creation = run_blocking_step<void> ([&] {
+              return detail::spot_node_runtime_test_access_t::create (node, preparation,
+                                                                      coordinator->spot_queue ());
+          });
+          const bool started =
+            entered.get_future ().wait_for (std::chrono::seconds (5)) == std::future_status::ready;
+          std::promise<void> initializer_sentinel;
+          detail::submit_blocking_call ([&] { initializer_sentinel.set_value (); });
+          const bool initializer_worker_free =
+            initializer_sentinel.get_future ().wait_for (std::chrono::seconds (2))
+            == std::future_status::ready;
+          const bool initializer_pending = !creation.await_ready ();
+          std::cerr << "initializer_worker_free=" << initializer_worker_free
+                    << " initializer_pending=" << initializer_pending << std::endl;
+          if (!started || !initializer_worker_free || !initializer_pending)
+              std::_Exit (1);
+          initializer.complete (result_t<spot_create_response_t>::failure (
+            framework_error_kind_t::shutting_down, "creation cancelled"));
+          const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+          bool discarding = false;
+          while (started && std::chrono::steady_clock::now () < deadline) {
+              discarding = state->lane.run ([&] { return context->closed.has_value (); }).get ();
+              if (discarding)
+                  break;
+              std::this_thread::yield ();
+          }
+          detail::submit_blocking_call ([&] { sentinel.set_value (); });
+          const bool worker_free =
+            sentinel.get_future ().wait_for (std::chrono::seconds (2)) == std::future_status::ready;
+          const bool pending = !creation.await_ready ();
+          std::cerr << "started=" << started << " discarding=" << discarding
+                    << " worker_free=" << worker_free << " pending=" << pending << std::endl;
+          if (!started || !discarding || !worker_free || !pending)
+              std::_Exit (1);
+          context->leave_callback ();
+          const auto result = creation.result_for (std::chrono::seconds (5));
+          const bool cancelled =
+            result && !*result && result->error_kind () == framework_error_kind_t::shutting_down;
+          (void) preparation->lifecycle->activate ([] {});
+          std::cerr << "cancelled=" << cancelled << std::endl;
+          std::_Exit (cancelled ? 0 : 1);
+      },
+      ::testing::ExitedWithCode (0), "cancelled=1");
+}
+#endif

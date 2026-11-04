@@ -429,7 +429,7 @@ TEST (FrameworkSessionSealRelay, public_request_preserves_wire_correlation_and_f
             {"seal-wire-target-owner", 37},
             target_status.lifecycle_generation ()};
       });
-    source.start ();
+    source.start ().result ().value ();
     source.connect_peer (target_rid, target_status.local_endpoint (),
                          target_status.lifecycle_generation ());
     const auto peer_ready = [&] {
@@ -588,7 +588,7 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
              query.source_node_generation},
             static_cast<std::uint64_t> (target_owner.lease_generation)};
       });
-    source.start ();
+    source.start ().result ().value ();
     const auto native_actor = source.create_actor ("player", "seal-dedup-actor", {}, 2s);
     ASSERT_EQ (native_actor.ref ().object_generation (), actor.object_generation ());
     const auto native_object =
@@ -949,7 +949,7 @@ TEST (FrameworkSessionSealRelay, bound_request_to_relocated_local_actor_keeps_bi
           }
           co_return address;
       });
-    source.start ();
+    source.start ().result ().value ();
     const auto native_actor = source.create_actor ("player", "relocated-actor", {}, 2s);
     ASSERT_EQ (native_actor.ref ().object_generation (), actor.object_generation ());
     const auto native_object =

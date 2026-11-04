@@ -134,15 +134,17 @@ int main ()
     provider.get_required<runtime::location_runtime_t> ().start (*registration->routing_id);
     runtime::mesh_node_host_service_t service (
       std::make_shared<runtime::runtime_failure_collector_t> (), {registration}, serializers);
+#if defined(ZLINK_TEST_RECEIVE_WAIT_WRAP)
+    {
+        std::lock_guard lock (observation_mutex);
+        observation_phase = 1;
+    }
+#endif
     service.start (provider).result ().value ();
     const auto node = service.nodes ().front ();
 
 #if defined(ZLINK_TEST_RECEIVE_WAIT_WRAP)
     assert (receive_poller.load () != nullptr);
-    {
-        std::lock_guard lock (observation_mutex);
-        observation_phase = 1;
-    }
     node->signal_dispatch_activity ();
     bool waited;
     {

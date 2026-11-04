@@ -488,23 +488,21 @@ stateful_object_runtime_t::retained_relocation_source (object_ref_t owner) const
 
 stateful_error_t stateful_object_runtime_t::abort_create (std::uint64_t attempt)
 {
-    return _lane
-      .run ([&, this] () -> stateful_error_t {
-          const auto attempt_entry = _attempts.find (attempt);
-          if (attempt_entry == _attempts.end ()) {
-              return stateful_error_t::conflict;
-          }
-          const auto record = _objects.find (attempt_entry->second);
-          if (record == _objects.end () || record->second.state != object_state_t::creating
-              || record->second.attempt != attempt) {
-              return stateful_error_t::conflict;
-          }
-          release_pending_capacity_locked (record->second);
-          erase_object_on_lane (record);
-          _attempts.erase (attempt_entry);
-          return stateful_error_t::none;
-      })
-      .get ();
+    return _lane.run_sync ([&, this] () -> stateful_error_t {
+        const auto attempt_entry = _attempts.find (attempt);
+        if (attempt_entry == _attempts.end ()) {
+            return stateful_error_t::conflict;
+        }
+        const auto record = _objects.find (attempt_entry->second);
+        if (record == _objects.end () || record->second.state != object_state_t::creating
+            || record->second.attempt != attempt) {
+            return stateful_error_t::conflict;
+        }
+        release_pending_capacity_locked (record->second);
+        erase_object_on_lane (record);
+        _attempts.erase (attempt_entry);
+        return stateful_error_t::none;
+    });
 }
 
 create_result_t stateful_object_runtime_t::activate_instance (
@@ -2037,7 +2035,7 @@ stateful_object_runtime_t::restore_relocation (frozen_object_state_t frozen,
                     || target.kind == object_kind_t::instance_spot)
                    && plan.restore) {
             try {
-                restored = plan.restore (frozen, target, cancellation);
+                restored = co_await plan.restore (frozen, target, cancellation);
             }
             catch (...) {
                 restored = false;
@@ -2082,23 +2080,19 @@ stateful_object_runtime_t::commit_relocation_restore (const object_ref_t &target
                                                       const relocation_restore_identity_t &identity)
 {
     relocation_state_commit_t commit;
-    const auto preflight =
-      _lane
-        .run ([&, this] {
-            stateful_error_t error = stateful_error_t::none;
-            auto *record = find_record_locked (target, error);
-            if (!record)
-                return error;
-            if (record->state == object_state_t::ready && !record->restore_identity)
-                return stateful_error_t::already_exists;
-            if (record->state != object_state_t::recovering
-                || record->restore_identity
-                     != std::optional<relocation_restore_identity_t>{identity})
-                return stateful_error_t::conflict;
-            commit = _relocation_state_commit;
-            return stateful_error_t::none;
-        })
-        .get ();
+    const auto preflight = _lane.run_sync ([&, this] {
+        stateful_error_t error = stateful_error_t::none;
+        auto *record = find_record_locked (target, error);
+        if (!record)
+            return error;
+        if (record->state == object_state_t::ready && !record->restore_identity)
+            return stateful_error_t::already_exists;
+        if (record->state != object_state_t::recovering
+            || record->restore_identity != std::optional<relocation_restore_identity_t>{identity})
+            return stateful_error_t::conflict;
+        commit = _relocation_state_commit;
+        return stateful_error_t::none;
+    });
     if (preflight != stateful_error_t::none)
         return preflight;
     if (commit) {
@@ -2110,47 +2104,42 @@ stateful_object_runtime_t::commit_relocation_restore (const object_ref_t &target
             return stateful_error_t::conflict;
         }
     }
-    return _lane
-      .run ([&, this] {
-          stateful_error_t error = stateful_error_t::none;
-          auto *record = find_record_locked (target, error);
-          if (!record)
-              return error;
-          if (record->state != object_state_t::recovering
-              || record->restore_identity != std::optional<relocation_restore_identity_t>{identity})
-              return stateful_error_t::conflict;
-          move_held_application_locked (*record);
-          activate_object_on_lane (*record);
-          record->restore_identity.reset ();
-          notify_quiescence ();
-          return stateful_error_t::none;
-      })
-      .get ();
+    return _lane.run_sync ([&, this] {
+        stateful_error_t error = stateful_error_t::none;
+        auto *record = find_record_locked (target, error);
+        if (!record)
+            return error;
+        if (record->state != object_state_t::recovering
+            || record->restore_identity != std::optional<relocation_restore_identity_t>{identity})
+            return stateful_error_t::conflict;
+        move_held_application_locked (*record);
+        activate_object_on_lane (*record);
+        record->restore_identity.reset ();
+        notify_quiescence ();
+        return stateful_error_t::none;
+    });
 }
 
 stateful_error_t stateful_object_runtime_t::commit_relocation_restore_aggregate (
   const std::vector<object_ref_t> &targets, const relocation_restore_identity_t &identity)
 {
     relocation_state_commit_t commit;
-    const auto preflight =
-      _lane
-        .run ([&, this] {
-            if (targets.size () < 2)
-                return stateful_error_t::invalid;
-            for (const auto &target : targets) {
-                stateful_error_t error = stateful_error_t::none;
-                auto *record = find_record_locked (target, error);
-                if (!record)
-                    return error;
-                if (record->state != object_state_t::recovering
-                    || record->restore_identity
-                         != std::optional<relocation_restore_identity_t>{identity})
-                    return stateful_error_t::conflict;
-            }
-            commit = _relocation_state_commit;
-            return stateful_error_t::none;
-        })
-        .get ();
+    const auto preflight = _lane.run_sync ([&, this] {
+        if (targets.size () < 2)
+            return stateful_error_t::invalid;
+        for (const auto &target : targets) {
+            stateful_error_t error = stateful_error_t::none;
+            auto *record = find_record_locked (target, error);
+            if (!record)
+                return error;
+            if (record->state != object_state_t::recovering
+                || record->restore_identity
+                     != std::optional<relocation_restore_identity_t>{identity})
+                return stateful_error_t::conflict;
+        }
+        commit = _relocation_state_commit;
+        return stateful_error_t::none;
+    });
     if (preflight != stateful_error_t::none)
         return preflight;
     if (commit) {
@@ -2162,30 +2151,28 @@ stateful_error_t stateful_object_runtime_t::commit_relocation_restore_aggregate 
             return stateful_error_t::conflict;
         }
     }
-    return _lane
-      .run ([&, this] {
-          std::vector<object_record_t *> records;
-          records.reserve (targets.size ());
-          for (const auto &target : targets) {
-              stateful_error_t error = stateful_error_t::none;
-              auto *record = find_record_locked (target, error);
-              if (!record)
-                  return error;
-              if (record->state != object_state_t::recovering
-                  || record->restore_identity
-                       != std::optional<relocation_restore_identity_t>{identity})
-                  return stateful_error_t::conflict;
-              records.push_back (record);
-          }
-          for (auto *record : records) {
-              move_held_application_locked (*record);
-              activate_object_on_lane (*record);
-              record->restore_identity.reset ();
-          }
-          notify_quiescence ();
-          return stateful_error_t::none;
-      })
-      .get ();
+    return _lane.run_sync ([&, this] {
+        std::vector<object_record_t *> records;
+        records.reserve (targets.size ());
+        for (const auto &target : targets) {
+            stateful_error_t error = stateful_error_t::none;
+            auto *record = find_record_locked (target, error);
+            if (!record)
+                return error;
+            if (record->state != object_state_t::recovering
+                || record->restore_identity
+                     != std::optional<relocation_restore_identity_t>{identity})
+                return stateful_error_t::conflict;
+            records.push_back (record);
+        }
+        for (auto *record : records) {
+            move_held_application_locked (*record);
+            activate_object_on_lane (*record);
+            record->restore_identity.reset ();
+        }
+        notify_quiescence ();
+        return stateful_error_t::none;
+    });
 }
 
 task_t<stateful_error_t>
@@ -2499,7 +2486,7 @@ stateful_object_runtime_t::restore_relocation_aggregate (std::vector<frozen_obje
                     && targets[index].kind != object_kind_t::instance_spot)
                     continue;
                 try {
-                    restored = restore (frozen[index], targets[index], cancellation);
+                    restored = co_await restore (frozen[index], targets[index], cancellation);
                 }
                 catch (...) {
                     restored = false;

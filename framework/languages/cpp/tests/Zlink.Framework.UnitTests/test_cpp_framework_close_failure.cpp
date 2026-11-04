@@ -642,7 +642,7 @@ int main (int argc, char **argv)
             registration->core_context = std::make_shared<zlink::context_t> ();
         auto mesh = zlink::framework::detail::mesh_node_runtime_t::from (builder, "worker");
         mesh->bind_serializers (serializers);
-        mesh->start ();
+        mesh->start ().result ().value ();
         auto runtime = zlink::framework::detail::stream_runtime_t::from (builder);
         auto monitoring = zlink::framework::test::runtime_failure_monitoring ();
         zlink::framework::runtime::stream_host_service_t host (
