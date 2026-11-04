@@ -17,7 +17,7 @@ import java.util.concurrent.ExecutionException;
 
 /** Keeps the public opaque provider boundary separate from Framework-owned location records. */
 public final class ZLinkProviderLocationRepository implements ZLinkLocationRepository {
-    private final ProviderBoundary provider;
+    final ProviderBoundary provider;
     private final ZLinkProviderOwnerLeaseRepository owners;
     private final ZLinkProviderDescriptorRepository descriptors;
     private final ZLinkProviderAuthorityRepository authority;

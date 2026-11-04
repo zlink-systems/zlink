@@ -46,13 +46,13 @@ final class ZLinkStreamConnectionLifecycle {
     //  transition of the pair is decided under this lock and every
     //  notification runs after it is released, so two threads cannot both
     //  claim the same ending and no user callback runs while it is held.
-    private final Object connectionAttemptLock = new Object();
+    final Object connectionAttemptLock = new Object();
 
-    private volatile ZLinkStreamConnectionState state = ZLinkStreamConnectionState.CREATED;
-    private volatile ZLinkStreamTransportConnection connection;
+    volatile ZLinkStreamConnectionState state = ZLinkStreamConnectionState.CREATED;
+    volatile ZLinkStreamTransportConnection connection;
     private volatile ScheduledFuture<?> heartbeatTask;
     private volatile long lastInboundNanos = System.nanoTime();
-    private volatile CompletableFuture<Void> connectionAttempt;
+    volatile CompletableFuture<Void> connectionAttempt;
     //  Guarded by connectionAttemptLock. Set once by the first close; every
     //  later close returns it.
     private CompletableFuture<Void> closeResult;

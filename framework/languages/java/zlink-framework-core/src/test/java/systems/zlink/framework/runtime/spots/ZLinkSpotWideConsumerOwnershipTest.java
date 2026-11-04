@@ -15,7 +15,6 @@ import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit;
 
-import java.lang.reflect.Field;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -231,8 +230,6 @@ final class ZLinkSpotWideConsumerOwnershipTest {
         initial.run();
         entered.get(5, TimeUnit.SECONDS);
         if (!occupiedGate) release.complete(null);
-        Field active = ZLinkSerialExecutionQueue.class.getDeclaredField("active");
-        active.setAccessible(true);
         try {
             var terminals = new java.util.ArrayList<CompletableFuture<Void>>();
             for (var actor : List.of(first, second)) {
@@ -244,7 +241,11 @@ final class ZLinkSpotWideConsumerOwnershipTest {
                                         () -> {
                                             synchronized (actor.relocationLane()) {
                                                 assertTrue(
-                                                        activeRecord(active, actor.relocationLane())
+                                                        systems.zlink.framework.execution
+                                                                        .ZLinkSerialExecutionQueueTestAccess
+                                                                        .activeRecord(
+                                                                                actor
+                                                                                        .relocationLane())
                                                                 != null);
                                             }
                                             calls.incrementAndGet();
@@ -264,7 +265,8 @@ final class ZLinkSpotWideConsumerOwnershipTest {
             for (var actor : List.of(first, second)) {
                 synchronized (actor.relocationLane()) {
                     assertNull(
-                            active.get(actor.relocationLane()),
+                            systems.zlink.framework.execution.ZLinkSerialExecutionQueueTestAccess
+                                    .activeRecord(actor.relocationLane()),
                             "Actor dequeue/claim occurred while another turn owned the Spot gate");
                 }
             }
@@ -283,14 +285,6 @@ final class ZLinkSpotWideConsumerOwnershipTest {
             serials.close();
             Runnable task;
             while ((task = tasks.poll(100, TimeUnit.MILLISECONDS)) != null) task.run();
-        }
-    }
-
-    private static Object activeRecord(Field field, ZLinkSerialExecutionQueue queue) {
-        try {
-            return field.get(queue);
-        } catch (IllegalAccessException failure) {
-            throw new AssertionError(failure);
         }
     }
 }

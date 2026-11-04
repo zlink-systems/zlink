@@ -44,7 +44,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
     private final ZLinkLocationOptions options;
     private final ZLinkClientServerRuntimeConfiguration clientServers;
     private final ZLinkFanoutRuntimeConfiguration fanout;
-    private final List<ZLinkAutoConnectLoop> loops = new ArrayList<>();
+    final List<ZLinkAutoConnectLoop> loops = new ArrayList<>();
     private volatile boolean clientServersStarted;
     private volatile boolean fanoutStarted;
 

@@ -20,15 +20,10 @@ public final class ZLinkJavaReadyRouteTestAccess {
             ZLinkServiceM6BWireCodec.InstanceRouteFence route,
             long sourceGeneration,
             boolean intent,
-            List<Message> parts)
-            throws ReflectiveOperationException {
+            List<Message> parts) {
         var raw = (ZLinkJavaRawMeshNode) source;
-        var portField = ZLinkJavaRawMeshNode.class.getDeclaredField("port");
-        var routerField = ZLinkJavaRawMeshNode.class.getDeclaredField("router");
-        portField.setAccessible(true);
-        routerField.setAccessible(true);
-        var port = (ZLinkJavaRawServicePort) portField.get(raw);
-        var router = (RouterSocket) routerField.get(raw);
+        var port = raw.port;
+        var router = (RouterSocket) raw.router;
         var header =
                 new ZLinkServiceM6BWireCodec.InstanceSpotMessage(
                         0,
@@ -102,5 +97,11 @@ public final class ZLinkJavaReadyRouteTestAccess {
         if (!accepted)
             terminal.complete(new AssertionError("stale Ready ingress was not classified"));
         return terminal;
+    }
+
+    public static boolean hasInstanceAuthority(
+            systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode node,
+            String spotId) {
+        return ((ZLinkJavaRawSpotNode) node).instanceAuthorities.containsKey(spotId);
     }
 }

@@ -9,9 +9,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry;
 
-import java.lang.reflect.Method;
 import java.time.Duration;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
 
 final class ZLinkJavaRawMeshNodeTerminalRetentionTest {
@@ -31,72 +29,50 @@ final class ZLinkJavaRawMeshNodeTerminalRetentionTest {
                                 ZLinkServiceLivenessRegistry.DEFAULT_PROBE_INTERVAL,
                                 ZLinkServiceLivenessRegistry.DEFAULT_PEER_TIMEOUT)) {
             long wireDeadline = wall.get() + 10_000;
-            Object first = admit(node, 1, new byte[] {1}, wireDeadline);
-            assertTrue((boolean) property(first, "owner"));
-            Object slot = property(first, "slot");
+            var first = admit(node, 1, new byte[] {1}, wireDeadline);
+            assertTrue(first.owner());
+            var slot = first.slot();
             complete(slot);
 
             wall.addAndGet(Duration.ofDays(1).toMillis());
             monotonic.addAndGet(Duration.ofSeconds(1).toNanos());
-            Object replay = admit(node, 1, new byte[] {1}, wireDeadline);
-            assertSame(slot, property(replay, "slot"), "wall jump must not evict a terminal");
-            assertFalse((boolean) property(replay, "owner"));
+            var replay = admit(node, 1, new byte[] {1}, wireDeadline);
+            assertSame(slot, replay.slot(), "wall jump must not evict a terminal");
+            assertFalse(replay.owner());
+            assertTrue(admit(node, 1, new byte[] {2}, wireDeadline).fingerprintMismatch());
             assertTrue(
-                    (boolean)
-                            property(
-                                    admit(node, 1, new byte[] {2}, wireDeadline),
-                                    "fingerprintMismatch"));
-            assertTrue(
-                    (boolean) property(admit(node, 2, new byte[] {1}, wireDeadline), "expiredNew"),
+                    admit(node, 2, new byte[] {1}, wireDeadline).expiredNew(),
                     "a new wire deadline is still compared to wall time");
 
             wall.addAndGet(-Duration.ofDays(2).toMillis());
             monotonic.set(startNanos + Duration.ofSeconds(310).toNanos());
             assertSame(
                     slot,
-                    property(admit(node, 1, new byte[] {1}, wireDeadline), "slot"),
+                    admit(node, 1, new byte[] {1}, wireDeadline).slot(),
                     "retain through the original deadline plus five minutes");
             monotonic.incrementAndGet();
-            Object replacement = admit(node, 1, new byte[] {1}, wireDeadline);
-            assertTrue(
-                    (boolean) property(replacement, "owner"),
-                    "backward wall jump must not extend local retention");
-            assertNotSame(slot, property(replacement, "slot"));
+            var replacement = admit(node, 1, new byte[] {1}, wireDeadline);
+            assertTrue(replacement.owner(), "backward wall jump must not extend local retention");
+            assertNotSame(slot, replacement.slot());
 
-            Object pending = property(replacement, "slot");
+            var pending = replacement.slot();
             monotonic.addAndGet(Duration.ofDays(3).toNanos());
             assertSame(
                     pending,
-                    property(admit(node, 1, new byte[] {1}, wireDeadline), "slot"),
+                    admit(node, 1, new byte[] {1}, wireDeadline).slot(),
                     "retention must not evict an unfinished operation");
         }
     }
 
-    private static Object admit(
-            ZLinkJavaRawMeshNode node, long operation, byte[] fingerprint, long deadline)
-            throws Exception {
-        Class<?> keyType =
-                Class.forName(ZLinkJavaRawMeshNode.class.getName() + "$UserSpotOperationKey");
-        var constructor =
-                keyType.getDeclaredConstructor(RoutingId.class, long.class, long.class, long.class);
-        constructor.setAccessible(true);
-        Object key = constructor.newInstance(RoutingId.from("source"), 1L, 1L, operation);
-        Method admit =
-                ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-                        "admitUserSpotOperation", keyType, byte[].class, long.class);
-        admit.setAccessible(true);
-        return admit.invoke(node, key, fingerprint, deadline);
+    private static ZLinkJavaRawMeshNode.UserSpotTerminalAdmission admit(
+            ZLinkJavaRawMeshNode node, long operation, byte[] fingerprint, long deadline) {
+        var key =
+                new ZLinkJavaRawMeshNode.UserSpotOperationKey(
+                        RoutingId.from("source"), 1L, 1L, operation);
+        return node.admitUserSpotOperation(key, fingerprint, deadline);
     }
 
-    private static Object property(Object owner, String name) throws Exception {
-        Method method = owner.getClass().getDeclaredMethod(name);
-        method.setAccessible(true);
-        return method.invoke(owner);
-    }
-
-    private static void complete(Object slot) throws Exception {
-        var field = slot.getClass().getDeclaredField("terminal");
-        field.setAccessible(true);
-        ((CompletableFuture<?>) field.get(slot)).complete(null);
+    private static void complete(ZLinkJavaRawMeshNode.UserSpotTerminalSlot slot) {
+        slot.terminal.complete(null);
     }
 }

@@ -25,7 +25,7 @@ public final class SendSendCorrelation {
     public record Result(Throwable error, long completedTicks) {}
 
     public static final class Entry {
-        private volatile PerfEchoRequest request;
+        volatile PerfEchoRequest request;
         private final long startedTicks;
         private final long expiresAtTicks;
         private final CompletableFuture<Throwable> result = new CompletableFuture<>();

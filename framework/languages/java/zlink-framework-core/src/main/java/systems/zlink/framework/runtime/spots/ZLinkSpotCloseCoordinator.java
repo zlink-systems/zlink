@@ -48,7 +48,7 @@ final class ZLinkSpotCloseCoordinator {
     private final Consumer<Throwable> closingFailure;
     // -1 until the Closing transition is committed; then the index of the next step to run.
     private int next = -1;
-    private CompletableFuture<Boolean> attempt;
+    CompletableFuture<Boolean> attempt;
     private AsyncDrainProbe debugProbe;
 
     ZLinkSpotCloseCoordinator(
@@ -163,7 +163,7 @@ final class ZLinkSpotCloseCoordinator {
                         });
     }
 
-    private void end(CompletableFuture<Boolean> result, Boolean value, Throwable failure) {
+    void end(CompletableFuture<Boolean> result, Boolean value, Throwable failure) {
         assert failure != null || !Boolean.TRUE.equals(value) || debugProbe.assertDrainedResult();
         if (failure != null) {
             synchronized (this) {

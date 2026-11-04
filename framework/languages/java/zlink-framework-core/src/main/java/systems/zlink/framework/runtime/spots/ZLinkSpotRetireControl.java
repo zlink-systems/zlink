@@ -651,7 +651,7 @@ final class ZLinkSpotRetireControl {
         }
     }
 
-    private static byte[] encodeStage(StageRequest request) {
+    static byte[] encodeStage(StageRequest request) {
         return write(
                 STAGE,
                 output -> {
@@ -698,7 +698,7 @@ final class ZLinkSpotRetireControl {
                 });
     }
 
-    private static byte[] encodeFence(int kind, Fence fence) {
+    static byte[] encodeFence(int kind, Fence fence) {
         return write(kind, output -> writeFence(output, fence));
     }
 

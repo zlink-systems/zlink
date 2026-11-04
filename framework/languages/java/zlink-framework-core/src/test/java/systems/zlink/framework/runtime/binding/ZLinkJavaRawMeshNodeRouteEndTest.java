@@ -8,7 +8,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
@@ -26,14 +25,14 @@ final class ZLinkJavaRawMeshNodeRouteEndTest {
         String connectionId = ZLinkJavaRawMeshNode.routeConnectionId(admittedGeneration);
         try (var context = Zlink.createContext();
                 var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
-            var port = (ZLinkJavaRawServicePort) field(node, "port");
+            var port = node.port;
             // No pump runs: a new-route handshake is already committed when the old
             // selected-route observation is delivered.
             try (var router = port.openRouter(localRid)) {
-                setField(node, "router", router);
+                node.router = router;
                 var topology =
                         new ZLinkServiceTopologyRegistry(descriptor(localRid), port.stateLane());
-                setField(node, "topology", topology);
+                node.topology = topology;
                 topology.observeChanges(node::publishPeerObservation);
                 assertEquals(
                         ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
@@ -41,12 +40,11 @@ final class ZLinkJavaRawMeshNodeRouteEndTest {
                                 descriptor(peerRid),
                                 connectionId,
                                 ServiceWireConstants.COMMAND_ADMIT));
-                var liveness = (ZLinkServiceLivenessRegistry) field(node, "liveness");
+                var liveness = node.liveness;
                 liveness.admit(peerRid, connectionId, 0);
                 long probeId = liveness.tick(0).probes().getFirst().probeId();
                 assertTrue(liveness.acknowledge(peerRid, connectionId, probeId, 1));
-                Map<RoutingId, ZLinkJavaRawMeshNode.HelloExchange> announced =
-                        mapField(node, "helloExchanges");
+                Map<RoutingId, ZLinkJavaRawMeshNode.HelloExchange> announced = node.helloExchanges;
                 var exchange =
                         new ZLinkJavaRawMeshNode.HelloExchange(
                                 peerRid,
@@ -54,7 +52,7 @@ final class ZLinkJavaRawMeshNodeRouteEndTest {
                                 java.util.concurrent.CompletableFuture.completedFuture(null),
                                 null);
                 announced.put(peerRid, exchange);
-                setField(node, "selectedRoutes", Map.of(peerRid, endedGeneration));
+                node.selectedRoutes = Map.of(peerRid, endedGeneration);
 
                 node.observeTransportState(ZLinkJavaSocketReceivePoller.ROUTE_CHANGED);
 
@@ -65,7 +63,7 @@ final class ZLinkJavaRawMeshNodeRouteEndTest {
                 assertEquals(
                         retained, topology.peer(peerRid).filter(topology::isReady).isPresent());
                 assertEquals(retained ? exchange : null, announced.get(peerRid));
-                setField(node, "router", null);
+                node.router = null;
             }
         }
     }
@@ -88,24 +86,5 @@ final class ZLinkJavaRawMeshNodeRouteEndTest {
                 1,
                 0,
                 0);
-    }
-
-    private static Object field(ZLinkJavaRawMeshNode node, String name) throws Exception {
-        var field = ZLinkJavaRawMeshNode.class.getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(node);
-    }
-
-    @SuppressWarnings("unchecked")
-    private static <K, V> Map<K, V> mapField(ZLinkJavaRawMeshNode node, String name)
-            throws Exception {
-        return (Map<K, V>) field(node, name);
-    }
-
-    private static void setField(ZLinkJavaRawMeshNode node, String name, Object value)
-            throws Exception {
-        var field = ZLinkJavaRawMeshNode.class.getDeclaredField(name);
-        field.setAccessible(true);
-        field.set(node, value);
     }
 }

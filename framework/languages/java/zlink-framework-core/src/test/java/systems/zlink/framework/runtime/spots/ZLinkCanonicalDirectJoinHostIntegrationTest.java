@@ -59,9 +59,7 @@ import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -1063,23 +1061,14 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
     private static void verifyDuplicateLeftPreservesRefreshedFollow(
             ZLinkActorRuntime actors, ZLinkBackendActorRef sourceRef, CanonicalLink link)
             throws Exception {
-        Field field = ZLinkActorRuntime.class.getDeclaredField("handoff");
-        field.setAccessible(true);
-        Object handoff = field.get(actors);
-        Method lookup = handoff.getClass().getDeclaredMethod("messageFollowSource", String.class);
-        lookup.setAccessible(true);
-        Object retained = ((Optional<?>) lookup.invoke(handoff, ACTOR_ID)).orElseThrow();
-        Method sourceGetter = retained.getClass().getDeclaredMethod("sourceRoute");
-        Method targetGetter = retained.getClass().getDeclaredMethod("rawTargetRoute");
-        sourceGetter.setAccessible(true);
-        targetGetter.setAccessible(true);
         var source =
-                (systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec
-                                .ActorRoute)
-                        sourceGetter.invoke(retained);
+                systems.zlink.framework.runtime.actors.ZLinkActorRuntimeTestAccess
+                        .messageFollowSourceRoute(actors, ACTOR_ID);
         link.submitDuplicateLeft();
         assertFalse(LEAVE_GATE.get().isDone());
-        var target = (ZLinkServiceM6BWireCodec.ActorRouteFence) targetGetter.invoke(retained);
+        var target =
+                systems.zlink.framework.runtime.actors.ZLinkActorRuntimeTestAccess
+                        .messageFollowTargetRoute(actors, ACTOR_ID);
         var refreshed =
                 new ZLinkServiceM6BWireCodec.ActorRouteFence(
                         target.actor(),
@@ -1096,7 +1085,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         link.submitDuplicateLeft();
         assertEquals(
                 refreshed,
-                targetGetter.invoke(retained),
+                systems.zlink.framework.runtime.actors.ZLinkActorRuntimeTestAccess
+                        .messageFollowTargetRoute(actors, ACTOR_ID),
                 "duplicate ActorLeft must not refresh the already claimed callback's Message Follow"
                         + " route");
         assertEquals(1, EVENTS.stream().filter("source.leave"::equals).count());
@@ -1297,10 +1287,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
     }
 
     private static boolean hasActorTimerOwner(Object spot, String actorId) throws Exception {
-        Object context = ((ZLinkSpot<?>) spot).context();
-        Field field = context.getClass().getDeclaredField("actorTimers");
-        field.setAccessible(true);
-        return ((Map<?, ?>) field.get(context)).containsKey(actorId);
+        return ZLinkSpotRuntimeTestAccess.hasActorTimerOwner((ZLinkSpot<?>) spot, actorId);
     }
 
     private static ZLinkUserSpotAggregateStagingOwner unusedSpotStaging() {
@@ -1847,12 +1834,10 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                                         ZLinkServiceM6BWireCodec
                                                                 .SessionRelocationRouteAction.ABORT,
                                                         route.action());
-                                                Field relocation =
-                                                        ZLinkSerialExecutionQueue.class
-                                                                .getDeclaredField("relocation");
-                                                relocation.setAccessible(true);
                                                 assertNull(
-                                                        relocation.get(sourceQueue),
+                                                        systems.zlink.framework.execution
+                                                                .ZLinkSerialExecutionQueueTestAccess
+                                                                .relocationState(sourceQueue),
                                                         "source queue must leave its relocation cut"
                                                                 + " before abort");
                                                 EVENTS.add("source.queue.restored");

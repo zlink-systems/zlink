@@ -37,23 +37,8 @@ final class ZLinkActorPopulationMetricTest {
                 runtime
                 .new DefaultActorContext(
                         new ZLinkBackendActorRef(RoutingId.from("node"), "actor", 1));
-        var mesh = ZLinkActorRuntime.class.getDeclaredField("meshName");
-        mesh.setAccessible(true);
-        mesh.set(runtime, null);
-        var field = ZLinkActorRuntime.class.getDeclaredField("actorRegistry");
-        field.setAccessible(true);
-        var registry = field.get(runtime);
-        var register =
-                registry.getClass()
-                        .getDeclaredMethod(
-                                "register",
-                                String.class,
-                                String.class,
-                                ZLinkActor.class,
-                                ZLinkActorRuntime.DefaultActorContext.class);
-        register.setAccessible(true);
-        var remove = registry.getClass().getDeclaredMethod("remove", String.class);
-        remove.setAccessible(true);
+        runtime.meshName = null;
+        var registry = runtime.actorRegistry;
         ZLinkActor actor =
                 new ZLinkActor() {
                     public ZLinkActorContext context() {
@@ -62,13 +47,13 @@ final class ZLinkActorPopulationMetricTest {
                 };
         try (var metrics = ZLinkRuntimeMetricProbe.install()) {
             try {
-                register.invoke(registry, "actor", "type", actor, context);
+                registry.register("actor", "type", actor, context);
                 assertEquals(
                         1,
                         metrics.observable("zlink.actor.count", Map.of("mesh_name", "actor-mesh")));
             } finally {
                 runtime.setMeshName("later-mesh");
-                remove.invoke(registry, "actor");
+                registry.remove("actor");
             }
             assertEquals(
                     0, metrics.observable("zlink.actor.count", Map.of("mesh_name", "actor-mesh")));

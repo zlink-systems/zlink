@@ -280,9 +280,7 @@ final class ZLinkJavaRawMeshNodeAdmissionSourceTest {
                                     Duration.ofSeconds(5))
                             .toCompletableFuture();
             assertTrue(cancelled.cancel(false));
-            var observers = ZLinkJavaRawMeshNode.class.getDeclaredField("stateListeners");
-            observers.setAccessible(true);
-            assertTrue(((java.util.List<?>) observers.get(source)).isEmpty());
+            assertTrue(source.stateListeners.isEmpty());
         }
     }
 

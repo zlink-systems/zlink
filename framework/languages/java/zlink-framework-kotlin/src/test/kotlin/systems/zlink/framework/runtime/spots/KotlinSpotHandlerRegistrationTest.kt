@@ -1,7 +1,5 @@
 package systems.zlink.framework.runtime.spots
 
-import java.lang.reflect.InvocationTargetException
-import java.lang.reflect.Proxy
 import java.util.concurrent.CompletableFuture
 import org.junit.jupiter.api.Assertions.assertDoesNotThrow
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -15,8 +13,6 @@ import systems.zlink.framework.kotlin.ZLinkSuspendingSpotPacketHandler
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpotSubscriptionHandler
 import systems.zlink.framework.kotlin.addHandler
 import systems.zlink.framework.kotlin.addPacket
-import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog
-import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
 import systems.zlink.framework.spots.ZLinkEntrySpot
 import systems.zlink.framework.spots.ZLinkEntrySpotContext
 import systems.zlink.framework.spots.ZLinkInstanceSpot
@@ -32,8 +28,20 @@ class KotlinSpotHandlerRegistrationTest {
         val instanceHandlers = RecordingInstanceRegistry()
         instanceHandlers.addPacket<InstancePacketHandler>()
 
-        assertDoesNotThrow { load(EntrySpotProbe::class.java, entryHandlers.handlerTypes) }
-        assertDoesNotThrow { load(InstanceSpotProbe::class.java, instanceHandlers.handlerTypes) }
+        assertDoesNotThrow {
+            ZLinkSpotHandlerRegistrationTestAccess.load(
+                EntrySpotProbe::class.java,
+                entryHandlers.handlerTypes,
+                emptyList<Any>(),
+            )
+        }
+        assertDoesNotThrow {
+            ZLinkSpotHandlerRegistrationTestAccess.load(
+                InstanceSpotProbe::class.java,
+                instanceHandlers.handlerTypes,
+                emptyList<Any>(),
+            )
+        }
     }
 
     @Test
@@ -43,7 +51,11 @@ class KotlinSpotHandlerRegistrationTest {
 
         val failure =
             assertThrows<ZLinkFrameworkException> {
-                load(EntrySpotProbe::class.java, handlers.handlerTypes)
+                ZLinkSpotHandlerRegistrationTestAccess.load(
+                    EntrySpotProbe::class.java,
+                    handlers.handlerTypes,
+                    emptyList<Any>(),
+                )
             }
 
         assertEquals(ZLinkFrameworkErrorKind.INVALID_OPERATION, failure.kind())
@@ -55,87 +67,18 @@ class KotlinSpotHandlerRegistrationTest {
 
     @Test
     fun `Kotlin calls the Java dynamic subscription registry`() {
-        val catalogType =
-            Class.forName("systems.zlink.framework.runtime.spots.ZLinkSpotHandlerCatalog")
-        val catalog =
-            catalogType
-                .getDeclaredConstructor(String::class.java)
-                .also { it.trySetAccessible() }
-                .newInstance("closed")
-        val registry = catalog as ZLinkSpotHandlerRegistry
         val topic = "runtime.${EntrySpotProbe::class.java.simpleName}"
-        registry.addSubscribe(MissingTopicSubscriptionHandler::class.java, "events", topic)
-        val close =
-            catalogType
-                .getDeclaredMethod("closeRegistration", java.util.function.BiFunction::class.java)
-                .also { it.trySetAccessible() }
-        val loader =
-            java.util.function.BiFunction<List<Class<*>>, List<*>, Any> { types, subscriptions ->
-                load(EntrySpotProbe::class.java, types, subscriptions)
-            }
-        close.invoke(catalog, loader)
         val targets =
-            catalogType
-                .getDeclaredMethod("subscriptions")
-                .also { it.trySetAccessible() }
-                .invoke(catalog) as Set<*>
+            ZLinkSpotHandlerRegistrationTestAccess.loadSubscriptions(
+                EntrySpotProbe::class.java,
+                MissingTopicSubscriptionHandler::class.java,
+                "events",
+                topic,
+            )
         assertEquals(1, targets.size)
         val target = targets.single()!!
         assertEquals("events", target.javaClass.getMethod("channelName").invoke(target))
         assertEquals(topic, target.javaClass.getMethod("topic").invoke(target))
-    }
-
-    private fun load(
-        spotType: Class<*>,
-        handlerTypes: List<Class<*>>,
-        subscriptions: List<*> = emptyList<Any>(),
-    ): Any {
-        val scannedHandlers = ZLinkScannedHandlerCatalog(emptyList())
-        val actorCatalogType =
-            Class.forName("systems.zlink.framework.runtime.spots.ZLinkSpotActorHandlerCatalog")
-        val actorCatalog =
-            actorCatalogType
-                .getDeclaredConstructor(
-                    ZLinkScannedHandlerCatalog::class.java,
-                    Class.forName("systems.zlink.framework.ZLinkMessageSerializer"),
-                )
-                .also { it.trySetAccessible() }
-                .newInstance(scannedHandlers, null)
-        val loaderType =
-            Class.forName("systems.zlink.framework.runtime.spots.ZLinkSpotHandlerLoader")
-        val loader =
-            loaderType
-                .getDeclaredConstructor(
-                    ZLinkScannedHandlerCatalog::class.java,
-                    actorCatalogType,
-                    ZLinkHandlerActivator::class.java,
-                )
-                .also { it.trySetAccessible() }
-                .newInstance(scannedHandlers, actorCatalog, ZLinkHandlerActivator { null })
-        val timerRegistrarType =
-            Class.forName(
-                "systems.zlink.framework.runtime.spots.ZLinkSpotHandlerLoader\$ScannedTimerRegistrar"
-            )
-        val timerRegistrar =
-            Proxy.newProxyInstance(javaClass.classLoader, arrayOf(timerRegistrarType)) { _, _, _ ->
-                CompletableFuture.completedFuture<Void>(null)
-            }
-        val load =
-            loaderType
-                .getDeclaredMethod(
-                    "load",
-                    Class::class.java,
-                    List::class.java,
-                    List::class.java,
-                    timerRegistrarType,
-                )
-                .also { it.trySetAccessible() }
-
-        try {
-            return load.invoke(loader, spotType, handlerTypes, subscriptions, timerRegistrar)
-        } catch (failure: InvocationTargetException) {
-            throw failure.targetException
-        }
     }
 
     private class RecordingSpotRegistry : ZLinkSpotHandlerRegistry {

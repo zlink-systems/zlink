@@ -61,7 +61,7 @@ public final class ZLinkFrameworkLifecycle
                 ZLinkChannelRuntimeOptions,
                 ZLinkMessageFlowControl {
     public static final int PHASE = 0;
-    private static final Duration SPRING_SHUTDOWN_DRAIN_DEADLINE =
+    static final Duration SPRING_SHUTDOWN_DRAIN_DEADLINE =
             ZLinkFrameworkRuntime.DEFAULT_TERMINATION_DEADLINE;
     private static final long SHUTDOWN_COMPLETION_ALLOWANCE_SECONDS = 5;
     private final DefaultZLinkFrameworkOptions options;

@@ -64,12 +64,12 @@ public final class ZLinkStateLane {
         }
     }
 
-    private volatile ConcurrentLinkedQueue<WorkItem> mailbox;
+    volatile ConcurrentLinkedQueue<WorkItem> mailbox;
     private volatile int scheduled;
     // The sign bit seals admission; the remaining bits count submissions still publishing a turn.
     private volatile int admission;
     private volatile CompletableFuture<Void> completed;
-    private final Executor executor;
+    final Executor executor;
 
     public ZLinkStateLane() {
         this(DEFAULT_EXECUTOR);

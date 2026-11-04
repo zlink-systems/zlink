@@ -27,12 +27,12 @@ final class ZLinkJavaInstanceSpotRegistry {
     private final Executor applicationExecutor;
     private final String meshName;
 
-    private record Registration(
+    record Registration(
             BiFunction<String, Long, ZLinkBackendSpot> factory,
             InstanceSpotActivationHandler hook,
             systems.zlink.framework.runtime.internal.metrics.ZLinkInstanceSpotMetrics metrics) {}
 
-    private final Map<String, Registration> factories = new ConcurrentHashMap<>();
+    final Map<String, Registration> factories = new ConcurrentHashMap<>();
     private final Map<String, String> stableTypes = new ConcurrentHashMap<>();
     private final Map<String, ActivationOperation> activations = new ConcurrentHashMap<>();
 

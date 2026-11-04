@@ -21,6 +21,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -38,7 +39,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
     private final List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers;
     private final String sourceName;
     private final Dispatch dispatch;
-    private final ZLinkStateLane stateLane = new ZLinkStateLane();
+    final ZLinkStateLane stateLane;
     private final Map<String, ManagedTimer> timers = new LinkedHashMap<>();
     private Object spot;
     private Phase phase = Phase.RUNNING;
@@ -88,12 +89,31 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
             List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers,
             String sourceName,
             Dispatch dispatch) {
+        this(
+                spotId,
+                executor,
+                handlers,
+                suspendHandlerInvokers,
+                sourceName,
+                dispatch,
+                new ZLinkStateLane());
+    }
+
+    ZLinkSpotTimerRegistry(
+            String spotId,
+            ScheduledExecutorService executor,
+            ZLinkHandlerInstanceOwner handlers,
+            List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers,
+            String sourceName,
+            Dispatch dispatch,
+            ZLinkStateLane stateLane) {
         this.spotId = spotId;
         this.executor = executor;
         this.handlers = handlers;
         this.suspendHandlerInvokers = suspendHandlerInvokers;
         this.sourceName = sourceName;
         this.dispatch = dispatch;
+        this.stateLane = Objects.requireNonNull(stateLane, "stateLane");
     }
 
     void setSpot(Object spot) {

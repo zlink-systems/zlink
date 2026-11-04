@@ -21,7 +21,7 @@ import java.util.function.BiConsumer;
 final class ZLinkJavaRouterSocket implements ZLinkBackendRouterSocket, ZLinkJavaSocketBacked {
     private final RouterSocket socket;
     private final ZLinkJavaSocketReceivePoller receivePoller;
-    private final ZLinkServiceOperationRegistry operations =
+    final ZLinkServiceOperationRegistry operations =
             new ZLinkServiceOperationRegistry(
                     ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN),
                     ZLinkJavaSocketSupport::requestTimeout);

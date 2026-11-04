@@ -18,8 +18,6 @@ import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.time.Duration;
 import java.util.EnumSet;
 import java.util.List;
@@ -88,21 +86,9 @@ final class ZLinkJavaRawSpotNodeBoundSessionAdmissionOwnershipTest {
                                                 "BoundSessionReply",
                                                 Map.of()),
                                         new byte[] {1}))) {
-            invoke(
-                    node.spotNode(),
-                    "replyBoundStreamSession",
-                    new Class<?>[] {
-                        ZLinkJavaStreamSocket.class,
-                        RoutingId.class,
-                        int.class,
-                        ZLinkStreamHeader.class,
-                        List.class
-                    },
-                    stream,
-                    sessionRid,
-                    7,
-                    requestHeader(41L),
-                    List.of(reply));
+            ((ZLinkJavaRawSpotNode) node.spotNode())
+                    .replyBoundStreamSession(
+                            stream, sessionRid, 7, requestHeader(41L), List.of(reply));
 
             Thread.sleep(40L);
             assertAll(
@@ -123,21 +109,13 @@ final class ZLinkJavaRawSpotNodeBoundSessionAdmissionOwnershipTest {
         try (var context = Zlink.createContext();
                 var node = new ZLinkJavaRawMeshNode(context, "mesh");
                 var stream = new ZLinkJavaStreamSocket(context.createStreamSocket(), node, sink)) {
-            invoke(
-                    node.spotNode(),
-                    "replyBoundStreamError",
-                    new Class<?>[] {
-                        ZLinkJavaStreamSocket.class,
-                        RoutingId.class,
-                        int.class,
-                        ZLinkStreamHeader.class,
-                        Throwable.class
-                    },
-                    stream,
-                    sessionRid,
-                    9,
-                    requestHeader(42L),
-                    new IllegalStateException("failed"));
+            ((ZLinkJavaRawSpotNode) node.spotNode())
+                    .replyBoundStreamError(
+                            stream,
+                            sessionRid,
+                            9,
+                            requestHeader(42L),
+                            new IllegalStateException("failed"));
 
             Thread.sleep(40L);
             assertAll(
@@ -153,22 +131,6 @@ final class ZLinkJavaRawSpotNodeBoundSessionAdmissionOwnershipTest {
 
     private static ZLinkStreamHeader requestHeader(long requestSequence) {
         return new ZLinkStreamHeader("BoundSessionRequest", Map.of(), Optional.of(requestSequence));
-    }
-
-    private static void invoke(
-            Object target, String methodName, Class<?>[] parameterTypes, Object... arguments)
-            throws Exception {
-        Method method = target.getClass().getDeclaredMethod(methodName, parameterTypes);
-        method.setAccessible(true);
-        try {
-            method.invoke(target, arguments);
-        } catch (InvocationTargetException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof Exception exception) {
-                throw exception;
-            }
-            throw failure;
-        }
     }
 
     private static final class AdmissionSink implements ZLinkJavaStreamSocket.BoundSessionSink {

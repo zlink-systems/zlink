@@ -21,7 +21,6 @@ import systems.zlink.framework.spots.ZLinkActorCreateResponse;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 
-import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -160,11 +159,9 @@ final class ZLinkNewActorEntryCandidateTest {
                 .entryAccepted();
     }
 
-    @SuppressWarnings("unchecked")
-    private static void removeEntrySpots(MeshNodeRegistration registration) throws Exception {
-        Field field = MeshNodeRegistration.class.getDeclaredField("entrySpots");
-        field.setAccessible(true);
-        ((List<Object>) field.get(registration)).clear();
+    private static void removeEntrySpots(MeshNodeRegistration registration) {
+        systems.zlink.framework.runtime.mesh.MeshNodeRegistrationTestAccess.clearEntrySpots(
+                registration);
     }
 
     private static Server server(
