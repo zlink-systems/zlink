@@ -516,26 +516,28 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                         .ZLinkLocationRepository
                                                 locationStore
                                 && this.registration.relocationStore() != null
-                        ? new systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireRuntime(
-                                this.spots,
-                                this.actors,
-                                this.registration.meshNodes(),
-                                this.meshNodes.nodesByName(),
-                                locationStore,
-                                this.storeLocationResolvers,
-                                this.locationStores.authorityStore(),
-                                this.registration.locations().options(),
-                                relocationAdapters,
-                                this.registration.applicationVersion(),
-                                this.registration.maintenanceWave(),
-                                this.registration
-                                        .locations()
-                                        .options()
-                                        .sessionRelocationSealTimeout(),
-                                this.meshDrains::isSealed,
-                                construction.relocationStateMachines(),
-                                construction.aggregateRelocationAuthorityStoreDecorator(),
-                                construction.targetNormalizerDecorator())
+                        ? construction
+                                .spotRetireRuntimeFactory()
+                                .create(
+                                        this.spots,
+                                        this.actors,
+                                        this.registration.meshNodes(),
+                                        this.meshNodes.nodesByName(),
+                                        locationStore,
+                                        this.storeLocationResolvers,
+                                        this.locationStores.authorityStore(),
+                                        this.registration.locations().options(),
+                                        relocationAdapters,
+                                        this.registration.applicationVersion(),
+                                        this.registration.maintenanceWave(),
+                                        this.registration
+                                                .locations()
+                                                .options()
+                                                .sessionRelocationSealTimeout(),
+                                        this.meshDrains::isSealed,
+                                        construction.relocationStateMachines(),
+                                        construction.aggregateRelocationAuthorityStoreDecorator(),
+                                        construction.targetNormalizerDecorator())
                         : null;
 
         if (this.spotRetire != null) {
@@ -972,6 +974,14 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
 
     ZLinkInternalMeshNode monitoringMeshNode(String meshName) {
         return meshNodes.nodesByName().get(meshName);
+    }
+
+    ZLinkLocationRepository authorityStoreForRuntimeConstruction() {
+        return locationStores == null ? null : locationStores.authorityStore();
+    }
+
+    ZLinkBackendContext backendContextForRuntimeConstruction() {
+        return backendContext;
     }
 
     public ZLinkLocationRuntimeQuery monitoringLocationRuntimeQuery() {
