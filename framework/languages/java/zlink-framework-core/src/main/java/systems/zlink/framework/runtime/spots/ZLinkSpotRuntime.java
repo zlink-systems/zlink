@@ -359,11 +359,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 timerExecutor,
                 multicastExecutor,
                 handlerExecutor,
-                timerStateLaneFactory,
-                null);
+                timerStateLaneFactory);
     }
 
-    public ZLinkSpotRuntime(
+    ZLinkSpotRuntime(
             ZLinkBackendAdapterProvider backendFactory,
             ZLinkBackendAdapterOptions adapterOptions,
             ZLinkFrameworkRegistration registration,
@@ -396,8 +395,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 timerExecutor,
                 multicastExecutor,
                 handlerExecutor,
-                timerStateLaneFactory,
-                null);
+                timerStateLaneFactory);
     }
 
     public ZLinkSpotRuntime(
@@ -539,7 +537,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 null,
                 null,
                 null,
-                null,
                 null);
     }
 
@@ -562,8 +559,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ScheduledExecutorService timerExecutor,
             ThreadPoolExecutor multicastExecutor,
             Executor handlerExecutor,
-            Supplier<ZLinkStateLane> timerStateLaneFactory,
-            Map<String, ZLinkInternalMeshNode> routeMeshNodesByName) {
+            Supplier<ZLinkStateLane> timerStateLaneFactory) {
         if (registration.spotNodes().isEmpty() && meshNodes.isEmpty()) {
             throw new ZLinkConfigurationException("at least one mesh node is required");
         }

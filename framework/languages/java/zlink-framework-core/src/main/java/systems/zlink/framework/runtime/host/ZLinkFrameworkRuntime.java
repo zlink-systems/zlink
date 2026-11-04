@@ -532,10 +532,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                         .locations()
                                         .options()
                                         .sessionRelocationSealTimeout(),
-                                this.meshDrains::isSealed,
-                                construction.relocationStateMachines(),
-                                construction.aggregateRelocationAuthorityStoreDecorator(),
-                                construction.targetNormalizerDecorator())
+                                this.meshDrains::isSealed)
                         : null;
 
         if (this.spotRetire != null) {
@@ -972,6 +969,14 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
 
     ZLinkInternalMeshNode monitoringMeshNode(String meshName) {
         return meshNodes.nodesByName().get(meshName);
+    }
+
+    ZLinkLocationRepository authorityStoreForRuntimeConstruction() {
+        return locationStores == null ? null : locationStores.authorityStore();
+    }
+
+    ZLinkBackendContext backendContextForRuntimeConstruction() {
+        return backendContext;
     }
 
     public ZLinkLocationRuntimeQuery monitoringLocationRuntimeQuery() {

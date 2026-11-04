@@ -72,26 +72,20 @@ final class ZLinkCommittedTargetCloseTest {
                     .toCompletableFuture()
                     .get(WAIT.toSeconds(), TimeUnit.SECONDS);
             var endpoint = source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
-            try (var target =
-                    ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
-                            options(TARGET, locations, relocations, endpoint),
-                            new systems.zlink.framework.runtime.binding
-                                    .ZLinkJavaBackendAdapterFactory(),
-                            systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
-                                    .reflection(),
-                            null,
-                            new ZLinkFrameworkRuntimeTestAccess.Construction()
-                                    .targetNormalizerDecorator(
-                                            normalize ->
-                                                    request ->
-                                                            normalize
-                                                                    .apply(request)
-                                                                    .thenCompose(
-                                                                            ignored -> {
-                                                                                entered.complete(
-                                                                                        null);
-                                                                                return publicationRelease;
-                                                                            })))) {
+            var targetOptions = options(TARGET, locations, relocations, endpoint);
+            try (var target = ZLinkFrameworkRuntimeTestAccess.start(targetOptions)) {
+                installTargetRetireRuntime(
+                        target,
+                        targetOptions,
+                        normalize ->
+                                request ->
+                                        normalize
+                                                .apply(request)
+                                                .thenCompose(
+                                                        ignored -> {
+                                                            entered.complete(null);
+                                                            return publicationRelease;
+                                                        }));
                 try (var ready =
                         ZLinkRelocationObservationPublicTest.observe(
                                 target.routeMeshRuntime().observe(MESH, 8),
@@ -167,6 +161,41 @@ final class ZLinkCommittedTargetCloseTest {
                 .server()
                 .addSpotFactory("room", Room.class, factory -> factory.recreateOnRelocation());
         return options;
+    }
+
+    private static void installTargetRetireRuntime(
+            ZLinkFrameworkRuntime runtime,
+            DefaultZLinkFrameworkOptions options,
+            java.util.function.UnaryOperator<
+                            java.util.function.Function<Object, CompletionStage<Void>>>
+                    normalizerDecorator) {
+        var registration = options.registration();
+        var locations = ZLinkFrameworkRuntimeTestAccess.authorityStore(runtime);
+        var retireRuntime =
+                ZLinkSpotRuntimeTestAccess.userSpotRetireRuntimeWithStateMachines(
+                        (systems.zlink.framework.runtime.spots.ZLinkSpotRuntime)
+                                runtime.spotManager(),
+                        (systems.zlink.framework.runtime.actors.ZLinkActorRuntime)
+                                runtime.actorManager(),
+                        registration.meshNodes(),
+                        ZLinkFrameworkRuntimeTestAccess.meshNodes(runtime),
+                        locations,
+                        ZLinkFrameworkRuntimeTestAccess.storeLocationResolvers(runtime),
+                        locations,
+                        registration.locations().options(),
+                        new systems.zlink.framework.runtime.internal.relocation
+                                .ZLinkRelocationAdapterRegistry(
+                                registration,
+                                systems.zlink.framework.runtime.internal.handlers
+                                        .ZLinkHandlerActivator.reflection()),
+                        registration.applicationVersion(),
+                        registration.maintenanceWave(),
+                        registration.locations().options().sessionRelocationSealTimeout(),
+                        ZLinkFrameworkRuntimeTestAccess.meshDrains(runtime)::isSealed,
+                        null,
+                        null,
+                        normalizerDecorator);
+        ZLinkFrameworkRuntimeTestAccess.replaceSpotRetire(runtime, retireRuntime);
     }
 
     public record Room(ZLinkSpotContext context) implements ZLinkSpot<ZLinkActor> {

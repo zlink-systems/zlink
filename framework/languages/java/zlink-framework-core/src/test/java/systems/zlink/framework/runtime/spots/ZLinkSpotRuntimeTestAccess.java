@@ -1,15 +1,25 @@
 package systems.zlink.framework.runtime.spots;
 
+import systems.zlink.framework.locations.ZLinkLocationOptions;
+import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapterRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec;
+import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
+import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 import systems.zlink.framework.spots.ZLinkSpot;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.function.UnaryOperator;
 
 /** Test-only access to package-owned spot runtime collaborators. */
 public final class ZLinkSpotRuntimeTestAccess {
@@ -46,6 +56,46 @@ public final class ZLinkSpotRuntimeTestAccess {
 
     public static Object firstRelocationStateMachine(Object retireRuntime) {
         return ((ZLinkUserSpotRetireRuntime) retireRuntime).stateMachines.getFirst();
+    }
+
+    public static ZLinkUserSpotRetireRuntime userSpotRetireRuntimeWithStateMachines(
+            ZLinkSpotRuntime spots,
+            ZLinkActorRuntime actors,
+            List<MeshNodeRegistration> registrations,
+            Map<String, ZLinkInternalMeshNode> nodes,
+            ZLinkLocationRepository locations,
+            ZLinkStoreLocationResolvers locationResolvers,
+            ZLinkLocationRepository authorities,
+            ZLinkLocationOptions options,
+            ZLinkRelocationAdapterRegistry adapters,
+            long applicationVersion,
+            Optional<String> maintenanceWave,
+            Duration sessionRelocationSealTimeout,
+            Predicate<String> targetAdmissionSealed,
+            List<?> stateMachines,
+            UnaryOperator<ZLinkLocationRepository> authorityStoreDecorator,
+            UnaryOperator<Function<Object, CompletionStage<Void>>> targetNormalizerDecorator) {
+        ZLinkLocationRepository effectiveAuthorities =
+                authorityStoreDecorator == null
+                        ? authorities
+                        : authorityStoreDecorator.apply(authorities);
+        return new ZLinkUserSpotRetireRuntime(
+                spots,
+                actors,
+                registrations,
+                nodes,
+                locations,
+                locationResolvers,
+                effectiveAuthorities,
+                options,
+                adapters,
+                applicationVersion,
+                maintenanceWave,
+                sessionRelocationSealTimeout,
+                targetAdmissionSealed,
+                stateMachines,
+                null,
+                targetNormalizerDecorator);
     }
 
     public static int targetAttemptCount(Object stateMachine) {
