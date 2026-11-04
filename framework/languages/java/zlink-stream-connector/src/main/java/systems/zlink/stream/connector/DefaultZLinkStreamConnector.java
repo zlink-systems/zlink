@@ -47,7 +47,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     private final List<ZLinkStreamReplyReceivedHandler> replyReceivedHandlers =
             new CopyOnWriteArrayList<>();
     private final ZLinkStreamDispatchQueue dispatchQueue;
-    private final ZLinkStreamActorRegistry actorRegistry;
+    final ZLinkStreamActorRegistry actorRegistry;
     private final ZLinkStreamConnectorPayloadCodec payloadCodec;
     final AtomicLong nextRequestSeq = new AtomicLong();
     //  Process-global monotonic correlation id (hex), stamped on outbound

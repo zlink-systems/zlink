@@ -33,6 +33,7 @@ import org.junit.jupiter.api.Timeout
 import systems.zlink.contracts.messaging.Message
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions
 import systems.zlink.framework.streams.ZLinkStreamCompressionCodec as FrameworkStreamCompressionCodec
+import systems.zlink.stream.connector.ZLinkStreamActorRegistryTestAccess
 import systems.zlink.stream.connector.ZLinkStreamCloseReason
 import systems.zlink.stream.connector.ZLinkStreamCompression
 import systems.zlink.stream.connector.ZLinkStreamCompressionCodec
@@ -434,18 +435,20 @@ final class KotlinConnectorWrapperTest {
                         }
                     }
 
-                actorRegistryControl(server, connector, "bound", boundControl(7, "player-a"))
+                actorRegistryControl(connector, "bound", boundControl(7, "player-a"))
                 val actor = connector.actor("player-a")!!
                 assertSame(actor, connector.actors().single())
                 assertTrue(actor.isBound)
                 assertTrue(!bound.isCompleted)
-                assertSame(actor, dispatchUntil(connector, bound))
+                connector.dispatch().await()
+                assertSame(actor, bound.await())
 
-                actorRegistryControl(server, connector, "unbound", unboundControl(7))
+                actorRegistryControl(connector, "unbound", unboundControl(7))
                 assertTrue(!actor.isBound)
                 assertNull(connector.actor("player-a"))
                 assertTrue(!unbound.isCompleted)
-                assertSame(actor, dispatchUntil(connector, unbound))
+                connector.dispatch().await()
+                assertSame(actor, unbound.await())
                 assertEquals(listOf("bound", "unbound"), eventOrder)
                 val stale =
                     Assertions.assertThrows(ZLinkStreamException::class.java) {
@@ -472,7 +475,6 @@ final class KotlinConnectorWrapperTest {
                 val firstBound = CompletableDeferred<Unit>()
                 val releaseBound = CompletableDeferred<Unit>()
                 val allBound = CompletableDeferred<List<String>>()
-                val allBoundDispatched = CompletableDeferred<Unit>()
                 val boundIds = mutableListOf<String>()
                 val boundCollector =
                     launch(start = CoroutineStart.UNDISPATCHED) {
@@ -485,31 +487,18 @@ final class KotlinConnectorWrapperTest {
                             if (boundIds.size == eventCount) allBound.complete(boundIds.toList())
                         }
                     }
-                val dispatchObserver =
-                    launch(start = CoroutineStart.UNDISPATCHED) {
-                        var dispatched = 0
-                        connector.actorBound().collect {
-                            dispatched++
-                            if (dispatched == eventCount) allBoundDispatched.complete(Unit)
-                        }
-                    }
                 try {
-                    actorRegistryControl(server, connector, "bound", boundControl(1, "actor-1"))
-                    dispatchUntil(connector, firstBound)
+                    actorRegistryControl(connector, "bound", boundControl(1, "actor-1"))
+                    connector.dispatch().await()
+                    firstBound.await()
                     for (slot in 2..eventCount) {
-                        actorRegistryControl(
-                            server,
-                            connector,
-                            "bound",
-                            boundControl(slot, "actor-$slot"),
-                        )
+                        actorRegistryControl(connector, "bound", boundControl(slot, "actor-$slot"))
                     }
-                    dispatchUntil(connector, allBoundDispatched)
+                    connector.dispatch().await()
                     releaseBound.complete(Unit)
                     assertEquals((1..eventCount).map { "actor-$it" }, allBound.await())
                 } finally {
                     boundCollector.cancelAndJoin()
-                    dispatchObserver.cancelAndJoin()
                 }
             } finally {
                 connector.close().await()
@@ -525,17 +514,11 @@ final class KotlinConnectorWrapperTest {
             try {
                 connector.connect().await()
                 for (slot in 1..eventCount) {
-                    actorRegistryControl(
-                        server,
-                        connector,
-                        "bound",
-                        boundControl(slot, "actor-$slot"),
-                    )
+                    actorRegistryControl(connector, "bound", boundControl(slot, "actor-$slot"))
                 }
                 val firstUnbound = CompletableDeferred<Unit>()
                 val releaseUnbound = CompletableDeferred<Unit>()
                 val allUnbound = CompletableDeferred<List<String>>()
-                val allUnboundDispatched = CompletableDeferred<Unit>()
                 val unboundIds = mutableListOf<String>()
                 val unboundCollector =
                     launch(start = CoroutineStart.UNDISPATCHED) {
@@ -550,26 +533,18 @@ final class KotlinConnectorWrapperTest {
                             }
                         }
                     }
-                val dispatchObserver =
-                    launch(start = CoroutineStart.UNDISPATCHED) {
-                        var dispatched = 0
-                        connector.actorUnbound().collect {
-                            dispatched++
-                            if (dispatched == eventCount) allUnboundDispatched.complete(Unit)
-                        }
-                    }
                 try {
-                    actorRegistryControl(server, connector, "unbound", unboundControl(1))
-                    dispatchUntil(connector, firstUnbound)
+                    actorRegistryControl(connector, "unbound", unboundControl(1))
+                    connector.dispatch().await()
+                    firstUnbound.await()
                     for (slot in 2..eventCount) {
-                        actorRegistryControl(server, connector, "unbound", unboundControl(slot))
+                        actorRegistryControl(connector, "unbound", unboundControl(slot))
                     }
-                    dispatchUntil(connector, allUnboundDispatched)
+                    connector.dispatch().await()
                     releaseUnbound.complete(Unit)
                     assertEquals((1..eventCount).map { "actor-$it" }, allUnbound.await())
                 } finally {
                     unboundCollector.cancelAndJoin()
-                    dispatchObserver.cancelAndJoin()
                 }
             } finally {
                 connector.close().await()
@@ -643,8 +618,8 @@ final class KotlinConnectorWrapperTest {
             val connector = ZLinkStreamConnectorFactory.create(options(server.endpoint())).kotlin()
             try {
                 connector.connect().await()
-                actorRegistryControl(server, connector, "bound", boundControl(7, "player-a"))
-                actorRegistryControl(server, connector, "bound", boundControl(8, "player-b"))
+                actorRegistryControl(connector, "bound", boundControl(7, "player-a"))
+                actorRegistryControl(connector, "bound", boundControl(8, "player-b"))
                 val actor = connector.actor("player-a")!!
                 connector.dispatch().await()
 
@@ -730,7 +705,7 @@ final class KotlinConnectorWrapperTest {
             val connector = ZLinkStreamConnectorFactory.create(options(server.endpoint())).kotlin()
             try {
                 connector.connect().await()
-                actorRegistryControl(server, connector, "bound", boundControl(7, "player-a"))
+                actorRegistryControl(connector, "bound", boundControl(7, "player-a"))
                 val actor = connector.actor("player-a")!!
                 connector.dispatch().await()
                 val connectorMessage =
@@ -799,7 +774,7 @@ final class KotlinConnectorWrapperTest {
                 ZLinkStreamConnectorFactory.create(options(server.endpoint(), resolver)).kotlin()
             try {
                 connector.connect().await()
-                actorRegistryControl(server, connector, "bound", boundControl(7, "player-a"))
+                actorRegistryControl(connector, "bound", boundControl(7, "player-a"))
                 val actor = connector.actor("player-a")!!
                 connector.dispatch().await()
                 val payload = mapOf("value" to "typed")
@@ -857,37 +832,15 @@ final class KotlinConnectorWrapperTest {
         }
     }
 
-    private suspend fun actorRegistryControl(
-        server: TcpServer,
+    private fun actorRegistryControl(
         connector: ZLinkKotlinStreamConnector,
         action: String,
         payload: ByteArray,
     ) {
-        val input = ByteBuffer.wrap(payload)
-        assertEquals(1, input.get().toInt())
-        val slot = input.short.toInt() and 0xffff
-        val actorId =
-            if (action == "bound") {
-                val idLength = input.get().toInt() and 0xff
-                val id = ByteArray(idLength)
-                input.get(id)
-                String(id, StandardCharsets.UTF_8).also { server.actorIdsBySlot[slot] = it }
-            } else {
-                server.actorIdsBySlot.remove(slot) ?: error("no actor is bound to slot $slot")
-            }
-        server.sendFrame(
-            Frame(
-                kind = 5,
-                codec = 0,
-                requestSeq = null,
-                name = if (action == "bound") "\$zlink.actor.bound" else "\$zlink.actor.unbound",
-                payload = payload,
-            )
-        )
-        if (action == "bound") {
-            while (connector.actor(actorId) == null) yield()
-        } else {
-            while (connector.actor(actorId) != null) yield()
+        when (action) {
+            "bound" -> ZLinkStreamActorRegistryTestAccess.bound(connector.inner, payload)
+            "unbound" -> ZLinkStreamActorRegistryTestAccess.unbound(connector.inner, payload)
+            else -> error("unsupported test action: $action")
         }
     }
 
@@ -1159,7 +1112,6 @@ final class KotlinConnectorWrapperTest {
     private class TcpServer : AutoCloseable {
         private val server = ServerSocket(0)
         private val sockets = LinkedBlockingQueue<Socket>()
-        val actorIdsBySlot = mutableMapOf<Int, String>()
         @Volatile private var current: Socket? = null
         private val acceptThread =
             Thread {

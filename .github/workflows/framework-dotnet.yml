@@ -286,6 +286,21 @@ jobs:
         if: ${{ inputs.skip_tests }}
         run: echo "No changed dotnet paths; tests are not required."
 
+      - name: Checkout repository for conformance validation
+        if: ${{ !inputs.skip_tests }}
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js for conformance validation
+        if: ${{ !inputs.skip_tests }}
+        uses: actions/setup-node@v5
+        with:
+          package-manager-cache: false
+          node-version: 22
+
+      - name: Verify framework relocation conformance inventory
+        if: ${{ !inputs.skip_tests }}
+        run: bash scripts/ci/verify-framework-relocation-conformance.sh
+
       - name: Confirm matrix completed
         if: ${{ !inputs.skip_tests }}
         run: |

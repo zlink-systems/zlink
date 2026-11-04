@@ -335,7 +335,7 @@ options.useVirtualThreadHandlers();
 | `.configureStreamCompression()` | 압축 없음 | STREAM 기본 압축 codec(`useDefault()`/`useLz4()`/`use(codec)`/`disable()`) |
 | `.setApplicationVersion(version)` / `.setMaintenanceWave(wave)` | `0` / `null`(exclusion 없음) | 모든 local MeshNode가 게시하는 배포 버전과 maintenance wave |
 | `.setDefaultRequestTimeout(timeout)` | Framework 기본값 | host 전체 request 기본 timeout |
-| `.useVirtualThreadHandlers()` / `.useHandlerExecutor(executor)` | 구현 기본 executor | Handler dispatch에 사용할 실행 모델(virtual thread 또는 지정한 `Executor`) 선택. 상호 배타적이다 |
+| `.useVirtualThreadHandlers()` / `.useHandlerExecutor(executor)` | 구현 기본 executor | Handler dispatch에 사용할 실행 모델(virtual thread 또는 지정한 `Executor`) 선택. 상호 배타적이다. 지정한 `Executor`는 받은 작업을 모두 실행하거나 `RejectedExecutionException`으로 거절해야 하며 조용히 버리면 안 된다. `ThreadPoolExecutor`의 `DiscardPolicy`·`DiscardOldestPolicy`는 configuration error다 |
 | `.codecs()` | JSON만 등록 | `options.codecs().use(extension)`. messaging-execution category의 Codec 등록 항목을 참고 |
 
 **완료 결과.** 대부분 반환값 없이 동기로 실행되며, `.configureNetwork()`/`.configureWorkers()`/

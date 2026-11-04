@@ -448,6 +448,73 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         await node.Completions.CompletionDrained.WaitAsync(CompletionBound);
     }
 
+    [Fact]
+    public async Task ActorPhysicalFailureCallbackCannotSkipNativeDeadline()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "actor-failure-callback");
+        var actor = CreateRegistrationActor(node, "actor-failure-callback-actor");
+        using var request = Message.From("request");
+        using var reply = Message.From("reply");
+        var original = new InvalidOperationException("Actor reply decoding failed");
+        var failureCalls = 0;
+        IReadOnlyList<Message>? decodedParts = null;
+        var completion = node.RequestToActorAsync<int>(
+            actor,
+            [request],
+            RegistrationTimeout,
+            CancellationToken.None,
+            parts =>
+            {
+                decodedParts = parts;
+                throw original;
+            },
+            static error => error,
+            null,
+            _ =>
+            {
+                failureCalls++;
+                throw new ObjectDisposedException("route-cache");
+            }
+        );
+        var replies = 0;
+        var replyFailure = Record.Exception(() =>
+        {
+            using var ready = new MeshReadyBatch();
+            node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+            for (var index = 0; index < ready.Count; index++)
+            {
+                using var claim = ready.TakeClaim(index);
+                using var received = new MeshReceiveBatch();
+                while (claim.Receive(received, RecvFlags.DontWait))
+                {
+                    for (var record = 0; record < received.Count; record++)
+                    {
+                        Assert.Equal(MeshRecordKind.ActorRequest, received[record].Kind);
+                        replies++;
+                        Assert.Equal(SubmitResult.Ok, received[record].Reply([reply]));
+                    }
+                    received.Reset();
+                }
+            }
+        });
+        var pendingAfterReply = node.PendingOperationCount;
+        // Cleanup also runs for the original defect, without advancing its deadline.
+        if (replyFailure is not null)
+            node.CloseSubmissions();
+        var failure = await Record.ExceptionAsync(() => completion.WaitAsync(CompletionBound));
+        Assert.Null(replyFailure);
+        Assert.Equal(1, replies);
+        Assert.Equal(1, failureCalls);
+        Assert.Equal(0, pendingAfterReply);
+        Assert.Same(original, failure);
+        Assert.NotNull(decodedParts);
+        Assert.All(
+            decodedParts,
+            part => Assert.Throws<ObjectDisposedException>(() => part.AsReadOnlySpan())
+        );
+    }
+
     private static ActorRef CreateRegistrationActor(ZLinkManagedMeshNode node, string actorId)
     {
         if (node.RoutingId.IsEmpty)

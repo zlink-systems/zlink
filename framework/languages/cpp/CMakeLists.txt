@@ -1721,6 +1721,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       TIMEOUT 30)
   endfunction()
 
+  add_zlink_framework_test(test_cpp_framework_actor_late_result
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_late_result.cpp
+    "framework-unit;actor")
+  target_use_zlink_gtest_main(test_cpp_framework_actor_late_result)
+  target_include_directories(test_cpp_framework_actor_late_result PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+
   function(add_zlink_connector_test target_name source_file labels)
     set(tier "${ARGV3}")
     add_executable(${target_name} ${source_file})
@@ -1884,6 +1891,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_layout_contract
     COMMAND test_cpp_framework_layout_contract
+    LABELS "framework-contract"
+    TIMEOUT 30)
+
+  add_executable(test_cpp_framework_capturing_coroutine_scan
+    tests/Zlink.Framework.ContractTests/test_cpp_framework_capturing_coroutine_scan.cpp)
+  target_compile_features(test_cpp_framework_capturing_coroutine_scan PRIVATE cxx_std_20)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_capturing_coroutine_scan
+    COMMAND test_cpp_framework_capturing_coroutine_scan
     LABELS "framework-contract"
     TIMEOUT 30)
 

@@ -970,6 +970,150 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
+    void ignoredControlsAtDefaultLogLevelDoNotEmitFlowOrLogs() throws Exception {
+        FakeStream stream = new FakeStream();
+        for (int index = 0; index < 1000; index++) {
+            stream.enqueue(PEER_A, controlFrame("$zlink.future.control", new byte[] {7, 8, 9}));
+        }
+        stream.enqueue(PEER_A, controlFrame(HEARTBEAT_PING, new byte[] {2, 3}));
+
+        Logger logger = Logger.getLogger(ZLinkStreamRuntime.class.getName());
+        List<String> runtimeLines = new CopyOnWriteArrayList<>();
+        Handler runtimeHandler = capturingHandler(runtimeLines);
+        Level oldRuntimeLevel = logger.getLevel();
+        boolean oldRuntimeParents = logger.getUseParentHandlers();
+        Logger flowLogger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        Level oldFlowLevel = flowLogger.getLevel();
+        boolean oldFlowParents = flowLogger.getUseParentHandlers();
+        List<String> flowLines = new CopyOnWriteArrayList<>();
+        Handler flowHandler =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        flowLines.add(record.getMessage());
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.addHandler(runtimeHandler);
+        logger.setLevel(Level.INFO);
+        logger.setUseParentHandlers(false);
+        flowLogger.addHandler(flowHandler);
+        flowLogger.setLevel(Level.ALL);
+        flowLogger.setUseParentHandlers(false);
+        try {
+            ZLinkStreamRuntime runtime =
+                    start(
+                            stream,
+                            0,
+                            64 * 1024,
+                            registration ->
+                                    registration
+                                            .dispatchOptions()
+                                            .messageFlow(ZLinkMessageFlowLogMode.NORMAL));
+            runtimes.add(runtime);
+            assertTrue(stream.heartbeatPongAsyncAttempted.await(5, TimeUnit.SECONDS));
+            assertEquals(1001, stream.successfulReceives.get());
+
+            assertEquals(List.of(), runtimeLines);
+            assertEquals(List.of(), flowLines);
+            assertEquals(List.of(0), stream.heartbeatPongPayloadLengths);
+        } finally {
+            logger.removeHandler(runtimeHandler);
+            logger.setLevel(oldRuntimeLevel);
+            logger.setUseParentHandlers(oldRuntimeParents);
+            flowLogger.removeHandler(flowHandler);
+            flowLogger.setLevel(oldFlowLevel);
+            flowLogger.setUseParentHandlers(oldFlowParents);
+        }
+    }
+
+    @Test
+    void futureControlsAndUnknownHeartbeatVersionsAreIgnoredAndLogged() throws Exception {
+        FakeStream stream = new FakeStream();
+        stream.enqueue(PEER_A, controlFrame("$zlink.future.control", new byte[] {7, 8, 9}));
+        stream.enqueue(PEER_A, controlFrame(HEARTBEAT_PING, new byte[] {2, 3}));
+        stream.enqueue(PEER_A, controlFrame(HEARTBEAT_PONG, new byte[] {2}));
+        stream.enqueue(PEER_A, controlFrame(ZLinkStreamActorControl.BOUND));
+        stream.enqueue(PEER_B, frame("good", "{}"));
+
+        Logger logger = Logger.getLogger(ZLinkStreamRuntime.class.getName());
+        List<String> lines = new CopyOnWriteArrayList<>();
+        Handler handler =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        lines.add(record.getMessage());
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        Level oldLevel = logger.getLevel();
+        boolean oldParentHandlers = logger.getUseParentHandlers();
+        logger.addHandler(handler);
+        logger.setLevel(Level.FINE);
+        logger.setUseParentHandlers(false);
+        try {
+            ZLinkStreamRuntime runtime = start(stream, 0);
+            runtimes.add(runtime);
+
+            TestSession session = awaitSession();
+            assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+            assertEquals(List.of("good"), session.packetNames);
+            assertEquals(0, stream.disconnectCalls.get());
+            assertEquals(1, stream.sessionClosingSends.get());
+            assertEquals(List.of(0), stream.heartbeatPongPayloadLengths);
+            assertTrue(
+                    lines.contains(
+                            "Ignored STREAM control name=$zlink.future.control payloadBytes=3"
+                                    + " peerSessionRid="
+                                    + PEER_A));
+            assertTrue(
+                    lines.contains(
+                            "Ignored STREAM control name="
+                                    + HEARTBEAT_PING
+                                    + " payloadBytes=2 peerSessionRid="
+                                    + PEER_A));
+            assertTrue(
+                    lines.contains(
+                            "Ignored STREAM control name="
+                                    + HEARTBEAT_PONG
+                                    + " payloadBytes=1 peerSessionRid="
+                                    + PEER_A));
+        } finally {
+            logger.removeHandler(handler);
+            logger.setLevel(oldLevel);
+            logger.setUseParentHandlers(oldParentHandlers);
+        }
+    }
+
+    @Test
+    void unprefixedUnknownControlAndMalformedControlHeaderIsolateOnlyTheirPeer() throws Exception {
+        FakeStream stream = new FakeStream();
+        byte[] malformedHeader = controlFrame("$zlink.future.header");
+        malformedHeader[6] = 0;
+        stream.enqueue(PEER_A, controlFrame("future.control"));
+        stream.enqueue(PEER_B, malformedHeader);
+        stream.enqueue(RoutingId.from("peer-good"), frame("good", "{}"));
+
+        ZLinkStreamRuntime runtime = start(stream, 0);
+        runtimes.add(runtime);
+
+        TestSession session = awaitSession();
+        assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+        assertEquals(List.of("good"), session.packetNames);
+        assertEquals(2, stream.sessionClosingSends.get());
+    }
+
+    @Test
     void pendingHeartbeatPongAdmissionDoesNotBlockTheReceiveOwner() throws Exception {
         FakeStream stream = new FakeStream();
         stream.deferHeartbeatPongSend = true;
@@ -2349,6 +2493,21 @@ final class ZLinkStreamRuntimeIngressTest {
         throw new AssertionError("STREAM session was not created");
     }
 
+    private static Handler capturingHandler(List<String> messages) {
+        return new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                messages.add(record.getMessage());
+            }
+
+            @Override
+            public void flush() {}
+
+            @Override
+            public void close() {}
+        };
+    }
+
     private static void awaitValue(AtomicInteger value, int expected) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (System.nanoTime() < deadline) {
@@ -2378,6 +2537,10 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     private static byte[] controlFrame(String packetName) {
+        return controlFrame(packetName, new byte[0]);
+    }
+
+    private static byte[] controlFrame(String packetName, byte[] payload) {
         ZLinkStreamHeader header =
                 new ZLinkStreamHeader(
                         ZLinkStreamMessageKind.CONTROL,
@@ -2386,7 +2549,7 @@ final class ZLinkStreamRuntimeIngressTest {
                         Optional.empty(),
                         packetName,
                         Map.of());
-        return ZLinkStreamFrameCodec.encode(ZLinkStreamHeaderCodec.encode(header), new byte[0]);
+        return ZLinkStreamFrameCodec.encode(ZLinkStreamHeaderCodec.encode(header), payload);
     }
 
     private static void awaitCondition(java.util.function.BooleanSupplier condition)
@@ -2621,6 +2784,7 @@ final class ZLinkStreamRuntimeIngressTest {
         private final AtomicInteger zeroReadinessWaits = new AtomicInteger();
         private final AtomicBoolean receiveReady = new AtomicBoolean();
         private final AtomicInteger sessionClosingSends = new AtomicInteger();
+        private final List<Integer> heartbeatPongPayloadLengths = new CopyOnWriteArrayList<>();
         private final AtomicInteger actorUnboundSubmissions = new AtomicInteger();
         private final CountDownLatch sessionClosingSendsLatch = new CountDownLatch(1);
         private final CompletableFuture<RoutingId> disconnectedPeer = new CompletableFuture<>();
@@ -2841,6 +3005,10 @@ final class ZLinkStreamRuntimeIngressTest {
         @Override
         public CompletionStage<Void> sendAsync(
                 RoutingId routingId, ZLinkStreamHeader header, List<Message> parts) {
+            if (HEARTBEAT_PONG.equals(header.packetName())) {
+                heartbeatPongPayloadLengths.add(parts.stream().mapToInt(Message::size).sum());
+                heartbeatPongAsyncAttempted.countDown();
+            }
             if (ZLinkSessionClosingControl.NAME.equals(header.packetName())) {
                 sessionClosingSends.incrementAndGet();
                 sessionClosingSendsLatch.countDown();

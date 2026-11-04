@@ -7,6 +7,7 @@
  * build keeps compiling while target signatures are still missing. */
 
 #include "../support/read_text_file.hpp"
+#include "../support/capturing_coroutine_scan.hpp"
 
 #include <algorithm>
 #include <array>
@@ -419,7 +420,9 @@ int main ()
                     && location_auto_connect.find ("update_peer") == std::string::npos,
                   "IMP-CP-05", "RouteMesh discovery still uses legacy peer rows");
     gate.require (
-      location_auto_connect.find ("const bool manual_endpoint") != std::string::npos
+      std::regex_replace (location_auto_connect, std::regex (R"(\s)"), "")
+            .find ("constboolautomatic=automatic_route_target(manual,target)")
+          != std::string::npos
         && location_auto_connect.find ("Manual routes still refresh admission") != std::string::npos
         && location_auto_connect.find ("co_await node->expect_peer_async") != std::string::npos,
       "CPP-TOPO-001", "manual RouteMesh endpoints do not install descriptor admission fences");
@@ -726,7 +729,7 @@ int main ()
     const auto accepted_barrier = app_runtime.find ("wait_for_accepted_callbacks_until");
     const auto relocation_dispatch = app_runtime.find ("join_application_actor_to_entry_spot");
     const auto stream_barrier = app_runtime.find ("drain_sessions_until", accepted_barrier);
-    const auto spot_close = app_runtime.find ("close_all_user_spots", stream_barrier);
+    const auto spot_close = app_runtime.find ("close_all_spots", stream_barrier);
     const auto owner_cleanup = app_runtime.find ("cleanup_owner", spot_close);
     gate.require (relocation_dispatch != std::string::npos && accepted_barrier != std::string::npos
                     && accepted_barrier < stream_barrier && stream_barrier < spot_close
@@ -1226,6 +1229,28 @@ int main ()
     const auto ungated_flow_calls = ungated_message_flow_calls (root / "framework/src");
     for (const auto &site : ungated_flow_calls)
         gate.require (false, "CPP-OBS-004", "ungated per-message trace: " + site);
+
+    // CP.51: captures read after suspension depend on the closure lifetime.
+    zlink::framework::tests::coroutine_scan_counts_t scan_counts;
+    for (const auto &scan_root : {root / "framework/src", include_root}) {
+        for (const auto &entry : std::filesystem::recursive_directory_iterator (scan_root)) {
+            const auto ext = entry.path ().extension ();
+            if (!entry.is_regular_file () || (ext != ".hpp" && ext != ".h" && ext != ".cpp"))
+                continue;
+            const auto source = read_text_file (entry.path ());
+            for (const auto offset :
+                 zlink::framework::tests::capturing_coroutine_reads (source, &scan_counts)) {
+                const auto line = 1 + std::count (source.begin (), source.begin () + offset, '\n');
+                gate.require (false, "CPP-CP51-001",
+                              "capture read after suspension: " + entry.path ().string () + ":"
+                                + std::to_string (line));
+            }
+        }
+    }
+    std::cout << "CP.51 files=" << scan_counts.files << " parsed_files=" << scan_counts.parsed_files
+              << " lambdas=" << scan_counts.lambdas << " regex_passes=" << scan_counts.regex_passes
+              << " binding_regex_passes=" << scan_counts.binding_regex_passes
+              << " declaration_visits=" << scan_counts.declaration_visits << '\n';
 
     /* CPP-ASYNC-003 — a STREAM-to-Actor relay keeps its completion and wrapper
      * closure alive until target completion, preserving both per-Actor order and

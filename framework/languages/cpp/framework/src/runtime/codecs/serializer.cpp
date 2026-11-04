@@ -95,7 +95,7 @@ std::string normalize_content_type (std::string_view input)
 } // namespace
 
 serializer_registry_t::serializer_registry_t () :
-    _state (std::make_unique<detail::serializer_registry_state_t> ())
+    _state (std::make_shared<detail::serializer_registry_state_t> ())
 {
 }
 

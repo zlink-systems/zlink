@@ -2,10 +2,12 @@ package systems.zlink.framework.runtime.actors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -693,6 +695,55 @@ final class ZLinkActorClientRuntimeTest {
     }
 
     @Test
+    void staleActorSendInvalidatesOnlyTheRouteFenceItUsed() throws Exception {
+        for (boolean replaceRoute : List.of(false, true)) {
+            var snapshot =
+                    new java.util.concurrent.atomic.AtomicReference<>(actorSnapshot("actor-1", 7));
+            var reads = new java.util.concurrent.atomic.AtomicInteger();
+            var locations =
+                    new ZLinkStoreLocationResolvers(
+                            ZLinkRegisteredLocationStores.fromUnified(
+                                    storeWithActor(snapshot, reads)),
+                            new ZLinkLocationOptions());
+            var submission = new CompletableFuture<Void>();
+            var node =
+                    new RecordingSpotNode() {
+                        @Override
+                        public CompletionStage<Void> sendToActorAsync(
+                                ZLinkServiceM6BWireCodec.ActorRouteFence target,
+                                List<Message> parts) {
+                            sentRoute = target;
+                            return systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls
+                                    .closeAfterAdmission(submission, parts);
+                        }
+                    };
+            var client =
+                    new ZLinkActorClientRuntime(
+                            () -> node,
+                            locations,
+                            new ZLinkJsonMessageSerializer(),
+                            Duration.ofSeconds(5),
+                            ZLinkTestAdmissionFactory.create());
+
+            var result = client.sendToActor("actor-1", new Ping("hello")).submit();
+            assertEquals(7, node.sentRoute.actor().generation());
+            if (replaceRoute) {
+                snapshot.set(actorSnapshot("actor-1", 8));
+                locations.readActor("actor-1").toCompletableFuture().get();
+            }
+            submission.completeExceptionally(new ZlinkSubmitException(SubmitResult.NOT_FOUND));
+
+            assertThrows(CompletionException.class, () -> result.toCompletableFuture().join());
+            var cached = locations.resolveActor("actor-1").toCompletableFuture().get();
+            assertEquals(replaceRoute ? 8 : 7, cached.actorRef().objectGeneration());
+            assertEquals(
+                    2,
+                    reads.get(),
+                    "stale send must invalidate its matching route and preserve a replacement");
+        }
+    }
+
+    @Test
     void staleRequestInvalidatesCacheWithoutRetryingTheSameOperation() {
         RequestFailingSpotNode node = new RequestFailingSpotNode(RequestResult.CONFLICT);
         ZLinkActorClientRuntime client =
@@ -718,6 +769,192 @@ final class ZLinkActorClientRuntimeTest {
         ZLinkFrameworkException frameworkError = (ZLinkFrameworkException) error.getCause();
         assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, frameworkError.kind());
         assertEquals(1, node.requestAttempts);
+    }
+
+    @RepeatedTest(100)
+    void lateStaleActorFailureInvalidatesMatchingRouteAfterPublicTimeout() throws Exception {
+        var snapshot =
+                new java.util.concurrent.atomic.AtomicReference<>(actorSnapshot("actor-1", 7));
+        var reads = new java.util.concurrent.atomic.AtomicInteger();
+        var locations =
+                new ZLinkStoreLocationResolvers(
+                        ZLinkRegisteredLocationStores.fromUnified(storeWithActor(snapshot, reads)),
+                        new ZLinkLocationOptions());
+        var node = new DelayedActorSpotNode();
+        var client =
+                new ZLinkActorClientRuntime(
+                        () -> node,
+                        locations,
+                        new ZLinkJsonMessageSerializer(),
+                        Duration.ofSeconds(5),
+                        ZLinkTestAdmissionFactory.create());
+
+        var result =
+                client.requestToActor("actor-1", new Ping("hello"))
+                        .submit(Pong.class)
+                        .toCompletableFuture();
+        node.submitted.get(1, java.util.concurrent.TimeUnit.SECONDS);
+        node.timeoutPublicResult();
+        node.deliverFailure(new ZlinkRequestException(RequestResult.CONFLICT));
+
+        assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, failureKind(result));
+        assertNotNull(locations.resolveActor("actor-1").toCompletableFuture().get());
+        assertEquals(2, reads.get(), "late failure must evict the matching route cache entry");
+        node.assertRequestPartsReleased();
+    }
+
+    @Test
+    void decodedStaleActorFailureInvalidatesTheMatchingRoute() throws Exception {
+        var reads = new java.util.concurrent.atomic.AtomicInteger();
+        var locations =
+                new ZLinkStoreLocationResolvers(
+                        ZLinkRegisteredLocationStores.fromUnified(
+                                storeWithActor(
+                                        new java.util.concurrent.atomic.AtomicReference<>(
+                                                actorSnapshot("actor-1", 7)),
+                                        reads)),
+                        new ZLinkLocationOptions());
+        var client =
+                new ZLinkActorClientRuntime(
+                        () ->
+                                new RecordingSpotNode(
+                                        errorReply(
+                                                "{\"code\":\"not_found\",\"message\":\"stale\"}")),
+                        locations,
+                        new ZLinkJsonMessageSerializer(),
+                        Duration.ofSeconds(5),
+                        ZLinkTestAdmissionFactory.create());
+
+        var result =
+                client.requestToActor("actor-1", new Ping("hello"))
+                        .submit(Pong.class)
+                        .toCompletableFuture();
+
+        assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND, failureKind(result));
+        assertNotNull(locations.resolveActor("actor-1").toCompletableFuture().get());
+        assertEquals(2, reads.get(), "decoded stale failure must invalidate its used fence");
+    }
+
+    @Test
+    void admissionStaleActorFailureInvalidatesOnlyTheMatchingRoute() throws Exception {
+        for (boolean replaceRoute : List.of(false, true)) {
+            var snapshot =
+                    new java.util.concurrent.atomic.AtomicReference<>(actorSnapshot("actor-1", 7));
+            var reads = new java.util.concurrent.atomic.AtomicInteger();
+            var locations =
+                    new ZLinkStoreLocationResolvers(
+                            ZLinkRegisteredLocationStores.fromUnified(
+                                    storeWithActor(snapshot, reads)),
+                            new ZLinkLocationOptions());
+            var submittedParts = new java.util.concurrent.atomic.AtomicReference<List<Message>>();
+            var node =
+                    new RecordingSpotNode() {
+                        @Override
+                        public CompletionStage<List<Message>> requestToActor(
+                                ZLinkServiceM6BWireCodec.ActorRouteFence actor,
+                                List<Message> parts,
+                                SendFlags flags,
+                                Duration timeout,
+                                CompletableFuture<Void> requestAdmission) {
+                            submittedParts.set(List.copyOf(parts));
+                            if (replaceRoute) {
+                                snapshot.set(actorSnapshot("actor-1", 8));
+                                locations.readActor("actor-1").toCompletableFuture().join();
+                            }
+                            throw new ZlinkSubmitException(SubmitResult.NOT_FOUND);
+                        }
+                    };
+            var client =
+                    new ZLinkActorClientRuntime(
+                            () -> node,
+                            locations,
+                            new ZLinkJsonMessageSerializer(),
+                            Duration.ofSeconds(5),
+                            ZLinkTestAdmissionFactory.create());
+
+            var result =
+                    client.requestToActor("actor-1", new Ping("hello"))
+                            .submit(Pong.class)
+                            .toCompletableFuture();
+
+            assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND, failureKind(result));
+            var route = locations.resolveActor("actor-1").toCompletableFuture().get();
+            assertEquals(replaceRoute ? 8 : 7, route.actorRef().objectGeneration());
+            assertEquals(2, reads.get(), "admission failure must invalidate only its used fence");
+            assertTrue(submittedParts.get().stream().allMatch(part -> part.size() == 0));
+        }
+    }
+
+    @RepeatedTest(100)
+    void lateStaleActorFailureKeepsReplacementRouteAfterPublicTimeout() throws Exception {
+        var snapshot =
+                new java.util.concurrent.atomic.AtomicReference<>(actorSnapshot("actor-1", 7));
+        var reads = new java.util.concurrent.atomic.AtomicInteger();
+        var locations =
+                new ZLinkStoreLocationResolvers(
+                        ZLinkRegisteredLocationStores.fromUnified(storeWithActor(snapshot, reads)),
+                        new ZLinkLocationOptions());
+        var node = new DelayedActorSpotNode();
+        var client =
+                new ZLinkActorClientRuntime(
+                        () -> node,
+                        locations,
+                        new ZLinkJsonMessageSerializer(),
+                        Duration.ofSeconds(5),
+                        ZLinkTestAdmissionFactory.create());
+
+        var result =
+                client.requestToActor("actor-1", new Ping("hello"))
+                        .submit(Pong.class)
+                        .toCompletableFuture();
+        node.submitted.get(1, java.util.concurrent.TimeUnit.SECONDS);
+        node.timeoutPublicResult();
+        snapshot.set(actorSnapshot("actor-1", 8));
+        var replacement = locations.readActor("actor-1").toCompletableFuture().get();
+        node.deliverFailure(new ZlinkRequestException(RequestResult.CONFLICT));
+
+        assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, failureKind(result));
+        assertNotNull(locations.resolveActor("actor-1").toCompletableFuture().get());
+        assertEquals(8, replacement.actorRef().objectGeneration());
+        assertEquals(2, reads.get(), "a replacement route must remain cached");
+        node.assertRequestPartsReleased();
+    }
+
+    @Test
+    void ordinaryStaleActorFailureInvalidatesExactlyOnce() throws Exception {
+        var snapshot =
+                new java.util.concurrent.atomic.AtomicReference<>(actorSnapshot("actor-1", 7));
+        var reads = new java.util.concurrent.atomic.AtomicInteger();
+        var locations =
+                new ZLinkStoreLocationResolvers(
+                        ZLinkRegisteredLocationStores.fromUnified(storeWithActor(snapshot, reads)),
+                        new ZLinkLocationOptions());
+        var node = new DelayedActorSpotNode();
+        var client =
+                new ZLinkActorClientRuntime(
+                        () -> node,
+                        locations,
+                        new ZLinkJsonMessageSerializer(),
+                        Duration.ofSeconds(5),
+                        ZLinkTestAdmissionFactory.create());
+
+        var result =
+                client.requestToActor("actor-1", new Ping("hello"))
+                        .submit(Pong.class)
+                        .toCompletableFuture();
+        node.submitted.get(1, java.util.concurrent.TimeUnit.SECONDS);
+        node.deliverFailure(new ZlinkRequestException(RequestResult.CONFLICT));
+
+        assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, failureKind(result));
+        assertNotNull(locations.resolveActor("actor-1").toCompletableFuture().get());
+        assertEquals(2, reads.get(), "ordinary stale failure must evict the route once");
+        assertEquals(1, node.physicalFailureDeliveries);
+        node.assertRequestPartsReleased();
+    }
+
+    private static ZLinkFrameworkErrorKind failureKind(CompletableFuture<?> result) {
+        CompletionException failure = assertThrows(CompletionException.class, () -> result.join());
+        return ((ZLinkFrameworkException) failure.getCause()).kind();
     }
 
     @Test
@@ -912,43 +1149,29 @@ final class ZLinkActorClientRuntimeTest {
     }
 
     private static ZLinkLocationRepository storeWithActor(String actorId, long generation) {
-        var codec = new systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec();
-        var snapshot =
-                new ZLinkAuthoritySnapshot(
-                        "v1",
-                        codec.encode(
-                                systems.zlink.framework.runtime.locations
-                                        .ZLinkActorAuthorityPayloadCodec.State.READY,
-                                "test",
-                                actorId,
-                                "entry-spot",
-                                1,
-                                1,
-                                "owner",
-                                1,
-                                "mesh",
-                                RoutingId.from("actor-node"),
-                                3),
-                        generation,
-                        5,
-                        "owner",
-                        1,
-                        new ZLinkPlacementAllocation(
-                                ZLinkPlacementAllocationState.ACTIVE,
-                                ZLinkPlacementObjectKind.ACTOR,
-                                "test",
-                                new ZLinkMeshNodeDescriptorKey(
-                                        "mesh", RoutingId.from("actor-node")),
-                                3,
-                                ZLinkPlacementCapacityBundle.actor(1)),
-                        Instant.now());
+        return storeWithActor(
+                new java.util.concurrent.atomic.AtomicReference<>(
+                        actorSnapshot(actorId, generation)));
+    }
+
+    private static ZLinkLocationRepository storeWithActor(
+            java.util.concurrent.atomic.AtomicReference<ZLinkAuthoritySnapshot> snapshot) {
+        return storeWithActor(snapshot, new java.util.concurrent.atomic.AtomicInteger());
+    }
+
+    private static ZLinkLocationRepository storeWithActor(
+            java.util.concurrent.atomic.AtomicReference<ZLinkAuthoritySnapshot> snapshot,
+            java.util.concurrent.atomic.AtomicInteger reads) {
         return (ZLinkLocationRepository)
                 Proxy.newProxyInstance(
                         ZLinkActorClientRuntimeTest.class.getClassLoader(),
                         new Class<?>[] {ZLinkLocationRepository.class},
                         (proxy, method, arguments) ->
                                 switch (method.getName()) {
-                                    case "read" -> CompletableFuture.completedFuture(snapshot);
+                                    case "read" -> {
+                                        reads.incrementAndGet();
+                                        yield CompletableFuture.completedFuture(snapshot.get());
+                                    }
                                     case "readOwnerLease" ->
                                             CompletableFuture.completedFuture(
                                                     new ZLinkOwnerLeaseFound(
@@ -959,6 +1182,37 @@ final class ZLinkActorClientRuntimeTest {
                                             throw new UnsupportedOperationException(
                                                     method.getName());
                                 });
+    }
+
+    private static ZLinkAuthoritySnapshot actorSnapshot(String actorId, long generation) {
+        var codec = new systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec();
+        return new ZLinkAuthoritySnapshot(
+                "v1",
+                codec.encode(
+                        systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec
+                                .State.READY,
+                        "test",
+                        actorId,
+                        "entry-spot",
+                        1,
+                        1,
+                        "owner",
+                        1,
+                        "mesh",
+                        RoutingId.from("actor-node"),
+                        3),
+                generation,
+                5,
+                "owner",
+                1,
+                new ZLinkPlacementAllocation(
+                        ZLinkPlacementAllocationState.ACTIVE,
+                        ZLinkPlacementObjectKind.ACTOR,
+                        "test",
+                        new ZLinkMeshNodeDescriptorKey("mesh", RoutingId.from("actor-node")),
+                        3,
+                        ZLinkPlacementCapacityBundle.actor(1)),
+                Instant.now());
     }
 
     private static List<Message> reply(String value) {
@@ -1382,6 +1636,67 @@ final class ZLinkActorClientRuntimeTest {
             return ZLinkTestAdmissionFactory.acceptedRequest(
                     CompletableFuture.failedFuture(new ZlinkRequestException(result)),
                     requestAdmission);
+        }
+    }
+
+    private static final class DelayedActorSpotNode extends RecordingSpotNode {
+        private final CompletableFuture<Void> submitted = new CompletableFuture<>();
+        private systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry
+                                .Operation<
+                        ?>
+                completion;
+        private java.util.function.Function<Throwable, Throwable> mapFailure;
+        private List<Message> requestParts;
+        private int physicalFailureDeliveries;
+
+        @Override
+        public <T> void requestToActor(
+                ZLinkServiceM6BWireCodec.ActorRouteFence actor,
+                List<Message> parts,
+                SendFlags flags,
+                Duration timeout,
+                CompletableFuture<Void> requestAdmission,
+                java.util.function.Function<List<Message>, T> decodeReply,
+                Consumer<T> discardReply,
+                java.util.function.Function<Throwable, Throwable> mapFailure,
+                systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry
+                                        .Operation<
+                                T>
+                        completion) {
+            this.requestParts = List.copyOf(parts);
+            this.mapFailure = mapFailure;
+            this.completion = completion;
+            requestAdmission.complete(null);
+            submitted.complete(null);
+        }
+
+        private void timeoutPublicResult() {
+            @SuppressWarnings("unchecked")
+            var typed =
+                    (systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry
+                                            .Operation<
+                                    Object>)
+                            completion;
+            typed.completeExceptionally(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, "request timed out"));
+        }
+
+        private void deliverFailure(Throwable failure) {
+            physicalFailureDeliveries++;
+            @SuppressWarnings("unchecked")
+            var typed =
+                    (systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry
+                                            .Operation<
+                                    Object>)
+                            completion;
+            typed.completeExceptionally(mapFailure.apply(failure));
+        }
+
+        private void assertRequestPartsReleased() {
+            assertNotNull(requestParts);
+            assertEquals(2, requestParts.size());
+            assertTrue(requestParts.stream().allMatch(part -> part.size() == 0));
         }
     }
 }

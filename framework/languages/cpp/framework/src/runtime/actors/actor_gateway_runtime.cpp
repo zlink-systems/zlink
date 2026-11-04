@@ -2244,14 +2244,27 @@ void detail::session_actor_manager_access_t::bind_native (
   session_actor_manager_t &manager,
   std::function<request_task_t<void> (actor_ref_t, std::uint64_t, std::uint16_t)> binder)
 {
-    bind_native (manager,
-                 [state = manager._state, binder = std::move (binder)] (
-                   actor_ref_t actor, std::uint64_t generation, std::uint16_t slot,
-                   std::function<void ()> publish) mutable -> request_task_t<void> {
-                     co_await detail::request_submission (
-                       binder (std::move (actor), generation, slot));
-                     state->sync (publish);
-                 });
+    struct publish_native_binding_t
+    {
+        static request_task_t<void> run (std::decay_t<decltype (manager._state)> state,
+                                         std::shared_ptr<std::decay_t<decltype (binder)>> binder,
+                                         actor_ref_t actor,
+                                         std::uint64_t generation,
+                                         std::uint16_t slot,
+                                         std::function<void ()> publish)
+        {
+            co_await detail::request_submission ((*binder) (std::move (actor), generation, slot));
+            state->sync (publish);
+        }
+    };
+    bind_native (
+      manager,
+      [state = manager._state, binder = std::make_shared<decltype (binder)> (std::move (binder))] (
+        actor_ref_t actor, std::uint64_t generation, std::uint16_t slot,
+        std::function<void ()> publish) mutable -> request_task_t<void> {
+          return publish_native_binding_t::run (state, binder, std::move (actor), generation, slot,
+                                                std::move (publish));
+      });
 }
 
 void detail::session_actor_manager_access_t::bind_native (
@@ -2265,15 +2278,28 @@ void detail::session_actor_manager_access_t::bind_native (
 void detail::session_actor_manager_access_t::bind_native (
   session_actor_manager_t &manager, std::function<task_t<void> (actor_ref_t, std::uint64_t)> binder)
 {
-    bind_native (manager,
-                 [state = manager._state, binder = std::move (binder)] (
-                   actor_ref_t actor, std::uint64_t generation, std::uint16_t,
-                   std::function<void ()> publish) mutable -> request_task_t<void> {
-                     auto pending = binder (std::move (actor), generation);
-                     co_await detail::request_admitted_t{};
-                     co_await pending;
-                     state->sync (publish);
-                 });
+    struct publish_task_binding_t
+    {
+        static request_task_t<void> run (std::decay_t<decltype (manager._state)> state,
+                                         std::shared_ptr<std::decay_t<decltype (binder)>> binder,
+                                         actor_ref_t actor,
+                                         std::uint64_t generation,
+                                         std::function<void ()> publish)
+        {
+            auto pending = (*binder) (std::move (actor), generation);
+            co_await detail::request_admitted_t{};
+            co_await pending;
+            state->sync (publish);
+        }
+    };
+    bind_native (
+      manager,
+      [state = manager._state, binder = std::make_shared<decltype (binder)> (std::move (binder))] (
+        actor_ref_t actor, std::uint64_t generation, std::uint16_t,
+        std::function<void ()> publish) mutable -> request_task_t<void> {
+          return publish_task_binding_t::run (state, binder, std::move (actor), generation,
+                                              std::move (publish));
+      });
 }
 
 std::optional<session_actor_t>

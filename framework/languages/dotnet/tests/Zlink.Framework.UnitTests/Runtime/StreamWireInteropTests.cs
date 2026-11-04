@@ -1,9 +1,13 @@
+using System.Collections.Concurrent;
 using System.Reflection;
 using System.Text;
+using Microsoft.Extensions.Logging;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Codecs;
+using Zlink.Framework.Runtime.Diagnostics;
+using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Streams;
 using ConnectorClosingCodec = Systems.Zlink.Stream.Connector.Runtime.Protocol.ZlinkStreamSessionClosingCodec;
 using ConnectorFrameCodec = Systems.Zlink.Stream.Connector.Runtime.Protocol.Framing.ZlinkStreamFrameCodec;
@@ -35,7 +39,12 @@ public sealed class StreamWireInteropTests
             ZlinkStreamMetadata.Empty
         );
 
-        ZLinkStreamControlFrames.Dispatch(stream, ping, ReadOnlyMemory<byte>.Empty);
+        ZLinkStreamControlFrames.Dispatch(
+            stream,
+            ping,
+            ReadOnlyMemory<byte>.Empty,
+            new CapturingLogger(LogLevel.Information)
+        );
 
         Assert.True(
             CoreFrameCodec.TryDecode(
@@ -48,6 +57,107 @@ public sealed class StreamWireInteropTests
         Assert.Equal(ZlinkStreamMessageKind.Control, pong.Kind);
         Assert.Equal(ZlinkStreamControlProtocol.HeartbeatPongName, pong.Name);
         Assert.Empty(payload.ToArray());
+    }
+
+    [Fact]
+    public void Server_ignored_controls_use_debug_logs_without_message_flow_drops()
+    {
+        var socket = DispatchProxy.Create<IZLinkBackendStreamSocket, CapturingStreamSocketProxy>();
+        var capture = (CapturingStreamSocketProxy)(object)socket;
+        var stream = new ZLinkManagedStream(
+            socket,
+            RoutingId.From("control-session"),
+            new ZLinkCodecRegistryBuilder(),
+            "test"
+        );
+        var options = new ZLinkDispatchOptionsModel();
+        options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Errors);
+        var flowLogger = new CapturingLogger(LogLevel.Trace);
+        var flow = new ZLinkMessageFlowTracer(options, flowLogger);
+        var runtimeLogger = new CapturingLogger(LogLevel.Information);
+        Assert.True(flow.Enabled(ZLinkMessageFlowOutcome.Dropped));
+
+        for (var index = 0; index < 1000; index++)
+            ZLinkStreamControlFrames.Dispatch(
+                stream,
+                Control("$zlink.future.control"),
+                new byte[] { 1, 2, 3 },
+                runtimeLogger
+            );
+
+        Assert.Empty(flowLogger.Entries);
+        Assert.Empty(runtimeLogger.Entries);
+
+        runtimeLogger.MinimumLevel = LogLevel.Debug;
+        ZLinkStreamControlFrames.Dispatch(
+            stream,
+            Control(ZlinkStreamControlProtocol.HeartbeatPingName),
+            new byte[] { 2, 3 },
+            runtimeLogger
+        );
+        ZLinkStreamControlFrames.Dispatch(
+            stream,
+            Control(ZlinkStreamControlProtocol.HeartbeatPongName),
+            new byte[] { 2 },
+            runtimeLogger
+        );
+        ZLinkStreamControlFrames.Dispatch(
+            stream,
+            Control("$zlink.future.control"),
+            new byte[] { 1, 2, 3 },
+            runtimeLogger
+        );
+
+        Assert.Empty(flowLogger.Entries);
+        var messages = runtimeLogger.Entries.Select(entry => entry.Message).ToArray();
+        Assert.Equal(3, messages.Length);
+        Assert.Contains(
+            messages,
+            message =>
+                message.Contains("$zlink.future.control", StringComparison.Ordinal)
+                && message.Contains("payloadBytes=3", StringComparison.Ordinal)
+                && message.Contains("control-session", StringComparison.Ordinal)
+        );
+        Assert.Contains(
+            messages,
+            message =>
+                message.Contains(
+                    ZlinkStreamControlProtocol.HeartbeatPingName,
+                    StringComparison.Ordinal
+                ) && message.Contains("payloadBytes=2", StringComparison.Ordinal)
+        );
+        Assert.Contains(
+            messages,
+            message =>
+                message.Contains(
+                    ZlinkStreamControlProtocol.HeartbeatPongName,
+                    StringComparison.Ordinal
+                ) && message.Contains("payloadBytes=1", StringComparison.Ordinal)
+        );
+        Assert.Single(capture.Frames);
+        Assert.True(CoreFrameCodec.TryDecode(capture.Frames[0], out _, out var pongPayload));
+        Assert.Empty(pongPayload.ToArray());
+    }
+
+    [Fact]
+    public void Server_rejects_known_actor_control_instead_of_treating_it_as_an_extension()
+    {
+        var socket = DispatchProxy.Create<IZLinkBackendStreamSocket, CapturingStreamSocketProxy>();
+        var stream = new ZLinkManagedStream(
+            socket,
+            RoutingId.From("control-session"),
+            new ZLinkCodecRegistryBuilder(),
+            "test"
+        );
+
+        Assert.Throws<InvalidOperationException>(() =>
+            ZLinkStreamControlFrames.Dispatch(
+                stream,
+                Control(ZlinkStreamControlProtocol.BoundControlName),
+                ReadOnlyMemory<byte>.Empty,
+                new CapturingLogger(LogLevel.Information)
+            )
+        );
     }
 
     [Theory]
@@ -105,6 +215,39 @@ public sealed class StreamWireInteropTests
             }
 
             throw new NotSupportedException(targetMethod?.Name);
+        }
+    }
+
+    private static ZlinkStreamHeader Control(string name) =>
+        new(
+            ZlinkStreamMessageKind.Control,
+            ZlinkStreamCodec.Raw,
+            ZlinkStreamHeaderFlags.None,
+            null,
+            name,
+            ZlinkStreamMetadata.Empty
+        );
+
+    private sealed class CapturingLogger(LogLevel minimumLevel) : ILogger
+    {
+        internal ConcurrentQueue<(LogLevel Level, string Message)> Entries { get; } = new();
+        internal LogLevel MinimumLevel { get; set; } = minimumLevel;
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => logLevel >= MinimumLevel;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter
+        )
+        {
+            if (IsEnabled(logLevel))
+                Entries.Enqueue((logLevel, formatter(state, exception)));
         }
     }
 

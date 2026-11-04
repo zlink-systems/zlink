@@ -1271,6 +1271,66 @@ apply_bound_session_bind_async (
         });
     };
     auto spot_runtime = spot_node_runtime_t (std::move (spot_state));
+    struct accept_session_binding_t
+    {
+        static task_t<::zlink::framework::result_t<bool>>
+        run (std::decay_t<decltype (actor_gateway_runtime)> actor_gateway_runtime,
+             std::decay_t<decltype (actor)> actor,
+             std::decay_t<decltype (incoming_route)> incoming_route,
+             std::decay_t<decltype (actor_session_binding_identity_t{
+               node_rid_t::from_string (session_owner.to_string ()), session_owner_generation,
+               bind.binding.generation})> incoming_identity,
+             std::decay_t<decltype (replace_binding)> replace_binding,
+             std::decay_t<decltype (race)> race,
+             std::decay_t<decltype (completion)> completion,
+             std::decay_t<decltype (start_callback_timeout)> start_callback_timeout,
+             actor_t *actor_instance,
+             std::stop_token cancellation)
+        {
+            const auto current = co_await actor_gateway_runtime.bound_session_route_async (actor);
+            const bool duplicate = current && current->session_rid && current->node_generation != 0
+                                   && current->binding_generation != 0
+                                   && (current->node_rid != incoming_route.node_rid
+                                       || current->node_generation != incoming_route.node_generation
+                                       || *current->session_rid != *incoming_route.session_rid);
+            if (duplicate) {
+                const actor_session_binding_identity_t current_identity{
+                  node_rid_t::from_string (current->node_rid.to_string ()),
+                  current->node_generation, current->binding_generation};
+                start_callback_timeout ();
+                const auto rejection = co_await actor_instance->on_duplicate_bind (
+                  current_identity, incoming_identity, cancellation);
+                std::uint8_t pending = 0;
+                if (!race->decision.compare_exchange_strong (pending, 1))
+                    co_return ::zlink::framework::result_t<bool>::success (false);
+                if (rejection && !rejection->empty ()) {
+                    completion->complete (
+                      ::zlink::framework::result_t<bind_result_t>::success (bind_result_t{
+                        runtime::stateful::stateful_error_t::conflict, std::nullopt,
+                        static_cast<std::uint32_t> (
+                          runtime::protocol::request_terminal_result::rejected),
+                        static_cast<std::uint32_t> (runtime::protocol::framework_error_code::none),
+                        runtime::protocol::stream_bind_reply_tail_t{0, 0, *rejection}}));
+                    co_return ::zlink::framework::result_t<bool>::success (false);
+                }
+            } else {
+                std::uint8_t pending = 0;
+                if (!race->decision.compare_exchange_strong (pending, 1))
+                    co_return ::zlink::framework::result_t<bool>::success (false);
+            }
+            if (cancellation.stop_requested ())
+                co_return ::zlink::framework::result_t<bool>::success (false);
+
+            auto transition = replace_binding ();
+            if (!transition)
+                co_return ::zlink::framework::result_t<bool>::failure (
+                  transition.error_kind (), transition.error ()
+                                              ? transition.error ()->what ()
+                                              : "Actor bound Session route replacement failed");
+            completion->complete (std::move (transition));
+            co_return ::zlink::framework::result_t<bool>::success (true);
+        }
+    };
     auto turn = spot_runtime.run_actor_turn (
       actor,
       [actor_gateway_runtime, actor, incoming_route, replace_binding = std::move (replace_binding),
@@ -1280,48 +1340,11 @@ apply_bound_session_bind_async (
        race, completion, start_callback_timeout] (
         actor_t &actor_instance,
         std::stop_token cancellation) mutable -> task_t<::zlink::framework::result_t<bool>> {
-          const auto current = co_await actor_gateway_runtime.bound_session_route_async (actor);
-          const bool duplicate = current && current->session_rid && current->node_generation != 0
-                                 && current->binding_generation != 0
-                                 && (current->node_rid != incoming_route.node_rid
-                                     || current->node_generation != incoming_route.node_generation
-                                     || *current->session_rid != *incoming_route.session_rid);
-          if (duplicate) {
-              const actor_session_binding_identity_t current_identity{
-                node_rid_t::from_string (current->node_rid.to_string ()), current->node_generation,
-                current->binding_generation};
-              start_callback_timeout ();
-              const auto rejection = co_await actor_instance.on_duplicate_bind (
-                current_identity, incoming_identity, cancellation);
-              std::uint8_t pending = 0;
-              if (!race->decision.compare_exchange_strong (pending, 1))
-                  co_return ::zlink::framework::result_t<bool>::success (false);
-              if (rejection && !rejection->empty ()) {
-                  completion->complete (
-                    ::zlink::framework::result_t<bind_result_t>::success (bind_result_t{
-                      runtime::stateful::stateful_error_t::conflict, std::nullopt,
-                      static_cast<std::uint32_t> (
-                        runtime::protocol::request_terminal_result::rejected),
-                      static_cast<std::uint32_t> (runtime::protocol::framework_error_code::none),
-                      runtime::protocol::stream_bind_reply_tail_t{0, 0, *rejection}}));
-                  co_return ::zlink::framework::result_t<bool>::success (false);
-              }
-          } else {
-              std::uint8_t pending = 0;
-              if (!race->decision.compare_exchange_strong (pending, 1))
-                  co_return ::zlink::framework::result_t<bool>::success (false);
-          }
-          if (cancellation.stop_requested ())
-              co_return ::zlink::framework::result_t<bool>::success (false);
-
-          auto transition = replace_binding ();
-          if (!transition)
-              co_return ::zlink::framework::result_t<bool>::failure (
-                transition.error_kind (), transition.error ()
-                                            ? transition.error ()->what ()
-                                            : "Actor bound Session route replacement failed");
-          completion->complete (std::move (transition));
-          co_return ::zlink::framework::result_t<bool>::success (true);
+          // run_actor_turn owns the Actor instance until this task completes.
+          return accept_session_binding_t::run (actor_gateway_runtime, actor, incoming_route,
+                                                incoming_identity, std::move (replace_binding),
+                                                race, completion, start_callback_timeout,
+                                                &actor_instance, cancellation);
       },
       race->cancellation.get_token ());
     observe_task_completion (
@@ -2313,6 +2336,184 @@ void app_t::_apply_zlink_framework ()
             }
             return header;
         };
+        struct request_instance_activation_t
+        {
+            static request_task_t<zlink::message_t>
+            run (std::decay_t<decltype (select_instance_target)> select_instance_target,
+                 std::decay_t<decltype (make_activation)> make_activation,
+                 std::decay_t<decltype (&_state->serializers)> serializers,
+                 std::decay_t<decltype (options.dispatch_options ())> dispatch,
+                 spot_id_t spot_id,
+                 detail::spot_activation_intent_t intent,
+                 std::optional<runtime::spot_address_t> cached_route,
+                 std::string packet_name,
+
+                 std::function<serialized_payload_t (serializer_registry_t &)> encode_payload,
+                 std::chrono::milliseconds timeout,
+                 std::map<std::string, std::string> metadata)
+            {
+                auto flow_scope = runtime::flow_context_t::enter_current_or_create (
+                  flow_origin_t::application, detail::message_flow_tracer_t (dispatch).mode ());
+                const auto flow = runtime::flow_context_t::current ();
+                auto selected = co_await select_instance_target (spot_id, intent, cached_route);
+                if (!selected)
+                    co_return detail::propagate_failure<zlink::message_t> (
+                      selected, "Instance Spot target selection failed");
+                auto metadata_frame = detail::mesh_metadata_codec_t::encode (metadata);
+                auto header = make_activation (
+                  selected.value (), spot_id, true, !metadata_frame.empty (),
+                  std::chrono::system_clock::now () + timeout, intent, cached_route);
+                const auto serialized = encode_payload (*serializers);
+                runtime::protocol::application_payload_t application_payload{
+                  packet_name, serialized.content_type, serialized.payload.to_bytes ()};
+                if (flow && !flow->flow_id.empty ()) {
+                    application_payload.flow_id = flow->flow_id;
+                    application_payload.flow_origin = flow->origin;
+                }
+                const auto trace_context = make_instance_spot_activation_trace_context (
+                  detail::message_flow_tracer_t (dispatch).capture_enabled (), packet_name,
+                  selected.value ().target.mesh_name, selected.value ().target.rid, spot_id,
+                  header);
+                if (trace_context) {
+                    trace_instance_spot_activation (dispatch, flow, message_flow_outcome_t::sent,
+                                                    dispatch_message_kind_t::request,
+                                                    *trace_context);
+                }
+                auto completion = std::make_shared<task_completion_source_t<zlink::message_t>> ();
+                auto output = completion->task ();
+                auto admitted = co_await detail::request_admission_source_t{};
+                detail::observe_request_failure (output, admitted);
+                const auto submitted =
+                  co_await selected.value ().source->activate_instance_spot_remote (
+                    selected.value ().target.rid, std::move (header),
+                    metadata_frame.empty () ? std::optional<std::vector<std::uint8_t>>{}
+                                            : std::make_optional (std::move (metadata_frame)),
+                    std::move (application_payload), timeout,
+                    [completion, dispatch, flow, trace_context] (
+                      runtime::foundation::operation_terminal_t terminal,
+                      runtime::protocol::reply_header_t reply,
+                      std::optional<runtime::protocol::application_payload_t> application_reply) {
+                        if (terminal != runtime::foundation::operation_terminal_t::completed) {
+                            if (trace_context) {
+                                trace_instance_spot_activation (
+                                  dispatch, flow, message_flow_outcome_t::reply_received,
+                                  dispatch_message_kind_t::request, *trace_context,
+                                  message_flow_result_t::failed);
+                            }
+                            completion->complete (result_t<zlink::message_t>::failure (
+                              framework_error_kind_t::unavailable,
+                              "Instance Spot activation transport did not complete"));
+                            return;
+                        }
+                        if (reply.terminal_result != 0) {
+                            if (trace_context) {
+                                trace_instance_spot_activation (
+                                  dispatch, flow, message_flow_outcome_t::reply_received,
+                                  dispatch_message_kind_t::request, *trace_context,
+                                  message_flow_result_t::failed,
+                                  message_flow_reason_t::activation_rejected);
+                            }
+                            completion->complete (
+                              detail::result_access_t::failure<zlink::message_t> (
+                                runtime::messaging::request_failure_mapper_t{}
+                                  .reply_header_exception (reply.terminal_result,
+                                                           reply.failure_code,
+                                                           "Instance Spot activation request")));
+                            return;
+                        }
+                        if (!application_reply) {
+                            if (trace_context) {
+                                trace_instance_spot_activation (
+                                  dispatch, flow, message_flow_outcome_t::reply_received,
+                                  dispatch_message_kind_t::request, *trace_context,
+                                  message_flow_result_t::failed);
+                            }
+                            completion->complete (result_t<zlink::message_t>::failure (
+                              framework_error_kind_t::protocol_error,
+                              "Instance Spot activation reply payload is missing"));
+                            return;
+                        }
+                        if (trace_context) {
+                            trace_instance_spot_activation (
+                              dispatch, flow, message_flow_outcome_t::reply_received,
+                              dispatch_message_kind_t::response, *trace_context);
+                        }
+                        completion->complete (
+                          result_t<zlink::message_t>::success (zlink::message_t::from (
+                            std::move (application_reply->payload_bytes ()))));
+                    });
+                if (!submitted) {
+                    if (trace_context) {
+                        trace_instance_spot_activation (
+                          dispatch, flow, message_flow_outcome_t::reply_received,
+                          dispatch_message_kind_t::request, *trace_context,
+                          message_flow_result_t::failed,
+                          message_flow_reason_t::activation_rejected);
+                    }
+                    completion->complete (result_t<zlink::message_t>::failure (
+                      framework_error_kind_t::unavailable,
+                      "Instance Spot activation was not admitted"));
+                }
+                if (submitted)
+                    co_await detail::request_admitted_t{};
+                co_return co_await output;
+            }
+        };
+        struct send_instance_activation_t
+        {
+            static task_t<result_t<void>>
+            run (std::decay_t<decltype (select_instance_target)> select_instance_target,
+                 std::decay_t<decltype (make_activation)> make_activation,
+                 std::decay_t<decltype (&_state->serializers)> serializers,
+                 std::decay_t<decltype (options.dispatch_options ())> dispatch,
+                 spot_id_t spot_id,
+                 detail::spot_activation_intent_t intent,
+                 std::optional<runtime::spot_address_t> cached_route,
+                 std::string packet_name,
+                 std::function<serialized_payload_t (serializer_registry_t &)> encode_payload,
+                 std::map<std::string, std::string> metadata,
+                 std::chrono::system_clock::time_point started_at)
+            {
+                auto flow_scope = runtime::flow_context_t::enter_current_or_create (
+                  flow_origin_t::application, detail::message_flow_tracer_t (dispatch).mode ());
+                const auto flow = runtime::flow_context_t::current ();
+                auto selected = co_await select_instance_target (spot_id, intent, cached_route);
+                if (!selected)
+                    co_return detail::propagate_failure<void> (
+                      selected, "Instance Spot target selection failed");
+                auto metadata_frame = detail::mesh_metadata_codec_t::encode (metadata);
+                auto header = make_activation (
+                  selected.value (), spot_id, false, !metadata_frame.empty (),
+                  started_at + selected.value ().source->default_request_timeout (), intent,
+                  cached_route);
+                const auto serialized = encode_payload (*serializers);
+                runtime::protocol::application_payload_t application_payload{
+                  packet_name, serialized.content_type, serialized.payload.to_bytes ()};
+                if (flow && !flow->flow_id.empty ()) {
+                    application_payload.flow_id = flow->flow_id;
+                    application_payload.flow_origin = flow->origin;
+                }
+                const auto trace_context = make_instance_spot_activation_trace_context (
+                  detail::message_flow_tracer_t (dispatch).enabled_for (
+                    message_flow_outcome_t::sent),
+                  packet_name, selected.value ().target.mesh_name, selected.value ().target.rid,
+                  spot_id, header);
+                if (trace_context) {
+                    trace_instance_spot_activation (dispatch, flow, message_flow_outcome_t::sent,
+                                                    dispatch_message_kind_t::send, *trace_context);
+                }
+                const auto submitted =
+                  co_await selected.value ().source->send_instance_spot_activation_remote (
+                    selected.value ().target.rid, std::move (header),
+                    metadata_frame.empty () ? std::optional<std::vector<std::uint8_t>>{}
+                                            : std::make_optional (std::move (metadata_frame)),
+                    std::move (application_payload));
+                co_return submitted
+                  ? result_t<void>::success ()
+                  : result_t<void>::failure (framework_error_kind_t::unavailable,
+                                             "Instance Spot activation was not admitted");
+            }
+        };
         channel_runtime.bind_instance_spot_activator (
           [select_instance_target, make_activation, serializers = &_state->serializers,
            dispatch = options.dispatch_options ()] (
@@ -2322,43 +2523,9 @@ void app_t::_apply_zlink_framework ()
             std::function<serialized_payload_t (serializer_registry_t &)> encode_payload,
             const std::map<std::string, std::string> &metadata,
             std::chrono::system_clock::time_point started_at) -> task_t<result_t<void>> {
-              auto flow_scope = runtime::flow_context_t::enter_current_or_create (
-                flow_origin_t::application, detail::message_flow_tracer_t (dispatch).mode ());
-              const auto flow = runtime::flow_context_t::current ();
-              auto selected = co_await select_instance_target (spot_id, intent, cached_route);
-              if (!selected)
-                  co_return detail::propagate_failure<void> (
-                    selected, "Instance Spot target selection failed");
-              auto metadata_frame = detail::mesh_metadata_codec_t::encode (metadata);
-              auto header =
-                make_activation (selected.value (), spot_id, false, !metadata_frame.empty (),
-                                 started_at + selected.value ().source->default_request_timeout (),
-                                 intent, cached_route);
-              const auto serialized = encode_payload (*serializers);
-              runtime::protocol::application_payload_t application_payload{
-                packet_name, serialized.content_type, serialized.payload.to_bytes ()};
-              if (flow && !flow->flow_id.empty ()) {
-                  application_payload.flow_id = flow->flow_id;
-                  application_payload.flow_origin = flow->origin;
-              }
-              const auto trace_context = make_instance_spot_activation_trace_context (
-                detail::message_flow_tracer_t (dispatch).enabled_for (message_flow_outcome_t::sent),
-                packet_name, selected.value ().target.mesh_name, selected.value ().target.rid,
-                spot_id, header);
-              if (trace_context) {
-                  trace_instance_spot_activation (dispatch, flow, message_flow_outcome_t::sent,
-                                                  dispatch_message_kind_t::send, *trace_context);
-              }
-              const auto submitted =
-                co_await selected.value ().source->send_instance_spot_activation_remote (
-                  selected.value ().target.rid, std::move (header),
-                  metadata_frame.empty () ? std::optional<std::vector<std::uint8_t>>{}
-                                          : std::make_optional (std::move (metadata_frame)),
-                  std::move (application_payload));
-              co_return submitted
-                ? result_t<void>::success ()
-                : result_t<void>::failure (framework_error_kind_t::unavailable,
-                                           "Instance Spot activation was not admitted");
+              return send_instance_activation_t::run (
+                select_instance_target, make_activation, serializers, dispatch, spot_id, intent,
+                cached_route, packet_name, std::move (encode_payload), metadata, started_at);
           },
           [select_instance_target, make_activation, serializers = &_state->serializers,
            dispatch = options.dispatch_options ()] (
@@ -2368,105 +2535,10 @@ void app_t::_apply_zlink_framework ()
             std::function<serialized_payload_t (serializer_registry_t &)> encode_payload,
             std::chrono::milliseconds timeout,
             std::map<std::string, std::string> metadata) -> request_task_t<zlink::message_t> {
-              auto flow_scope = runtime::flow_context_t::enter_current_or_create (
-                flow_origin_t::application, detail::message_flow_tracer_t (dispatch).mode ());
-              const auto flow = runtime::flow_context_t::current ();
-              auto selected = co_await select_instance_target (spot_id, intent, cached_route);
-              if (!selected)
-                  co_return detail::propagate_failure<zlink::message_t> (
-                    selected, "Instance Spot target selection failed");
-              auto metadata_frame = detail::mesh_metadata_codec_t::encode (metadata);
-              auto header =
-                make_activation (selected.value (), spot_id, true, !metadata_frame.empty (),
-                                 std::chrono::system_clock::now () + timeout, intent, cached_route);
-              const auto serialized = encode_payload (*serializers);
-              runtime::protocol::application_payload_t application_payload{
-                packet_name, serialized.content_type, serialized.payload.to_bytes ()};
-              if (flow && !flow->flow_id.empty ()) {
-                  application_payload.flow_id = flow->flow_id;
-                  application_payload.flow_origin = flow->origin;
-              }
-              const auto trace_context = make_instance_spot_activation_trace_context (
-                detail::message_flow_tracer_t (dispatch).capture_enabled (), packet_name,
-                selected.value ().target.mesh_name, selected.value ().target.rid, spot_id, header);
-              if (trace_context) {
-                  trace_instance_spot_activation (dispatch, flow, message_flow_outcome_t::sent,
-                                                  dispatch_message_kind_t::request, *trace_context);
-              }
-              auto completion = std::make_shared<task_completion_source_t<zlink::message_t>> ();
-              auto output = completion->task ();
-              auto admitted = co_await detail::request_admission_source_t{};
-              detail::observe_request_failure (output, admitted);
-              const auto submitted =
-                co_await selected.value ().source->activate_instance_spot_remote (
-                  selected.value ().target.rid, std::move (header),
-                  metadata_frame.empty () ? std::optional<std::vector<std::uint8_t>>{}
-                                          : std::make_optional (std::move (metadata_frame)),
-                  std::move (application_payload), timeout,
-                  [completion, dispatch, flow, trace_context] (
-                    runtime::foundation::operation_terminal_t terminal,
-                    runtime::protocol::reply_header_t reply,
-                    std::optional<runtime::protocol::application_payload_t> application_reply) {
-                      if (terminal != runtime::foundation::operation_terminal_t::completed) {
-                          if (trace_context) {
-                              trace_instance_spot_activation (
-                                dispatch, flow, message_flow_outcome_t::reply_received,
-                                dispatch_message_kind_t::request, *trace_context,
-                                message_flow_result_t::failed);
-                          }
-                          completion->complete (result_t<zlink::message_t>::failure (
-                            framework_error_kind_t::unavailable,
-                            "Instance Spot activation transport did not complete"));
-                          return;
-                      }
-                      if (reply.terminal_result != 0) {
-                          if (trace_context) {
-                              trace_instance_spot_activation (
-                                dispatch, flow, message_flow_outcome_t::reply_received,
-                                dispatch_message_kind_t::request, *trace_context,
-                                message_flow_result_t::failed,
-                                message_flow_reason_t::activation_rejected);
-                          }
-                          completion->complete (detail::result_access_t::failure<zlink::message_t> (
-                            runtime::messaging::request_failure_mapper_t{}.reply_header_exception (
-                              reply.terminal_result, reply.failure_code,
-                              "Instance Spot activation request")));
-                          return;
-                      }
-                      if (!application_reply) {
-                          if (trace_context) {
-                              trace_instance_spot_activation (
-                                dispatch, flow, message_flow_outcome_t::reply_received,
-                                dispatch_message_kind_t::request, *trace_context,
-                                message_flow_result_t::failed);
-                          }
-                          completion->complete (result_t<zlink::message_t>::failure (
-                            framework_error_kind_t::protocol_error,
-                            "Instance Spot activation reply payload is missing"));
-                          return;
-                      }
-                      if (trace_context) {
-                          trace_instance_spot_activation (
-                            dispatch, flow, message_flow_outcome_t::reply_received,
-                            dispatch_message_kind_t::response, *trace_context);
-                      }
-                      completion->complete (result_t<zlink::message_t>::success (
-                        zlink::message_t::from (std::move (application_reply->payload_bytes ()))));
-                  });
-              if (!submitted) {
-                  if (trace_context) {
-                      trace_instance_spot_activation (
-                        dispatch, flow, message_flow_outcome_t::reply_received,
-                        dispatch_message_kind_t::request, *trace_context,
-                        message_flow_result_t::failed, message_flow_reason_t::activation_rejected);
-                  }
-                  completion->complete (result_t<zlink::message_t>::failure (
-                    framework_error_kind_t::unavailable,
-                    "Instance Spot activation was not admitted"));
-              }
-              if (submitted)
-                  co_await detail::request_admitted_t{};
-              co_return co_await output;
+              return request_instance_activation_t::run (
+                select_instance_target, make_activation, serializers, dispatch, spot_id, intent,
+                cached_route, std::move (packet_name), std::move (encode_payload), timeout,
+                std::move (metadata));
           });
     }
     const auto spot_router_channels = options.location_options ().spot_router_channels;
@@ -2508,21 +2580,32 @@ void app_t::_apply_zlink_framework ()
             channel_runtime.bind_spot_mesh_transport (route->second, std::move (send_to_spot),
                                                       std::move (request_to_spot));
         }
+        struct send_mesh_node_t
+        {
+            static task_t<result_t<void>>
+            run (std::decay_t<decltype (mesh)> mesh,
+                 std::decay_t<decltype (mesh_node_service)> mesh_node_service,
+                 zlink::routing_id_t target,
+                 runtime::messaging::message_parts_t parts)
+            {
+                const auto local_rid = co_await mesh->routing_id_async ();
+                if (local_rid && *local_rid == target) {
+                    co_return one_way_native_submit_result (
+                      co_await mesh_node_service->submit_local_node_send (
+                        mesh, std::move (parts).take_items ()),
+                      "MeshNode send");
+                }
+                co_return one_way_native_submit_result (
+                  co_await mesh->send_to_node (target, std::move (parts).take_items ()),
+                  "MeshNode send");
+            }
+        };
         channel_runtime.bind_mesh_node_transport (
           mesh_name,
           [mesh, mesh_node_service] (
             zlink::routing_id_t target,
             runtime::messaging::message_parts_t parts) -> task_t<result_t<void>> {
-              const auto local_rid = co_await mesh->routing_id_async ();
-              if (local_rid && *local_rid == target) {
-                  co_return one_way_native_submit_result (
-                    co_await mesh_node_service->submit_local_node_send (
-                      mesh, std::move (parts).take_items ()),
-                    "MeshNode send");
-              }
-              co_return one_way_native_submit_result (
-                co_await mesh->send_to_node (target, std::move (parts).take_items ()),
-                "MeshNode send");
+              return send_mesh_node_t::run (mesh, mesh_node_service, target, std::move (parts));
           },
           [mesh] (
             const zlink::routing_id_t &target, runtime::messaging::message_parts_t parts,
@@ -2729,6 +2812,180 @@ void app_t::_apply_zlink_framework ()
             }
             co_return relayed;
         };
+        struct relay_bound_session_t
+        {
+            static request_task_t<std::optional<zlink::message_t>>
+            run (std::decay_t<decltype (std::weak_ptr (application_mesh))> weak_application_mesh,
+                 std::decay_t<decltype (deliver_relay)> deliver_relay,
+                 std::decay_t<decltype (options.configure_dispatch ())> dispatch_options,
+                 std::decay_t<decltype (request_timeout)> request_timeout,
+                 actor_ref_t actor,
+                 detail::stream_header_t header,
+                 zlink::message_t payload,
+                 std::optional<detail::bound_session_relay_source_t> source,
+                 std::chrono::milliseconds timeout)
+            {
+                const auto application_mesh = detail::lock_runtime_owner (weak_application_mesh);
+                using reply_t = std::optional<zlink::message_t>;
+                const auto budget =
+                  timeout.count () > 0
+                    ? timeout
+                    : std::chrono::duration_cast<std::chrono::milliseconds> (request_timeout);
+                const auto deadline = std::chrono::steady_clock::now () + budget;
+                if (!source)
+                    co_return co_await detail::request_submission (
+                      deliver_relay (actor, header, std::move (payload), source, {}, budget, {}));
+                std::shared_ptr<task_completion_source_t<reply_t>> completion;
+                std::optional<runtime::foundation::call_id_t> operation;
+                auto session_owner_runtime = application_mesh->native_node ().shared_from_this ();
+                auto &native = *session_owner_runtime;
+                const bool request = header.kind () == detail::stream_message_kind_t::request;
+                std::optional<runtime::mesh::raw_mesh_node_owner_t::local_operation_reservation_t>
+                  prepared_operation;
+                if (request)
+                    prepared_operation =
+                      co_await native.transport ().prepare_local_operation_async ();
+                auto retain = [&, prepared_operation = std::move (prepared_operation)] ()
+                  -> runtime::stateful::stream_relay_delivery_t {
+                    completion = std::make_shared<task_completion_source_t<reply_t>> ();
+                    operation =
+                      request && prepared_operation
+                          && native.transport ().register_prepared_local_operation (
+                            *prepared_operation, deadline,
+                            [completion] (runtime::foundation::operation_terminal_t terminal,
+                                          result_t<zlink::message_t>) {
+                                completion->complete (result_t<reply_t>::failure (
+                                  terminal == runtime::foundation::operation_terminal_t::timed_out
+                                    ? framework_error_kind_t::deadline_exceeded
+                                    : framework_error_kind_t::unavailable,
+                                  "bound Session relay request did not complete within its "
+                                  "original "
+                                  "operation"));
+                            })
+                        ? std::make_optional (prepared_operation->first)
+                        : std::nullopt;
+
+                    if (request && !operation)
+                        completion->complete (result_t<reply_t>::failure (
+                          framework_error_kind_t::unavailable,
+                          "bound Session request operation is unavailable"));
+                    auto drop = [header, source, actor,
+                                 dispatch_options] (message_flow_reason_t reason) {
+                        detail::message_flow_tracer_t (dispatch_options)
+                          .trace (
+                            message_flow_outcome_t::dropped, message_flow_result_t::dropped, [&] {
+                                message_flow_event_t event{};
+                                event.outcome = message_flow_outcome_t::dropped;
+                                event.surface = dispatch_error_surface_t::stream_session;
+                                event.message_kind = dispatch_message_kind_t::send;
+                                event.packet_name = std::string (header.packet_name ());
+                                event.actor_id = std::string (actor.actor_id ().value ());
+                                event.stream_session_id = source->session_rid.to_hex ();
+                                event.reason = reason;
+                                if (header.correlation_id ())
+                                    event.correlation_id = std::string (*header.correlation_id ());
+                                if (header.flow_id ())
+                                    event.flow_id = std::string (*header.flow_id ());
+                                event.flow_origin = header.flow_origin ();
+                                return event;
+                            });
+                    };
+                    return [application_mesh, session_owner_runtime, deliver_relay, actor, header,
+                            payload, source, deadline, budget, request, operation, completion, drop,
+                            dispatch_options] (
+                             std::optional<runtime::stateful::stream_dispatch_t> dispatch,
+                             message_flow_reason_t reason,
+                             std::optional<result_t<void>> failure) mutable -> task_t<void> {
+                        if (failure) {
+                            detail::dispatch_error_reporter_t (dispatch_options).report_lazy ([&] {
+                                message_dispatch_error_event_t event{};
+                                event.surface = dispatch_error_surface_t::stream_session;
+                                event.message_kind = request ? dispatch_message_kind_t::request
+                                                             : dispatch_message_kind_t::send;
+                                event.reason =
+                                  detail::dispatch_reason_from_error (failure->error ());
+                                event.action = dispatch_error_action_t::drop;
+                                event.packet_name = std::string (header.packet_name ());
+                                event.actor_id = std::string (actor.actor_id ().value ());
+                                event.source_rid = source->session_rid.to_hex ();
+                                if (header.correlation_id ())
+                                    event.correlation_id = std::string (*header.correlation_id ());
+                                if (header.flow_id ())
+                                    event.flow_id = std::string (*header.flow_id ());
+                                event.flow_origin = header.flow_origin ();
+                                if (failure->error ())
+                                    event.exception = std::make_exception_ptr (*failure->error ());
+                                return event;
+                            });
+                            co_return;
+                        }
+                        auto &owner = *session_owner_runtime;
+                        if (!dispatch) {
+                            if (request && operation)
+                                (void) owner.transport ().fail_local_operation (
+                                  *operation,
+                                  runtime::foundation::operation_terminal_t::route_unavailable);
+                            else if (!request)
+                                drop (reason);
+                            else
+                                completion->complete (result_t<reply_t>::failure (
+                                  framework_error_kind_t::unavailable,
+                                  "bound Session request operation is unavailable"));
+                            co_return;
+                        }
+                        const auto remaining =
+                          request
+                              && (!operation
+                                  || !owner.transport ().unregister_local_operation (*operation))
+                            ? std::chrono::milliseconds::zero ()
+                            : std::chrono::duration_cast<std::chrono::milliseconds> (
+                                deadline - std::chrono::steady_clock::now ());
+                        auto execute =
+                          std::make_shared<std::remove_cvref_t<decltype (deliver_relay)>> (
+                            deliver_relay);
+                        auto delivery = std::make_shared<task_t<reply_t>> (
+                          (*execute) (actor, header, payload, source, dispatch,
+                                      request ? remaining : budget, session_owner_runtime));
+                        detail::observe_task_completion (
+                          *delivery, [execute, delivery, completion, request,
+                                      drop] (const result_t<reply_t> &result) {
+                              if (request)
+                                  completion->complete (result);
+                              else {
+                                  if (!result)
+                                      drop (
+                                        detail::message_flow_reason_from_error (result.error ()));
+                                  completion->complete (result_t<reply_t>::success (std::nullopt));
+                              }
+                          });
+                        if (!request)
+                            (void) co_await completion->task ();
+                        co_return;
+                    };
+                };
+                auto [admission, dispatch] = native.sessions ().admit_inbound (
+                  source->session_rid.to_hex (), source->binding_generation,
+                  std::string (actor.actor_id ().value ()), source->session_sequence,
+                  std::chrono::milliseconds{0}, std::move (retain));
+                if (admission != runtime::stateful::stateful_error_t::none) {
+                    if (operation)
+                        (void) native.transport ().unregister_local_operation (*operation);
+                    co_return result_t<reply_t>::failure (framework_error_kind_t::invalid_operation,
+                                                          "bound Session ingress was not admitted");
+                }
+                co_await detail::request_admitted_t{};
+                if (!dispatch) {
+                    if (request)
+                        co_return co_await completion->task ();
+                    co_return std::nullopt;
+                }
+                co_return co_await detail::request_submission (
+                  deliver_relay (actor, header, std::move (payload), source, dispatch,
+                                 std::chrono::duration_cast<std::chrono::milliseconds> (
+                                   deadline - std::chrono::steady_clock::now ()),
+                                 session_owner_runtime));
+            }
+        };
         actor_gateway_runtime.on_relay (
           [weak_application_mesh = std::weak_ptr (application_mesh), deliver_relay,
            dispatch_options = options.configure_dispatch (),
@@ -2737,162 +2994,9 @@ void app_t::_apply_zlink_framework ()
                              std::optional<detail::bound_session_relay_source_t> source,
                              std::chrono::milliseconds timeout) mutable
           -> request_task_t<std::optional<zlink::message_t>> {
-              const auto application_mesh = detail::lock_runtime_owner (weak_application_mesh);
-              using reply_t = std::optional<zlink::message_t>;
-              const auto budget =
-                timeout.count () > 0
-                  ? timeout
-                  : std::chrono::duration_cast<std::chrono::milliseconds> (request_timeout);
-              const auto deadline = std::chrono::steady_clock::now () + budget;
-              if (!source)
-                  co_return co_await detail::request_submission (
-                    deliver_relay (actor, header, payload, source, {}, budget, {}));
-              std::shared_ptr<task_completion_source_t<reply_t>> completion;
-              std::optional<runtime::foundation::call_id_t> operation;
-              auto session_owner_runtime = application_mesh->native_node ().shared_from_this ();
-              auto &native = *session_owner_runtime;
-              const bool request = header.kind () == detail::stream_message_kind_t::request;
-              std::optional<runtime::mesh::raw_mesh_node_owner_t::local_operation_reservation_t>
-                prepared_operation;
-              if (request)
-                  prepared_operation =
-                    co_await native.transport ().prepare_local_operation_async ();
-              auto retain = [&, prepared_operation = std::move (prepared_operation)] ()
-                -> runtime::stateful::stream_relay_delivery_t {
-                  completion = std::make_shared<task_completion_source_t<reply_t>> ();
-                  operation =
-                    request && prepared_operation
-                        && native.transport ().register_prepared_local_operation (
-                          *prepared_operation, deadline,
-                          [completion] (runtime::foundation::operation_terminal_t terminal,
-                                        result_t<zlink::message_t>) {
-                              completion->complete (result_t<reply_t>::failure (
-                                terminal == runtime::foundation::operation_terminal_t::timed_out
-                                  ? framework_error_kind_t::deadline_exceeded
-                                  : framework_error_kind_t::unavailable,
-                                "bound Session relay request did not complete within its original "
-                                "operation"));
-                          })
-                      ? std::make_optional (prepared_operation->first)
-                      : std::nullopt;
-
-                  if (request && !operation)
-                      completion->complete (result_t<reply_t>::failure (
-                        framework_error_kind_t::unavailable,
-                        "bound Session request operation is unavailable"));
-                  auto drop = [header, source, actor,
-                               dispatch_options] (message_flow_reason_t reason) {
-                      detail::message_flow_tracer_t (dispatch_options)
-                        .trace (
-                          message_flow_outcome_t::dropped, message_flow_result_t::dropped, [&] {
-                              message_flow_event_t event{};
-                              event.outcome = message_flow_outcome_t::dropped;
-                              event.surface = dispatch_error_surface_t::stream_session;
-                              event.message_kind = dispatch_message_kind_t::send;
-                              event.packet_name = std::string (header.packet_name ());
-                              event.actor_id = std::string (actor.actor_id ().value ());
-                              event.stream_session_id = source->session_rid.to_hex ();
-                              event.reason = reason;
-                              if (header.correlation_id ())
-                                  event.correlation_id = std::string (*header.correlation_id ());
-                              if (header.flow_id ())
-                                  event.flow_id = std::string (*header.flow_id ());
-                              event.flow_origin = header.flow_origin ();
-                              return event;
-                          });
-                  };
-                  return [application_mesh, session_owner_runtime, deliver_relay, actor, header,
-                          payload, source, deadline, budget, request, operation, completion, drop,
-                          dispatch_options] (
-                           std::optional<runtime::stateful::stream_dispatch_t> dispatch,
-                           message_flow_reason_t reason,
-                           std::optional<result_t<void>> failure) mutable -> task_t<void> {
-                      if (failure) {
-                          detail::dispatch_error_reporter_t (dispatch_options).report_lazy ([&] {
-                              message_dispatch_error_event_t event{};
-                              event.surface = dispatch_error_surface_t::stream_session;
-                              event.message_kind = request ? dispatch_message_kind_t::request
-                                                           : dispatch_message_kind_t::send;
-                              event.reason = detail::dispatch_reason_from_error (failure->error ());
-                              event.action = dispatch_error_action_t::drop;
-                              event.packet_name = std::string (header.packet_name ());
-                              event.actor_id = std::string (actor.actor_id ().value ());
-                              event.source_rid = source->session_rid.to_hex ();
-                              if (header.correlation_id ())
-                                  event.correlation_id = std::string (*header.correlation_id ());
-                              if (header.flow_id ())
-                                  event.flow_id = std::string (*header.flow_id ());
-                              event.flow_origin = header.flow_origin ();
-                              if (failure->error ())
-                                  event.exception = std::make_exception_ptr (*failure->error ());
-                              return event;
-                          });
-                          co_return;
-                      }
-                      auto &owner = *session_owner_runtime;
-                      if (!dispatch) {
-                          if (request && operation)
-                              (void) owner.transport ().fail_local_operation (
-                                *operation,
-                                runtime::foundation::operation_terminal_t::route_unavailable);
-                          else if (!request)
-                              drop (reason);
-                          else
-                              completion->complete (result_t<reply_t>::failure (
-                                framework_error_kind_t::unavailable,
-                                "bound Session request operation is unavailable"));
-                          co_return;
-                      }
-                      const auto remaining =
-                        request
-                            && (!operation
-                                || !owner.transport ().unregister_local_operation (*operation))
-                          ? std::chrono::milliseconds::zero ()
-                          : std::chrono::duration_cast<std::chrono::milliseconds> (
-                              deadline - std::chrono::steady_clock::now ());
-                      auto execute =
-                        std::make_shared<std::remove_cvref_t<decltype (deliver_relay)>> (
-                          deliver_relay);
-                      auto delivery = std::make_shared<task_t<reply_t>> (
-                        (*execute) (actor, header, payload, source, dispatch,
-                                    request ? remaining : budget, session_owner_runtime));
-                      detail::observe_task_completion (
-                        *delivery, [execute, delivery, completion, request,
-                                    drop] (const result_t<reply_t> &result) {
-                            if (request)
-                                completion->complete (result);
-                            else {
-                                if (!result)
-                                    drop (detail::message_flow_reason_from_error (result.error ()));
-                                completion->complete (result_t<reply_t>::success (std::nullopt));
-                            }
-                        });
-                      if (!request)
-                          (void) co_await completion->task ();
-                      co_return;
-                  };
-              };
-              auto [admission, dispatch] = native.sessions ().admit_inbound (
-                source->session_rid.to_hex (), source->binding_generation,
-                std::string (actor.actor_id ().value ()), source->session_sequence,
-                std::chrono::milliseconds{0}, std::move (retain));
-              if (admission != runtime::stateful::stateful_error_t::none) {
-                  if (operation)
-                      (void) native.transport ().unregister_local_operation (*operation);
-                  co_return result_t<reply_t>::failure (framework_error_kind_t::invalid_operation,
-                                                        "bound Session ingress was not admitted");
-              }
-              co_await detail::request_admitted_t{};
-              if (!dispatch) {
-                  if (request)
-                      co_return co_await completion->task ();
-                  co_return std::nullopt;
-              }
-              co_return co_await detail::request_submission (
-                deliver_relay (actor, header, payload, source, dispatch,
-                               std::chrono::duration_cast<std::chrono::milliseconds> (
-                                 deadline - std::chrono::steady_clock::now ()),
-                               session_owner_runtime));
+              return relay_bound_session_t::run (weak_application_mesh, deliver_relay,
+                                                 dispatch_options, request_timeout, actor, header,
+                                                 payload, std::move (source), timeout);
           });
         actor_gateway_runtime.offload_session_relay ();
         actor_gateway_runtime.on_disconnect (
@@ -4387,7 +4491,7 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
             for (const auto &snapshot : detail::spot_node_runtime_t::snapshots (state.zlink)) {
                 auto runtime = detail::spot_node_runtime_t::from (state.zlink, snapshot.name);
                 if (runtime
-                    && !runtime->close_all_user_spots (
+                    && !runtime->close_all_spots (
                       deadline_at, state.termination_operation.deadline_at.value (),
                       state.termination_operation.cleanup_cancellation)) {
                     spots_closed = false;

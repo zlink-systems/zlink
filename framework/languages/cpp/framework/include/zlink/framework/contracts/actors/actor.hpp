@@ -336,8 +336,16 @@ class actor_request_call_t
     static request_task_t<TReply> decode_reply (request_task_t<message_t> pending,
                                                 serializer_registry_t *serializers)
     {
+        return decode_owned_reply<TReply> (
+          std::move (pending), detail::serializer_registry_access_t::retain (*serializers));
+    }
+
+    template <typename TReply>
+    static request_task_t<TReply> decode_owned_reply (request_task_t<message_t> pending,
+                                                      serializer_registry_t serializers)
+    {
         auto reply = co_await detail::request_submission (std::move (pending));
-        co_return reply.template decode<TReply> (*serializers);
+        co_return reply.template decode<TReply> (serializers);
     }
 
     request_task_t<message_t> start (bool release_turn);

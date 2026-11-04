@@ -265,6 +265,31 @@ bool start_admitted_request (
     return true;
 }
 
+// The registry owns the terminal claim for delivered and never-submitted requests.
+void deliver_request_terminal (const std::shared_ptr<foundation::operation_registry_t> &operations,
+                               foundation::call_id_t operation,
+                               foundation::operation_terminal_t terminal,
+                               result_t<zlink::message_t> payload,
+                               const raw_mesh_node_owner_t::physical_receiver_t &receiver,
+                               std::optional<foundation::operation_terminal_t> metric = {})
+{
+    const auto receive = [&] {
+        if (receiver)
+            receiver (terminal, payload, true);
+    };
+    auto public_payload = receiver ? payload : std::move (payload);
+    const bool claimed =
+      terminal == foundation::operation_terminal_t::completed
+        ? operations->complete (operation, std::move (public_payload), receive,
+                                metric.value_or (terminal))
+        : operations->fail (operation, terminal,
+                            public_payload ? std::move (public_payload)
+                                           : result_t<zlink::message_t>::success ({}),
+                            receive, metric);
+    if (!claimed && receiver)
+        receiver (terminal, std::move (payload), false);
+}
+
 // Readiness waits observe the same final completion as the caller. The
 // registry owns timeout; a ready peer admits one binding submission.
 template <typename TTerminal>
@@ -280,7 +305,8 @@ task_t<void> run_request_admission (
   foundation::operation_registry_t::clock_t::time_point deadline,
   task_t<TTerminal> terminal,
   std::shared_ptr<task_completion_source_t<void>> admitted,
-  std::function<void (result_t<detail::backend::raw_request_completion_t>)> observe = {})
+  std::function<void (result_t<detail::backend::raw_request_completion_t>)> observe = {},
+  raw_mesh_node_owner_t::physical_receiver_t receiver = {})
 {
     struct wait_subscriptions_t
     {
@@ -300,8 +326,9 @@ task_t<void> run_request_admission (
                  && (!attempt || baseline->first != attempt->intent_id
                      || baseline->second != attempt->last_failure_id))
                 || (!baseline && attempt && attempt->last_failure_id != 0))) {
-            (void) operations->fail (operation,
-                                     foundation::operation_terminal_t::route_unavailable);
+            deliver_request_terminal (operations, operation,
+                                      foundation::operation_terminal_t::route_unavailable,
+                                      result_t<zlink::message_t>::success ({}), receiver);
             co_return;
         }
         auto finish =
@@ -316,13 +343,16 @@ task_t<void> run_request_admission (
                                     std::move (finish)))
             co_return;
         if (foundation::operation_registry_t::clock_t::now () >= deadline) {
-            (void) co_await terminal;
+            deliver_request_terminal (operations, operation,
+                                      foundation::operation_terminal_t::timed_out,
+                                      result_t<zlink::message_t>::success ({}), receiver);
             co_return;
         }
         if ((!observation.peer || observation.peer->connection_id.empty ()) && attempt
             && attempt->state == zlink::connection_attempt_state_t::attempt_failed) {
-            (void) operations->fail (operation,
-                                     foundation::operation_terminal_t::route_unavailable);
+            deliver_request_terminal (operations, operation,
+                                      foundation::operation_terminal_t::route_unavailable,
+                                      result_t<zlink::message_t>::success ({}), receiver);
             co_return;
         }
         if (!baseline && attempt)
@@ -343,6 +373,27 @@ task_t<void> run_request_admission (
         }
         co_await notified;
     }
+    if (receiver) {
+        // Only external registry terminals can end this wait without a binding
+        // request. Observe the existing admission failure before releasing its receiver.
+        auto ended = foundation::operation_terminal_t::route_unavailable;
+        try {
+            (void) co_await terminal;
+        }
+        catch (const framework_exception_t &error) {
+            if (error.kind () == framework_error_kind_t::deadline_exceeded)
+                ended = foundation::operation_terminal_t::timed_out;
+            else if (error.kind () == framework_error_kind_t::shutting_down)
+                ended = foundation::operation_terminal_t::shutdown;
+        }
+        catch (const std::system_error &error) {
+            if (!detail::is_cancellation_exception (error))
+                throw;
+            ended = foundation::operation_terminal_t::cancelled;
+        }
+        deliver_request_terminal (operations, operation, ended,
+                                  result_t<zlink::message_t>::success ({}), receiver);
+    }
 }
 template <typename TTerminal>
 task_t<bool> submit_registered_request (
@@ -357,10 +408,13 @@ task_t<bool> submit_registered_request (
   foundation::operation_registry_t::clock_t::time_point deadline,
   task_t<TTerminal> terminal,
   std::shared_ptr<task_completion_source_t<void>> admitted = {},
-  std::function<void (result_t<detail::backend::raw_request_completion_t>)> observe = {})
+  std::function<void (result_t<detail::backend::raw_request_completion_t>)> observe = {},
+  raw_mesh_node_owner_t::physical_receiver_t receiver = {})
 {
     if (!port) {
-        (void) operations->fail (operation, foundation::operation_terminal_t::route_unavailable);
+        deliver_request_terminal (operations, operation,
+                                  foundation::operation_terminal_t::route_unavailable,
+                                  result_t<zlink::message_t>::success ({}), receiver);
         co_return false;
     }
     // Infrastructure progress releases the initiating handler's turn.
@@ -369,12 +423,14 @@ task_t<bool> submit_registered_request (
     auto running = std::make_shared<task_t<void>> (run_request_admission (
       std::move (port), std::move (observe_peer), operations, operation, correlation,
       std::move (target_routing_id), std::move (request_parts), std::move (decode_reply), deadline,
-      std::move (terminal), std::move (admitted), std::move (observe)));
-    detail::observe_task_terminal (*running, [operations, operation,
-                                              running] (const result_t<void> &settled) {
-        if (!settled)
-            (void) operations->fail (operation, foundation::operation_terminal_t::transport_failed);
-    });
+      std::move (terminal), std::move (admitted), std::move (observe), receiver));
+    detail::observe_task_terminal (
+      *running, [operations, operation, receiver, running] (const result_t<void> &settled) {
+          if (!settled)
+              deliver_request_terminal (operations, operation,
+                                        foundation::operation_terminal_t::transport_failed,
+                                        result_t<zlink::message_t>::success ({}), receiver);
+      });
     co_return true;
 }
 
@@ -1038,14 +1094,12 @@ void raw_mesh_node_owner_t::disconnect_peer_intent (const std::string &endpoint)
 {
     std::vector<std::function<void ()>> notifications;
     try {
-        _lane
-          .run ([this, endpoint, &notifications] {
-              const auto found = _peer_connection_intents.find (endpoint);
-              disconnect_peer_endpoint_owned (endpoint, notifications);
-              if (found != _peer_connection_intents.end ())
-                  _peer_connection_intents.erase (found);
-          })
-          .get ();
+        _lane.run_sync ([this, endpoint, &notifications] {
+            const auto found = _peer_connection_intents.find (endpoint);
+            disconnect_peer_endpoint_owned (endpoint, notifications);
+            if (found != _peer_connection_intents.end ())
+                _peer_connection_intents.erase (found);
+        });
     }
     catch (...) {
         std::rethrow_exception (
@@ -1060,12 +1114,9 @@ void raw_mesh_node_owner_t::disconnect_peer_intent (const zlink::routing_id_t &e
 {
     std::vector<std::function<void ()>> notifications;
     try {
-        _lane
-          .run ([this, expected_routing_id, endpoint, automatic, &notifications] {
-              disconnect_peer_intent_owned (expected_routing_id, endpoint, automatic,
-                                            notifications);
-          })
-          .get ();
+        _lane.run_sync ([this, expected_routing_id, endpoint, automatic, &notifications] {
+            disconnect_peer_intent_owned (expected_routing_id, endpoint, automatic, notifications);
+        });
     }
     catch (...) {
         std::rethrow_exception (
@@ -1178,9 +1229,8 @@ raw_mesh_node_owner_t::local_accepted_source (const std::vector<std::uint8_t> &r
 void raw_mesh_node_owner_t::forget_peer (const std::vector<std::uint8_t> &node_routing_id,
                                          const std::string &endpoint)
 {
-    _lane
-      .run ([this, &node_routing_id, &endpoint] { forget_peer_owned (node_routing_id, endpoint); })
-      .get ();
+    _lane.run_sync (
+      [this, &node_routing_id, &endpoint] { forget_peer_owned (node_routing_id, endpoint); });
 }
 
 task_t<void> raw_mesh_node_owner_t::forget_peer_async (std::vector<std::uint8_t> node_routing_id,
@@ -1348,10 +1398,18 @@ void raw_mesh_node_owner_t::observe_request (
   std::shared_ptr<foundation::operation_registry_t> operations,
   foundation::call_id_t operation,
   std::uint64_t correlation,
-  result_t<detail::backend::raw_request_completion_t> settled)
+  result_t<detail::backend::raw_request_completion_t> settled,
+  physical_receiver_t receiver)
 {
+    const auto deliver = [&] (foundation::operation_terminal_t terminal,
+                              result_t<zlink::message_t> payload,
+                              std::optional<foundation::operation_terminal_t> metric = {}) {
+        deliver_request_terminal (operations, operation, terminal, std::move (payload), receiver,
+                                  metric);
+    };
     if (!settled) {
-        (void) operations->fail (operation, foundation::operation_terminal_t::transport_failed);
+        deliver (foundation::operation_terminal_t::transport_failed,
+                 detail::result_access_t::failure<zlink::message_t> (settled.exception ()));
         return;
     }
     auto &completion = settled.value ();
@@ -1363,8 +1421,8 @@ void raw_mesh_node_owner_t::observe_request (
                                 .transport_terminal (completion.terminal)
                                 .value_or (foundation::operation_terminal_t::transport_failed);
         auto failure_reply = request_failure_reply_parts (correlation, completion.terminal);
-        (void) operations->fail (operation, terminal,
-                                 zlink::message_t::from (failure_reply.front ()));
+        deliver (terminal, result_t<zlink::message_t>::success (
+                             zlink::message_t::from (failure_reply.front ())));
         return;
     }
     try {
@@ -1397,28 +1455,30 @@ void raw_mesh_node_owner_t::observe_request (
                 throw protocol::service_wire_error_t (
                   "failed request reply cannot carry a payload");
             }
-            (void) operations->fail (operation, foundation::operation_terminal_t::transport_failed,
-                                     std::move (parts.front ()), {},
-                                     request_metric_terminal (reply));
+            deliver (foundation::operation_terminal_t::transport_failed,
+                     result_t<zlink::message_t>::success (std::move (parts.front ())),
+                     request_metric_terminal (reply));
             return;
         }
         if (parts.size () != 2) {
             throw protocol::service_wire_error_t ("successful request reply must carry a payload");
         }
         (void) protocol::application_payload_hwm_bytes (protocol::message_bytes (parts[1]));
-        (void) operations->complete (operation, std::move (parts[1]));
+        deliver (foundation::operation_terminal_t::completed,
+                 result_t<zlink::message_t>::success (std::move (parts[1])));
     }
     catch (const protocol::service_wire_error_t &) {
         //  Spec 32-framework-error-model:91-92 — a malformed reply is
         //  ProtocolError, not a transport failure. Carry a synthesized
         //  protocolError header; complete_operation decodes it into
         //  terminal 104 instead of collapsing to internal_error.
-        (void) operations->fail (
-          operation, foundation::operation_terminal_t::transport_failed,
-          zlink::message_t::from (protocol::encode_reply_header (
-            correlation,
-            static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError),
-            static_cast<std::uint32_t> (protocol::framework_error_code::requestProtocolError))));
+        deliver (
+          foundation::operation_terminal_t::transport_failed,
+          result_t<zlink::message_t>::success (
+            zlink::message_t::from (protocol::encode_reply_header (
+              correlation,
+              static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError),
+              static_cast<std::uint32_t> (protocol::framework_error_code::requestProtocolError)))));
     }
 }
 
@@ -1473,7 +1533,8 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
   bool target_claimed,
   mesh_request_metric_t request_metric,
   std::optional<foundation::operation_registry_t::request_identity_t> request,
-  std::shared_ptr<task_completion_source_t<void>> admitted)
+  std::shared_ptr<task_completion_source_t<void>> admitted,
+  physical_receiver_t receiver)
 try {
     const auto wait_owner = detail::current_wait_owner ();
     struct request_start_t
@@ -1483,59 +1544,62 @@ try {
         std::shared_ptr<task_completion_source_t<void>> admitted;
         bool registered = false;
     };
-    auto start = _lane.run_sync (
-      [this, &header, &request_metric, &target_routing_id, &application_payload,
-       request = std::move (request), requested_correlation, target_claimed, deadline, wait_owner,
-       callback = std::move (callback), admitted = std::move (admitted)] () mutable {
-          const auto peer = _topology.peer (target_routing_id);
-          if (!target_claimed && !peer && !_expected_peers.contains (target_routing_id))
-              return std::optional<request_start_t>{};
-          auto encoded_payload = protocol::encode_application_payload (application_payload);
-          std::shared_ptr<detail::backend::raw_route_port_t> port;
-          {
-              std::lock_guard lifecycle_lock (_lifecycle_mutex);
-              port = _port;
-          }
-          if (!port)
-              return std::optional<request_start_t>{};
-          request_start_t value;
-          value.admitted =
-            admitted ? std::move (admitted) : std::make_shared<task_completion_source_t<void>> ();
-          value.correlation = take_reply_route_id_locked (requested_correlation);
-          value.operation =
-            operation_id (_options.descriptor.lifecycle_generation, value.correlation);
-          detail::backend::raw_message_t wire;
-          wire.reserve (2);
-          wire.push_back (header (value.correlation));
-          wire.push_back (std::move (encoded_payload));
-          if (request && request->operation == foundation::call_id_t{})
-              request->operation = value.operation;
-          value.registered = _operations->register_operation (
-            value.operation, deadline,
-            request_admission_completion (std::move (callback), value.admitted),
-            peer && peer->ready ? std::vector<std::uint8_t>{} : target_routing_id,
-            std::move (request_metric), std::move (request), wait_owner);
-          if (value.registered) {
-              try {
-                  auto finish = [operations = _operations, operation = value.operation,
-                                 correlation = value.correlation] (auto result) {
-                      observe_request (operations, operation, correlation, std::move (result));
-                  };
-                  if (!start_admitted_request (port, peer.get (), target_routing_id, wire, deadline,
-                                               value.admitted, finish)) {
-                      (void) submit_registered_request (
-                        port, observe_request_peer_on_lane (target_routing_id), _operations,
-                        value.operation, value.correlation, target_routing_id, std::move (wire), {},
-                        deadline, value.admitted->task (), value.admitted, std::move (finish));
-                  }
-              }
-              catch (...) {
-                  (void) _operations->unregister (value.operation);
-                  throw;
-              }
-          }
-          return std::optional<request_start_t>{std::move (value)};
-      });
+    auto start = _lane.run_sync ([this, &header, &request_metric, &target_routing_id,
+                                  &application_payload, request = std::move (request),
+                                  requested_correlation, target_claimed, deadline, wait_owner,
+                                  callback = std::move (callback), admitted = std::move (admitted),
+                                  receiver = std::move (receiver)] () mutable {
+        const auto peer = _topology.peer (target_routing_id);
+        if (!target_claimed && !peer && !_expected_peers.contains (target_routing_id))
+            return std::optional<request_start_t>{};
+        auto encoded_payload = protocol::encode_application_payload (application_payload);
+        std::shared_ptr<detail::backend::raw_route_port_t> port;
+        {
+            std::lock_guard lifecycle_lock (_lifecycle_mutex);
+            port = _port;
+        }
+        if (!port)
+            return std::optional<request_start_t>{};
+        request_start_t value;
+        value.admitted =
+          admitted ? std::move (admitted) : std::make_shared<task_completion_source_t<void>> ();
+        value.correlation = take_reply_route_id_locked (requested_correlation);
+        value.operation =
+          operation_id (_options.descriptor.lifecycle_generation, value.correlation);
+        detail::backend::raw_message_t wire;
+        wire.reserve (2);
+        wire.push_back (header (value.correlation));
+        wire.push_back (std::move (encoded_payload));
+        if (request && request->operation == foundation::call_id_t{})
+            request->operation = value.operation;
+        value.registered = _operations->register_operation (
+          value.operation, deadline,
+          request_admission_completion (std::move (callback), value.admitted),
+          peer && peer->ready ? std::vector<std::uint8_t>{} : target_routing_id,
+          std::move (request_metric), std::move (request), wait_owner);
+        if (value.registered) {
+            try {
+                auto finish = [operations = _operations, operation = value.operation,
+                               correlation = value.correlation, receiver] (auto result) {
+                    observe_request (operations, operation, correlation, std::move (result),
+                                     receiver);
+                };
+                if (!start_admitted_request (port, peer.get (), target_routing_id, wire, deadline,
+                                             value.admitted, finish)) {
+                    (void) submit_registered_request (
+                      port, observe_request_peer_on_lane (target_routing_id), _operations,
+                      value.operation, value.correlation, target_routing_id, std::move (wire), {},
+                      deadline, value.admitted->task (), value.admitted, std::move (finish),
+                      std::move (receiver));
+                }
+            }
+            catch (...) {
+                (void) _operations->unregister (value.operation);
+                throw;
+            }
+        }
+        return std::optional<request_start_t>{std::move (value)};
+    });
     if (!start)
         return task_t<bool> (result_t<bool>::success (false));
     if (!start->registered) {
@@ -2290,7 +2354,8 @@ task_t<bool> raw_mesh_node_owner_t::request_to_actor (
   std::optional<protocol::wire_operation_id_t> operation,
   std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source,
   std::optional<std::uint64_t> correlation,
-  std::uint8_t message_follow_hop_count)
+  std::uint8_t message_follow_hop_count,
+  physical_receiver_t receiver)
 {
     const auto deadline = capture_request_deadline (timeout);
     const auto local = _topology.local_descriptor ();
@@ -2306,7 +2371,7 @@ task_t<bool> raw_mesh_node_owner_t::request_to_actor (
       },
       application_payload, deadline, std::move (callback), correlation, false,
       mesh_request_metric_t (_request_metrics, mesh_request_surface_t::actor),
-      request_identity (operation));
+      request_identity (operation), {}, std::move (receiver));
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_user_spot_create (

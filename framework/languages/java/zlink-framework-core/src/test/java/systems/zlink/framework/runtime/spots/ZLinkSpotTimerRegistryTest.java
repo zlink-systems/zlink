@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.spots;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -339,16 +340,7 @@ final class ZLinkSpotTimerRegistryTest {
 
     @Test
     void omittedTimerOptionsKeepTickingAfterAnUnhandledException() throws Exception {
-        var scheduledTicks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
-        var executor =
-                new ScheduledThreadPoolExecutor(1) {
-                    @Override
-                    public ScheduledFuture<?> schedule(
-                            Runnable command, long delay, TimeUnit unit) {
-                        scheduledTicks.add(command);
-                        return super.schedule(() -> {}, 1, TimeUnit.HOURS);
-                    }
-                };
+        var executor = new ZLinkRelocatedTimerRebindTest.ManualScheduler();
         AtomicInteger ticks = new AtomicInteger();
         ZLinkHandlerActivator activator =
                 new ZLinkHandlerActivator() {
@@ -372,40 +364,22 @@ final class ZLinkSpotTimerRegistryTest {
         registry.setSpot(new TestSpot());
 
         try {
-            // Omitted timer options: the default must NOT stop the timer on an
-            // unhandled handler exception. The frozen spec default is
-            // stopOnUnhandledException = false (explicit in the C++/.NET/Node
-            // interfaces; the Java interface is silent and nothing authorizes
-            // true), so a repeating timer keeps ticking after each exception.
-            registry.add("timer", Duration.ofDays(1), ThrowingTimerHandler.class, null);
-            long scheduleDeadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(200);
-            Runnable firstTick = pollScheduledTick(scheduledTicks, scheduleDeadline);
-            assertTrue(firstTick != null, "the first omitted-options timer tick must be scheduled");
-            firstTick.run();
-            Runnable secondTick = pollScheduledTick(scheduledTicks, scheduleDeadline);
-            assertTrue(
-                    secondTick != null,
-                    "an omitted-options timer must reschedule after an unhandled exception");
-            secondTick.run();
-            Runnable nextTick = pollScheduledTick(scheduledTicks, scheduleDeadline);
-            assertTrue(nextTick != null, "the omitted-options timer must keep ticking");
-            assertTrue(
-                    ticks.get() > 1,
-                    "an omitted-options repeating timer must keep ticking after an "
-                            + "unhandled exception; ticks="
-                            + ticks.get());
+            registry.add("timer", Duration.ofMillis(5), ThrowingTimerHandler.class, null)
+                    .toCompletableFuture()
+                    .join();
+            var due = executor.due.poll(2, TimeUnit.SECONDS);
+            assertNotNull(due, "registration must schedule the first tick");
+            for (int expectedTicks = 1; expectedTicks <= 2; expectedTicks++) {
+                due.run();
+                due = executor.due.poll(2, TimeUnit.SECONDS);
+                assertNotNull(due, "an unhandled exception must not prevent the next tick");
+                assertEquals(expectedTicks, ticks.get());
+            }
         } finally {
             registry.close();
             handlers.close();
             executor.shutdownNow();
         }
-    }
-
-    private static Runnable pollScheduledTick(
-            java.util.concurrent.BlockingQueue<Runnable> scheduledTicks, long deadline)
-            throws InterruptedException {
-        long remaining = deadline - System.nanoTime();
-        return remaining <= 0 ? null : scheduledTicks.poll(remaining, TimeUnit.NANOSECONDS);
     }
 
     @Test

@@ -52,7 +52,11 @@ import {
   internalFrameworkErrorKindFromWireFailureCode,
   ZLinkFrameworkInternalErrorKind
 } from '../framework-errors-internal';
-import type { ZLinkResolvedActorRoute, ZLinkStoreLocationResolvers } from '../locations';
+import type {
+  ZLinkActorRouteInvalidationFence,
+  ZLinkResolvedActorRoute,
+  ZLinkStoreLocationResolvers
+} from '../locations';
 import { resolveFrameworkPacketName } from '../messaging/packet-name';
 import { decodeFrameworkPayloadMessage, encodeFrameworkPayload } from '../messaging/payload-codec';
 import {
@@ -161,7 +165,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
   ): Promise<ZLinkSubmitResult> {
     const route = await this.resolveActorRoute(actorId);
     const { meshName, actorRef: actor } = route;
-    this.throwIfKnownStale(meshName, actor);
+    this.throwIfKnownStale(route);
     const parts = this.createPacketParts(
       ZLinkStreamMessageKind.Send,
       undefined,
@@ -169,8 +173,10 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
       message,
       metadata
     );
+    let routeFence: ZLinkActorRouteInvalidationFence | undefined;
     try {
       const messageFollow = createActorMessageFollowContext(route, parts, false);
+      routeFence = actorRouteInvalidationFence(route);
       const routedActor = attachActorMessageFollowContext(actor, messageFollow);
       const submissionCopies =
         (await this.options.transportDeliveryGate?.()?.waitBeforeSubmit(actorId, 'oneWay')) ?? 1;
@@ -218,12 +224,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
       }
       return await this.submitActorSend(meshName, toBackendActorRef(actor), parts, route);
     } catch (error) {
-      if (isStaleActorError(error)) {
-        this.invalidateActorRoute(actorId);
-        this.options.staleActorRefReporter?.(meshName, actor.actorId);
-        throw actorLocationStale(actor.actorId, error);
-      }
-      throw error;
+      throw this.mapActorFailure(actorId, error, routeFence, meshName);
     } finally {
       closeMessages(parts);
     }
@@ -243,6 +244,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     const sourceSpotId = currentZLinkActorExecution()?.spotId ?? currentZLinkSpotSerialSourceId();
     const effectiveTimeoutMs = timeoutMs ?? this.options.defaultRequestTimeoutMs;
     let meshName: string | undefined;
+    let routeFence: ZLinkActorRouteInvalidationFence | undefined;
     return this.requests.prepare<TReply>(
       effectiveTimeoutMs,
       signal,
@@ -265,8 +267,10 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
           }
           const { actorRef: actor } = route;
           meshName = route.meshName;
-          if (this.options.staleActorRefPredicate?.(meshName, actor) === true)
+          if (this.options.staleActorRefPredicate?.(meshName, actor) === true) {
+            routeFence = actorRouteInvalidationFence(route);
             throw actorLocationStale(actor.actorId, undefined);
+          }
           const operationId = createMessageFollowId();
           const correlationId = createMessageFollowId();
           const requestSequence = BigInt(`0x${operationId.slice(16)}`);
@@ -287,6 +291,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
               correlationId,
               operationId
             );
+            routeFence = actorRouteInvalidationFence(route);
             const routedActor = attachActorMessageFollowContext(actor, messageFollow);
             const delivery = this.options
               .transportDeliveryGate?.()
@@ -342,14 +347,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
         })().catch((error) => receiver.operationFailed(requestOperation.id, error, undefined));
       },
       (value) => value as TReply,
-      (error) => {
-        if (isStaleActorError(error)) {
-          this.invalidateActorRoute(actorId);
-          if (meshName !== undefined) this.options.staleActorRefReporter?.(meshName, actorId);
-          return actorLocationStale(actorId, error);
-        }
-        return error;
-      }
+      (error) => this.mapActorFailure(actorId, error, routeFence, meshName)
     );
   }
 
@@ -387,15 +385,29 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     return resolution.route;
   }
 
-  private invalidateActorRoute(actorId: string): void {
-    this.options.locationResolver()?.invalidateActorRoute(actorId);
+  private mapActorFailure(
+    actorId: string,
+    error: unknown,
+    routeFence: ZLinkActorRouteInvalidationFence | undefined,
+    meshName: string | undefined
+  ): unknown {
+    if (!isStaleActorError(error)) return error;
+    const resolver = this.options.locationResolver();
+    if (routeFence !== undefined && resolver !== undefined)
+      resolver.invalidateActorRouteIfMatches(routeFence);
+    if (meshName !== undefined) this.options.staleActorRefReporter?.(meshName, actorId);
+    return actorLocationStale(actorId, error);
   }
 
-  private throwIfKnownStale(meshName: string, actor: ActorRef): void {
+  private throwIfKnownStale(route: ZLinkResolvedActorRoute): void {
+    const { meshName, actorRef: actor } = route;
     if (this.options.staleActorRefPredicate?.(meshName, actor) !== true) return;
-    this.invalidateActorRoute(actor.actorId);
-    this.options.staleActorRefReporter?.(meshName, actor.actorId);
-    throw actorLocationStale(actor.actorId, undefined);
+    throw this.mapActorFailure(
+      actor.actorId,
+      actorLocationStale(actor.actorId, undefined),
+      actorRouteInvalidationFence(route),
+      meshName
+    );
   }
 
   private createPacketParts(
@@ -603,6 +615,19 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
 function nativeActorRouteFence(route: ZLinkResolvedActorRoute, actor: ZLinkBackendActorRef) {
   return {
     actor,
+    targetNodeGeneration: route.ownerNodeGeneration,
+    authorityOwnerGeneration: route.authorityOwnerGeneration,
+    ownerLeaseGeneration: route.ownerLeaseGeneration
+  };
+}
+
+function actorRouteInvalidationFence(
+  route: ZLinkResolvedActorRoute
+): ZLinkActorRouteInvalidationFence {
+  return {
+    actorId: route.actorRef.actorId,
+    objectGeneration: route.actorRef.objectGeneration,
+    targetNodeRid: route.actorRef.nodeRid,
     targetNodeGeneration: route.ownerNodeGeneration,
     authorityOwnerGeneration: route.authorityOwnerGeneration,
     ownerLeaseGeneration: route.ownerLeaseGeneration

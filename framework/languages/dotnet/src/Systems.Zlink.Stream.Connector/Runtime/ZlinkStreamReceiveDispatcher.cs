@@ -127,12 +127,6 @@ internal sealed class ZlinkStreamReceiveDispatcher(
             return;
         }
 
-        if (payload.Length != 0)
-            throw ZlinkStreamConnector.Error(
-                ZlinkStreamErrorCode.FrameDecodeFailed,
-                "Heartbeat control packet payload must be empty."
-            );
-
         if (header.Name == ZlinkStreamConnector.HeartbeatPingName)
         {
             await frameSender
@@ -142,6 +136,9 @@ internal sealed class ZlinkStreamReceiveDispatcher(
         }
 
         if (header.Name == ZlinkStreamConnector.HeartbeatPongName)
+            return;
+
+        if (header.Name.StartsWith("$zlink.", StringComparison.Ordinal))
             return;
 
         throw ZlinkStreamConnector.Error(

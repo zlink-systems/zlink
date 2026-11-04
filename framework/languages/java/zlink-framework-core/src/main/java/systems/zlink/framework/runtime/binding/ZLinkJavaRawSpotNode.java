@@ -808,6 +808,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     requestAdmission,
                     decodeReply,
                     discardReply,
+                    mapFailure,
                     completion);
             return;
         }

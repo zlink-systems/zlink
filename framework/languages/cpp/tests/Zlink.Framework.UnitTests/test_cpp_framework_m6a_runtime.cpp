@@ -1085,9 +1085,8 @@ void verify_actor_create_readiness_deadline_is_timed_out ()
           auto payload = native_payload.to_bytes ();
           completion_promise.set_value ({terminal, std::move (payload)});
       });
-    assert (std::chrono::steady_clock::now () - submitted_at < 20ms);
+    assert (submitted.await_ready ());
     assert (await_task (std::move (submitted)));
-    assert (std::chrono::steady_clock::now () - submitted_at < 20ms);
     const auto deadline = submitted_at + 500ms;
     while (completion.wait_for (0ms) != std::future_status::ready
            && std::chrono::steady_clock::now () < deadline) {

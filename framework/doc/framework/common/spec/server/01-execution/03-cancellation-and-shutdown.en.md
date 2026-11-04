@@ -72,6 +72,10 @@ The rules for a call with a cancellation input that arrives already pre-cancelle
   [Binding async execution model §6](../../../../../../../bindings/doc/spec/async-execution-model.en.md#6-caller-wait-cancellation).**
   The binding owns native-operation lifetime and its registry, so the Framework does not redefine them.
   The Framework handles cancellation of its own queue waiting before handing work to the binding.
+  Results the binding has not delivered to the Framework are cleaned up by the binding and have no Framework effect.
+  The Framework does not ask the binding for replies it has already discarded. The prepared final consumer in
+  [Submit and Completion §9](01-submit-and-completion.en.md#9-request-completion--the-completion-race-and-timeout-budget)
+  owns the handling of results the Framework has already received.
 - Cancellation of [Logical Multicast](../00-foundation/02-glossary.en.md#logical-multicast) —
   delivering one message by ChannelName and topic to multiple
   [Spot](../00-foundation/02-glossary.en.md#spot) instances, each a logical instance with an

@@ -16,6 +16,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 
     private readonly ZLinkSessionContext _context;
     private readonly ZLinkMessageFlowTracer _flow;
+    private readonly ILogger _logger;
     private readonly ZLinkStreamSessionLiveness _liveness;
     private readonly ZLinkScopedHandlerInstanceOwner _handlerInstances;
     private IZLinkSession _handler = null!;
@@ -127,9 +128,10 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         _requireConnectionReady = requireConnectionReady;
         _handlerInstances = new ZLinkScopedHandlerInstanceOwner(scope.ServiceProvider);
         Stream = new ZLinkManagedStream(socket, routingId, _runtime.Registration.Codecs, transport);
+        _logger = ZLinkMessageFlowTracer.GetLogger(scope.ServiceProvider);
         _flow = new ZLinkMessageFlowTracer(
             _runtime.Registration.DispatchOptions,
-            ZLinkMessageFlowTracer.GetLogger(scope.ServiceProvider),
+            _logger,
             _runtime
         );
         _liveness = new ZLinkStreamSessionLiveness(timeProvider, livenessOptions);
@@ -593,7 +595,12 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                 );
                 if (decoded.Kind == ZlinkStreamMessageKind.Control)
                 {
-                    ZLinkStreamControlFrames.Dispatch(Stream, decoded, payload.AsReadOnlyMemory());
+                    ZLinkStreamControlFrames.Dispatch(
+                        Stream,
+                        decoded,
+                        payload.AsReadOnlyMemory(),
+                        _logger
+                    );
                     return;
                 }
             }
