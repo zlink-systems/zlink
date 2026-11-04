@@ -360,9 +360,7 @@ void fanout_location_runtime_t::wait_for_activity (std::chrono::milliseconds tim
 }
 
 task_t<bool> fanout_location_runtime_t::publish_descriptors (
-  location_write_intent_t intent,
-  std::stop_token cancellation,
-  std::optional<std::chrono::steady_clock::time_point> deadline)
+  location_write_intent_t intent, std::optional<std::chrono::steady_clock::time_point> deadline)
 {
     auto completion = std::make_shared<task_completion_source_t<void>> ();
     struct release_t
@@ -377,7 +375,7 @@ task_t<bool> fanout_location_runtime_t::publish_descriptors (
         return previous ? previous->task () : task_t<void> (result_t<void>::success ());
     });
     const auto owner = _locations->current_owner_token ();
-    if (!owner || cancellation.stop_requested () || _stop.stop_requested ())
+    if (!owner || _stop.stop_requested ())
         co_return false;
     struct pending_descriptor_t
     {
@@ -416,14 +414,14 @@ task_t<bool> fanout_location_runtime_t::publish_descriptors (
         return result;
     });
     for (auto &item : pending) {
-        if (cancellation.stop_requested () || _stop.stop_requested ())
+        if (_stop.stop_requested ())
             co_return false;
         const auto written = co_await _locations->descriptor_write_confirmed (
           [store = _store, descriptor = item.descriptor, intent = item.intent] {
               return store->update_fanout_publisher (descriptor, intent);
           },
-          std::chrono::steady_clock::now, cancellation, deadline, _stop.get_token ());
-        if (cancellation.stop_requested () || _stop.stop_requested ())
+          std::chrono::steady_clock::now, _stop.get_token (), deadline);
+        if (_stop.stop_requested ())
             co_return false;
         if (!written) {
             published = false;
@@ -440,11 +438,9 @@ task_t<bool> fanout_location_runtime_t::publish_descriptors (
 }
 
 task_t<bool> fanout_location_runtime_t::republish_after_store_recovery (
-  location_write_intent_t intent,
-  std::stop_token cancellation,
-  std::optional<std::chrono::steady_clock::time_point> deadline)
+  location_write_intent_t intent, std::optional<std::chrono::steady_clock::time_point> deadline)
 {
-    return publish_descriptors (intent, cancellation, deadline);
+    return publish_descriptors (intent, deadline);
 }
 
 void fanout_location_runtime_t::reconcile_subscribers ()
