@@ -65,7 +65,7 @@ final class ZLinkChannelCallRuntime {
     }
 
     private final ZLinkMessageFlowTracer flow;
-    private final ZLinkServiceOperationRegistry operations;
+    final ZLinkServiceOperationRegistry operations;
     private final LongSupplier nanoTime;
     private final ZLinkChannelReplyDecoder replyDecoder;
     private final SpotSend spotSend;

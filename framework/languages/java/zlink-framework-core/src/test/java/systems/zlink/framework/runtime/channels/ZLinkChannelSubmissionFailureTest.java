@@ -288,11 +288,7 @@ final class ZLinkChannelSubmissionFailureTest {
             ZLinkChannelCallRuntime runtime = runtime();
             try {
                 ZLinkChannelSocketRegistry registry = sockets(node);
-                var laneField = ZLinkChannelSocketRegistry.class.getDeclaredField("stateLane");
-                laneField.setAccessible(true);
-                var lane =
-                        (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
-                                laneField.get(registry);
+                var lane = registry.stateLane;
                 // Preserve the immediate binding-stage fast path when already in the Registry owner
                 // turn.
                 CompletionStage<Void> completion =

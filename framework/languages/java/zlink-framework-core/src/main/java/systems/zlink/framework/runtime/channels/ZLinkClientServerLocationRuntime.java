@@ -61,11 +61,11 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
     private final int pageSize;
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<String, PublishedServer> published = new LinkedHashMap<>();
-    private final Map<String, Connection> connections = new HashMap<>();
+    final Map<String, Connection> connections = new HashMap<>();
     private final ScheduledExecutorService scheduler;
     private final Executor infrastructureExecutor;
     private ScheduledFuture<?> scheduledTick;
-    private volatile boolean running;
+    volatile boolean running;
     private long lifecycleEpoch;
     private CompletableFuture<Void> admittedTick;
     private CompletableFuture<Void> stopCompletion;
@@ -935,7 +935,7 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
         }
     }
 
-    private record Connection(
+    record Connection(
             String connectionId,
             ZLinkClientServerServerDescriptor expected,
             ZLinkBackendDealerSocket dealer) {

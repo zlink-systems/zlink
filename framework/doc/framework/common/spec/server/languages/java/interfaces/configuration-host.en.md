@@ -30,6 +30,12 @@ The registry doesn't change after startup. Send-selection results are stored for
 first seen afterward is evaluated against the registration list on every send, and its
 result isn't stored.
 
+The `Executor` passed to `useHandlerExecutor(executor)` must run every task it
+accepts or reject it with `RejectedExecutionException`; it must not discard a task
+silently. At registration the Framework rejects a `ThreadPoolExecutor` whose
+rejection handler is `DiscardPolicy` or `DiscardOldestPolicy` (or a subclass) with
+`ZLinkConfigurationException`.
+
 ```java
 public interface ZLinkFrameworkOptions {
  Duration defaultRequestTimeout();

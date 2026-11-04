@@ -874,18 +874,22 @@ final class ZLinkCanonicalRelocationSettlementTest {
                             .listen("inproc://shutdown-target-" + UUID.randomUUID());
             mesh.channelName("shutdown-target").server();
             mesh.objects().server();
-            var runtime = ZLinkFrameworkRuntimeTestAccess.start(options);
+            var runtime =
+                    ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                            options,
+                            new systems.zlink.framework.runtime.binding
+                                    .ZLinkJavaBackendAdapterFactory(),
+                            systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
+                                    .reflection(),
+                            null,
+                            new ZLinkFrameworkRuntimeTestAccess.Construction()
+                                    .relocationStateMachines(List.of(target)));
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
                     .toCompletableFuture()
                     .get(3, TimeUnit.SECONDS);
             runtime.setMessageFlowModeAsync(ZLinkMessageFlowLogMode.NORMAL).join();
-            var bridgeField = runtime.getClass().getDeclaredField("spotRetire");
-            bridgeField.setAccessible(true);
-            Object bridge = bridgeField.get(runtime);
+            Object bridge = ZLinkFrameworkRuntimeTestAccess.spotRetire(runtime);
             assertNotNull(bridge);
-            var machinesField = bridge.getClass().getDeclaredField("stateMachines");
-            machinesField.setAccessible(true);
-            machinesField.set(bridge, List.of(target));
             return runtime;
         }
 

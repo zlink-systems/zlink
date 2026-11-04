@@ -149,14 +149,10 @@ final class ZLinkRelocationPublicationFailureTest {
     void expiredInternalBudgetSealsAdmissionAndUsesBoundedTeardown() throws Exception {
         var runtime = ZLinkFrameworkRuntimeTestAccess.start(new DefaultZLinkFrameworkOptions());
         try {
-            var terminate =
-                    ZLinkFrameworkRuntime.class.getDeclaredMethod(
-                            "beginTermination", Duration.class, ZLinkTerminationReason.class);
-            terminate.setAccessible(true);
             var completion =
                     (CompletionStage<ZLinkTerminationResult>)
-                            terminate.invoke(
-                                    runtime, Duration.ZERO, ZLinkTerminationReason.TEARDOWN_FAILED);
+                            runtime.beginTermination(
+                                    Duration.ZERO, ZLinkTerminationReason.TEARDOWN_FAILED);
             assertFalse(runtime.status().acceptingWork());
             var terminal = completion.toCompletableFuture().get(WAIT.toSeconds(), TimeUnit.SECONDS);
             assertEquals(ZLinkTerminationOutcome.FORCE_STOPPED, terminal.outcome());

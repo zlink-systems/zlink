@@ -74,14 +74,10 @@ final class ZLinkStatusPublisherTest {
 
                     public void onComplete() {}
                 });
-        var gateField = ZLinkStatusPublisher.class.getDeclaredField("retentionGate");
-        gateField.setAccessible(true);
-        var listField = ZLinkStatusPublisher.class.getDeclaredField("subscriptions");
-        listField.setAccessible(true);
-        var current = (java.util.List<?>) listField.get(publisher);
+        var current = publisher.subscriptions;
         CompletableFuture<Void> failed;
         var replacement = new CompletableFuture<Flow.Subscription>();
-        synchronized (gateField.get(publisher)) {
+        synchronized (publisher.retentionGate) {
             failed =
                     CompletableFuture.runAsync(
                             () -> publisher.fail(new IllegalStateException("registration")));

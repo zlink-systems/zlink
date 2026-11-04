@@ -54,12 +54,9 @@ final class SpotManagerTest {
                 .addEntrySpot(DirectEntrySpot.class);
         try (ZLinkFrameworkRuntime runtime =
                 RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
-            Object spots = runtime.spotManager();
-            var nodeField = spots.getClass().getDeclaredField("primaryNode");
-            nodeField.setAccessible(true);
             var node =
-                    (systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode)
-                            nodeField.get(spots);
+                    systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTesting.primaryNode(
+                            runtime.spotManager());
             ZLinkBackendSpot entry = node.entrySpot();
             entry.onDispatchEvent(
                     info -> {
@@ -271,19 +268,9 @@ final class SpotManagerTest {
                                     .get(5, TimeUnit.SECONDS));
             CompletionStage<Boolean> resumed = runtime.spotManager().close(created.spot());
             secondFailure.get(5, TimeUnit.SECONDS);
-            Object spots = runtime.spotManager();
-            var retainedField = spots.getClass().getDeclaredField("closingCoordinators");
-            retainedField.setAccessible(true);
-            Object retained =
-                    ((java.util.Map<?, ?>) retainedField.get(spots)).values().iterator().next();
-            var coordinatorField = retained.getClass().getDeclaredField("coordinator");
-            coordinatorField.setAccessible(true);
-            Object coordinator = coordinatorField.get(retained);
-            var attemptField = coordinator.getClass().getDeclaredField("attempt");
-            attemptField.setAccessible(true);
-            @SuppressWarnings("unchecked")
             CompletableFuture<Boolean> backgroundAttempt =
-                    (CompletableFuture<Boolean>) attemptField.get(coordinator);
+                    systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTesting
+                            .retainedCloseAttempt(runtime.spotManager());
             assertTrue(backgroundAttempt != null && !backgroundAttempt.isDone());
             heldSecondDelete.completeExceptionally(
                     new IllegalStateException("injected second User authority release failure"));

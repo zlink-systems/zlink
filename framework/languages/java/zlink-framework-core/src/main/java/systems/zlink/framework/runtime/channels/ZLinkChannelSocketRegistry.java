@@ -69,7 +69,7 @@ final class ZLinkChannelSocketRegistry {
     private final Map<String, ChannelRegistration> registrations = new ConcurrentHashMap<>();
     private final ZLinkApplicationJobQueue applicationJobQueue;
 
-    private final ZLinkStateLane stateLane = new ZLinkStateLane();
+    final ZLinkStateLane stateLane;
 
     private final Map<ZLinkBackendObject, ZLinkApplicationJobReceiveFlowController.Registration>
             receiveFlowRegistrations = new IdentityHashMap<>();
@@ -120,9 +120,18 @@ final class ZLinkChannelSocketRegistry {
             ZLinkApplicationJobQueue applicationJobQueue,
             java.util.function.LongSupplier requestNanoTime,
             java.util.function.BooleanSupplier closing) {
+        this(applicationJobQueue, requestNanoTime, closing, new ZLinkStateLane());
+    }
+
+    ZLinkChannelSocketRegistry(
+            ZLinkApplicationJobQueue applicationJobQueue,
+            java.util.function.LongSupplier requestNanoTime,
+            java.util.function.BooleanSupplier closing,
+            ZLinkStateLane stateLane) {
         this.applicationJobQueue = applicationJobQueue;
         this.requestNanoTime = requestNanoTime;
         this.closing = closing;
+        this.stateLane = java.util.Objects.requireNonNull(stateLane, "stateLane");
     }
 
     private final java.util.function.LongSupplier requestNanoTime;

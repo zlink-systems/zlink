@@ -44,7 +44,7 @@ public final class DefaultZLinkFrameworkOptions
         implements ZLinkFrameworkOptions,
                 systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendHandlerOptions,
                 systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopologyOptions {
-    private final ZLinkFrameworkRegistration registration = new ZLinkFrameworkRegistration();
+    private final ZLinkFrameworkRegistration registration;
     private final NetworkOptions network = new NetworkOptions();
     private final Map<String, ChannelKind> channelKinds = new HashMap<>();
     private final Map<String, ChannelRegistration> clientServerChannels = new HashMap<>();
@@ -52,6 +52,14 @@ public final class DefaultZLinkFrameworkOptions
     private final Set<String> routeMeshNames = new HashSet<>();
     private final Set<Class<?>> spotFactoryTypes = new HashSet<>();
     private final Set<String> streamNodeNames = new HashSet<>();
+
+    public DefaultZLinkFrameworkOptions() {
+        this(new ZLinkFrameworkRegistration());
+    }
+
+    DefaultZLinkFrameworkOptions(ZLinkFrameworkRegistration registration) {
+        this.registration = Objects.requireNonNull(registration, "registration");
+    }
 
     @Override
     public Duration defaultRequestTimeout() {

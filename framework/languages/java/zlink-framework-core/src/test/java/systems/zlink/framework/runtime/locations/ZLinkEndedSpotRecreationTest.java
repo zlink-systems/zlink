@@ -740,17 +740,19 @@ final class ZLinkEndedSpotRecreationTest {
     private static long oldSlots(Fixture fixture, boolean actors)
             throws ReflectiveOperationException {
         if (fixture.store instanceof ZLinkInMemoryLocationStore) {
-            var field = ZLinkInMemoryLocationStore.class.getDeclaredField("authority");
-            field.setAccessible(true);
-            return ((ZLinkInMemoryAuthorityStore) field.get(fixture.store))
+            return ((ZLinkInMemoryLocationStore) fixture.store)
+                    .authority
                     .kindCapacity(
                             new ZLinkMeshNodeDescriptorKey("mesh", fixture.oldDescriptor.rid()),
                             1,
                             actors)[0];
         }
-        var field = ZLinkProviderLocationRepository.class.getDeclaredField("provider");
-        field.setAccessible(true);
-        var provider = (ZLinkLocationStore) field.get(fixture.store);
+        var provider =
+                systems.zlink.framework.runtime.internal.locations
+                        .ZLinkProviderLocationRepositoryTestAccess.provider(
+                        (systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkProviderLocationRepository)
+                                fixture.store);
         var read =
                 (ZLinkStoreReadFound)
                         provider.read(new ZLinkStoreKey("zlink:v11:capacity:mesh:old"), () -> false)
@@ -1455,13 +1457,6 @@ final class ZLinkEndedSpotRecreationTest {
                                 ZLinkPlacementCapacityBundle.actor(0),
                                 fixture.oldOwner,
                                 "1");
-                var publish =
-                        ZLinkCanonicalRelocationAuthorityStateCodec.class.getDeclaredMethod(
-                                "publish",
-                                byte[].class,
-                                ZLinkAggregateRelocationCoordinator.Request.class,
-                                ZLinkAuthorityGenerationTransition.class);
-                publish.setAccessible(true);
                 assertInstanceOf(
                         ZLinkAuthorityStored.class,
                         fixture.store
@@ -1469,9 +1464,9 @@ final class ZLinkEndedSpotRecreationTest {
                                         memberKey,
                                         new ZLinkAuthorityExpectFound(before.storeVersion()),
                                         new ZLinkAuthorityPut(
-                                                (byte[])
-                                                        publish.invoke(
-                                                                null,
+                                                systems.zlink.framework.runtime.internal.locations
+                                                        .ZLinkCanonicalRelocationAuthorityStateCodecTestAccess
+                                                        .publish(
                                                                 before.payload(),
                                                                 relocation,
                                                                 ZLinkAuthorityGenerationTransition
@@ -1906,17 +1901,10 @@ final class ZLinkEndedSpotRecreationTest {
                         ZLinkPlacementCapacityBundle.actor(0),
                         fixture.oldOwner,
                         "1");
-        var publish =
-                ZLinkCanonicalRelocationAuthorityStateCodec.class.getDeclaredMethod(
-                        "publish",
-                        byte[].class,
-                        ZLinkAggregateRelocationCoordinator.Request.class,
-                        ZLinkAuthorityGenerationTransition.class);
-        publish.setAccessible(true);
         byte[] payload =
                 (byte[])
-                        publish.invoke(
-                                null,
+                        systems.zlink.framework.runtime.internal.locations
+                                .ZLinkCanonicalRelocationAuthorityStateCodecTestAccess.publish(
                                 before.payload(),
                                 relocation,
                                 ZLinkAuthorityGenerationTransition.PRESERVE);

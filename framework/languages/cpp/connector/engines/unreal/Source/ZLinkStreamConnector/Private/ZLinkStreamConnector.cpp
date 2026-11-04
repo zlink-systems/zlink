@@ -450,6 +450,8 @@ class FZLinkStreamConnectorRuntime
     }
 
   private:
+    friend struct unreal_stream_connector_test_access_t;
+
     struct sending_entry_t
     {
         std::shared_ptr<TFunction<void (FZLinkStreamRequestSendingContext &)>> Callback;

@@ -221,7 +221,9 @@ class stream_runtime_t
      * on the session's transport writer; the sweep loop owns the cadence. */
     void send_heartbeat_ping (stream_t &stream) const noexcept;
     void send_heartbeat_pong (stream_t &stream) const noexcept;
-    void dispatch_control_frame (stream_t &stream, const stream_header_t &header) const noexcept;
+    void dispatch_control_frame (stream_t &stream,
+                                 const stream_header_t &header,
+                                 const zlink::message_t &payload) const;
 
   private:
     std::shared_ptr<stream_runtime_state_t> _state;

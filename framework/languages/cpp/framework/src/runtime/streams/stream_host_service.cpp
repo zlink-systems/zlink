@@ -2518,24 +2518,24 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         trace_stream_host ("core-frame", _stream, header,
                            "rid=" + rid.to_hex ()
                              + " payload_bytes=" + std::to_string (payload.size ()));
-        if (header.kind () == stream_message_kind_t::control) {
-            std::lock_guard session_lock (current->gate);
-            if (current->connected && !current->closing) {
-                detail::session_actor_manager_access_t::set_codec (*current->actors,
-                                                                   header.codec ());
-                _runtime.dispatch_control_frame (current->stream, header);
-            }
-            return true;
-        }
-        if (current->replacement
-            && current->replacement->closing.load (std::memory_order_acquire)) {
-            return false;
-        }
-
         bool submitted = false;
         bool protocol_error = false;
         std::optional<result_t<void>> rejected;
         try {
+            if (header.kind () == stream_message_kind_t::control) {
+                std::lock_guard session_lock (current->gate);
+                if (current->connected && !current->closing) {
+                    detail::session_actor_manager_access_t::set_codec (*current->actors,
+                                                                       header.codec ());
+                    _runtime.dispatch_control_frame (current->stream, header, payload);
+                }
+                return true;
+            }
+            if (current->replacement
+                && current->replacement->closing.load (std::memory_order_acquire)) {
+                return false;
+            }
+
             std::lock_guard session_lock (current->gate);
             if (current->connected && !current->closing) {
                 trace_stream_host ("core-dispatch-submit", _stream, header, "rid=" + rid.to_hex ());
@@ -3402,7 +3402,8 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                                                 != stream_message_kind_t::control);
                     batch.account (received_frame.payload.size ());
                     if (received_frame.header.kind () == stream_message_kind_t::control) {
-                        _runtime.dispatch_control_frame (stream, received_frame.header);
+                        _runtime.dispatch_control_frame (stream, received_frame.header,
+                                                         received_frame.payload);
                         continue;
                     }
                     std::shared_ptr<application_job_queue_t::permit_t> application_permit;

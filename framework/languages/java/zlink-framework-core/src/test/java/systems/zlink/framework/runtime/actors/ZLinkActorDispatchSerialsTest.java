@@ -23,7 +23,6 @@ import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.spots.ZLinkSpotSerialExecutor;
 import systems.zlink.framework.runtime.spots.ZLinkSpotSerialExecutorTesting;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
@@ -483,12 +482,16 @@ final class ZLinkActorDispatchSerialsTest {
         owner.set(target);
         var claim = dispatches.prepareAsync("actor-1").toCompletableFuture().join();
         assertSame(source, claim.target());
-        Field queuesField = ZLinkSpotSerialExecutor.class.getDeclaredField("actorQueues");
-        queuesField.setAccessible(true);
-        var targetQueues = (java.util.Map<?, ?>) queuesField.get(target);
         try {
             assertTrue(
-                    targetState.runNowOrQueue(targetQueues::isEmpty).toCompletableFuture().join());
+                    targetState
+                            .runNowOrQueue(
+                                    () ->
+                                            systems.zlink.framework.runtime.spots
+                                                    .ZLinkSpotRuntimeTestAccess.actorQueuesEmpty(
+                                                    (ZLinkSpotSerialExecutor) target))
+                            .toCompletableFuture()
+                            .join());
         } finally {
             cleanup.complete(null);
             teardown.toCompletableFuture().join();

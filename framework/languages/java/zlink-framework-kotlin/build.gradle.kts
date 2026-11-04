@@ -21,6 +21,13 @@ dependencies {
     testImplementation(rootProject.project(":zlink-framework-core").extensions.getByType<SourceSetContainer>()["test"].output)
 }
 
+gradle.projectsEvaluated {
+    val connectorTests =
+        rootProject.project(":zlink-stream-connector")
+            .extensions.getByType<SourceSetContainer>()["test"].output
+    project.dependencies.add("testImplementation", connectorTests)
+}
+
 val detektMain = tasks.named<Detekt>("detektMain")
 val detektNegative =
     tasks.register<Detekt>("detektNegative") {

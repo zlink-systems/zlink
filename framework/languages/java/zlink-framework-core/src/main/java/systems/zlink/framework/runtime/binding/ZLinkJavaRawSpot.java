@@ -35,10 +35,10 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot {
     private final ZLinkJavaRawSpotNode owner;
     private final long lifecycleGeneration;
     private final Queue<ZLinkBackendReceived> routes = new ConcurrentLinkedQueue<>();
-    private final Queue<ZLinkBackendTopicMessage> subscriptions = new ConcurrentLinkedQueue<>();
+    final Queue<ZLinkBackendTopicMessage> subscriptions = new ConcurrentLinkedQueue<>();
     private final Set<ZLinkBackendSubscription> subscriptionTargets = ConcurrentHashMap.newKeySet();
     private volatile String spotId;
-    private volatile ZLinkBackendSpotDispatchHandler dispatchHandler;
+    volatile ZLinkBackendSpotDispatchHandler dispatchHandler;
 
     ZLinkJavaRawSpot(ZLinkJavaRawSpotNode owner, String spotId, long lifecycleGeneration) {
         this.owner = owner;

@@ -33,7 +33,6 @@ import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -76,6 +75,8 @@ final class ZLinkChannelShutdownInFlightTest {
                                 .daemon()
                                 .name("channel-shutdown-test-timeout")
                                 .factory());
+        CompletableFuture<Void> waiting = new CompletableFuture<>();
+        ExecutorService executor = ZLinkChannelRuntime.createInfrastructureExecutor();
         ZLinkChannelRuntime runtime =
                 new ZLinkChannelRuntime(
                         backend,
@@ -93,16 +94,10 @@ final class ZLinkChannelShutdownInFlightTest {
                                 },
                         System::nanoTime,
                         java.util.concurrent.locks.LockSupport::parkNanos,
-                        scheduler);
-        var executorField = ZLinkChannelRuntime.class.getDeclaredField("infrastructureExecutor");
-        executorField.setAccessible(true);
-        ExecutorService executor = (ExecutorService) executorField.get(runtime);
-        CompletableFuture<Void> waiting = new CompletableFuture<>();
-        executorField.set(runtime, observeExecutor(executor, waiting, false));
+                        scheduler,
+                        observeExecutor(executor, waiting, false));
         if (dealerLiveness) {
-            var socketsField = ZLinkChannelRuntime.class.getDeclaredField("sockets");
-            socketsField.setAccessible(true);
-            var sockets = (ZLinkChannelSocketRegistry) socketsField.get(runtime);
+            var sockets = runtime.sockets;
             var descriptor =
                     new ZLinkClientServerServerDescriptor(
                             "orders",
@@ -246,23 +241,11 @@ final class ZLinkChannelShutdownInFlightTest {
                         executor,
                         Duration.ofSeconds(WAIT_SECONDS),
                         1);
-        var runningField = ZLinkClientServerLocationRuntime.class.getDeclaredField("running");
-        runningField.setAccessible(true);
-        runningField.setBoolean(location, true);
-        var connectionClass =
-                Class.forName(ZLinkClientServerLocationRuntime.class.getName() + "$Connection");
-        var constructor = connectionClass.getDeclaredConstructors()[0];
-        constructor.setAccessible(true);
-        var connectionsField =
-                ZLinkClientServerLocationRuntime.class.getDeclaredField("connections");
-        connectionsField.setAccessible(true);
-        @SuppressWarnings("unchecked")
-        var connections = (Map<String, Object>) connectionsField.get(location);
-        connections.put("liveness", constructor.newInstance("liveness", descriptor, dealer));
-        var locationField =
-                ZLinkChannelRuntime.class.getDeclaredField("clientServerLocationRuntime");
-        locationField.setAccessible(true);
-        locationField.set(runtime, location);
+        location.running = true;
+        location.connections.put(
+                "liveness",
+                new ZLinkClientServerLocationRuntime.Connection("liveness", descriptor, dealer));
+        runtime.clientServerLocationRuntime = location;
     }
 
     @Test
@@ -273,17 +256,33 @@ final class ZLinkChannelShutdownInFlightTest {
         var backend = new BlockingChannelBackend(events, entered, release);
         var options = new DefaultZLinkFrameworkOptions();
         options.addFanoutChannel("fanout").enablePublisher("inproc://c1876-expired");
+        var waiting = new CompletableFuture<Void>();
+        ExecutorService executor = ZLinkChannelRuntime.createInfrastructureExecutor();
+        var scheduler =
+                Executors.newSingleThreadScheduledExecutor(
+                        Thread.ofPlatform()
+                                .daemon()
+                                .name("channel-shutdown-expired-timeout")
+                                .factory());
         var runtime =
                 new ZLinkChannelRuntime(
                         backend,
+                        backend.createContext(),
+                        true,
+                        null,
+                        null,
                         options.registration(),
                         new ZLinkJsonMessageSerializer(),
-                        ZLinkHandlerActivator.services());
-        var executorField = ZLinkChannelRuntime.class.getDeclaredField("infrastructureExecutor");
-        executorField.setAccessible(true);
-        ExecutorService executor = (ExecutorService) executorField.get(runtime);
-        var waiting = new CompletableFuture<Void>();
-        executorField.set(runtime, observeExecutor(executor, waiting, true));
+                        ZLinkHandlerActivator.services(),
+                        null,
+                        (ignoredBackend, ignoredKey) ->
+                                (ignoredSubmission, ignoredCleanup) -> {
+                                    throw new AssertionError("unexpected one-way admission");
+                                },
+                        System::nanoTime,
+                        java.util.concurrent.locks.LockSupport::parkNanos,
+                        scheduler,
+                        observeExecutor(executor, waiting, true));
         CompletableFuture<Void> closing = null;
         try {
             assertTrue(entered.await(WAIT_SECONDS, TimeUnit.SECONDS));
@@ -300,7 +299,6 @@ final class ZLinkChannelShutdownInFlightTest {
             if (closing != null)
                 closing.handle((ignored, failure) -> null).get(WAIT_SECONDS, TimeUnit.SECONDS);
             assertTrue(executor.awaitTermination(WAIT_SECONDS, TimeUnit.SECONDS));
-            executorField.set(runtime, executor);
             runtime.close();
         }
         var result = closing;

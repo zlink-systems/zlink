@@ -42,8 +42,6 @@ import systems.zlink.framework.streams.ZLinkSessionActor;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -540,9 +538,7 @@ final class ZLinkSessionActorBindingContractTest {
         ZLinkSessionActorsRuntime runtime = runtime(stream);
         ZLinkSessionActor existing =
                 runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
-        Field slots = ZLinkSessionActorsRuntime.class.getDeclaredField("nextActorSlot");
-        slots.setAccessible(true);
-        slots.setInt(runtime, 0x10000);
+        runtime.nextActorSlot = 0x10000;
 
         CompletionException failure =
                 assertThrows(
@@ -1191,25 +1187,18 @@ final class ZLinkSessionActorBindingContractTest {
         assertEquals(1, stream.disconnectedPeers);
     }
 
-    private static void expireRelocationSeal(ZLinkSessionActorsRuntime runtime) throws Exception {
+    private static void expireRelocationSeal(ZLinkSessionActorsRuntime runtime) {
         expireRelocationSeal(runtime, currentSealTerminal(runtime));
     }
 
-    private static Object currentSealTerminal(ZLinkSessionActorsRuntime runtime) throws Exception {
-        Field terminals = ZLinkSessionActorsRuntime.class.getDeclaredField("sealTerminals");
-        terminals.setAccessible(true);
-        return ((Map<?, ?>) terminals.get(runtime)).values().iterator().next();
+    private static ZLinkSessionActorsRuntime.SealTerminal currentSealTerminal(
+            ZLinkSessionActorsRuntime runtime) {
+        return runtime.sealTerminals.values().iterator().next();
     }
 
-    private static void expireRelocationSeal(ZLinkSessionActorsRuntime runtime, Object terminal)
-            throws Exception {
-        Method expiration =
-                java.util.Arrays.stream(ZLinkSessionActorsRuntime.class.getDeclaredMethods())
-                        .filter(method -> method.getName().equals("expireRelocationSeal"))
-                        .findFirst()
-                        .orElseThrow();
-        expiration.setAccessible(true);
-        expiration.invoke(runtime, terminal);
+    private static void expireRelocationSeal(
+            ZLinkSessionActorsRuntime runtime, ZLinkSessionActorsRuntime.SealTerminal terminal) {
+        runtime.expireRelocationSeal(terminal);
     }
 
     private static ZLinkServiceM6BWireCodec.RelocationIdentity relocation() {
@@ -1350,17 +1339,10 @@ final class ZLinkSessionActorBindingContractTest {
     }
 
     private static void corruptIngressGateProjection(
-            ZLinkSessionActorsRuntime runtime, long objectGeneration, long bindingGeneration)
-            throws Exception {
-        Field gatesField = ZLinkSessionActorsRuntime.class.getDeclaredField("ingressGates");
-        gatesField.setAccessible(true);
-        Object gate = ((Map<?, ?>) gatesField.get(runtime)).get("actor-1");
-        Field objectField = gate.getClass().getDeclaredField("objectGeneration");
-        objectField.setAccessible(true);
-        objectField.setLong(gate, objectGeneration);
-        Field bindingField = gate.getClass().getDeclaredField("bindingGeneration");
-        bindingField.setAccessible(true);
-        bindingField.setLong(gate, bindingGeneration);
+            ZLinkSessionActorsRuntime runtime, long objectGeneration, long bindingGeneration) {
+        runtime.ingressGates.put(
+                "actor-1",
+                new ZLinkSessionActorsRuntime.IngressGate(objectGeneration, bindingGeneration));
     }
 
     private static ZLinkSessionActorsRuntime runtime(

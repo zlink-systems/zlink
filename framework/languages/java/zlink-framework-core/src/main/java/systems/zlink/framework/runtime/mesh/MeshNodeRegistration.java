@@ -60,7 +60,7 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
     private final List<Peer> peers = new ArrayList<>();
     private final List<DispatchHandler> routeHandlers = new ArrayList<>();
     private final List<Class<? extends ZLinkSpot<?>>> spotFactories = new ArrayList<>();
-    private final List<Class<? extends ZLinkEntrySpot<?>>> entrySpots = new ArrayList<>();
+    final List<Class<? extends ZLinkEntrySpot<?>>> entrySpots = new ArrayList<>();
     private final Map<String, Class<? extends ZLinkActorFactory>> actorFactories =
             new LinkedHashMap<>();
     private final Map<String, RelocatableSpotFactory<?>> relocatableSpotFactories =

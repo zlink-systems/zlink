@@ -513,7 +513,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                             probe);
                     store.releaseReady.complete(null);
                     if (replacedBoundary) {
-                        SourceEntrySpot.beforeClose.get(5, TimeUnit.SECONDS);
+                        awaitSourceBeforeClose();
                         try (var seed = new RetainedAdmissionBoundary(target, backend, spotId);
                                 var late =
                                         new RetainedAdmissionBoundary(
@@ -722,9 +722,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                             SourceEntrySpot.reply.get(5, TimeUnit.SECONDS));
                     return;
                 }
-                CompletableFuture.anyOf(SourceEntrySpot.beforeClose, SourceEntrySpot.reply)
-                        .get(5, TimeUnit.SECONDS);
-                assertTrue(SourceEntrySpot.beforeClose.isDone());
+                awaitSourceBeforeClose();
                 if (failCommit) {
                     store.failNextAuthorityPut.set(true);
                 } else if (failureStage == CloseScenario.COMMIT_APPLIED_FAILURE
@@ -862,6 +860,12 @@ final class InstanceSpotRuntimeIntegrationTest {
                 if (requestFlowCapture != null) requestFlowCapture.close();
             }
         }
+    }
+
+    private static void awaitSourceBeforeClose() throws Exception {
+        CompletableFuture.anyOf(SourceEntrySpot.beforeClose, SourceEntrySpot.reply)
+                .get(5, TimeUnit.SECONDS);
+        assertTrue(SourceEntrySpot.beforeClose.isDone());
     }
 
     private static String awaitSourceReplyWithDiagnostics(
@@ -1054,10 +1058,6 @@ final class InstanceSpotRuntimeIntegrationTest {
                 String spotId,
                 boolean instanceIntent)
                 throws Exception {
-            Object spots = runtime.spotManager();
-            var activations = spots.getClass().getDeclaredField("instanceSpotActivations");
-            activations.setAccessible(true);
-            Object activation = ((java.util.Map<?, ?>) activations.get(spots)).get(spotId);
             var route =
                     new systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                             .InstanceColdActivation(
@@ -1133,28 +1133,22 @@ final class InstanceSpotRuntimeIntegrationTest {
                                 1,
                                 1,
                                 null));
-            var admit =
-                    activation
-                            .getClass()
-                            .getDeclaredMethod(
-                                    "admitRoute",
-                                    systems.zlink.framework.runtime.internal.backend
-                                            .ZLinkBackendReceived.class,
-                                    CompletableFuture.class);
-            admit.setAccessible(true);
             executor.submit(
                     () -> {
                         try {
                             start.get(5, TimeUnit.SECONDS);
                             var completion =
-                                    (CompletionStage<?>)
-                                            admit.invoke(activation, received, admitted);
+                                    systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTesting
+                                            .admitInstanceSpotRoute(
+                                                    runtime.spotManager(),
+                                                    spotId,
+                                                    received,
+                                                    admitted);
                             completion.whenComplete(
                                     (value, failure) -> {
                                         if (failure != null) reply.completeExceptionally(failure);
                                     });
-                        } catch (ReflectiveOperationException
-                                | java.util.concurrent.ExecutionException
+                        } catch (java.util.concurrent.ExecutionException
                                 | java.util.concurrent.TimeoutException failure) {
                             admitted.completeExceptionally(failure);
                         } catch (InterruptedException failure) {
@@ -1215,18 +1209,15 @@ final class InstanceSpotRuntimeIntegrationTest {
     }
 
     /** Waits until the target's route scan has dropped the Closing Instance authority. */
-    private static void awaitClosingRouteDropped(Object spots, String spotId) throws Exception {
-        var meshes = spots.getClass().getDeclaredField("routeMeshNodesByName");
-        meshes.setAccessible(true);
+    private static void awaitClosingRouteDropped(
+            systems.zlink.framework.spots.ZLinkSpotManager spots, String spotId) throws Exception {
         var mesh =
-                (systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode)
-                        ((java.util.Map<?, ?>) meshes.get(spots)).get("game");
-        Object spotNode = mesh.spotNode();
-        var authorities = spotNode.getClass().getDeclaredField("instanceAuthorities");
-        authorities.setAccessible(true);
-        var registered = (java.util.Map<?, ?>) authorities.get(spotNode);
+                systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTesting.meshNode(
+                        spots, "game");
+        var spotNode = mesh.spotNode();
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (registered.containsKey(spotId)) {
+        while (systems.zlink.framework.runtime.binding.ZLinkJavaReadyRouteTestAccess
+                .hasInstanceAuthority(spotNode, spotId)) {
             if (System.nanoTime() > deadline) {
                 throw new java.util.concurrent.TimeoutException(
                         "route scan kept the Closing Instance authority");
@@ -1493,11 +1484,8 @@ final class InstanceSpotRuntimeIntegrationTest {
                 SourceEntrySpot.start.complete(null);
                 SourceEntrySpot.beforeClose.get(5, TimeUnit.SECONDS);
                 // Establish the scan-owned Ready projection before testing its Closing removal.
-                var routesField =
-                        ZLinkFrameworkRuntime.class.getDeclaredField("authorityRouteRuntime");
-                routesField.setAccessible(true);
-                ((systems.zlink.framework.runtime.locations.ZLinkStatefulAuthorityRouteRuntime)
-                                routesField.get(target))
+                systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess
+                        .authorityRouteRuntime(target)
                         .reconcile()
                         .toCompletableFuture()
                         .get(5, TimeUnit.SECONDS);

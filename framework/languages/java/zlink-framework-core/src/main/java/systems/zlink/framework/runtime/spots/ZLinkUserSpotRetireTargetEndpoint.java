@@ -58,13 +58,13 @@ final class ZLinkUserSpotRetireTargetEndpoint
 
     private final RoutingId localNodeRid;
     private final long localNodeGeneration;
-    private final ZLinkAggregateRelocationCoordinator coordinator;
+    final ZLinkAggregateRelocationCoordinator coordinator;
     private final ZLinkUserSpotAggregateStagingOwner staging;
     private final Function<String, Class<? extends ZLinkSpot<?>>> spotTypes;
     private final ZLinkUserSpotAggregateStagingOwner.JournalReplayer fallbackReplayer;
     private final ZLinkSessionRelocationPeerClient sessionRoutes;
     private final Duration routeTimeout;
-    private final SteadyNormalizer normalizer;
+    final SteadyNormalizer normalizer;
     private final BiFunction<
                     ZLinkSpotRetireControl.StageRequest, Map<String, Long>, CompletionStage<Void>>
             boundSessionRestorer;

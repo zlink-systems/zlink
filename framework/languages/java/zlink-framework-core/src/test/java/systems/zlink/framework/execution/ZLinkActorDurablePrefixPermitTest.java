@@ -213,34 +213,26 @@ final class ZLinkActorDurablePrefixPermitTest {
     @org.junit.jupiter.api.RepeatedTest(20)
     void durableOwnershipIsDetachedBeforeItsEntryBecomesVisible() throws Exception {
         var executor = new ManualExecutor();
-        var actor =
-                new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.actorDelivery());
-        var ownershipField =
-                Class.forName(ZLinkSerialExecutionQueue.class.getName() + "$Entry")
-                        .getDeclaredField("applicationJobOwnership");
-        ownershipField.setAccessible(true);
         var observations = new ArrayList<Boolean>();
         var intercepted =
-                new ArrayDeque<Object>() {
+                new ArrayDeque<ZLinkSerialExecutionQueue.Entry>() {
                     @Override
-                    public void addLast(Object entry) {
-                        try {
-                            var ownership =
-                                    (ZLinkApplicationJobContext.QueuedOwnership)
-                                            ownershipField.get(entry);
-                            observations.add(
-                                    ownership != null
-                                            && ownership.isDurable()
-                                            && !ownership.isRunnable());
-                        } catch (IllegalAccessException failure) {
-                            observations.add(false);
-                        }
+                    public void addLast(ZLinkSerialExecutionQueue.Entry entry) {
+                        var ownership = entry.applicationJobOwnership;
+                        observations.add(
+                                ownership != null
+                                        && ownership.isDurable()
+                                        && !ownership.isRunnable());
                         super.addLast(entry);
                     }
                 };
-        var pending = ZLinkSerialExecutionQueue.class.getDeclaredField("applicationPending");
-        pending.setAccessible(true);
-        pending.set(actor, intercepted);
+        var actor =
+                new ZLinkSerialExecutionQueue(
+                        executor,
+                        ZLinkExecutionLanePolicy.actorDelivery(),
+                        ZLinkSerialExecutionQueue.DEFAULT_LIFECYCLE_BURST_LIMIT,
+                        ZLinkSerialExecutionQueue.DEFAULT_OWNER_TIME_BUDGET,
+                        intercepted);
         try (var jobs =
                 new ZLinkApplicationJobQueue(
                         ZLinkApplicationJobQueueProfile.BALANCED,
@@ -879,16 +871,6 @@ final class ZLinkActorDurablePrefixPermitTest {
                 new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.actorDelivery());
         var terminal = new CompletableFuture<Void>();
         var calls = new ArrayList<String>();
-        var hold =
-                ZLinkSerialExecutionQueue.class.getDeclaredMethod(
-                        "holdRelocationIngress",
-                        byte[].class,
-                        java.util.function.Supplier.class,
-                        Runnable.class,
-                        Object.class,
-                        CompletableFuture.class,
-                        CompletableFuture.class);
-        hold.setAccessible(true);
         try (var jobs =
                 new ZLinkApplicationJobQueue(
                         ZLinkApplicationJobQueueProfile.BALANCED,
@@ -903,8 +885,7 @@ final class ZLinkActorDurablePrefixPermitTest {
             try (var scope = ZLinkApplicationJobContext.enter(permit)) {
                 synchronized (serial) {
                     entry =
-                            hold.invoke(
-                                    serial,
+                            serial.holdRelocationIngress(
                                     new byte[] {1},
                                     (java.util.function.Supplier<
                                                     java.util.concurrent.CompletionStage<Void>>)
@@ -920,10 +901,6 @@ final class ZLinkActorDurablePrefixPermitTest {
                                     terminal);
                 }
             }
-            var settle =
-                    ZLinkSerialExecutionQueue.class.getDeclaredMethod(
-                            "settleOwnership", entry.getClass());
-            settle.setAccessible(true);
             try {
                 assertEquals(1, jobs.snapshot().permitsInUse());
                 assertTrue(serial.abortRelocation(seal).toCompletableFuture().join());
@@ -931,7 +908,7 @@ final class ZLinkActorDurablePrefixPermitTest {
                 assertFalse(
                         terminal.isDone(), "head is restored while its initial claim is detached");
                 assertEquals(0, jobs.snapshot().capacityWaiters());
-                settle.invoke(serial, entry);
+                serial.settleOwnership((ZLinkSerialExecutionQueue.Entry) entry);
                 executor.drain();
                 assertTrue(
                         terminal.isDone(),
@@ -939,7 +916,7 @@ final class ZLinkActorDurablePrefixPermitTest {
                 terminal.join();
                 assertEquals(List.of("held"), calls);
             } finally {
-                settle.invoke(serial, entry);
+                serial.settleOwnership((ZLinkSerialExecutionQueue.Entry) entry);
                 permit.abandonReservation();
                 if (!terminal.isDone())
                     serial.enqueuePreviouslyAccepted(() -> CompletableFuture.completedFuture(null));

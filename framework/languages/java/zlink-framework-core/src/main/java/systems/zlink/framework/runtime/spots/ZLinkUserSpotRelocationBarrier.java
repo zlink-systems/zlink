@@ -25,7 +25,7 @@ final class ZLinkUserSpotRelocationBarrier {
     private final DefaultSpotContext context;
     private final ZLinkActorSessionCoordinator actors;
     private final ZLinkCompositeRelocationBarrier barrier = new ZLinkCompositeRelocationBarrier();
-    private final ZLinkStateLane stateLane = new ZLinkStateLane();
+    final ZLinkStateLane stateLane = new ZLinkStateLane();
     private Seal active;
     private boolean sealing;
     private boolean committing;

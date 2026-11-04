@@ -43,7 +43,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
                             + " running");
     private final ZLinkInstanceSpotHandlerRegistry publicHandlers =
             handlerType -> handlers.addHandler(handlerType);
-    private final ZLinkSpotTimerRegistry timers;
+    final ZLinkSpotTimerRegistry timers;
     private ZLinkInstanceSpot spot;
     private ZLinkInstanceSpotActivation activation;
 

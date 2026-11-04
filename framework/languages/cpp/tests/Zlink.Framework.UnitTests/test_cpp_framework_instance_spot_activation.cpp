@@ -1017,7 +1017,6 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     auto errors =
       std::make_shared<fw::test::telemetry_observations_t<fw::message_dispatch_error_event_t>> ();
     constexpr auto source_budget = 80ms;
-    auto deadline_worker_release = std::make_shared<fw::task_completion_source_t<void>> ();
     auto &dispatch = options.configure_dispatch ();
     dispatch.message_flow (fw::message_flow_log_mode_t::normal);
     fw::detail::dispatch_options_access_t::set_observer_for_tests (
@@ -1055,6 +1054,39 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
         std::promise<void> entered;
         fw::task_completion_source_t<void> release;
     };
+    class recovery_gate_t final : public fw::runtime::stateful::relocation_store_port_t
+    {
+      public:
+        fw::runtime::stateful::relocation_stored_t
+        put (const std::vector<std::uint8_t> &payload,
+             std::chrono::hours,
+             std::chrono::steady_clock::time_point) override
+        {
+            entered.set_value (
+              fw::runtime::protocol::decode_instance_activation_recovery (payload, false)
+                .activation.target.deadline_unix_ms);
+            return fw::runtime::infrastructure_result ([&] { return release.task (); }).value ();
+        }
+        std::optional<std::vector<std::uint8_t>> get (const std::string &) override
+        {
+            ADD_FAILURE () << "Unexpected recovery read";
+            return std::nullopt;
+        }
+        void remove (const std::string &) override
+        {
+            ADD_FAILURE () << "Unexpected recovery removal";
+        }
+        std::promise<std::uint64_t> entered;
+        fw::task_completion_source_t<fw::runtime::stateful::relocation_stored_t> release;
+    };
+    auto recovery = std::make_shared<recovery_gate_t> ();
+    auto recovery_entered = recovery->entered.get_future ();
+    app.advanced ().services ().add_factory<fw::runtime::stateful::relocation_store_port_t> (
+      [recovery] (auto &) {
+          return std::static_pointer_cast<fw::runtime::stateful::relocation_store_port_t> (
+            recovery);
+      },
+      fw::service_lifetime_t::singleton);
     auto store = std::make_shared<lookup_gate_store_t> ();
     auto lookup_entered = store->entered.get_future ();
     options.add_location_store (store);
@@ -1079,7 +1111,9 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     std::thread host ([&] { exit_code = app.run (1, argv); });
     auto cleanup =
       std::unique_ptr<fw::app_t, std::function<void (fw::app_t *)>> (&app, [&] (auto *) {
-          deadline_worker_release->complete (fw::result_t<void>::success ());
+          recovery->release.complete (
+            fw::result_t<fw::runtime::stateful::relocation_stored_t>::failure (
+              fw::framework_error_kind_t::unavailable, "Controlled recovery Store failure"));
           store->release.complete (fw::result_t<void>::success ());
           app.stop ();
           host.join ();
@@ -1090,36 +1124,42 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     ASSERT_TRUE (app.is_ready ());
     auto provider = app.advanced ().services ().build_provider ();
     auto &client = provider.get_required<fw::route_client_t> ();
+    const auto unix_ms = [] (auto at) {
+        return static_cast<std::uint64_t> (
+          std::chrono::duration_cast<std::chrono::milliseconds> (at.time_since_epoch ()).count ());
+    };
+    const auto before_send = std::chrono::system_clock::now ();
     auto send = client.send_to_spot ("budget-player-1", traced_event_t{11})
                   .instance_spot ("traced-player")
                   .in_mesh ("activation-budget")
                   .async ();
     ASSERT_EQ (std::future_status::ready, lookup_entered.wait_for (3s));
-    auto budget_elapsed = std::make_shared<std::promise<void>> ();
-    auto elapsed = budget_elapsed->get_future ();
-    fw::detail::deadline_scheduler_t::instance ().schedule (
-      std::chrono::steady_clock::now () + source_budget + 1ms,
-      std::make_shared<fw::detail::deadline_state_t> (), [budget_elapsed, deadline_worker_release] {
-          budget_elapsed->set_value ();
-          // Hold admission expiry until the expired Store operation fixes the terminal.
-          deadline_worker_release->task ().result ().value ();
-      });
-    ASSERT_EQ (std::future_status::ready, elapsed.wait_for (1s));
+    const auto lookup_started = std::chrono::system_clock::now ();
+    // Crossing the source budget must not finish a send still waiting for resolve.
+    auto source_expired = advance_activation_deadline (unix_ms (lookup_started + source_budget));
+    ASSERT_EQ (std::future_status::ready, source_expired.wait_for (1s));
+    EXPECT_TRUE (source_expired.get ());
     EXPECT_FALSE (send.await_ready ());
     store->release.complete (fw::result_t<void>::success ());
-    // The expired activation deadline reaches the target in ZLIA; send admission succeeds.
+    // Outbound admission succeeds while target recovery is still pending.
     const auto admitted = send.result_for (1s);
     ASSERT_TRUE (admitted.has_value ());
     ASSERT_TRUE (*admitted);
-    // Spot address messaging §4.2/§5: admission does not finish activation.
-    // Observe that activation's terminal instead of assuming a later request starts a new one.
+    ASSERT_EQ (std::future_status::ready, recovery_entered.wait_for (3s));
+    const auto activation_deadline = recovery_entered.get ();
+    EXPECT_GE (activation_deadline, unix_ms (before_send + source_budget));
+    EXPECT_LE (activation_deadline, unix_ms (lookup_started + source_budget));
+    // Spot address messaging §5: expire the captured source budget while recovery
+    // is pending. Advancing the scheduler does not assume the two clocks advance equally.
+    auto expired = advance_activation_deadline (activation_deadline);
+    ASSERT_EQ (std::future_status::ready, expired.wait_for (1s));
+    EXPECT_TRUE (expired.get ());
     const auto observation_deadline = std::chrono::steady_clock::now () + 3s;
     {
         std::unique_lock lock (errors->mutex);
         ASSERT_TRUE (errors->changed.wait_until (lock, observation_deadline,
                                                  [&] { return !errors->events.empty (); }));
     }
-    deadline_worker_release->complete (fw::result_t<void>::success ());
     // Activation records its dropped flow before reporting this terminal error.
     fw::test::acknowledge_delivery (observation_deadline);
     const auto dropped = flows->snapshot ();
@@ -1137,7 +1177,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     EXPECT_EQ (fw::dispatch_error_action_t::drop, terminal.error_action);
     ASSERT_EQ (1u, diagnostics.size ());
     EXPECT_EQ (typeid (fw::framework_exception_t).name (), diagnostics.front ().error_type);
-    EXPECT_EQ ("relocation Store operation deadline elapsed", diagnostics.front ().error_message);
+    EXPECT_EQ ("Instance Spot activation deadline expired", diagnostics.front ().error_message);
     EXPECT_EQ (terminal.exception, diagnostics.front ().exception);
     EXPECT_FALSE (instance);
     EXPECT_TRUE (send.result ());

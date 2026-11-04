@@ -31,7 +31,7 @@ public final class ZoneSpot implements ZLinkSpot<PlayerActor> {
     private final NodeCensus census;
     private final ZLinkActorClient actorClient;
     private final SampleTopology topology;
-    private final Map<String, PlayerActor> residents = new HashMap<>();
+    final Map<String, PlayerActor> residents = new HashMap<>();
     private final Map<String, Messages.EnterZoneReq> pendingJoins = new HashMap<>();
     private final Map<String, BorderSnapshot> borderSnapshots = new HashMap<>();
     private ZLinkTimer tickTimer;

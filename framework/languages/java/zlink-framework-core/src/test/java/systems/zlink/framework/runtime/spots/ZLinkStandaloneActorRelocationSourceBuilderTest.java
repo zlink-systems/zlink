@@ -132,8 +132,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             byte[] acceptedRecord =
                     ZLinkAcceptedJournalTestRecords.actor(
                             "actor-a", 51, "accepted-reply", Map.of(), new byte[] {7});
-            var replyRoutes =
-                    (ZLinkSpotRelocationReplyRoutes) readField(runtime, "relocationReplyRoutes");
+            var replyRoutes = runtime.relocationReplyRoutes;
             AtomicInteger replies = new AtomicInteger();
             replyRoutes.registerActor(
                     acceptedRecord,
@@ -278,9 +277,10 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                     builder.prepare("actor-b", rollingToVersionOne(), NEVER)
                             .toCompletableFuture()
                             .get();
-            Object actorRuntime = readField(runtime.actorSessions(), "actors");
-            Object dispatches = readField(actorRuntime, "dispatches");
-            ZLinkStateLane lane = (ZLinkStateLane) readField(dispatches, "stateLane");
+            var actorRuntime = runtime.actorSessions().actors;
+            ZLinkStateLane lane =
+                    systems.zlink.framework.runtime.actors.ZLinkActorRuntimeTestAccess.dispatchLane(
+                            actorRuntime);
             CompletableFuture<Void> entered = new CompletableFuture<>();
             CompletableFuture<Void> release = new CompletableFuture<>();
             assertTrue(
@@ -966,12 +966,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                 TestActor actor, byte[] state, ZLinkRelocationCancellation cancellation) {
             return CompletableFuture.completedFuture(null);
         }
-    }
-
-    private static Object readField(Object owner, String name) throws Exception {
-        java.lang.reflect.Field field = owner.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(owner);
     }
 
     /** An Entry Spot that accepts every Actor type, so the node can create new Actors. */

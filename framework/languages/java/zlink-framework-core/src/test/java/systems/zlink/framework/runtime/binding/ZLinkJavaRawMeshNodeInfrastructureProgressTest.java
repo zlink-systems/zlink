@@ -9,15 +9,11 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.sockets.ReceiveFlowState;
-import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 
-import java.lang.reflect.Method;
 import java.time.Duration;
-import java.util.List;
 import java.util.OptionalLong;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -43,31 +39,18 @@ final class ZLinkJavaRawMeshNodeInfrastructureProgressTest {
             source.setRoutingId(sourceRid);
             source.setBind(sourceEndpoint);
             source.start();
-            var routerField = ZLinkJavaRawMeshNode.class.getDeclaredField("router");
-            routerField.setAccessible(true);
-            var router = (RouterSocket) routerField.get(source);
+            var router = source.router;
             router.options().sendHwm(1);
             source.connectPeer(pausedEndpoint, pausedRid);
             await(() -> !router.routesSnapshot().isEmpty());
 
-            Method send =
-                    ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-                            "sendLiveness", RoutingId.class, List.class);
-            send.setAccessible(true);
-            Method encode =
-                    ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-                            "encodeLiveness", int.class, long.class);
-            encode.setAccessible(true);
-            @SuppressWarnings("unchecked")
             var frames =
-                    (List<byte[]>)
-                            encode.invoke(
-                                    null,
-                                    systems.zlink.framework.runtime.protocol.ServiceWireConstants
-                                            .COMMAND_LIVENESS_PROBE,
-                                    1L);
-            var fill = (CompletionStage<?>) send.invoke(source, pausedRid, frames);
-            var pending = (CompletionStage<?>) send.invoke(source, pausedRid, frames);
+                    ZLinkJavaRawMeshNode.encodeLiveness(
+                            systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                                    .COMMAND_LIVENESS_PROBE,
+                            1L);
+            var fill = source.sendLiveness(pausedRid, frames);
+            var pending = source.sendLiveness(pausedRid, frames);
             assertFalse(pending.toCompletableFuture().isDone(), pending.toString());
 
             other.setRoutingId(otherRid);

@@ -50,10 +50,10 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     private static final Duration INFINITE_WAIT = Duration.ofMillis(-1);
     private final Context context;
     private final boolean ownsContext;
-    private final LinkedHashMap<RouterSocket, ZLinkJavaSocketReceivePoller> receivePollers =
+    final LinkedHashMap<RouterSocket, ZLinkJavaSocketReceivePoller> receivePollers =
             new LinkedHashMap<>();
     private final ZLinkStateLane stateLane;
-    private final ZLinkServiceOperationRegistry operations;
+    final ZLinkServiceOperationRegistry operations;
     private CloseAttempt closeAttempt;
 
     private Function<
