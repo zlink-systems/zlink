@@ -2776,6 +2776,25 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       OpenSSL::SSL OpenSSL::Crypto)
   endif()
   add_zlink_framework_test(
+    test_cpp_stream_control_contract
+    tests/Zlink.Framework.UnitTests/test_cpp_stream_control_contract.cpp
+    "framework-unit;framework-contract;stream;liveness"
+    contract)
+  zlink_framework_cpp_add_boost_headers(test_cpp_stream_control_contract)
+  target_include_directories(test_cpp_stream_control_contract PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/connector/core/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_link_libraries(test_cpp_stream_control_contract PRIVATE zlink::stream_connector)
+  foreach(_control_case server server-core connector debug)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_stream_control_${_control_case}
+      COMMAND test_cpp_stream_control_contract ${_control_case}
+      LABELS "framework-unit;framework-contract;stream;liveness"
+      TIER contract
+      TIMEOUT 30)
+  endforeach()
+
+  add_zlink_framework_test(
     test_cpp_framework_stream_liveness
     tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_liveness.cpp
     "framework-unit;framework-contract;stream;liveness"
