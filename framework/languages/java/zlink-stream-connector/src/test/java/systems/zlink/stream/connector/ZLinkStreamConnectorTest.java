@@ -18,7 +18,6 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.messaging.Message;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.Proxy;
 import java.net.URI;
 import java.nio.ByteBuffer;
@@ -38,7 +37,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import javax.net.ssl.SSLHandshakeException;
@@ -274,9 +272,7 @@ final class ZLinkStreamConnectorTest {
     void completedSendTailReentryKeepsTheSecondFrameBehindTheFirstWrite() throws Exception {
         DefaultZLinkStreamConnector connector =
                 new DefaultZLinkStreamConnector(options(ZLinkStreamDispatchMode.IMMEDIATE));
-        Field lifecycleField = DefaultZLinkStreamConnector.class.getDeclaredField("lifecycle");
-        lifecycleField.setAccessible(true);
-        Object lifecycle = lifecycleField.get(connector);
+        ZLinkStreamConnectionLifecycle lifecycle = connector.lifecycle;
         AtomicBoolean firstWriteReturned = new AtomicBoolean();
         AtomicReference<Boolean> secondSawFirstReturn = new AtomicReference<>();
         AtomicReference<CompletionStage<Void>> reentrantSend = new AtomicReference<>();
@@ -306,8 +302,8 @@ final class ZLinkStreamConnectorTest {
                                     }
                                     return CompletableFuture.completedFuture(null);
                                 });
-        setField(lifecycle, "connection", transport);
-        setField(lifecycle, "state", ZLinkStreamConnectionState.CONNECTED);
+        lifecycle.connection = transport;
+        lifecycle.state = ZLinkStreamConnectionState.CONNECTED;
 
         CompletionStage<Void> first = sendEmptyPayload(connector, "first");
         first.toCompletableFuture().join();
@@ -354,14 +350,12 @@ final class ZLinkStreamConnectorTest {
     void sendCompletesOnlyAfterItsFrameIsWrittenToTheTransport() throws Exception {
         DefaultZLinkStreamConnector connector =
                 new DefaultZLinkStreamConnector(options(ZLinkStreamDispatchMode.IMMEDIATE));
-        Field lifecycleField = DefaultZLinkStreamConnector.class.getDeclaredField("lifecycle");
-        lifecycleField.setAccessible(true);
-        Object lifecycle = lifecycleField.get(connector);
+        ZLinkStreamConnectionLifecycle lifecycle = connector.lifecycle;
         CompletableFuture<Void> firstWrite = new CompletableFuture<>();
         List<String> written = new ArrayList<>();
         AtomicBoolean closed = new AtomicBoolean();
-        setField(lifecycle, "connection", heldFirstWriteTransport(firstWrite, written, closed));
-        setField(lifecycle, "state", ZLinkStreamConnectionState.CONNECTED);
+        lifecycle.connection = heldFirstWriteTransport(firstWrite, written, closed);
+        lifecycle.state = ZLinkStreamConnectionState.CONNECTED;
 
         CompletableFuture<Void> first =
                 connector.send(payload("first", "a")).submit().toCompletableFuture();
@@ -396,14 +390,12 @@ final class ZLinkStreamConnectorTest {
                                 true,
                                 false,
                                 ZLinkStreamCompression.NONE));
-        Field lifecycleField = DefaultZLinkStreamConnector.class.getDeclaredField("lifecycle");
-        lifecycleField.setAccessible(true);
-        Object lifecycle = lifecycleField.get(connector);
+        ZLinkStreamConnectionLifecycle lifecycle = connector.lifecycle;
         CompletableFuture<Void> firstWrite = new CompletableFuture<>();
         List<String> written = new ArrayList<>();
         AtomicBoolean closed = new AtomicBoolean();
-        setField(lifecycle, "connection", heldFirstWriteTransport(firstWrite, written, closed));
-        setField(lifecycle, "state", ZLinkStreamConnectionState.CONNECTED);
+        lifecycle.connection = heldFirstWriteTransport(firstWrite, written, closed);
+        lifecycle.state = ZLinkStreamConnectionState.CONNECTED;
 
         CompletableFuture<Void> first =
                 connector.send(payload("first", "a")).submit().toCompletableFuture();
@@ -444,7 +436,7 @@ final class ZLinkStreamConnectorTest {
     void closeNeverLetsThePeerReceiveAFrameWhoseSendFailedWithDisconnected() throws Exception {
         DefaultZLinkStreamConnector connector =
                 new DefaultZLinkStreamConnector(options(ZLinkStreamDispatchMode.IMMEDIATE));
-        Object lifecycle = lifecycleOf(connector);
+        ZLinkStreamConnectionLifecycle lifecycle = lifecycleOf(connector);
         CompletableFuture<Void> firstWrite = new CompletableFuture<>();
         CountDownLatch secondWriteStarted = new CountDownLatch(1);
         CountDownLatch releaseSecondWrite = new CountDownLatch(1);
@@ -480,8 +472,8 @@ final class ZLinkStreamConnectorTest {
                                     }
                                     return null;
                                 });
-        setField(lifecycle, "connection", transport);
-        setField(lifecycle, "state", ZLinkStreamConnectionState.CONNECTED);
+        lifecycle.connection = transport;
+        lifecycle.state = ZLinkStreamConnectionState.CONNECTED;
 
         CompletableFuture<Void> first =
                 connector.send(payload("first", "a")).submit().toCompletableFuture();
@@ -520,7 +512,7 @@ final class ZLinkStreamConnectorTest {
     void closeEndsTheFrameBeingWrittenWithDisconnected() throws Exception {
         DefaultZLinkStreamConnector connector =
                 new DefaultZLinkStreamConnector(options(ZLinkStreamDispatchMode.IMMEDIATE));
-        Object lifecycle = lifecycleOf(connector);
+        ZLinkStreamConnectionLifecycle lifecycle = lifecycleOf(connector);
         CompletableFuture<Void> heldWrite = new CompletableFuture<>();
         ZLinkStreamTransportConnection transport =
                 (ZLinkStreamTransportConnection)
@@ -544,8 +536,8 @@ final class ZLinkStreamConnectorTest {
                                     }
                                     return null;
                                 });
-        setField(lifecycle, "connection", transport);
-        setField(lifecycle, "state", ZLinkStreamConnectionState.CONNECTED);
+        lifecycle.connection = transport;
+        lifecycle.state = ZLinkStreamConnectionState.CONNECTED;
 
         CompletableFuture<Void> send =
                 connector.send(payload("held", "a")).submit().toCompletableFuture();
@@ -562,10 +554,10 @@ final class ZLinkStreamConnectorTest {
     void closeCompletesAnInFlightConnectAsDisconnected() throws Exception {
         DefaultZLinkStreamConnector connector =
                 new DefaultZLinkStreamConnector(options(ZLinkStreamDispatchMode.IMMEDIATE));
-        Object lifecycle = lifecycleOf(connector);
+        ZLinkStreamConnectionLifecycle lifecycle = lifecycleOf(connector);
         CompletableFuture<Void> attempt = new CompletableFuture<>();
-        setField(lifecycle, "state", ZLinkStreamConnectionState.CONNECTING);
-        setField(lifecycle, "connectionAttempt", attempt);
+        lifecycle.state = ZLinkStreamConnectionState.CONNECTING;
+        lifecycle.connectionAttempt = attempt;
 
         CompletableFuture<Void> connecting = connector.connect().submit().toCompletableFuture();
         ConnectorTestAwait.await(connector.close());
@@ -591,7 +583,7 @@ final class ZLinkStreamConnectorTest {
                                 false,
                                 false,
                                 ZLinkStreamCompression.LZ4));
-        Object lifecycle = lifecycleOf(connector);
+        ZLinkStreamConnectionLifecycle lifecycle = lifecycleOf(connector);
         AtomicInteger writes = new AtomicInteger();
         ZLinkStreamTransportConnection transport =
                 (ZLinkStreamTransportConnection)
@@ -610,8 +602,8 @@ final class ZLinkStreamConnectorTest {
                                             case "isOpen" -> true;
                                             default -> null;
                                         });
-        setField(lifecycle, "connection", transport);
-        setField(lifecycle, "state", ZLinkStreamConnectionState.CONNECTED);
+        lifecycle.connection = transport;
+        lifecycle.state = ZLinkStreamConnectionState.CONNECTED;
         CompletableFuture<ZLinkStreamReplyReceivedContext> replyContext = new CompletableFuture<>();
         connector.onReplyReceived(replyContext::complete);
 
@@ -668,8 +660,7 @@ final class ZLinkStreamConnectorTest {
             }
             assertTrue(stalled != null, "the peer that stopped reading must stall a frame write");
             io.netty.channel.Channel socket =
-                    (io.netty.channel.Channel)
-                            fieldValue(fieldValue(lifecycleOf(connector), "connection"), "channel");
+                    ((ZLinkNettyTransportConnection) lifecycleOf(connector).connection).channel;
 
             connector.close().submit().toCompletableFuture().get(5, TimeUnit.SECONDS);
 
@@ -685,14 +676,9 @@ final class ZLinkStreamConnectorTest {
         }
     }
 
-    private static Object lifecycleOf(DefaultZLinkStreamConnector connector) throws Exception {
-        return fieldValue(connector, "lifecycle");
-    }
-
-    private static Object fieldValue(Object target, String name) throws Exception {
-        Field field = target.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(target);
+    private static ZLinkStreamConnectionLifecycle lifecycleOf(
+            DefaultZLinkStreamConnector connector) {
+        return connector.lifecycle;
     }
 
     private static String frameName(Object frame) {
@@ -705,12 +691,8 @@ final class ZLinkStreamConnectorTest {
     void sendAdmissionCannotPassAConnectionEnd() throws Exception {
         DefaultZLinkStreamConnector connector =
                 new DefaultZLinkStreamConnector(options(ZLinkStreamDispatchMode.IMMEDIATE));
-        Field lifecycleField = DefaultZLinkStreamConnector.class.getDeclaredField("lifecycle");
-        lifecycleField.setAccessible(true);
-        Object lifecycle = lifecycleField.get(connector);
-        Field admissionLockField = lifecycle.getClass().getDeclaredField("connectionAttemptLock");
-        admissionLockField.setAccessible(true);
-        Object admissionLock = admissionLockField.get(lifecycle);
+        ZLinkStreamConnectionLifecycle lifecycle = connector.lifecycle;
+        Object admissionLock = lifecycle.connectionAttemptLock;
         AtomicInteger writes = new AtomicInteger();
         ZLinkStreamTransportConnection transport =
                 (ZLinkStreamTransportConnection)
@@ -727,8 +709,8 @@ final class ZLinkStreamConnectorTest {
                                     }
                                     return null;
                                 });
-        setField(lifecycle, "connection", transport);
-        setField(lifecycle, "state", ZLinkStreamConnectionState.CONNECTED);
+        lifecycle.connection = transport;
+        lifecycle.state = ZLinkStreamConnectionState.CONNECTED;
         AtomicReference<Throwable> failure = new AtomicReference<>();
         CountDownLatch entering = new CountDownLatch(1);
         Thread sender =
@@ -753,8 +735,8 @@ final class ZLinkStreamConnectorTest {
                 Thread.onSpinWait();
             }
             assertEquals(0, writes.get(), "send must wait for lifecycle admission");
-            setField(lifecycle, "connection", null);
-            setField(lifecycle, "state", ZLinkStreamConnectionState.CLOSED);
+            lifecycle.connection = null;
+            lifecycle.state = ZLinkStreamConnectionState.CLOSED;
         }
         sender.join(TimeUnit.SECONDS.toMillis(5));
         assertFalse(sender.isAlive());
@@ -772,12 +754,6 @@ final class ZLinkStreamConnectorTest {
             // submit() encodes the payload into its own frame bytes before it returns.
             payload.payload().close();
         }
-    }
-
-    private static void setField(Object target, String name, Object value) throws Exception {
-        Field field = target.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        field.set(target, value);
     }
 
     @Test
@@ -2152,13 +2128,11 @@ final class ZLinkStreamConnectorTest {
     @Test
     void requestSequenceExhaustionDoesNotReuseAnEarlierValue() throws Exception {
         try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
-            ZLinkStreamConnector connector =
-                    createConnector(server.options(ZLinkStreamDispatchMode.MANUAL));
+            DefaultZLinkStreamConnector connector =
+                    (DefaultZLinkStreamConnector)
+                            createConnector(server.options(ZLinkStreamDispatchMode.MANUAL));
             ConnectorTestAwait.await(connector.connect());
-            Field sequenceField =
-                    DefaultZLinkStreamConnector.class.getDeclaredField("nextRequestSeq");
-            sequenceField.setAccessible(true);
-            ((AtomicLong) sequenceField.get(connector)).set(-2L);
+            connector.nextRequestSeq.set(-2L);
 
             var first = connector.request(payload("Echo", "first")).submit();
             assertEquals(-1L, server.readFrameAsync().join().header().requestSeq());
@@ -2224,9 +2198,7 @@ final class ZLinkStreamConnectorTest {
                                     ZLinkStreamCompression.LZ4,
                                     codec));
             connectors.add(connector);
-            timer.set(
-                    (java.util.concurrent.ScheduledExecutorService)
-                            fieldValue(connector, "timeouts"));
+            timer.set((java.util.concurrent.ScheduledExecutorService) connector.timeouts);
             ConnectorTestAwait.await(connector.connect());
 
             CompletableFuture<ZLinkStreamEncodedPayload> pending =

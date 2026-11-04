@@ -14,6 +14,7 @@ import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.service.*;
 import systems.zlink.framework.runtime.locations.*;
 import systems.zlink.framework.runtime.spots.ZLinkSpotRuntime;
+import systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTestAccess;
 
 import java.time.Duration;
 import java.util.*;
@@ -189,14 +190,13 @@ final class StoredInstanceActivationTest {
             var before =
                     (ZLinkAuthoritySnapshot)
                             store.read(key, () -> false).toCompletableFuture().join();
-            var method =
-                    ZLinkSpotRuntime.class.getDeclaredMethod(
-                            (field.equals("match") || field.equals("operation"))
-                                    ? "readInstanceSpotActivationTarget"
-                                    : "reserveInstanceSpotTarget",
-                            ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope.class);
-            method.setAccessible(true);
-            var result = (CompletionStage<?>) method.invoke(host, envelope);
+            var spotRuntime = host;
+            var result =
+                    (field.equals("match") || field.equals("operation"))
+                            ? ZLinkSpotRuntimeTestAccess.readInstanceSpotActivationTarget(
+                                    spotRuntime, envelope)
+                            : ZLinkSpotRuntimeTestAccess.reserveInstanceSpotTarget(
+                                    spotRuntime, envelope);
             if ((field.equals("match") || field.equals("operation"))) {
                 assertInstanceOf(
                         ZLinkAuthoritySnapshot.class,

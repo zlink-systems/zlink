@@ -23,7 +23,6 @@ import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.spots.*;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.util.List;
@@ -81,10 +80,12 @@ final class ZLinkLocalActorCutoverAdmissionTest {
                 var node = ((ZLinkSpotRuntime) host.spotManager()).primaryNode();
                 var entry = node.entrySpot();
                 var original =
-                        (ZLinkInternalAsyncSpotDispatchHandler) field(entry, "dispatchHandler");
+                        (ZLinkInternalAsyncSpotDispatchHandler)
+                                systems.zlink.framework.runtime.binding
+                                        .ZLinkJavaRawSpotNodeTestAccess.dispatchHandler(entry);
                 var originalFollow =
-                        (ZLinkInternalSpotNode.MessageFollowRelayHandler)
-                                field(node, "messageFollowRelayHandler");
+                        systems.zlink.framework.runtime.binding.ZLinkJavaRawSpotNodeTestAccess
+                                .messageFollowRelayHandler(node);
                 assertNotNull(originalFollow);
                 var lookups = new AtomicInteger();
                 var nativeDispatches = new AtomicInteger();
@@ -330,12 +331,6 @@ final class ZLinkLocalActorCutoverAdmissionTest {
         } catch (InvocationTargetException failure) {
             throw failure.getCause();
         }
-    }
-
-    private static Object field(Object target, String name) throws Exception {
-        Field field = target.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(target);
     }
 
     private static DefaultZLinkFrameworkOptions options() {

@@ -25,7 +25,6 @@ import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
-import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.EnumSet;
@@ -44,20 +43,19 @@ import java.util.concurrent.atomic.AtomicReference;
 final class ZLinkJavaStreamSocketAsyncTerminalTest {
     @Test
     void idleReceiveAndSubmitDoNotPostSocketOwnerTasks() throws Exception {
+        AtomicInteger postedTasks = new AtomicInteger();
         try (var context = Zlink.createContext();
-                var stream = new ZLinkJavaStreamSocket(context.createStreamSocket(), null);
+                var stream =
+                        new ZLinkJavaStreamSocket(
+                                context.createStreamSocket(),
+                                null,
+                                new ZLinkStateLane(
+                                        command -> {
+                                            postedTasks.incrementAndGet();
+                                            command.run();
+                                        }));
                 Message payload = Message.from(new byte[0])) {
             stream.bind("tcp://127.0.0.1:0");
-            AtomicInteger postedTasks = new AtomicInteger();
-            Field laneField = ZLinkJavaStreamSocket.class.getDeclaredField("stateLane");
-            laneField.setAccessible(true);
-            laneField.set(
-                    stream,
-                    new ZLinkStateLane(
-                            command -> {
-                                postedTasks.incrementAndGet();
-                                command.run();
-                            }));
 
             assertNull(stream.recv());
             assertEquals(0, postedTasks.get(), "idle receive must not post a socket owner task");
@@ -117,28 +115,22 @@ final class ZLinkJavaStreamSocketAsyncTerminalTest {
         var monitorType =
                 systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitor.class;
         var eventMonitor =
-                java.lang.reflect.Proxy.newProxyInstance(
-                        monitorType.getClassLoader(),
-                        new Class<?>[] {monitorType},
-                        (proxy, method, args) ->
-                                switch (method.getName()) {
-                                    case "isClosed" -> events.isEmpty();
-                                    case "waitForReadable" -> true;
-                                    case "recvDontWait" -> events.remove();
-                                    default -> throw new AssertionError(method.getName());
-                                });
+                (systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitor)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                monitorType.getClassLoader(),
+                                new Class<?>[] {monitorType},
+                                (proxy, method, args) ->
+                                        switch (method.getName()) {
+                                            case "isClosed" -> events.isEmpty();
+                                            case "waitForReadable" -> true;
+                                            case "recvDontWait" -> events.remove();
+                                            default -> throw new AssertionError(method.getName());
+                                        });
         try (var context = Zlink.createContext();
                 var stream = new ZLinkJavaStreamSocket(context.createStreamSocket(), null)) {
-            var receiver =
-                    ZLinkJavaStreamSocket.class.getDeclaredMethod(
-                            "receiveMonitorEvents",
-                            monitorType,
-                            systems.zlink.framework.runtime.internal.backend
-                                    .ZLinkBackendStreamErrorHandler.class);
-            receiver.setAccessible(true);
             systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamErrorHandler
                     callback = (peer, event, nativeCode, message) -> delivered.add(event);
-            receiver.invoke(stream, eventMonitor, callback);
+            stream.receiveMonitorEvents(eventMonitor, callback);
             assertEquals(
                     List.of(MonitorEventType.CONNECTION_READY, MonitorEventType.DISCONNECTED),
                     delivered);
@@ -172,25 +164,19 @@ final class ZLinkJavaStreamSocketAsyncTerminalTest {
                     systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitor
                             .class;
             var eventMonitor =
-                    java.lang.reflect.Proxy.newProxyInstance(
-                            monitorType.getClassLoader(),
-                            new Class<?>[] {monitorType},
-                            (proxy, method, args) -> {
-                                if (method.getName().equals("isClosed")) {
-                                    return false;
-                                }
-                                throw injected;
-                            });
-            var receiver =
-                    ZLinkJavaStreamSocket.class.getDeclaredMethod(
-                            "receiveMonitorEvents",
-                            monitorType,
-                            systems.zlink.framework.runtime.internal.backend
-                                    .ZLinkBackendStreamErrorHandler.class);
-            receiver.setAccessible(true);
+                    (systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitor)
+                            java.lang.reflect.Proxy.newProxyInstance(
+                                    monitorType.getClassLoader(),
+                                    new Class<?>[] {monitorType},
+                                    (proxy, method, args) -> {
+                                        if (method.getName().equals("isClosed")) {
+                                            return false;
+                                        }
+                                        throw injected;
+                                    });
             systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamErrorHandler
                     callback = (rid, event, nativeCode, message) -> {};
-            receiver.invoke(stream, eventMonitor, callback);
+            stream.receiveMonitorEvents(eventMonitor, callback);
             assertEquals(injected, failure.get(5, TimeUnit.SECONDS));
         } finally {
             logger.removeHandler(logHandler);
@@ -280,9 +266,7 @@ final class ZLinkJavaStreamSocketAsyncTerminalTest {
                 var node = new ZLinkJavaRawMeshNode(context, "mesh");
                 var stream = new ZLinkJavaStreamSocket(context.createStreamSocket(), node);
                 Message payload = Message.from(new byte[0])) {
-            Field stateLaneField = ZLinkJavaStreamSocket.class.getDeclaredField("stateLane");
-            stateLaneField.setAccessible(true);
-            ZLinkStateLane stateLane = (ZLinkStateLane) stateLaneField.get(stream);
+            ZLinkStateLane stateLane = stream.stateLane;
             CompletionStage<Void> laneBlocker =
                     stateLane.runAsync(
                             () -> {
@@ -350,9 +334,7 @@ final class ZLinkJavaStreamSocketAsyncTerminalTest {
                 var node = new ZLinkJavaRawMeshNode(context, "mesh");
                 var stream = new ZLinkJavaStreamSocket(context.createStreamSocket(), node);
                 Message frame = Message.from("bound-session-frame")) {
-            Field stateLaneField = ZLinkJavaStreamSocket.class.getDeclaredField("stateLane");
-            stateLaneField.setAccessible(true);
-            ZLinkStateLane stateLane = (ZLinkStateLane) stateLaneField.get(stream);
+            ZLinkStateLane stateLane = stream.stateLane;
             CompletionStage<Void> laneBlocker =
                     stateLane.runAsync(
                             () -> {

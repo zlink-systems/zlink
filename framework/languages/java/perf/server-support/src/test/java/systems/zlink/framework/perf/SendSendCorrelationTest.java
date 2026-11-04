@@ -10,7 +10,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
-import java.lang.reflect.Field;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
@@ -101,11 +100,8 @@ class SendSendCorrelationTest {
         }
     }
 
-    private static PerfEchoRequest retainedRequest(SendSendCorrelation.Entry entry)
-            throws ReflectiveOperationException {
-        Field request = SendSendCorrelation.Entry.class.getDeclaredField("request");
-        request.setAccessible(true);
-        return (PerfEchoRequest) request.get(entry);
+    private static PerfEchoRequest retainedRequest(SendSendCorrelation.Entry entry) {
+        return entry.request;
     }
 
     @Test

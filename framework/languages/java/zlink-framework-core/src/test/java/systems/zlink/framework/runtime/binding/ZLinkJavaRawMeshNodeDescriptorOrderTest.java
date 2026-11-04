@@ -12,9 +12,6 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
-import java.lang.reflect.Field;
-import java.util.Map;
-import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -59,18 +56,18 @@ class ZLinkJavaRawMeshNodeDescriptorOrderTest {
                     });
             assertTrue(blocked.await(2, TimeUnit.SECONDS));
             CompletableFuture<Void> serving = CompletableFuture.runAsync(target::markServiceReady);
-            Field mailboxField = ZLinkStateLane.class.getDeclaredField("mailbox");
-            mailboxField.setAccessible(true);
-            var pendingTurns = (Queue<?>) mailboxField.get(descriptorLane);
-            await(() -> pendingTurns.size() == 1);
+            await(
+                    () ->
+                            systems.zlink.framework.runtime.internal.execution
+                                            .ZLinkStateLaneTestAccess.queuedTurnCount(
+                                            descriptorLane)
+                                    == 1);
 
             source.connectPeer(endpoint, targetRid);
             // Observe the peer HELLO's validation, rather than an incidental number of
             // queued control turns. Both HELLO and ADMIT respect the pending publication.
             await(() -> target.configuredPeerIds().contains(source.routingId()));
-            Field channelsField = ZLinkJavaRawMeshNode.class.getDeclaredField("knownPeerChannels");
-            channelsField.setAccessible(true);
-            var knownChannels = (Map<?, ?>) channelsField.get(target);
+            var knownChannels = target.knownPeerChannels;
             await(() -> knownChannels.containsKey(source.routingId()));
             assertEquals(
                     ZLinkOneWayCalls.ROUTE_NOT_CONNECTED,
@@ -93,9 +90,7 @@ class ZLinkJavaRawMeshNodeDescriptorOrderTest {
     }
 
     private static ZLinkStateLane descriptorLane(ZLinkJavaRawMeshNode node) throws Exception {
-        Field field = ZLinkJavaRawMeshNode.class.getDeclaredField("descriptorStateLane");
-        field.setAccessible(true);
-        return (ZLinkStateLane) field.get(node);
+        return node.descriptorStateLane;
     }
 
     private static void awaitLatch(CountDownLatch latch) {

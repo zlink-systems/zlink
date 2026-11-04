@@ -15,7 +15,7 @@ import java.util.function.Supplier;
 final class ZLinkAutoConnectLoop implements AutoCloseable {
     private final ZLinkAutoConnectReconciler reconciler;
     private final ZLinkLocationOptions options;
-    private final Supplier<CompletionStage<Void>> refreshCapacity;
+    final Supplier<CompletionStage<Void>> refreshCapacity;
     private final ScheduledExecutorService executor;
     private final Object lifecycleGate = new Object();
     private ScheduledFuture<?> task;
@@ -130,7 +130,7 @@ final class ZLinkAutoConnectLoop implements AutoCloseable {
         return reconciler.markDraining();
     }
 
-    private CompletionStage<Void> tick() {
+    CompletionStage<Void> tick() {
         return reconciler.tick(this::runContinuation).thenCompose(ignored -> refreshCapacity.get());
     }
 

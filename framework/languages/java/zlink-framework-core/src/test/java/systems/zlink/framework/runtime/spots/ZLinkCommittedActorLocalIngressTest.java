@@ -16,6 +16,7 @@ import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
+import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
@@ -25,15 +26,11 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
-import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.spots.*;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -108,8 +105,7 @@ final class ZLinkCommittedActorLocalIngressTest {
                         .toCompletableFuture()
                         .get(WAIT_SECONDS, TimeUnit.SECONDS);
                 committed.get(WAIT_SECONDS, TimeUnit.SECONDS);
-                var resolvers =
-                        (ZLinkStoreLocationResolvers) field(target, "storeLocationResolvers");
+                var resolvers = ZLinkFrameworkRuntimeTestAccess.storeLocationResolvers(target);
                 var route =
                         resolvers
                                 .resolveActor(ACTOR)
@@ -319,10 +315,9 @@ final class ZLinkCommittedActorLocalIngressTest {
                     .get(WAIT_SECONDS, TimeUnit.SECONDS);
             var targetNode = node(target);
             var targetCleanup = new CompletableFuture<CompletionStage<Void>>();
-            @SuppressWarnings("unchecked")
             var targetMachines =
-                    (List<ZLinkCanonicalRelocationStateMachine>)
-                            field(field(target, "spotRetire"), "stateMachines");
+                    ZLinkSpotRuntimeTestAccess.relocationStateMachines(
+                            ZLinkFrameworkRuntimeTestAccess.spotRetire(target));
             Runnable observeTargetCleanup =
                     () ->
                             targetCleanup.complete(
@@ -483,31 +478,16 @@ final class ZLinkCommittedActorLocalIngressTest {
             ZLinkInternalSpotNode node,
             BiFunction<ZLinkLocationRepository, Object[], CompletionStage<?>> commit)
             throws Exception {
-        Object endpoint = field(node, "relocationStagingIngressHandler");
-        Object coordinator = field(endpoint, "coordinator");
-        var delegate = (ZLinkLocationRepository) field(coordinator, "authorityStore");
-        var observed =
-                Proxy.newProxyInstance(
-                        ZLinkLocationRepository.class.getClassLoader(),
-                        new Class<?>[] {ZLinkLocationRepository.class},
-                        (proxy, method, arguments) -> {
-                            if (method.getName().equals("commitAggregate"))
-                                return commit.apply(delegate, arguments);
-                            try {
-                                return method.invoke(delegate, arguments);
-                            } catch (InvocationTargetException failure) {
-                                throw failure.getCause();
-                            }
-                        });
-        Field repository = coordinator.getClass().getDeclaredField("authorityStore");
-        repository.setAccessible(true);
-        repository.set(coordinator, observed);
-    }
-
-    private static Object field(Object owner, String name) throws Exception {
-        Field field = owner.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(owner);
+        Object endpoint =
+                systems.zlink.framework.runtime.binding.ZLinkJavaRawSpotNodeTestAccess
+                        .relocationStagingIngressHandler(node);
+        Object coordinator = ZLinkSpotRuntimeTestAccess.aggregateCoordinator(endpoint);
+        systems.zlink.framework.runtime.internal.locations
+                .ZLinkAggregateRelocationCoordinatorTestAccess.interceptCommit(
+                (systems.zlink.framework.runtime.internal.locations
+                                .ZLinkAggregateRelocationCoordinator)
+                        coordinator,
+                commit);
     }
 
     private static ZLinkInternalSpotNode node(ZLinkFrameworkRuntime host) throws Exception {
@@ -515,7 +495,17 @@ final class ZLinkCommittedActorLocalIngressTest {
     }
 
     private static ZLinkFrameworkRuntime start(DefaultZLinkFrameworkOptions options) {
-        return ZLinkFrameworkRuntimeTestAccess.start(options);
+        return ZLinkFrameworkRuntimeTestAccess.startHostWithConstruction(
+                options,
+                new ZLinkJavaBackendAdapterFactory(),
+                systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
+                        .reflection(),
+                null,
+                new ZLinkFrameworkRuntimeTestAccess.Construction()
+                        .aggregateRelocationAuthorityStoreDecorator(
+                                systems.zlink.framework.runtime.internal.locations
+                                                .ZLinkAggregateRelocationCoordinatorTestAccess
+                                        ::interceptingStore));
     }
 
     private static DefaultZLinkFrameworkOptions options(

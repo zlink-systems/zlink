@@ -42,7 +42,6 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegi
 import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
-import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -1418,9 +1417,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             } catch (IllegalStateException closing) {
                 // The host observes the same close and retries on its next directory read.
             }
-            Method drain = ZLinkJavaRawMeshNode.class.getDeclaredMethod("drainPeerCloseRequests");
-            drain.setAccessible(true);
-            drain.invoke(local);
+            local.drainPeerCloseRequests();
             // Keep the listener absent until Core has retired the original intent.
             awaitIntentClosed(local, originalIntent);
             peer.start();
@@ -2241,11 +2238,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                             record.reply(List.of(reply));
                         }
                     });
-            var ownerField = ZLinkJavaRawMeshNode.class.getDeclaredField("liveness");
-            ownerField.setAccessible(true);
-            var owner =
-                    (systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry)
-                            ownerField.get(requester);
+            var owner = requester.liveness;
             try (var held =
                             queue.acquire(
                                             systems.zlink.framework.runtime.internal.dispatch
@@ -2343,11 +2336,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     private static void awaitIntentClosed(ZLinkJavaRawMeshNode node, long intent) throws Exception {
         // ERROR and endpoint-only fixtures do not expose a CLOSED peer row.
         // Observe the same terminal fact that replacePeerConnection reads.
-        Method isClosed =
-                ZLinkJavaRawMeshNode.class.getDeclaredMethod("peerIntentIsClosed", long.class);
-        isClosed.setAccessible(true);
         long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-        while (!(boolean) isClosed.invoke(node, intent)) {
+        while (!node.peerIntentIsClosed(intent)) {
             if (System.nanoTime() >= deadline) {
                 throw new AssertionError("peer intent close was not observed");
             }

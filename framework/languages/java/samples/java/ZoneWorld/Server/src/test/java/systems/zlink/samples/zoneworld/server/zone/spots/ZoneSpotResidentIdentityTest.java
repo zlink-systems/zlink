@@ -12,7 +12,6 @@ import systems.zlink.samples.zoneworld.server.configuration.NodeCensus;
 import systems.zlink.samples.zoneworld.server.configuration.NodeMaintenanceState;
 import systems.zlink.samples.zoneworld.server.zone.actors.PlayerActor;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.Proxy;
 import java.util.Map;
 
@@ -29,7 +28,7 @@ final class ZoneSpotResidentIdentityTest {
         PlayerActor old = new PlayerActor("player-1", proxy(ZLinkActorContext.class, null, null));
         PlayerActor current =
                 new PlayerActor("player-1", proxy(ZLinkActorContext.class, null, null));
-        Map<String, PlayerActor> residents = residents(spot);
+        Map<String, PlayerActor> residents = spot.residents;
 
         residents.put(current.actorId(), current);
         spot.onLeaveActor(old).toCompletableFuture().join();
@@ -42,13 +41,6 @@ final class ZoneSpotResidentIdentityTest {
         assertSame(current, residents.get(current.actorId()));
         spot.onDisconnectActor(current).toCompletableFuture().join();
         assertFalse(residents.containsKey(current.actorId()));
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Map<String, PlayerActor> residents(ZoneSpot spot) throws Exception {
-        Field field = ZoneSpot.class.getDeclaredField("residents");
-        field.setAccessible(true);
-        return (Map<String, PlayerActor>) field.get(spot);
     }
 
     @SuppressWarnings("unchecked")

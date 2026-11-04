@@ -21,7 +21,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 import systems.zlink.framework.locationprovider.ZLinkBlobReference;
 import systems.zlink.framework.locationprovider.ZLinkBlobStored;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -163,11 +162,7 @@ final class ZLinkRedisRelocationBlobBoundTest {
                                                                 "unexpected Redis connection call: "
                                                                         + method);
                                             });
-            Field owner = ZLinkRedisRelocationStore.class.getDeclaredField("connection");
-            owner.setAccessible(true);
-            Field connection = ZLinkRedisLocationConnection.class.getDeclaredField("connection");
-            connection.setAccessible(true);
-            connection.set(owner.get(store), CompletableFuture.completedFuture(transport));
+            store.connection.connection = CompletableFuture.completedFuture(transport);
         }
 
         @Override

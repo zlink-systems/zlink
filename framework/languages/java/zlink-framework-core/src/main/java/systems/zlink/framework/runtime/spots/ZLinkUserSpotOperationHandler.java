@@ -49,7 +49,7 @@ final class ZLinkUserSpotOperationHandler
     private static final ZLinkStoreCancellation OPEN = () -> false;
     private final String meshName;
     private final ZLinkInternalMeshNode node;
-    private final ZLinkLocationRepository authorityStore;
+    final ZLinkLocationRepository authorityStore;
     private final ZLinkSpotRuntime runtime;
     private final ZLinkSpotLifecycle lifecycle;
     private final ZLinkActivationAdmission activationAdmission;

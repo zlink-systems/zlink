@@ -95,7 +95,7 @@ public final class ZLinkRedisRelocationStore implements ZLinkRelocationStore, Au
             """,
                     ScriptToken.BY_WIRE);
 
-    private final ZLinkRedisLocationConnection<byte[]> connection;
+    final ZLinkRedisLocationConnection<byte[]> connection;
     private final String keyPrefix;
 
     public ZLinkRedisRelocationStore(ZLinkRedisRelocationOptions options) {

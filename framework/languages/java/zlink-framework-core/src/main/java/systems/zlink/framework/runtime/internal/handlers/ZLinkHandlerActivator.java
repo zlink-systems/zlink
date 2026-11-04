@@ -149,7 +149,7 @@ public interface ZLinkHandlerActivator {
                     ZLinkTypeAwareHandlerActivator,
                     ZLinkTypeAwareHandlerActivator.RuntimeServiceLookup {
         private final Map<Class<?>, Object> services = new LinkedHashMap<>();
-        private volatile Map<Class<?>, Object> serviceIndex = Map.of();
+        volatile Map<Class<?>, Object> serviceIndex = Map.of();
         private final ZLinkHandlerActivator fallback;
         private final Map<Class<?>, PreparedConstruction> constructionPlans =
                 new ConcurrentHashMap<>();

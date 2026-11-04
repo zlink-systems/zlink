@@ -136,15 +136,10 @@ final class ZLinkLocationRuntimeAdmissionRecoveryTest {
                         Duration.ofSeconds(3),
                         Duration.ofSeconds(5),
                         () -> 0L,
-                        scheduler)) {
+                        scheduler,
+                        new ZLinkStateLane(Runnable::run))) {
             // Run lane turns inline so return from renew proves its publication dispatch ran.
             // The pending publication remains asynchronous and never holds a lane turn.
-            var laneField = ZLinkLocationRuntime.class.getDeclaredField("stateLane");
-            laneField.setAccessible(true);
-            var lane = (ZLinkStateLane) laneField.get(runtime);
-            var executorField = ZLinkStateLane.class.getDeclaredField("executor");
-            executorField.setAccessible(true);
-            executorField.set(lane, (java.util.concurrent.Executor) Runnable::run);
             runtime.setOwnerLeaseRecoveryListener(
                     admissionWasOpen -> {
                         publications.incrementAndGet();
@@ -236,9 +231,7 @@ final class ZLinkLocationRuntimeAdmissionRecoveryTest {
                 var renewed =
                         new ZLinkOwnerLeaseRenewed(Instant.EPOCH.plusSeconds(15), Instant.EPOCH);
                 if (queuedResult) {
-                    var field = ZLinkLocationRuntime.class.getDeclaredField("stateLane");
-                    field.setAccessible(true);
-                    var lane = (ZLinkStateLane) field.get(runtime);
+                    var lane = runtime.stateLane;
                     var entered = new CompletableFuture<Void>();
                     heldTurn =
                             lane.runAsync(

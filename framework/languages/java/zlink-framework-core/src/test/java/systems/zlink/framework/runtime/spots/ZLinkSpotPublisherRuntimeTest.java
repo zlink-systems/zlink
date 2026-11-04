@@ -35,7 +35,6 @@ final class ZLinkSpotPublisherRuntimeTest {
         var entered = new CountDownLatch(1);
         var release = new CountDownLatch(1);
         var calls = new AtomicInteger();
-        var runtime = runtime(calls::incrementAndGet, 1);
         var worker =
                 new java.util.concurrent.ThreadPoolExecutor(
                         1,
@@ -49,10 +48,7 @@ final class ZLinkSpotPublisherRuntimeTest {
                         awaitUninterruptibly(release);
                     }
                 };
-        var field = ZLinkSpotPublisherRuntime.class.getDeclaredField("multicastExecutor");
-        field.setAccessible(true);
-        ((java.util.concurrent.ThreadPoolExecutor) field.get(runtime)).shutdownNow();
-        field.set(runtime, worker);
+        var runtime = runtime(calls::incrementAndGet, 1, worker);
         try {
             var held = submit(runtime, "not-started");
             assertTrue(entered.await(3, TimeUnit.SECONDS));
@@ -494,6 +490,13 @@ final class ZLinkSpotPublisherRuntimeTest {
     }
 
     private static ZLinkSpotPublisherRuntime runtime(Runnable publish, int parallelism) {
+        return runtime(publish, parallelism, null);
+    }
+
+    private static ZLinkSpotPublisherRuntime runtime(
+            Runnable publish,
+            int parallelism,
+            java.util.concurrent.ThreadPoolExecutor multicastExecutor) {
 
         ZLinkStringMessageSerializer serializer = new ZLinkStringMessageSerializer();
         ZLinkSpotPublisherRuntime runtime =
@@ -503,7 +506,9 @@ final class ZLinkSpotPublisherRuntimeTest {
                         parallelism,
                         ignored ->
                                 systems.zlink.framework.runtime.channels
-                                        .ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE);
+                                        .ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE,
+                        null,
+                        multicastExecutor);
         AtomicInteger proxyClose = new AtomicInteger();
         ZLinkInternalSpotNode node =
                 (ZLinkInternalSpotNode)

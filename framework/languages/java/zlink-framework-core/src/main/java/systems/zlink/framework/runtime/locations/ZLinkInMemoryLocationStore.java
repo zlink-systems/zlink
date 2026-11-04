@@ -77,7 +77,7 @@ public final class ZLinkInMemoryLocationStore
 
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Clock clock;
-    private final ZLinkInMemoryAuthorityStore authority;
+    final ZLinkInMemoryAuthorityStore authority;
     private final ZLinkInMemoryProviderLocationStore opaque;
     private final Map<String, LeaseRow> leases = new HashMap<>();
     private long ownerLeaseGeneration;

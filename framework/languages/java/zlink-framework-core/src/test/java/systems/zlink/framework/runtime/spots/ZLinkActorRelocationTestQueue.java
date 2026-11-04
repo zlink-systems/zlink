@@ -17,8 +17,8 @@ import java.util.function.Supplier;
 /** Test adapters use the same prepared-Actor lifecycle barrier and FIFO as production. */
 final class ZLinkActorRelocationTestQueue {
     private final CompletableFuture<Void> opened = new CompletableFuture<>();
-    private ZLinkSerialExecutionQueue fifo;
-    private ZLinkApplicationJobQueue jobs;
+    ZLinkSerialExecutionQueue fifo;
+    ZLinkApplicationJobQueue jobs;
     private CompletionStage<List<CompletableFuture<Void>>> admission;
 
     CompletionStage<List<CompletableFuture<Void>>> admit(

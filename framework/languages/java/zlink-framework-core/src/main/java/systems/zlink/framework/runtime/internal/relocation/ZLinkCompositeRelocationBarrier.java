@@ -28,7 +28,7 @@ public final class ZLinkCompositeRelocationBarrier {
     private long nextGeneration = 1L;
     private Seal active;
     private boolean committing;
-    private CompletableFuture<Void> transition;
+    CompletableFuture<Void> transition;
 
     private CompletionStage<Void> awaitTransition(CompletableFuture<Void> pending) {
         return pending.handle((ignored, failure) -> null);

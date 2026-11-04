@@ -1257,13 +1257,10 @@ final class ZLinkServiceOperationRegistryTest {
     void pendingEntryDoesNotAllocateAnExceptionForASuccessfulRequest() throws Exception {
         try (var registry = new ZLinkServiceOperationRegistry()) {
             var operation = ZLinkCompletionBridge.await(registry.register(Duration.ofSeconds(1)));
-            Object entry = registry.pendingEntryForTest(operation.id());
-            for (var field : entry.getClass().getDeclaredFields()) {
-                if (Throwable.class.isAssignableFrom(field.getType())) {
-                    field.setAccessible(true);
-                    assertNull(field.get(entry), field.getName());
-                }
-            }
+            var entry =
+                    (ZLinkServiceOperationRegistry.Entry<?>)
+                            registry.pendingEntryForTest(operation.id());
+            assertNull(entry.terminalFailure);
             assertTrue(registry.complete(operation.id(), "success"));
             assertEquals("success", operation.completion().join());
         }
@@ -1330,7 +1327,8 @@ final class ZLinkServiceOperationRegistryTest {
 
     @Test
     void registersMoreThanTheFormerPendingCapacity() {
-        try (ZLinkServiceOperationRegistry registry = new ZLinkServiceOperationRegistry()) {
+        try (ZLinkServiceOperationRegistry registry =
+                new ZLinkServiceOperationRegistry(new ManualMaintenance())) {
             List<UUID> pending = new ArrayList<>();
             for (int index = 0; index <= 4_096; index++) {
                 pending.add(

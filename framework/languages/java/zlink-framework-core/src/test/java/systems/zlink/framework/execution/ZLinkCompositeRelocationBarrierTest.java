@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.framework.runtime.internal.relocation.ZLinkCompositeRelocationBarrier;
+import systems.zlink.framework.runtime.internal.relocation.ZLinkCompositeRelocationBarrierTestAccess;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -79,8 +80,6 @@ final class ZLinkCompositeRelocationBarrierTest {
     @Test
     void sealAndAbortCompleteAfterTransitionStateClears() throws Exception {
         ZLinkCompositeRelocationBarrier barrier = new ZLinkCompositeRelocationBarrier();
-        var transition = ZLinkCompositeRelocationBarrier.class.getDeclaredField("transition");
-        transition.setAccessible(true);
         var seal =
                 barrier.trySeal(
                                 lanes(
@@ -90,9 +89,9 @@ final class ZLinkCompositeRelocationBarrierTest {
                         .toCompletableFuture()
                         .get(3, TimeUnit.SECONDS)
                         .orElseThrow();
-        assertNull(transition.get(barrier));
+        assertNull(ZLinkCompositeRelocationBarrierTestAccess.transition(barrier));
         assertTrue(barrier.abort(seal).toCompletableFuture().get(3, TimeUnit.SECONDS));
-        assertNull(transition.get(barrier));
+        assertNull(ZLinkCompositeRelocationBarrierTestAccess.transition(barrier));
     }
 
     @Test
@@ -104,13 +103,11 @@ final class ZLinkCompositeRelocationBarrierTest {
                         .getReturnType());
         ZLinkCompositeRelocationBarrier barrier = new ZLinkCompositeRelocationBarrier();
         CompletableFuture<Void> pending = new CompletableFuture<>();
-        var transition = ZLinkCompositeRelocationBarrier.class.getDeclaredField("transition");
-        transition.setAccessible(true);
-        transition.set(barrier, pending);
+        ZLinkCompositeRelocationBarrierTestAccess.transition(barrier, pending);
 
         CompletableFuture<Boolean> abort = barrier.abort(null).toCompletableFuture();
         assertFalse(abort.isDone());
-        transition.set(barrier, null);
+        ZLinkCompositeRelocationBarrierTestAccess.transition(barrier, null);
         pending.complete(null);
         assertFalse(abort.get(3, TimeUnit.SECONDS));
     }

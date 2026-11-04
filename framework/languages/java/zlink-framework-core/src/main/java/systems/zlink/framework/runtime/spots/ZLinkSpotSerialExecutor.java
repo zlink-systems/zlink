@@ -26,7 +26,7 @@ import java.util.function.Supplier;
 
 /** Coordinates the Spot queue and its named timer execution queues. */
 public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
-    private final ZLinkSerialExecutionQueue spotQueue;
+    final ZLinkSerialExecutionQueue spotQueue;
     private final ZLinkSerialExecutionQueue infrastructureQueue;
     private final Executor serialExecutor;
     private final boolean sharedSpotGate;
@@ -36,7 +36,7 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
     // queues must happen as one state-lane turn when Spot shutdown is wired.
     private final ZLinkStateLane stateLane;
     private final Map<String, ZLinkSerialExecutionQueue> timerQueues = new LinkedHashMap<>();
-    private final Map<String, ZLinkActorSerialExecutor> actorQueues = new LinkedHashMap<>();
+    final Map<String, ZLinkActorSerialExecutor> actorQueues = new LinkedHashMap<>();
 
     public ZLinkSpotSerialExecutor(
             ZLinkSerialExecutionQueue spotQueue,
