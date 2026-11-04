@@ -2585,6 +2585,7 @@ void execute_actor_create_operation_target (
 
 task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
 {
+    std::exception_ptr failure;
     try {
         _completion_dispatcher = detail::borrow_completion_dispatcher ();
         _services = &services;
@@ -3382,8 +3383,13 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
         }
     }
     catch (...) {
+        failure = std::current_exception ();
+    }
+    if (failure) {
+        // Rollback drains workers as well as closing completion owners.
+        co_await external_lifecycle_turn_t{};
         stop ();
-        throw;
+        std::rethrow_exception (failure);
     }
     co_return;
 }

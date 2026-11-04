@@ -29,6 +29,8 @@ extern "C" zlink_connect_result_t __wrap_zlink_disconnect (void *socket, const c
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/dispatch/completion_turn.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/locations/live_location_reader.hpp"
@@ -552,6 +554,65 @@ make_named_node (std::string mesh_name, std::string routing_id)
     // The host admits object creation only for declared stable types.
     state->spot_state->snapshot.actor_types.emplace_back ("vertical.actor");
     return state;
+}
+
+void verify_mesh_start_and_rollback_from_completion_turn ()
+{
+    using namespace zlink::framework;
+    completion_owner_t completion_owner;
+    // Plain provider continuations always resume on completion turns. This
+    // makes the pre-fix lifecycle violation independent of lane timing.
+    runtime::configure_handler_coroutine_executor (1);
+    runtime::shutdown_handler_coroutine_executor ();
+    for (const bool fail_second : {false, true}) {
+        auto first = make_named_node ("completion-start", "completion-start-first");
+        auto second = make_named_node ("completion-start", "completion-start-second");
+        if (fail_second)
+            second->socket.receive_timeout = std::chrono::milliseconds::zero ();
+        serializer_registry_t serializers;
+        service_collection_t services;
+        auto provider = services.build_provider ();
+        auto failures = std::make_shared<runtime::runtime_failure_collector_t> ();
+        runtime::mesh_node_host_service_t service (failures, {first, second}, serializers);
+        auto completion = std::make_shared<task_completion_source_t<void>> ();
+        auto started = completion->task ();
+        detail::dispatch_completion ([&service, &provider, completion] {
+            assert (detail::current_completion_owner () != nullptr);
+            bool rejected = false;
+            try {
+                completion_owner_t forbidden;
+            }
+            catch (const framework_exception_t &error) {
+                rejected = error.kind () == framework_error_kind_t::invalid_operation;
+            }
+            assert (rejected);
+            auto pending = service.start (provider);
+            detail::observe_task_completion (pending, [completion] (const result_t<void> &result) {
+                completion->complete (result);
+            });
+        });
+        const auto result = started.result ();
+        if (fail_second) {
+            assert (!result);
+            assert (std::string_view (result.error ()->what ()).find ("receive timeout")
+                    != std::string_view::npos);
+            // Failure is returned only after the already-started first node is closed.
+            bool stopped = false;
+            try {
+                (void) service.nodes ().front ()->native_node ();
+            }
+            catch (const framework_exception_t &) {
+                stopped = true;
+            }
+            assert (stopped);
+        } else {
+            result.value ();
+            assert (
+              !service.nodes ().front ()->native_node ().status ().local_endpoint ().empty ());
+        }
+        service.stop ();
+        failures->rethrow_if_failed ();
+    }
 }
 
 void verify_unselected_object_role_defaults_to_none ()
@@ -3538,6 +3599,10 @@ void verify_repeated_mesh_connect_keeps_one_physical_connection ()
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--completion-start") {
+        verify_mesh_start_and_rollback_from_completion_turn ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--route-internal-owner-lease") {
         verify_route_internal_packets_precede_application_dispatch ();
         return 0;
@@ -3638,5 +3703,6 @@ int main (int argc, char **argv)
     // different in-process smoke check must not stand in for that scenario.
 #endif
     verify_actor_route_resolver_preserves_unavailable ();
+    verify_mesh_start_and_rollback_from_completion_turn ();
     return 0;
 }

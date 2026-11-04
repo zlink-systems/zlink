@@ -2,6 +2,7 @@
 #pragma once
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
+#include <zlink/framework/contracts/channels/call.hpp>
 #include <zlink/framework/detail/deadline_scheduler.hpp>
 
 #include <memory>
@@ -20,6 +21,26 @@ template <typename T> task_t<result_t<T>> await_result (task_t<T> pending)
     });
     return task;
 }
+
+// Lifecycle entry can create the first completion owner. Hand off the named
+// coroutine frame directly: registering a task wait here would itself require
+// that owner before the lifecycle operation has created it.
+struct external_lifecycle_turn_t
+{
+    bool await_ready () const noexcept { return false; }
+    void await_suspend (std::coroutine_handle<> continuation) const
+    {
+        auto ambient = detail::capture_ambient_context ();
+        if (!detail::submit_blocking_call ([ambient = std::move (ambient), continuation] {
+                const auto scope = detail::enter_ambient_context (ambient, false);
+                continuation.resume ();
+            })) {
+            throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                         "Lifecycle executor is stopped");
+        }
+    }
+    void await_resume () const noexcept {}
+};
 
 // Bounds the observation, not opaque provider I/O. Losing completions retain no
 // runtime or coroutine owner and cannot resume the observer a second time.

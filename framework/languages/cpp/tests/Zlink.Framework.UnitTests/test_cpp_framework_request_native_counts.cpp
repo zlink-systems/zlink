@@ -265,7 +265,7 @@ TEST (RequestNativeCounts, LocalActorJoinMovesTheCapturedReplyParts)
     state->routing_id = zlink::routing_id_t::from ("join-copy-count");
     state->object_role = fw::object_role_t::none;
     fw::detail::mesh_node_runtime_t runtime (state);
-    runtime.start ();
+    runtime.start ().result ().value ();
     struct stop_t
     {
         fw::detail::mesh_node_runtime_t &runtime;

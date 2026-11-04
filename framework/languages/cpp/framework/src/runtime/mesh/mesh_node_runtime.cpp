@@ -892,6 +892,10 @@ task_t<void> mesh_node_runtime_t::start (
                                                                  metric_provider);
     node->configure_relocation_gate (std::move (relocation_gate), std::move (native_spot_target),
                                      std::move (relocation_resume));
+    // Retain partial startup in the lifecycle owner before any further await;
+    // coroutine-frame destruction must not close a live completion owner.
+    _node = node;
+    co_await runtime::external_lifecycle_turn_t{};
     node->start ();
     if (_instance_spot_materializer)
         (void) co_await node->recover_instance_spot_activations ();
@@ -904,7 +908,6 @@ task_t<void> mesh_node_runtime_t::start (
     });
     for (const auto &peer : peer_connections)
         node->transport ().connect_peer_intent (peer);
-    _node = std::move (node);
     const auto callback_gate = _peer_callback_gate;
     const auto weak_node = std::weak_ptr<host::public_host_runtime_t> (_node);
     auto runtime_peer_connect = [weak_node,
@@ -1910,12 +1913,10 @@ void mesh_node_runtime_t::stop ()
         });
     }
     _completion_ready.notify_all ();
-    _state->lane
-      .run ([&] {
-          _state->runtime_peer_connect = {};
-          _state->runtime_peer_disconnect = {};
-      })
-      .get ();
+    _state->lane.run_sync ([&] {
+        _state->runtime_peer_connect = {};
+        _state->runtime_peer_disconnect = {};
+    });
     {
         std::unique_lock callback_lock (_peer_callback_gate->mutex);
         _peer_callback_gate->stopping = true;

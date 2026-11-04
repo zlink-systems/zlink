@@ -1095,32 +1095,29 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
         std::shared_ptr<runtime::offload_executor_t> worker_executor;
         std::stop_source cancellation;
     };
-    auto plan =
-      node.lane
-        .run ([&] {
-            drain_plan_t result;
-            node.stopping.store (true, std::memory_order_release);
-            auto execution = snapshot_spot_execution_owned (node);
-            result.creations = std::move (execution.creations);
-            result.contexts.reserve (execution.contexts.size ());
-            for (const auto &state : execution.contexts) {
-                result.contexts.push_back (drain_plan_t::context_t{
-                  state, {}, state->serial_queue, state->admitted_callbacks_terminal ()});
-                auto &context_plan = result.contexts.back ();
-                if (state->spot_serial_executor) {
-                    context_plan.retained_queues = state->spot_serial_executor->timer_queues ();
-                    const auto actors = state->spot_serial_executor->actor_executor_snapshot ();
-                    for (const auto &[_, actor] : *actors)
-                        if (actor && actor->queue ())
-                            context_plan.retained_queues.push_back (actor->queue ());
-                }
+    auto plan = node.lane.run_sync ([&] {
+        drain_plan_t result;
+        node.stopping.store (true, std::memory_order_release);
+        auto execution = snapshot_spot_execution_owned (node);
+        result.creations = std::move (execution.creations);
+        result.contexts.reserve (execution.contexts.size ());
+        for (const auto &state : execution.contexts) {
+            result.contexts.push_back (drain_plan_t::context_t{
+              state, {}, state->serial_queue, state->admitted_callbacks_terminal ()});
+            auto &context_plan = result.contexts.back ();
+            if (state->spot_serial_executor) {
+                context_plan.retained_queues = state->spot_serial_executor->timer_queues ();
+                const auto actors = state->spot_serial_executor->actor_executor_snapshot ();
+                for (const auto &[_, actor] : *actors)
+                    if (actor && actor->queue ())
+                        context_plan.retained_queues.push_back (actor->queue ());
             }
-            result.cancellation = node.worker_cancellation;
-            result.deadline_executor = node.deadline_executor;
-            result.worker_executor = node.worker_executor;
-            return result;
-        })
-        .get ();
+        }
+        result.cancellation = node.worker_cancellation;
+        result.deadline_executor = node.deadline_executor;
+        result.worker_executor = node.worker_executor;
+        return result;
+    });
 
     // Host relocation §14: accepted callbacks retain their execution resources
     // until the host deadline. Only deadline expiry cancels their owned waits.
@@ -1165,36 +1162,31 @@ void drain_spot_node_executors (spot_node_builder_state_t &node,
     if (plan.worker_executor)
         plan.worker_executor->drain ();
 
-    node.lane
-      .run ([&] {
-          for (const auto &context : plan.contexts) {
-              context.state->serial_executor.reset ();
-              if (context.state->spot_serial_executor)
-                  context.state->spot_serial_executor->close ();
-              context.state->worker_scheduler.reset ();
-          }
-          node.deadline_executor.reset ();
-          node.worker_executor.reset ();
-      })
-      .get ();
+    node.lane.run_sync ([&] {
+        for (const auto &context : plan.contexts) {
+            context.state->serial_executor.reset ();
+            if (context.state->spot_serial_executor)
+                context.state->spot_serial_executor->close ();
+            context.state->worker_scheduler.reset ();
+        }
+        node.deadline_executor.reset ();
+        node.worker_executor.reset ();
+    });
 }
 
 void visit_spot_node_dispatch_queues (
   spot_node_builder_state_t &node,
   const std::function<void (runtime::serial_execution_queue_t &)> &visitor)
 {
-    const auto queues =
-      node.lane
-        .run ([&] {
-            std::vector<std::shared_ptr<runtime::serial_execution_queue_t>> result;
-            const auto execution = snapshot_spot_execution_owned (node);
-            result.reserve (execution.contexts.size ());
-            for (const auto &state : execution.contexts)
-                if (state->serial_queue)
-                    result.push_back (state->serial_queue);
-            return result;
-        })
-        .get ();
+    const auto queues = node.lane.run_sync ([&] {
+        std::vector<std::shared_ptr<runtime::serial_execution_queue_t>> result;
+        const auto execution = snapshot_spot_execution_owned (node);
+        result.reserve (execution.contexts.size ());
+        for (const auto &state : execution.contexts)
+            if (state->serial_queue)
+                result.push_back (state->serial_queue);
+        return result;
+    });
     for (const auto &queue : queues)
         if (queue)
             visitor (*queue);
@@ -1234,29 +1226,27 @@ std::shared_ptr<service::spot_t> detail::spot_node_runtime_t::attach_native_spot
         std::vector<spot_handler_descriptor_t> handlers;
     };
     auto owner = state->node;
-    auto plan = owner->lane
-                  .run ([&] {
-                      attachment_plan_t result;
-                      result.native_node = owner->native_node.lock ();
-                      result.rid = std::string (state->spot_id);
-                      result.spot_name = state->spot_name;
-                      result.mesh_name = state->mesh_name;
-                      result.node_rid = std::string (state->node_rid.value ());
-                      result.object_generation = state->object_generation;
-                      result.authority_owner_generation = state->authority_owner_generation;
-                      result.entry_spot = owner->snapshot.entry_spot_name
-                                          && *owner->snapshot.entry_spot_name == state->spot_name;
-                      result.instance_spot = state->is_instance_spot ();
-                      result.handlers = state->handlers;
-                      result.native = state->native_spot.lock ();
-                      if (!result.native) {
-                          const auto found = owner->native_spots_by_id.find (result.rid);
-                          if (found != owner->native_spots_by_id.end ())
-                              result.native = found->second;
-                      }
-                      return result;
-                  })
-                  .get ();
+    auto plan = owner->lane.run_sync ([&] {
+        attachment_plan_t result;
+        result.native_node = owner->native_node.lock ();
+        result.rid = std::string (state->spot_id);
+        result.spot_name = state->spot_name;
+        result.mesh_name = state->mesh_name;
+        result.node_rid = std::string (state->node_rid.value ());
+        result.object_generation = state->object_generation;
+        result.authority_owner_generation = state->authority_owner_generation;
+        result.entry_spot =
+          owner->snapshot.entry_spot_name && *owner->snapshot.entry_spot_name == state->spot_name;
+        result.instance_spot = state->is_instance_spot ();
+        result.handlers = state->handlers;
+        result.native = state->native_spot.lock ();
+        if (!result.native) {
+            const auto found = owner->native_spots_by_id.find (result.rid);
+            if (found != owner->native_spots_by_id.end ())
+                result.native = found->second;
+        }
+        return result;
+    });
     if (!plan.native_node)
         return {};
 
@@ -1285,19 +1275,16 @@ std::shared_ptr<service::spot_t> detail::spot_node_runtime_t::attach_native_spot
         }
     }
     if (publish) {
-        native = owner->lane
-                   .run ([&] {
-                       auto [found, inserted] =
-                         owner->native_spots_by_id.emplace (plan.rid, native);
-                       if (!inserted)
-                           native = found->second;
-                       state->native_spot = native;
-                       return native;
-                   })
-                   .get ();
+        native = owner->lane.run_sync ([&] {
+            auto [found, inserted] = owner->native_spots_by_id.emplace (plan.rid, native);
+            if (!inserted)
+                native = found->second;
+            state->native_spot = native;
+            return native;
+        });
     } else {
         // Keep the facade out of the public native index until activation succeeds.
-        owner->lane.run ([&] { state->native_spot = native; }).get ();
+        owner->lane.run_sync ([&] { state->native_spot = native; });
     }
 
     for (const auto &handler : plan.handlers) {
@@ -14610,26 +14597,22 @@ void spot_node_runtime_t::release_native_handles () noexcept
 {
     std::vector<std::shared_ptr<detail::spot_context_state_t>> contexts;
     try {
-        const auto shutdown = _state->lane
-                                .run ([&] {
-                                    contexts.reserve (_state->spot_contexts_by_id.size ());
-                                    for (auto &[_, context] : _state->spot_contexts_by_id) {
-                                        if (context._state) {
-                                            context._state->closed =
-                                              spot_close_reason_t::host_shutdown;
-                                            contexts.push_back (context._state);
-                                        }
-                                    }
-                                    _state->spot_contexts_by_id.clear ();
-                                    _state->spot_ids_by_name.clear ();
-                                    _state->spot_names_by_id.clear ();
-                                    _state->native_actors.clear ();
-                                    _state->native_spots_by_id.clear ();
-                                    _state->routed_control_spot.reset ();
-                                    return _state->host_lifecycle ? _state->host_lifecycle ()
-                                                                  : host_lifecycle_snapshot_t{};
-                                })
-                                .get ();
+        const auto shutdown = _state->lane.run_sync ([&] {
+            contexts.reserve (_state->spot_contexts_by_id.size ());
+            for (auto &[_, context] : _state->spot_contexts_by_id) {
+                if (context._state) {
+                    context._state->closed = spot_close_reason_t::host_shutdown;
+                    contexts.push_back (context._state);
+                }
+            }
+            _state->spot_contexts_by_id.clear ();
+            _state->spot_ids_by_name.clear ();
+            _state->spot_names_by_id.clear ();
+            _state->native_actors.clear ();
+            _state->native_spots_by_id.clear ();
+            _state->routed_control_spot.reset ();
+            return _state->host_lifecycle ? _state->host_lifecycle () : host_lifecycle_snapshot_t{};
+        });
         for (auto &context : contexts) {
             try {
                 context->detach_application_instance (
@@ -14643,15 +14626,13 @@ void spot_node_runtime_t::release_native_handles () noexcept
                                               "on_closing_failed", std::current_exception ());
             }
         }
-        _state->lane
-          .run ([&] {
-              std::atomic_store_explicit (&_state->route_client,
-                                          std::shared_ptr<const route_client_t>{},
-                                          std::memory_order_release);
-              _state->channel_runtime.reset ();
-              _state->root_services.reset ();
-          })
-          .get ();
+        _state->lane.run_sync ([&] {
+            std::atomic_store_explicit (&_state->route_client,
+                                        std::shared_ptr<const route_client_t>{},
+                                        std::memory_order_release);
+            _state->channel_runtime.reset ();
+            _state->root_services.reset ();
+        });
     }
     catch (...) {
     }
@@ -14664,7 +14645,7 @@ void spot_node_runtime_t::request_stop () noexcept
 
 void spot_node_runtime_t::bind_service_provider (service_provider_t &services)
 {
-    _state->lane.run ([&] { _state->root_services = services; }).get ();
+    _state->lane.run_sync ([&] { _state->root_services = services; });
 }
 
 bool spot_node_runtime_t::stopping () const noexcept
@@ -14686,17 +14667,15 @@ void spot_node_runtime_t::cancel_pending_dispatch () noexcept
 void spot_node_runtime_t::cancel_timers () noexcept
 {
     try {
-        const auto contexts = _state->lane
-                                .run ([&] {
-                                    std::vector<std::shared_ptr<spot_context_state_t>> result;
-                                    result.reserve (_state->spot_contexts_by_id.size ());
-                                    for (const auto &[_, context] : _state->spot_contexts_by_id) {
-                                        if (context._state)
-                                            result.push_back (context._state);
-                                    }
-                                    return result;
-                                })
-                                .get ();
+        const auto contexts = _state->lane.run_sync ([&] {
+            std::vector<std::shared_ptr<spot_context_state_t>> result;
+            result.reserve (_state->spot_contexts_by_id.size ());
+            for (const auto &[_, context] : _state->spot_contexts_by_id) {
+                if (context._state)
+                    result.push_back (context._state);
+            }
+            return result;
+        });
         for (const auto &context : contexts)
             detail::timer_runtime_t (context).cancel_all ();
     }
@@ -14745,33 +14724,28 @@ void spot_node_runtime_t::attach_native_node (std::shared_ptr<service::mesh_node
           if (const auto host = weak.lock ())
               host->signal_dispatch_activity ();
       });
-    const auto plan = _state->lane
-                        .run ([&] {
-                            attach_plan_t result;
-                            _state->stopping.store (false, std::memory_order_release);
-                            _state->worker_cancellation = std::stop_source{};
-                            _state->native_node = node;
-                            result.create_control_spot = _state->spot_contexts_by_id.empty ();
-                            result.contexts.reserve (_state->spot_contexts_by_id.size ());
-                            for (const auto &[_, context] : _state->spot_contexts_by_id) {
-                                if (context._state)
-                                    result.contexts.push_back (context._state);
-                            }
-                            result.idle_timeout = _state->instance_spot_idle_timeout;
-                            result.create_idle_timer =
-                              result.idle_timeout > std::chrono::milliseconds::zero ()
-                              && !_state->instance_spot_idle_timer;
-                            return result;
-                        })
-                        .get ();
+    const auto plan = _state->lane.run_sync ([&] {
+        attach_plan_t result;
+        _state->stopping.store (false, std::memory_order_release);
+        _state->worker_cancellation = std::stop_source{};
+        _state->native_node = node;
+        result.create_control_spot = _state->spot_contexts_by_id.empty ();
+        result.contexts.reserve (_state->spot_contexts_by_id.size ());
+        for (const auto &[_, context] : _state->spot_contexts_by_id) {
+            if (context._state)
+                result.contexts.push_back (context._state);
+        }
+        result.idle_timeout = _state->instance_spot_idle_timeout;
+        result.create_idle_timer = result.idle_timeout > std::chrono::milliseconds::zero ()
+                                   && !_state->instance_spot_idle_timer;
+        return result;
+    });
     if (plan.create_control_spot && native) {
         auto control = std::make_shared<service::spot_t> (native->entry_spot ());
-        _state->lane
-          .run ([&] {
-              if (_state->spot_contexts_by_id.empty () && !_state->routed_control_spot)
-                  _state->routed_control_spot = std::move (control);
-          })
-          .get ();
+        _state->lane.run_sync ([&] {
+            if (_state->spot_contexts_by_id.empty () && !_state->routed_control_spot)
+                _state->routed_control_spot = std::move (control);
+        });
     }
     for (const auto &context : plan.contexts)
         attach_native_spot (context);
@@ -14786,30 +14760,26 @@ void spot_node_runtime_t::attach_native_node (std::shared_ptr<service::mesh_node
                                   spot_node_runtime_t (std::move (state)).evict_idle_spots ();
                           }
                       });
-        _state->lane
-          .run ([&] {
-              if (!_state->instance_spot_idle_timer)
-                  _state->instance_spot_idle_timer = std::move (timer);
-          })
-          .get ();
+        _state->lane.run_sync ([&] {
+            if (!_state->instance_spot_idle_timer)
+                _state->instance_spot_idle_timer = std::move (timer);
+        });
     }
 }
 
 void spot_node_runtime_t::detach_native_node ()
 {
     detail::core_timer_drain_loop_t *idle_timer = nullptr;
-    auto native_spots = _state->lane
-                          .run ([&] {
-                              std::vector<std::shared_ptr<service::spot_t>> result;
-                              idle_timer = _state->instance_spot_idle_timer.get ();
-                              result.reserve (_state->native_spots_by_id.size ());
-                              for (const auto &[_, native] : _state->native_spots_by_id) {
-                                  if (native)
-                                      result.push_back (native);
-                              }
-                              return result;
-                          })
-                          .get ();
+    auto native_spots = _state->lane.run_sync ([&] {
+        std::vector<std::shared_ptr<service::spot_t>> result;
+        idle_timer = _state->instance_spot_idle_timer.get ();
+        result.reserve (_state->native_spots_by_id.size ());
+        for (const auto &[_, native] : _state->native_spots_by_id) {
+            if (native)
+                result.push_back (native);
+        }
+        return result;
+    });
     if (idle_timer)
         idle_timer->close ();
 
@@ -14827,16 +14797,14 @@ void spot_node_runtime_t::detach_native_node ()
     if (close_error) {
         std::rethrow_exception (close_error);
     }
-    _state->lane
-      .run ([&] {
-          _state->instance_spot_idle_timer.reset ();
-          _state->native_node.reset ();
-          _state->native_spots_by_id.clear ();
-          _state->routed_control_spot.reset ();
-          for (auto &[_, context] : _state->spot_contexts_by_id)
-              context._state->native_spot.reset ();
-      })
-      .get ();
+    _state->lane.run_sync ([&] {
+        _state->instance_spot_idle_timer.reset ();
+        _state->native_node.reset ();
+        _state->native_spots_by_id.clear ();
+        _state->routed_control_spot.reset ();
+        for (auto &[_, context] : _state->spot_contexts_by_id)
+            context._state->native_spot.reset ();
+    });
 }
 
 void spot_node_runtime_t::evict_idle_spots () noexcept
