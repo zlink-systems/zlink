@@ -13,7 +13,7 @@ flowchart LR
 
 - Docker with Compose v2, and PowerShell 7 on Windows.
 - Network access to Maven Central and the Redis container registry.
-- Published ZLink Framework 0.32.0 and binding 1.22.0. Versions are owned by `build.gradle.kts`.
+- Published ZLink Framework 0.32.0 and binding 1.23.0. Versions are owned by `build.gradle.kts`.
 
 The Gradle wrapper and all server modules are included. Copy this directory to build it independently. On Windows, run the commands in PowerShell 7; launchers use the JDK selected by Gradle and enable native access.
 

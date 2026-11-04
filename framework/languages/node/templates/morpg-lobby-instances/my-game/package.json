@@ -21,7 +21,7 @@
     "@zlink-systems/framework-locations-redis": "0.32.0",
     "@zlink-systems/nestjs": "0.32.0",
     "@zlink-systems/stream-connector": "0.32.0",
-    "@zlink-systems/zlink": "1.22.0",
+    "@zlink-systems/zlink": "1.23.0",
     "reflect-metadata": "0.2.2",
     "rxjs": "7.8.2",
     "@opentelemetry/api": "1.9.1",

@@ -17,7 +17,7 @@ The Lobby and Instance roles (`lobby`, `instanceA`, and `instanceB`) explicitly 
 
 Default execution requires Docker Linux containers; no host .NET SDK is needed.
 
-.NET SDK 8 or later, Docker with Compose v2 and PowerShell 7 or Bash. Public NuGet packages are pinned in `Directory.Packages.props`: Framework and Stream Connector 0.32.0, binding 1.22.0. The template builds independently of the ZLink repository.
+.NET SDK 8 or later, Docker with Compose v2 and PowerShell 7 or Bash. Public NuGet packages are pinned in `Directory.Packages.props`: Framework and Stream Connector 0.32.0, binding 1.23.0. The template builds independently of the ZLink repository.
 
 ## Build
 

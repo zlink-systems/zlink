@@ -16,7 +16,7 @@ flowchart LR
 
 Default execution requires Docker Linux containers; no host .NET SDK is needed.
 
-Install Docker with Compose v2 (Linux containers) and Bash or PowerShell 7. Dependencies are pinned in `Directory.Packages.props`: Framework and STREAM connector 0.32.0 and binding 1.22.0. The template uses NuGet.org; it has no repository or local-feed dependency.
+Install Docker with Compose v2 (Linux containers) and Bash or PowerShell 7. Dependencies are pinned in `Directory.Packages.props`: Framework and STREAM connector 0.32.0 and binding 1.23.0. The template uses NuGet.org; it has no repository or local-feed dependency.
 
 ## Build
 

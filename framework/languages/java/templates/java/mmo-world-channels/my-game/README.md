@@ -16,7 +16,7 @@ flowchart LR
 
 ## Prerequisites
 
-Docker with Compose v2, and PowerShell 7 on Windows. Gradle 9.3 is included. Dependencies come from Maven Central; Framework 0.32.0 and binding 1.22.0 are pinned in `build.gradle.kts`. No repository checkout is required.
+Docker with Compose v2, and PowerShell 7 on Windows. Gradle 9.3 is included. Dependencies come from Maven Central; Framework 0.32.0 and binding 1.23.0 are pinned in `build.gradle.kts`. No repository checkout is required.
 
 ## Build
 

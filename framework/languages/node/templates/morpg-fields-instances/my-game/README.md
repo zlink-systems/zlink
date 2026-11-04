@@ -14,7 +14,7 @@ flowchart LR
 
 ## Prerequisites
 
-Docker Compose v2, and PowerShell 7 for the PowerShell runner are required. The project pins public Framework packages to 0.32.0 and the binding to 1.22.0 in `package.json`. A license, when required by the deployment, is provided externally and is never committed.
+Docker Compose v2, and PowerShell 7 for the PowerShell runner are required. The project pins public Framework packages to 0.32.0 and the binding to 1.23.0 in `package.json`. A license, when required by the deployment, is provided externally and is never committed.
 
 ## Build
 

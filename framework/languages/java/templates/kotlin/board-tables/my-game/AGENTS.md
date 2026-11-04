@@ -2,7 +2,7 @@
 
 ## Project overview
 
-This Kotlin project (Kotlin 2.3.21 on a Java 25 toolchain, built with Gradle) is a four-player board table server. It runs a Session gateway for connections, two Table hosts (`tableA` and `tableB`), and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.32.0` (`frameworkVersion`) and the ZLink binding to `1.22.0` (`bindingVersion`).
+This Kotlin project (Kotlin 2.3.21 on a Java 25 toolchain, built with Gradle) is a four-player board table server. It runs a Session gateway for connections, two Table hosts (`tableA` and `tableB`), and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.32.0` (`frameworkVersion`) and the ZLink binding to `1.23.0` (`bindingVersion`).
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and the scenario assertions. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
