@@ -2,6 +2,19 @@
 # of these instead of building Core; `sources` below stays for every platform,
 # option and version that has no such build.
 binaries:
+  "1.23.0":
+    linux-x64:
+      url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.23.0/libzlink-linux-x64.tar.gz"
+      sha256: "3f7def6f36e4e0b86fbf6eb95437afcb2f97a4846a2d5eb768834e811ce55d31"
+    linux-arm64:
+      url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.23.0/libzlink-linux-arm64.tar.gz"
+      sha256: "41a8a50bc1d6bf6da1cdb7493a6516af2c2553b6f55ba3abdd56afa6e9bbda55"
+    macos-arm64:
+      url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.23.0/libzlink-macos-arm64.tar.gz"
+      sha256: "cb6aa044d5d54d0d33da6d99158c76b18229f723207bca157e0f5233bf611f36"
+    windows-x64:
+      url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.23.0/libzlink-windows-x64.tar.gz"
+      sha256: "907e04b0a044715e68939f9c506214ac7e7701b95f7acde1fcd67049067ec2d7"
   "1.22.0":
     linux-x64:
       url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.22.0/libzlink-linux-x64.tar.gz"
@@ -277,6 +290,9 @@ binaries:
       sha256: "acd5614c43ca431fbd528cbe726d36d86ce62ee5758be671ebfe3d34637d9046"
 
 sources:
+  "1.23.0":
+    url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.23.0/zlink-1.23.0-source.tar.gz"
+    sha256: "e4bf3330d07b12cb116d679520b90c93d702720adcc683e0b28c03381946282c"
   "1.22.0":
     url: "https://github.com/zlink-systems/zlink/releases/download/core/v1.22.0/zlink-1.22.0-source.tar.gz"
     sha256: "003dbecc142835a8837b61ea1fcc2446596ea558b9df0412cdf6abf6c79f9627"
