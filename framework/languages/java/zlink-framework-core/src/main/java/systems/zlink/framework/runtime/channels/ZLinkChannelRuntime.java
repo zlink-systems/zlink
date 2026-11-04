@@ -392,7 +392,7 @@ public final class ZLinkChannelRuntime
                 admission);
     }
 
-    public ZLinkChannelRuntime(
+    ZLinkChannelRuntime(
             ZLinkChannelBackendAdapter backend,
             ZLinkBackendContext context,
             ZLinkBackendAdapterProvider backendFactory,
@@ -628,7 +628,7 @@ public final class ZLinkChannelRuntime
         this.infrastructureExecutor =
                 infrastructureExecutor == null
                         ? createInfrastructureExecutor()
-                        : Objects.requireNonNull(infrastructureExecutor, "infrastructureExecutor");
+                        : infrastructureExecutor;
         ZLinkStateLane actualStateLane = stateLane == null ? new ZLinkStateLane() : stateLane;
         this.sockets =
                 new ZLinkChannelSocketRegistry(

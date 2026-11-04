@@ -69,20 +69,22 @@ final class ZLinkFrameworkSpotSubsystem {
         }
 
         ZLinkSpotRuntime spots =
-                new ZLinkSpotRuntime(
-                        backendFactory,
-                        adapterOptions,
-                        options.registration(),
-                        channels,
-                        backendContext,
-                        serializer,
-                        runtimeHandlers,
-                        eventDispatcher,
-                        meshNodes,
-                        construction.spotTimerExecutor(),
-                        construction.spotMulticastExecutor(),
-                        construction.spotHandlerExecutor(),
-                        construction.spotTimerStateLaneFactory());
+                construction
+                        .spotRuntimeFactory()
+                        .create(
+                                backendFactory,
+                                adapterOptions,
+                                options.registration(),
+                                channels,
+                                backendContext,
+                                serializer,
+                                runtimeHandlers,
+                                eventDispatcher,
+                                meshNodes,
+                                construction.spotTimerExecutor(),
+                                construction.spotMulticastExecutor(),
+                                construction.spotHandlerExecutor(),
+                                construction.spotTimerStateLaneFactory());
         spots.setLocationLifecycle(locationLifecycle);
         if (channels != null) {
             channels.registerInstanceSpotCallRuntime(spots.instanceSpotCalls());

@@ -1,6 +1,14 @@
 package systems.zlink.framework.runtime.channels;
 
+import systems.zlink.framework.ZLinkMessageSerializer;
+import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterOptions;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
+import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
@@ -14,6 +22,28 @@ public final class ZLinkChannelRuntimeTestAccess {
 
     public static ExecutorService infrastructureExecutor(ZLinkChannelRuntime runtime) {
         return runtime.infrastructureExecutor;
+    }
+
+    public static ZLinkChannelRuntime withInfrastructureExecutor(
+            ZLinkChannelBackendAdapter backend,
+            ZLinkBackendContext context,
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkFrameworkRegistration registration,
+            ZLinkMessageSerializer serializer,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkRuntimeEventDispatcher eventDispatcher,
+            ExecutorService infrastructureExecutor) {
+        return new ZLinkChannelRuntime(
+                backend,
+                context,
+                backendFactory,
+                adapterOptions,
+                registration,
+                serializer,
+                handlerFactory,
+                eventDispatcher,
+                infrastructureExecutor);
     }
 
     public static ZLinkBackendRouterSocket requireRouteRouter(
