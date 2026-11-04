@@ -665,6 +665,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                 || !actors.remove(actor.actorId(), departed)) {
             return CompletableFuture.completedFuture(null);
         }
+        owner.retireOrderedActorRelays(actor.actorId());
         return retireStreamRoute(actor, null, authorityOwnerGeneration)
                 .thenCombine(
                         retireActorBinding(actor, null, authorityOwnerGeneration), (a, b) -> null);
@@ -1358,7 +1359,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                             == authorityOwnerGeneration
                                     && (sessionRid == null
                                             || current.binding().sessionRid().equals(sessionRid))
-                                    && actorBindings.remove(actor.actorId(), current));
+                                    && removeActorBinding(actor.actorId(), current));
                 });
     }
 
@@ -2398,8 +2399,14 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                                     routingId(),
                                                     sessionRid,
                                                     bindingGeneration)
-                                    && actorBindings.remove(actor.actorId(), current));
+                                    && removeActorBinding(actor.actorId(), current));
                 });
+    }
+
+    private boolean removeActorBinding(String actorId, BindingEntry entry) {
+        if (!actorBindings.remove(actorId, entry)) return false;
+        owner.retireOrderedActorRelays(actorId);
+        return true;
     }
 
     /**
@@ -2412,6 +2419,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         if (current != null && current.binding().equals(candidate)) {
             return;
         }
+        owner.retireOrderedActorRelays(actorId);
         actorBindings.put(actorId, new BindingEntry(candidate, new AtomicLong()));
         if (current != null) {
             notifyBoundSessionReplaced(current.binding());
@@ -2686,7 +2694,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             BindingEntry entry = actorBindings.get(actor.actorId());
             if (entry != null
                     && candidate.equals(entry.binding())
-                    && actorBindings.remove(actor.actorId(), entry)) {
+                    && removeActorBinding(actor.actorId(), entry)) {
                 applied.retire(candidate.route());
             }
             return candidate;
