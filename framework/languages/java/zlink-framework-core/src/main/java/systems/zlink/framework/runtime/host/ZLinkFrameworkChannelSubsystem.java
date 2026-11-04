@@ -32,16 +32,18 @@ final class ZLinkFrameworkChannelSubsystem {
             ZLinkFrameworkRuntimeConstruction construction) {
         backendContext.configureCoreHwm(options.registration().inboundDispatch());
         ZLinkChannelRuntime channels =
-                new ZLinkChannelRuntime(
-                        channelBackend,
-                        backendContext,
-                        backendFactory,
-                        adapterOptions,
-                        options.registration(),
-                        serializer,
-                        runtimeHandlers,
-                        eventDispatcher,
-                        construction.channelInfrastructureExecutor());
+                construction
+                        .channelRuntimeFactory()
+                        .create(
+                                channelBackend,
+                                backendContext,
+                                backendFactory,
+                                adapterOptions,
+                                options.registration(),
+                                serializer,
+                                runtimeHandlers,
+                                eventDispatcher,
+                                construction.channelInfrastructureExecutor());
         runtimeHandlers.add(ZLinkClient.class, channels);
         runtimeHandlers.add(ZLinkFanoutClient.class, channels);
         runtimeHandlers.add(ZLinkRouteClient.class, channels);

@@ -1932,6 +1932,21 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     COMMAND test_cpp_framework_target_contract
     LABELS "framework-contract"
     TIMEOUT 60)
+
+  add_executable(test_cpp_framework_source_scan_gate
+    tests/Zlink.Framework.ContractTests/test_cpp_framework_source_scan_gate.cpp)
+  target_compile_definitions(test_cpp_framework_source_scan_gate PRIVATE
+    ZLINK_FRAMEWORK_CPP_SOURCE_DIR="${ZLINK_FRAMEWORK_CPP_DIR}")
+  target_compile_features(test_cpp_framework_source_scan_gate PRIVATE cxx_std_20)
+  if(NOT MSVC AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_cpp_framework_source_scan_gate PRIVATE
+      -O2 -U_GLIBCXX_DEBUG -U_GLIBCXX_DEBUG_PEDANTIC -U_GLIBCXX_ASSERTIONS)
+  endif()
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_source_scan_gate
+    COMMAND test_cpp_framework_source_scan_gate
+    LABELS "framework-contract"
+    TIMEOUT 60)
   set(ZLINK_FRAMEWORK_CPP_TOOLING_CONTRACT_ARGS
     -D ZLINK_FRAMEWORK_CPP_SOURCE_DIR=${CMAKE_CURRENT_LIST_DIR}
     -D ZLINK_FRAMEWORK_CPP_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR})

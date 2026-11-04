@@ -328,20 +328,17 @@ final class ZLinkChannelMessageDispatcher {
                 0L);
         Message payload = Message.from(packet.payload());
         CompletableFuture<Void> admission = new CompletableFuture<>();
-        if (flow.enabled(ZLinkMessageFlowOutcome.ADMITTED))
-            admission.thenRun(
-                    () ->
-                            traceFlow(
-                                    ZLinkMessageFlowOutcome.ADMITTED,
-                                    ZLinkDispatchMessageKind.SEND,
-                                    packetName,
-                                    channelName,
-                                    null,
-                                    0L));
         try {
             registry.enqueueChannel(
                     registry.clientServerQueue(channelName),
                     () -> {
+                        traceFlow(
+                                ZLinkMessageFlowOutcome.ADMITTED,
+                                ZLinkDispatchMessageKind.SEND,
+                                packetName,
+                                channelName,
+                                null,
+                                0L);
                         return invokeStarted(
                                         () ->
                                                 invoker.executeHandler(
@@ -413,20 +410,17 @@ final class ZLinkChannelMessageDispatcher {
         String packetName = packet.packetName();
         Message payload = Message.from(packet.payload());
         CompletableFuture<Void> admission = new CompletableFuture<>();
-        if (flow.enabled(ZLinkMessageFlowOutcome.ADMITTED))
-            admission.thenRun(
-                    () ->
-                            traceFlow(
-                                    ZLinkMessageFlowOutcome.ADMITTED,
-                                    ZLinkDispatchMessageKind.REQUEST,
-                                    packetName,
-                                    channelName,
-                                    null,
-                                    requestSeq));
         try {
             registry.enqueueChannel(
                     registry.clientServerQueue(channelName),
                     () -> {
+                        traceFlow(
+                                ZLinkMessageFlowOutcome.ADMITTED,
+                                ZLinkDispatchMessageKind.REQUEST,
+                                packetName,
+                                channelName,
+                                null,
+                                requestSeq);
                         return CompletableFuture.completedFuture(null)
                                 .thenCompose(
                                         permit -> {

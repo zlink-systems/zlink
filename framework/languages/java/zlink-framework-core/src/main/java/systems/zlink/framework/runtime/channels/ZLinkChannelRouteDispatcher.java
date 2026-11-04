@@ -340,130 +340,126 @@ final class ZLinkChannelRouteDispatcher {
             String contentType) {
         Message payload = Message.from(packet.payload());
         CompletableFuture<Void> admission = new CompletableFuture<>();
-        if (flow.enabled(ZLinkMessageFlowOutcome.ADMITTED))
-            admission.thenRun(
-                    () ->
-                            traceFlow(
-                                    ZLinkMessageFlowOutcome.ADMITTED,
-                                    ZLinkDispatchMessageKind.REQUEST,
-                                    packet.packetName(),
-                                    channelName,
-                                    requestSeq,
-                                    source));
         try {
             registry.enqueueChannel(
                     registry.routeQueue(channelName),
-                    () ->
-                            CompletableFuture.completedFuture(null)
-                                    .thenCompose(
-                                            permit -> {
-                                                try {
-                                                    return invokeStarted(
-                                                                    () ->
-                                                                            invoker.executeHandler(
-                                                                                    () ->
-                                                                                            invoker
-                                                                                                    .invokeRouteRequestHandler(
-                                                                                                            channelName,
-                                                                                                            registration,
-                                                                                                            source,
-                                                                                                            payload
-                                                                                                                    .dataBuffer(),
-                                                                                                            packet
-                                                                                                                                    .header()
-                                                                                                                            != null
-                                                                                                                    ? packet.header()
-                                                                                                                            .metadata()
-                                                                                                                    : Map
-                                                                                                                            .of(),
-                                                                                                            contentType,
-                                                                                                            flow
-                                                                                                                            .enabled(
-                                                                                                                                    ZLinkMessageFlowOutcome
-                                                                                                                                            .DISPATCHED)
-                                                                                                                    ? () ->
-                                                                                                                            traceFlow(
-                                                                                                                                    ZLinkMessageFlowOutcome
-                                                                                                                                            .DISPATCHED,
-                                                                                                                                    ZLinkDispatchMessageKind
-                                                                                                                                            .REQUEST,
-                                                                                                                                    packet
-                                                                                                                                            .packetName(),
-                                                                                                                                    channelName,
-                                                                                                                                    requestSeq,
-                                                                                                                                    source)
-                                                                                                                    : null)))
-                                                            .whenComplete(
-                                                                    (reply, error) -> {
-                                                                        if (error != null) {
-                                                                            errors.replyError(
-                                                                                    router,
-                                                                                    received,
+                    () -> {
+                        traceFlow(
+                                ZLinkMessageFlowOutcome.ADMITTED,
+                                ZLinkDispatchMessageKind.REQUEST,
+                                packet.packetName(),
+                                channelName,
+                                requestSeq,
+                                source);
+                        return CompletableFuture.completedFuture(null)
+                                .thenCompose(
+                                        permit -> {
+                                            try {
+                                                return invokeStarted(
+                                                                () ->
+                                                                        invoker.executeHandler(
+                                                                                () ->
+                                                                                        invoker
+                                                                                                .invokeRouteRequestHandler(
+                                                                                                        channelName,
+                                                                                                        registration,
+                                                                                                        source,
+                                                                                                        payload
+                                                                                                                .dataBuffer(),
+                                                                                                        packet
+                                                                                                                                .header()
+                                                                                                                        != null
+                                                                                                                ? packet.header()
+                                                                                                                        .metadata()
+                                                                                                                : Map
+                                                                                                                        .of(),
+                                                                                                        contentType,
+                                                                                                        flow
+                                                                                                                        .enabled(
+                                                                                                                                ZLinkMessageFlowOutcome
+                                                                                                                                        .DISPATCHED)
+                                                                                                                ? () ->
+                                                                                                                        traceFlow(
+                                                                                                                                ZLinkMessageFlowOutcome
+                                                                                                                                        .DISPATCHED,
+                                                                                                                                ZLinkDispatchMessageKind
+                                                                                                                                        .REQUEST,
+                                                                                                                                packet
+                                                                                                                                        .packetName(),
+                                                                                                                                channelName,
+                                                                                                                                requestSeq,
+                                                                                                                                source)
+                                                                                                                : null)))
+                                                        .whenComplete(
+                                                                (reply, error) -> {
+                                                                    if (error != null) {
+                                                                        errors.replyError(
+                                                                                router,
+                                                                                received,
+                                                                                ZLinkDispatchErrorSurface
+                                                                                        .ROUTE_MESH_CHANNEL,
+                                                                                ZLinkDispatchMessageKind
+                                                                                        .REQUEST,
+                                                                                ZLinkChannelDispatchReporter
+                                                                                        .reasonFrom(
+                                                                                                error),
+                                                                                packet.packetName(),
+                                                                                channelName,
+                                                                                source.toString(),
+                                                                                packet.header(),
+                                                                                error);
+                                                                    } else {
+                                                                        try {
+                                                                            ZLinkChannelDispatchReporter
+                                                                                    .replyPayloadAndClose(
+                                                                                            router,
+                                                                                            received,
+                                                                                            packet
+                                                                                                    .header(),
+                                                                                            reply);
+                                                                            traceFlow(
+                                                                                    ZLinkMessageFlowOutcome
+                                                                                            .REPLIED,
+                                                                                    ZLinkDispatchMessageKind
+                                                                                            .REQUEST,
+                                                                                    packet
+                                                                                            .packetName(),
+                                                                                    channelName,
+                                                                                    requestSeq,
+                                                                                    source);
+                                                                        } catch (
+                                                                                RuntimeException
+                                                                                        replyFailure) {
+                                                                            errors.report(
                                                                                     ZLinkDispatchErrorSurface
                                                                                             .ROUTE_MESH_CHANNEL,
                                                                                     ZLinkDispatchMessageKind
                                                                                             .REQUEST,
-                                                                                    ZLinkChannelDispatchReporter
-                                                                                            .reasonFrom(
-                                                                                                    error),
+                                                                                    ZLinkDispatchErrorReason
+                                                                                            .REPLY_PATH_MISSING,
+                                                                                    ZLinkDispatchErrorAction
+                                                                                            .DROP,
                                                                                     packet
                                                                                             .packetName(),
                                                                                     channelName,
                                                                                     source
                                                                                             .toString(),
-                                                                                    packet.header(),
-                                                                                    error);
-                                                                        } else {
-                                                                            try {
-                                                                                ZLinkChannelDispatchReporter
-                                                                                        .replyPayloadAndClose(
-                                                                                                router,
-                                                                                                received,
-                                                                                                packet
-                                                                                                        .header(),
-                                                                                                reply);
-                                                                                traceFlow(
-                                                                                        ZLinkMessageFlowOutcome
-                                                                                                .REPLIED,
-                                                                                        ZLinkDispatchMessageKind
-                                                                                                .REQUEST,
-                                                                                        packet
-                                                                                                .packetName(),
-                                                                                        channelName,
-                                                                                        requestSeq,
-                                                                                        source);
-                                                                            } catch (
-                                                                                    RuntimeException
-                                                                                            replyFailure) {
-                                                                                errors.report(
-                                                                                        ZLinkDispatchErrorSurface
-                                                                                                .ROUTE_MESH_CHANNEL,
-                                                                                        ZLinkDispatchMessageKind
-                                                                                                .REQUEST,
-                                                                                        ZLinkDispatchErrorReason
-                                                                                                .REPLY_PATH_MISSING,
-                                                                                        ZLinkDispatchErrorAction
-                                                                                                .DROP,
-                                                                                        packet
-                                                                                                .packetName(),
-                                                                                        channelName,
-                                                                                        source
-                                                                                                .toString(),
-                                                                                        replyFailure);
-                                                                            }
+                                                                                    replyFailure);
                                                                         }
-                                                                    });
-                                                } catch (RuntimeException failure) {
+                                                                    }
+                                                                });
+                                            } catch (RuntimeException failure) {
 
-                                                    return CompletableFuture.<Message>failedFuture(
-                                                            failure);
-                                                }
-                                            })
-                                    .whenComplete(
-                                            (ignored, error) -> {
-                                                payload.close();
-                                            })
-                                    .thenApply(ignored -> null),
+                                                return CompletableFuture.<Message>failedFuture(
+                                                        failure);
+                                            }
+                                        })
+                                .whenComplete(
+                                        (ignored, error) -> {
+                                            payload.close();
+                                        })
+                                .thenApply(ignored -> null);
+                    },
                     admission);
             errors.replyShutdownOnAdmissionRejected(
                     admission,
@@ -510,76 +506,74 @@ final class ZLinkChannelRouteDispatcher {
                 source);
         Message payload = Message.from(packet.payload());
         CompletableFuture<Void> admission = new CompletableFuture<>();
-        if (flow.enabled(ZLinkMessageFlowOutcome.ADMITTED))
-            admission.thenRun(
-                    () ->
-                            traceFlow(
-                                    ZLinkMessageFlowOutcome.ADMITTED,
-                                    ZLinkDispatchMessageKind.SEND,
-                                    packetName,
-                                    channelName,
-                                    0L,
-                                    source));
         try {
             registry.enqueueChannel(
                     registry.routeQueue(channelName),
-                    () ->
-                            invokeStarted(
-                                            () ->
-                                                    invoker.executeHandler(
-                                                            () ->
-                                                                    invoker.invokeRouteSendHandler(
-                                                                            channelName,
-                                                                            registration,
-                                                                            source,
-                                                                            payload.dataBuffer(),
-                                                                            packet.header() != null
-                                                                                    ? packet.header()
-                                                                                            .metadata()
-                                                                                    : Map.of(),
-                                                                            contentType,
-                                                                            flow.enabled(
-                                                                                            ZLinkMessageFlowOutcome
-                                                                                                    .DISPATCHED)
-                                                                                    ? () ->
-                                                                                            traceFlow(
-                                                                                                    ZLinkMessageFlowOutcome
-                                                                                                            .DISPATCHED,
-                                                                                                    ZLinkDispatchMessageKind
-                                                                                                            .SEND,
-                                                                                                    packetName,
-                                                                                                    channelName,
-                                                                                                    0L,
-                                                                                                    source)
-                                                                                    : null)))
-                                    .whenComplete(
-                                            (ignored, error) -> {
-                                                if (error != null) {
-                                                    errors.report(
-                                                            ZLinkDispatchErrorSurface
-                                                                    .ROUTE_MESH_CHANNEL,
-                                                            ZLinkDispatchMessageKind.SEND,
-                                                            ZLinkChannelDispatchReporter.reasonFrom(
-                                                                    error),
-                                                            ZLinkDispatchErrorAction.DROP,
-                                                            packetName,
-                                                            channelName,
-                                                            null,
-                                                            error);
-                                                } else {
-                                                    traceFlow(
-                                                            ZLinkMessageFlowOutcome.COMPLETED,
-                                                            ZLinkDispatchMessageKind.SEND,
-                                                            packetName,
-                                                            channelName,
-                                                            0L,
-                                                            source);
-                                                }
-                                            })
-                                    .whenComplete(
-                                            (ignored, error) -> {
-                                                payload.close();
-                                            }),
+                    () -> {
+                        traceFlow(
+                                ZLinkMessageFlowOutcome.ADMITTED,
+                                ZLinkDispatchMessageKind.SEND,
+                                packetName,
+                                channelName,
+                                0L,
+                                source);
+                        return invokeStarted(
+                                        () ->
+                                                invoker.executeHandler(
+                                                        () ->
+                                                                invoker.invokeRouteSendHandler(
+                                                                        channelName,
+                                                                        registration,
+                                                                        source,
+                                                                        payload.dataBuffer(),
+                                                                        packet.header() != null
+                                                                                ? packet.header()
+                                                                                        .metadata()
+                                                                                : Map.of(),
+                                                                        contentType,
+                                                                        flow.enabled(
+                                                                                        ZLinkMessageFlowOutcome
+                                                                                                .DISPATCHED)
+                                                                                ? () ->
+                                                                                        traceFlow(
+                                                                                                ZLinkMessageFlowOutcome
+                                                                                                        .DISPATCHED,
+                                                                                                ZLinkDispatchMessageKind
+                                                                                                        .SEND,
+                                                                                                packetName,
+                                                                                                channelName,
+                                                                                                0L,
+                                                                                                source)
+                                                                                : null)))
+                                .whenComplete(
+                                        (ignored, error) -> {
+                                            if (error != null) {
+                                                errors.report(
+                                                        ZLinkDispatchErrorSurface
+                                                                .ROUTE_MESH_CHANNEL,
+                                                        ZLinkDispatchMessageKind.SEND,
+                                                        ZLinkChannelDispatchReporter.reasonFrom(
+                                                                error),
+                                                        ZLinkDispatchErrorAction.DROP,
+                                                        packetName,
+                                                        channelName,
+                                                        null,
+                                                        error);
+                                            } else {
+                                                traceFlow(
+                                                        ZLinkMessageFlowOutcome.COMPLETED,
+                                                        ZLinkDispatchMessageKind.SEND,
+                                                        packetName,
+                                                        channelName,
+                                                        0L,
+                                                        source);
+                                            }
+                                        })
+                                .whenComplete(
+                                        (ignored, error) -> {
+                                            payload.close();
+                                        });
+                    },
                     admission);
             ZLinkChannelDispatchReporter.onAdmissionRejected(admission, payload::close, null);
         } catch (RuntimeException error) {
