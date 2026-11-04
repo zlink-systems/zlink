@@ -4387,7 +4387,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                                 ZLinkDispatchErrorAction.ReplyError,
                                 inboundHeader.Name,
                                 ActorId: actorId,
-                                SourceRid: sourceSessionRid.ToHex(),
+                                SourceRid: sourceNodeRid.ToHex(),
                                 CorrelationId: inboundHeader.CorrelationId,
                                 Exception: staleSequence,
                                 StreamSessionId: sourceSessionRid.ToHex()
@@ -4418,7 +4418,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                                 ZLinkDispatchMessageKind.Send,
                                 inboundHeader.Name,
                                 CorrelationId: inboundHeader.CorrelationId,
-                                SourceRid: sourceSessionRid.ToHex(),
+                                SourceRid: sourceNodeRid.ToHex(),
                                 ActorId: actorId,
                                 Result: ZLinkMessageFlowResult.Dropped,
                                 Reason: ZLinkMessageFlowReason.StaleTarget
