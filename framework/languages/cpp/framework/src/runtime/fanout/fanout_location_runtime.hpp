@@ -64,7 +64,6 @@ class fanout_location_runtime_t final : public fanout_runtime_t
     wait_for_accepted_callbacks_until (std::chrono::steady_clock::time_point deadline) noexcept;
     task_t<bool> republish_after_store_recovery (
       location_write_intent_t intent = location_write_intent_t::new_claim,
-      std::stop_token cancellation = {},
       std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
     bool empty () const noexcept;
 
@@ -93,7 +92,6 @@ class fanout_location_runtime_t final : public fanout_runtime_t
     void run ();
     task_t<bool> publish_descriptors (
       location_write_intent_t intent,
-      std::stop_token cancellation = {},
       std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
     void reconcile_subscribers ();
     void reconcile_subscriber (const subscriber_resource_t &subscriber);

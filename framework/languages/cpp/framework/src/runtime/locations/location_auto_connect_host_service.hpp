@@ -647,8 +647,11 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             if (stopped.stop_requested ())
                 co_return false;
             if (_fanout) {
+                // The domain stop token cancels the whole publication chain.
+                // Coordinator-only cancellation would release a periodic successor
+                // before request_stop() reaches the domain's stop source.
                 const auto result =
-                  co_await _fanout->republish_after_store_recovery (intent, stopped, deadline);
+                  co_await _fanout->republish_after_store_recovery (intent, deadline);
                 published = result && published;
             }
             if (published && !stopped.stop_requested ())
