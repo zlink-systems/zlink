@@ -670,6 +670,7 @@ final class ZLinkChannelMessageDispatcherTest {
             closing.get(2, TimeUnit.SECONDS);
             assertEquals(List.of("send", "later", "first"), probe.completions);
             assertTrue(terminals.await(2, TimeUnit.SECONDS), traces.toString());
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
             var byFlow =
                     traces.stream()
                             .filter(line -> line.contains("phase="))
@@ -678,6 +679,9 @@ final class ZLinkChannelMessageDispatcherTest {
                                             line -> line.replaceAll(".* flow=([^ ]+).*", "$1")));
             assertEquals(4, byFlow.size(), traces.toString());
             for (var records : byFlow.values()) {
+                assertTrue(
+                        records.stream().allMatch(line -> line.contains(" origin=inbound")),
+                        records.toString());
                 boolean send = records.getFirst().contains("kind=send");
                 assertEquals(
                         List.of(
