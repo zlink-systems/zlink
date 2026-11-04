@@ -8,10 +8,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
-import systems.zlink.framework.runtime.channels.ZLinkChannelRuntimeTestAccess;
+import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
-import systems.zlink.framework.runtime.spots.ZLinkSpotRuntime;
-import systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTestAccess;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
@@ -45,12 +44,16 @@ final class ZLinkInfrastructureShutdownDeadlineTest {
 
     @Test
     void closePreservesShutdownTerminalAfterTeardownFailure() throws Exception {
-        var runtime = ZLinkFrameworkRuntimeTestAccess.start(new DefaultZLinkFrameworkOptions());
+        var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+        var runtime =
+                ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                        new DefaultZLinkFrameworkOptions(),
+                        new ZLinkJavaBackendAdapterFactory(),
+                        ZLinkHandlerActivator.reflection(),
+                        null,
+                        new ZLinkFrameworkRuntimeTestAccess.Construction()
+                                .channelInfrastructureExecutor(failChannelCleanup(executor)));
         runtime.startupCompletion().toCompletableFuture().get(WAIT_SECONDS, TimeUnit.SECONDS);
-        var channels = ZLinkFrameworkRuntimeTestAccess.channels(runtime);
-        var executor = ZLinkChannelRuntimeTestAccess.infrastructureExecutor(channels);
-        ZLinkChannelRuntimeTestAccess.replaceInfrastructureExecutor(
-                channels, failChannelCleanup(executor));
         var terminal =
                 runtime.shutdown(Duration.ofSeconds(WAIT_SECONDS))
                         .toCompletableFuture()
@@ -70,12 +73,16 @@ final class ZLinkInfrastructureShutdownDeadlineTest {
 
     @Test
     void directCloseStillPropagatesCleanupFailure() throws Exception {
-        var runtime = ZLinkFrameworkRuntimeTestAccess.start(new DefaultZLinkFrameworkOptions());
+        var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+        var runtime =
+                ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                        new DefaultZLinkFrameworkOptions(),
+                        new ZLinkJavaBackendAdapterFactory(),
+                        ZLinkHandlerActivator.reflection(),
+                        null,
+                        new ZLinkFrameworkRuntimeTestAccess.Construction()
+                                .channelInfrastructureExecutor(failChannelCleanup(executor)));
         runtime.startupCompletion().toCompletableFuture().get(WAIT_SECONDS, TimeUnit.SECONDS);
-        var channels = ZLinkFrameworkRuntimeTestAccess.channels(runtime);
-        var executor = ZLinkChannelRuntimeTestAccess.infrastructureExecutor(channels);
-        ZLinkChannelRuntimeTestAccess.replaceInfrastructureExecutor(
-                channels, failChannelCleanup(executor));
         var failure = assertThrows(ZLinkFrameworkShutdown.Failure.class, runtime::close);
         assertEquals("injected executor cleanup failure", failure.getCause().getMessage());
         assertTrue(executor.isTerminated());
@@ -111,13 +118,10 @@ final class ZLinkInfrastructureShutdownDeadlineTest {
         var entered = new CountDownLatch(1);
         var release = new CountDownLatch(1);
         var waiting = new CompletableFuture<Void>();
-        var runtime = ZLinkFrameworkRuntimeTestAccess.start(options);
-        runtime.startupCompletion().toCompletableFuture().get(WAIT_SECONDS, TimeUnit.SECONDS);
         ExecutorService executor;
+        var construction = new ZLinkFrameworkRuntimeTestAccess.Construction();
         if (spotPublisher) {
-            var spots = (ZLinkSpotRuntime) runtime.spotManager();
-            ZLinkSpotRuntimeTestAccess.multicastExecutor(spots).shutdown();
-            var pool =
+            executor =
                     new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new LinkedBlockingQueue<>()) {
                         @Override
                         public boolean awaitTermination(long timeout, TimeUnit unit)
@@ -126,16 +130,23 @@ final class ZLinkInfrastructureShutdownDeadlineTest {
                             return super.awaitTermination(timeout, unit);
                         }
                     };
-            ZLinkSpotRuntimeTestAccess.replaceMulticastExecutor(spots, pool);
-            executor = pool;
+            construction.spotMulticastExecutor((ThreadPoolExecutor) executor);
         } else {
             executor =
-                    ZLinkChannelRuntimeTestAccess.infrastructureExecutor(
-                            ZLinkFrameworkRuntimeTestAccess.channels(runtime));
-            ZLinkChannelRuntimeTestAccess.replaceInfrastructureExecutor(
-                    ZLinkFrameworkRuntimeTestAccess.channels(runtime),
-                    observeExecutor(executor, waiting, executorDeadline));
+                    observeExecutor(
+                            java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor(),
+                            waiting,
+                            executorDeadline);
+            construction.channelInfrastructureExecutor(executor);
         }
+        var runtime =
+                ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                        options,
+                        new ZLinkJavaBackendAdapterFactory(),
+                        ZLinkHandlerActivator.reflection(),
+                        null,
+                        construction);
+        runtime.startupCompletion().toCompletableFuture().get(WAIT_SECONDS, TimeUnit.SECONDS);
         executor.execute(
                 () -> {
                     entered.countDown();

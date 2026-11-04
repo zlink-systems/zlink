@@ -97,151 +97,172 @@ final class ZLinkInstanceSpotStaleCacheTest {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
         options.addRouteMesh(MESH).listen("inproc://cache-" + UUID.randomUUID()).objects().server();
-        try (var locationRuntime =
-                        new ZLinkLocationRuntime(
-                                ZLinkRegisteredLocationStores.fromUnified(repository),
-                                locationOptions.ownerLeaseTtl(),
-                                locationOptions.ownerLeaseRenewInterval());
-                var runtime = ZLinkFrameworkRuntimeTestAccess.start(options);
+        var submissions = new AtomicInteger();
+        var accepted = new AtomicInteger();
+        var requestParts = new AtomicReference<Object>();
+        var firstTimeout = new AtomicReference<Duration>();
+        var backendProvider =
+                ZLinkFrameworkRuntimeTestAccess.withMeshNodeDecorator(
+                        new systems.zlink.framework.runtime.binding
+                                .ZLinkJavaBackendAdapterFactory(),
+                        originalNode ->
+                                (ZLinkInternalMeshNode)
+                                        Proxy.newProxyInstance(
+                                                getClass().getClassLoader(),
+                                                new Class<?>[] {ZLinkInternalMeshNode.class},
+                                                (proxy, method, args) -> {
+                                                    if (method.getName()
+                                                            .equals("requestInstanceSpot")) {
+                                                        int submitted =
+                                                                submissions.incrementAndGet();
+                                                        if (submitted > 1
+                                                                && args[0]
+                                                                        instanceof
+                                                                        systems.zlink.framework
+                                                                                        .runtime
+                                                                                        .internal
+                                                                                        .service
+                                                                                        .ZLinkServiceM6BWireCodec
+                                                                                        .InstanceRouteFence
+                                                                                fence) {
+                                                            assertEquals("new", fence.ownerId());
+                                                            if (!missing && submitted == 2) {
+                                                                assertSame(
+                                                                        requestParts.get(),
+                                                                        args[4]);
+                                                                assertTrue(
+                                                                        ((Duration) args[5])
+                                                                                        .compareTo(
+                                                                                                firstTimeout
+                                                                                                        .get())
+                                                                                <= 0);
+                                                            }
+                                                            accepted.incrementAndGet();
+                                                            return CompletableFuture
+                                                                    .completedFuture(
+                                                                            List.<Message>of());
+                                                        }
+                                                        if (submitted == 1) {
+                                                            assertEquals(
+                                                                    "InstanceRouteFence",
+                                                                    args[0].getClass()
+                                                                            .getSimpleName());
+                                                            requestParts.set(args[4]);
+                                                            firstTimeout.set((Duration) args[5]);
+                                                            current.set(
+                                                                    creating
+                                                                            ? snapshot(
+                                                                                    "new", 3, true)
+                                                                            : missing
+                                                                                    ? new ZLinkAuthorityMissing(
+                                                                                            Instant
+                                                                                                    .now())
+                                                                                    : snapshot(
+                                                                                            "new",
+                                                                                            3));
+                                                            return CompletableFuture.failedFuture(
+                                                                    terminal);
+                                                        }
+                                                        assertTrue(
+                                                                missing,
+                                                                "Missing or Creating delegates to the activation coordinator");
+                                                        assertEquals(
+                                                                "InstanceColdActivation",
+                                                                args[0].getClass().getSimpleName());
+                                                        assertSame(
+                                                                requestParts.get(),
+                                                                args[4],
+                                                                "cold admission retains the original payload");
+                                                        assertTrue(
+                                                                ((Duration) args[5])
+                                                                                .compareTo(
+                                                                                        firstTimeout
+                                                                                                .get())
+                                                                        <= 0,
+                                                                "cold admission retains the deadline");
+                                                        accepted.incrementAndGet();
+                                                        current.set(snapshot("new", 3));
+                                                        return CompletableFuture.completedFuture(
+                                                                List.<Message>of());
+                                                    }
+                                                    try {
+                                                        return method.invoke(originalNode, args);
+                                                    } catch (
+                                                            java.lang.reflect
+                                                                            .InvocationTargetException
+                                                                    failure) {
+                                                        throw failure.getCause();
+                                                    }
+                                                }));
+        var locationRuntime =
+                new ZLinkLocationRuntime(
+                        ZLinkRegisteredLocationStores.fromUnified(repository),
+                        locationOptions.ownerLeaseTtl(),
+                        locationOptions.ownerLeaseRenewInterval());
+        var construction =
+                new ZLinkFrameworkRuntimeTestAccess.Construction()
+                        .spotOperationAuthorityStore(repository)
+                        .spotLocationStore(repository)
+                        .spotLocationRuntime(locationRuntime)
+                        .spotLocationResolvers(routes);
+        try (var runtime =
+                        ZLinkFrameworkRuntimeTestAccess.startHostWithConstruction(
+                                options,
+                                backendProvider,
+                                systems.zlink.framework.runtime.internal.handlers
+                                        .ZLinkHandlerActivator.reflection(),
+                                null,
+                                construction);
                 var payload = Message.from(new byte[] {1})) {
             var host = (ZLinkSpotRuntime) runtime.spotManager();
-            host.installUserSpotOperationHandlers(repository, repository, locationRuntime, routes);
-            var nodes = host.routeMeshNodesByName;
-            var originalNode = nodes.get(MESH);
-            var submissions = new AtomicInteger();
-            var accepted = new AtomicInteger();
-            var requestParts = new AtomicReference<Object>();
-            var firstTimeout = new AtomicReference<Duration>();
-            var source =
-                    (ZLinkInternalMeshNode)
-                            Proxy.newProxyInstance(
-                                    getClass().getClassLoader(),
-                                    new Class<?>[] {ZLinkInternalMeshNode.class},
-                                    (proxy, method, args) -> {
-                                        if (method.getName().equals("requestInstanceSpot")) {
-                                            int submitted = submissions.incrementAndGet();
-                                            if (submitted > 1
-                                                    && args[0]
-                                                            instanceof
-                                                            systems.zlink.framework.runtime.internal
-                                                                            .service
-                                                                            .ZLinkServiceM6BWireCodec
-                                                                            .InstanceRouteFence
-                                                                    fence) {
-                                                assertEquals("new", fence.ownerId());
-                                                if (!missing && submitted == 2) {
-                                                    assertSame(requestParts.get(), args[4]);
-                                                    assertTrue(
-                                                            ((Duration) args[5])
-                                                                            .compareTo(
-                                                                                    firstTimeout
-                                                                                            .get())
-                                                                    <= 0);
-                                                }
-                                                accepted.incrementAndGet();
-                                                return CompletableFuture.completedFuture(
-                                                        List.<Message>of());
-                                            }
-                                            if (submitted == 1) {
-                                                assertEquals(
-                                                        "InstanceRouteFence",
-                                                        args[0].getClass().getSimpleName());
-                                                requestParts.set(args[4]);
-                                                firstTimeout.set((Duration) args[5]);
-                                                current.set(
-                                                        creating
-                                                                ? snapshot("new", 3, true)
-                                                                : missing
-                                                                        ? new ZLinkAuthorityMissing(
-                                                                                Instant.now())
-                                                                        : snapshot("new", 3));
-                                                return CompletableFuture.failedFuture(terminal);
-                                            }
-                                            assertTrue(
-                                                    missing,
-                                                    "Missing or Creating delegates to the activation coordinator");
-                                            assertEquals(
-                                                    "InstanceColdActivation",
-                                                    args[0].getClass().getSimpleName());
-                                            assertSame(
-                                                    requestParts.get(),
-                                                    args[4],
-                                                    "cold admission retains the original payload");
-                                            assertTrue(
-                                                    ((Duration) args[5])
-                                                                    .compareTo(firstTimeout.get())
-                                                            <= 0,
-                                                    "cold admission retains the deadline");
-                                            accepted.incrementAndGet();
-                                            current.set(snapshot("new", 3));
-                                            return CompletableFuture.completedFuture(
-                                                    List.<Message>of());
-                                        }
-                                        try {
-                                            return method.invoke(originalNode, args);
-                                        } catch (
-                                                java.lang.reflect.InvocationTargetException
-                                                        failure) {
-                                            throw failure.getCause();
-                                        }
-                                    });
-            var substituted = new HashMap<>(nodes);
-            substituted.put(MESH, source);
-            host.routeMeshNodesByName = Map.copyOf(substituted);
-            try {
-                var ready = resolver.resolve(SPOT).toCompletableFuture().join().orElseThrow();
-                assertEquals("old", ready.ownerId());
-                var call =
-                        host.instanceSpotCalls()
-                                .request(
-                                        SPOT,
-                                        TYPE,
-                                        MESH,
-                                        payload,
-                                        Optional.of("Probe"),
-                                        "application/json",
-                                        Map.of(),
-                                        WAIT,
-                                        ready,
-                                        resolver,
-                                        null);
-                assertTrue(
-                        call.toCompletableFuture()
-                                .get(WAIT.toMillis(), TimeUnit.MILLISECONDS)
-                                .isEmpty());
-                assertEquals(2, submissions.get());
-                assertEquals(1, accepted.get());
-                assertEquals(1, invalidations.get());
-                int beforeNext = reads.get();
-                var next = resolver.resolve(SPOT).toCompletableFuture().join().orElseThrow();
-                assertEquals(
-                        "new", next.ownerId(), "next independent operation uses the current owner");
-                assertEquals(3, next.spotGeneration());
-                assertEquals(beforeNext + (missing ? 1 : 0), reads.get());
-                host.instanceSpotCalls()
-                        .request(
-                                SPOT,
-                                TYPE,
-                                MESH,
-                                payload,
-                                Optional.of("Probe"),
-                                "application/json",
-                                Map.of(),
-                                WAIT,
-                                next,
-                                resolver,
-                                null)
-                        .toCompletableFuture()
-                        .get(WAIT.toMillis(), TimeUnit.MILLISECONDS);
-                assertEquals(3, submissions.get());
-                assertEquals(2, accepted.get());
-                assertEquals(
-                        1,
-                        invalidations.get(),
-                        "successful next operation must not invalidate again");
-            } finally {
-                host.routeMeshNodesByName = nodes;
-            }
+            var ready = resolver.resolve(SPOT).toCompletableFuture().join().orElseThrow();
+            assertEquals("old", ready.ownerId());
+            var call =
+                    host.instanceSpotCalls()
+                            .request(
+                                    SPOT,
+                                    TYPE,
+                                    MESH,
+                                    payload,
+                                    Optional.of("Probe"),
+                                    "application/json",
+                                    Map.of(),
+                                    WAIT,
+                                    ready,
+                                    resolver,
+                                    null);
+            assertTrue(
+                    call.toCompletableFuture()
+                            .get(WAIT.toMillis(), TimeUnit.MILLISECONDS)
+                            .isEmpty());
+            assertEquals(2, submissions.get());
+            assertEquals(1, accepted.get());
+            assertEquals(1, invalidations.get());
+            int beforeNext = reads.get();
+            var next = resolver.resolve(SPOT).toCompletableFuture().join().orElseThrow();
+            assertEquals(
+                    "new", next.ownerId(), "next independent operation uses the current owner");
+            assertEquals(3, next.spotGeneration());
+            assertEquals(beforeNext + (missing ? 1 : 0), reads.get());
+            host.instanceSpotCalls()
+                    .request(
+                            SPOT,
+                            TYPE,
+                            MESH,
+                            payload,
+                            Optional.of("Probe"),
+                            "application/json",
+                            Map.of(),
+                            WAIT,
+                            next,
+                            resolver,
+                            null)
+                    .toCompletableFuture()
+                    .get(WAIT.toMillis(), TimeUnit.MILLISECONDS);
+            assertEquals(3, submissions.get());
+            assertEquals(2, accepted.get());
+            assertEquals(
+                    1, invalidations.get(), "successful next operation must not invalidate again");
         } finally {
             routes.close();
         }

@@ -73,8 +73,25 @@ final class ZLinkCommittedTargetCloseTest {
                     .get(WAIT.toSeconds(), TimeUnit.SECONDS);
             var endpoint = source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
             try (var target =
-                    ZLinkFrameworkRuntimeTestAccess.start(
-                            options(TARGET, locations, relocations, endpoint))) {
+                    ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                            options(TARGET, locations, relocations, endpoint),
+                            new systems.zlink.framework.runtime.binding
+                                    .ZLinkJavaBackendAdapterFactory(),
+                            systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
+                                    .reflection(),
+                            null,
+                            new ZLinkFrameworkRuntimeTestAccess.Construction()
+                                    .targetNormalizerDecorator(
+                                            normalize ->
+                                                    request ->
+                                                            normalize
+                                                                    .apply(request)
+                                                                    .thenCompose(
+                                                                            ignored -> {
+                                                                                entered.complete(
+                                                                                        null);
+                                                                                return publicationRelease;
+                                                                            })))) {
                 try (var ready =
                         ZLinkRelocationObservationPublicTest.observe(
                                 target.routeMeshRuntime().observe(MESH, 8),
@@ -84,11 +101,6 @@ final class ZLinkCommittedTargetCloseTest {
                 var retire = ZLinkFrameworkRuntimeTestAccess.spotRetire(target);
                 assertEquals(1, ZLinkSpotRuntimeTestAccess.relocationStateMachineCount(retire));
                 var machine = ZLinkSpotRuntimeTestAccess.firstRelocationStateMachine(retire);
-                var targetEndpoint =
-                        ZLinkSpotRuntimeTestAccess.firstRelocationTargetEndpoint(retire);
-                Object original =
-                        ZLinkSpotRuntimeTestAccess.gateTargetNormalizer(
-                                targetEndpoint, entered, publicationRelease);
                 var release = publicationRelease;
                 try {
                     var relocation =
@@ -132,7 +144,6 @@ final class ZLinkCommittedTargetCloseTest {
                             "target OnClosing must follow accepted publication terminal");
                 } finally {
                     release.complete(null);
-                    ZLinkSpotRuntimeTestAccess.replaceTargetNormalizer(targetEndpoint, original);
                 }
             }
         } finally {

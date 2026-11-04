@@ -45,7 +45,7 @@ public final class ZLinkUserSpotRetireRuntime {
     private final Duration sessionRelocationSealTimeout;
     private final Map<String, Lane> lanes;
     private final Map<String, ActorLane> actorLanes;
-    List<ZLinkCanonicalRelocationStateMachine> stateMachines;
+    final List<ZLinkCanonicalRelocationStateMachine> stateMachines;
 
     public static class RelocationBlockedException extends IllegalStateException {
         private final ZLinkFrameworkRelocationReason reason;
@@ -86,6 +86,45 @@ public final class ZLinkUserSpotRetireRuntime {
             Optional<String> maintenanceWave,
             Duration sessionRelocationSealTimeout,
             java.util.function.Predicate<String> targetAdmissionSealed) {
+        this(
+                spots,
+                actors,
+                registrations,
+                nodes,
+                locations,
+                locationResolvers,
+                authorities,
+                options,
+                adapters,
+                applicationVersion,
+                maintenanceWave,
+                sessionRelocationSealTimeout,
+                targetAdmissionSealed,
+                null,
+                null,
+                null);
+    }
+
+    public ZLinkUserSpotRetireRuntime(
+            ZLinkSpotRuntime spots,
+            ZLinkActorRuntime actors,
+            List<MeshNodeRegistration> registrations,
+            Map<String, ZLinkInternalMeshNode> nodes,
+            ZLinkLocationRepository locations,
+            ZLinkStoreLocationResolvers locationResolvers,
+            ZLinkLocationRepository authorities,
+            ZLinkLocationOptions options,
+            ZLinkRelocationAdapterRegistry adapters,
+            long applicationVersion,
+            Optional<String> maintenanceWave,
+            Duration sessionRelocationSealTimeout,
+            java.util.function.Predicate<String> targetAdmissionSealed,
+            List<?> injectedStateMachines,
+            java.util.function.UnaryOperator<ZLinkLocationRepository>
+                    aggregateRelocationAuthorityStoreDecorator,
+            java.util.function.UnaryOperator<
+                            java.util.function.Function<Object, CompletionStage<Void>>>
+                    targetNormalizerDecorator) {
         this.spots = Objects.requireNonNull(spots, "spots");
         Objects.requireNonNull(targetAdmissionSealed, "targetAdmissionSealed");
         this.actors = Objects.requireNonNull(actors, "actors");
@@ -105,7 +144,12 @@ public final class ZLinkUserSpotRetireRuntime {
         Objects.requireNonNull(nodes, "nodes");
         var coordinator =
                 new ZLinkAggregateRelocationCoordinator(
-                        Objects.requireNonNull(authorities, "authorities"));
+                        aggregateRelocationAuthorityStoreDecorator == null
+                                ? Objects.requireNonNull(authorities, "authorities")
+                                : Objects.requireNonNull(
+                                        aggregateRelocationAuthorityStoreDecorator.apply(
+                                                Objects.requireNonNull(authorities, "authorities")),
+                                        "decorated authorities"));
         Objects.requireNonNull(options, "options");
         var transferOptions =
                 new ZLinkRelocationPayloadTransfer.Options(
@@ -164,6 +208,36 @@ public final class ZLinkUserSpotRetireRuntime {
                             spots, adapters, registration.meshName());
             var peerClient = new ZLinkSessionRelocationPeerClient(node);
             var relocationReplyClient = ZLinkSpotRetireControl.client(node);
+            java.util.function.Function<Object, CompletionStage<Void>> normalize =
+                    value -> {
+                        ZLinkSpotRetireControl.StageRequest request =
+                                (ZLinkSpotRetireControl.StageRequest) value;
+                        return coordinator.normalizePublishedAggregate(
+                                request.participants().stream()
+                                        .map(
+                                                participant ->
+                                                        new ZLinkAggregateRelocationCoordinator
+                                                                .ExpectedParticipant(
+                                                                participant.authorityKey(),
+                                                                participant.objectGeneration(),
+                                                                participant
+                                                                        .sourceAuthorityOwnerGeneration()))
+                                        .toList(),
+                                new ZLinkAggregateFence(
+                                        request.fence().aggregateId(),
+                                        request.fence().aggregateGeneration()),
+                                new ZLinkLocationOwnerToken(
+                                        request.targetOwnerId(),
+                                        request.targetOwnerLeaseGeneration()),
+                                () -> false);
+                    };
+            var normalized =
+                    targetNormalizerDecorator == null
+                            ? normalize
+                            : targetNormalizerDecorator.apply(normalize);
+            var normalizer =
+                    (ZLinkUserSpotRetireTargetEndpoint.SteadyNormalizer)
+                            request -> normalized.apply(request);
             var target =
                     new ZLinkUserSpotRetireTargetEndpoint(
                             node.status().routingId(),
@@ -177,26 +251,7 @@ public final class ZLinkUserSpotRetireRuntime {
                             null,
                             peerClient,
                             CONTROL_TIMEOUT,
-                            request ->
-                                    coordinator.normalizePublishedAggregate(
-                                            request.participants().stream()
-                                                    .map(
-                                                            value ->
-                                                                    new ZLinkAggregateRelocationCoordinator
-                                                                            .ExpectedParticipant(
-                                                                            value.authorityKey(),
-                                                                            value
-                                                                                    .objectGeneration(),
-                                                                            value
-                                                                                    .sourceAuthorityOwnerGeneration()))
-                                                    .toList(),
-                                            new ZLinkAggregateFence(
-                                                    request.fence().aggregateId(),
-                                                    request.fence().aggregateGeneration()),
-                                            new ZLinkLocationOwnerToken(
-                                                    request.targetOwnerId(),
-                                                    request.targetOwnerLeaseGeneration()),
-                                            () -> false),
+                            normalizer,
                             spots,
                             relocationReplyClient,
                             locations,
@@ -274,7 +329,12 @@ public final class ZLinkUserSpotRetireRuntime {
         }
         lanes = Map.copyOf(configured);
         actorLanes = Map.copyOf(configuredActors);
-        stateMachines = List.copyOf(machines);
+        stateMachines =
+                injectedStateMachines == null
+                        ? List.copyOf(machines)
+                        : injectedStateMachines.stream()
+                                .map(ZLinkCanonicalRelocationStateMachine.class::cast)
+                                .toList();
         if (!actorLanes.isEmpty()) {
             actors.setActorJoinRelocationPort(actorJoin);
         }

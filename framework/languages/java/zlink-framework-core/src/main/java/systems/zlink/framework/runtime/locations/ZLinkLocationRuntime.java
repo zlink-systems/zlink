@@ -61,9 +61,9 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     private final Duration heartbeatInterval;
     private final Duration ownerLeaseRenewTimeout;
     private final Duration ownerLeaseFencingMargin;
-    ScheduledExecutorService heartbeatExecutor;
-    LongSupplier monotonicNow;
-    final ZLinkStateLane stateLane = new ZLinkStateLane();
+    final ScheduledExecutorService heartbeatExecutor;
+    final LongSupplier monotonicNow;
+    final ZLinkStateLane stateLane;
     private ScheduledFuture<?> heartbeatTask;
     private StartupLifecycle startupLifecycle;
     private RoutingId nodeRid;
@@ -220,6 +220,28 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
             Duration ownerLeaseFencingMargin,
             LongSupplier monotonicNow,
             ScheduledExecutorService heartbeatExecutor) {
+        this(
+                stores,
+                ownerId,
+                ownerLeaseTtl,
+                heartbeatInterval,
+                ownerLeaseRenewTimeout,
+                ownerLeaseFencingMargin,
+                monotonicNow,
+                heartbeatExecutor,
+                new ZLinkStateLane());
+    }
+
+    ZLinkLocationRuntime(
+            ZLinkRegisteredLocationStores stores,
+            String ownerId,
+            Duration ownerLeaseTtl,
+            Duration heartbeatInterval,
+            Duration ownerLeaseRenewTimeout,
+            Duration ownerLeaseFencingMargin,
+            LongSupplier monotonicNow,
+            ScheduledExecutorService heartbeatExecutor,
+            ZLinkStateLane stateLane) {
         this.stores = Objects.requireNonNull(stores, "stores");
         this.ownerId = requireText(ownerId, "ownerId");
         this.ownerLeaseTtl = requirePositive(ownerLeaseTtl, "ownerLeaseTtl");
@@ -230,6 +252,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                 requireNonNegative(ownerLeaseFencingMargin, "ownerLeaseFencingMargin");
         this.monotonicNow = Objects.requireNonNull(monotonicNow, "monotonicNow");
         this.heartbeatExecutor = Objects.requireNonNull(heartbeatExecutor, "heartbeatExecutor");
+        this.stateLane = Objects.requireNonNull(stateLane, "stateLane");
     }
 
     public String ownerId() {

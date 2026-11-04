@@ -62,7 +62,8 @@ final class ZLinkFrameworkLocationSubsystem {
             ZLinkFrameworkRegistration registration,
             ZLinkHandlerActivator.MutableServices runtimeHandlers,
             ZLinkRuntimeEventDispatcher runtimeEvents,
-            Supplier<Instant> cleanupDeadline) {
+            Supplier<Instant> cleanupDeadline,
+            ZLinkFrameworkRuntimeConstruction construction) {
         ZLinkRegisteredLocationStores locationStores =
                 ZLinkLocationStoreResolver.resolve(registration.locations(), runtimeHandlers);
         if (locationStores == null) {
@@ -71,12 +72,14 @@ final class ZLinkFrameworkLocationSubsystem {
 
         locationStores.addTo(runtimeHandlers);
         ZLinkLocationRuntime locationRuntime =
-                new ZLinkLocationRuntime(
-                        locationStores,
-                        registration.locations().options().ownerLeaseTtl(),
-                        registration.locations().options().ownerLeaseRenewInterval(),
-                        registration.locations().options().ownerLeaseRenewTimeout(),
-                        registration.locations().options().ownerLeaseFencingMargin());
+                construction.locationRuntime() == null
+                        ? new ZLinkLocationRuntime(
+                                locationStores,
+                                registration.locations().options().ownerLeaseTtl(),
+                                registration.locations().options().ownerLeaseRenewInterval(),
+                                registration.locations().options().ownerLeaseRenewTimeout(),
+                                registration.locations().options().ownerLeaseFencingMargin())
+                        : construction.locationRuntime();
         CompletionStage<Void> startup =
                 locationRuntime.start(RoutingId.from(locationRuntime.ownerId()), cleanupDeadline);
 

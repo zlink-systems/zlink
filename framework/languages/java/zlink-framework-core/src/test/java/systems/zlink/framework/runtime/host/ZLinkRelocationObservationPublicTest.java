@@ -44,6 +44,11 @@ final class ZLinkRelocationObservationPublicTest {
         joined = new CompletableFuture<>();
         connected = new CompletableFuture<>();
         relayed = new CompletableFuture<>();
+        var publicationLaneExecutor =
+                new java.util.concurrent.atomic.AtomicReference<java.util.concurrent.Executor>(
+                        Runnable::run);
+        var publicationLane =
+                new ZLinkStateLane(task -> publicationLaneExecutor.get().execute(task));
         var locations = new ZLinkInMemoryLocationStore();
         var relocations = new InMemoryRelocationStore();
         try (var publicationExecutor = Executors.newVirtualThreadPerTaskExecutor();
@@ -92,7 +97,12 @@ final class ZLinkRelocationObservationPublicTest {
             try (var target =
                             ZLinkFrameworkRuntimeTestAccess.start(
                                     options("target-bound", locations, relocations, endpoint));
-                    var gateway = ZLinkFrameworkRuntimeTestAccess.start(gatewayOptions);
+                    var gateway =
+                            ZLinkFrameworkRuntimeTestAccess.startHost(
+                                    gatewayOptions,
+                                    systems.zlink.framework.runtime.binding
+                                            .ZLinkJavaBackendAdapterFactoryTestAccess
+                                            .withRawSpotStateLaneFactory(() -> publicationLane));
                     var targetReady =
                             observe(
                                     target.routeMeshRuntime().observe(MESH, 8),
@@ -112,20 +122,14 @@ final class ZLinkRelocationObservationPublicTest {
                                     .get(WAIT.toSeconds(), TimeUnit.SECONDS);
                     var publicationEntered = new CompletableFuture<Void>();
                     var publicationRelease = new CompletableFuture<Void>();
-                    var backendSpot =
-                            systems.zlink.framework.runtime.actors
-                                    .ZLinkSessionActorsRuntimeTestAccess.spotNode(sessionActors);
-                    var publicationLane =
-                            new ZLinkStateLane(
-                                    task ->
-                                            publicationExecutor.execute(
-                                                    () -> {
-                                                        publicationEntered.complete(null);
-                                                        publicationRelease.join();
-                                                        task.run();
-                                                    }));
-                    systems.zlink.framework.runtime.binding.ZLinkJavaRawSpotNodeTestAccess
-                            .replaceStateLaneForTest(backendSpot, publicationLane);
+                    publicationLaneExecutor.set(
+                            task ->
+                                    publicationExecutor.execute(
+                                            () -> {
+                                                publicationEntered.complete(null);
+                                                publicationRelease.join();
+                                                task.run();
+                                            }));
                     CompletableFuture<Void> submitted;
                     try {
                         var result =

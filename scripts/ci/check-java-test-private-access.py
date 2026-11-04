@@ -19,6 +19,11 @@ LEXEMES = re.compile(
     r"|'(?:\\.|[^'\\])*'|[A-Za-z_$][\w$]*|\d+|[^\s]"
 )
 ACCESS = re.compile(r"\b(setAccessible|trySetAccessible)\s*\(")
+ACCESS_METHOD_REFERENCE = re.compile(r"::\s*(setAccessible|trySetAccessible)\b")
+ACCESS_FLAG_ASSIGNMENT = re.compile(r"\bisAccessible\s*=")
+ACCESS_METHOD_LOOKUP = re.compile(
+    r'\bgetMethod\s*\(\s*"(?:setAccessible|trySetAccessible|isAccessible)"'
+)
 BYPASS = re.compile(
     r"\bprivateLookupIn\s*\(|\bUnsafe\b|\b(?:sun\.misc|jdk\.internal\.misc)\.Unsafe\b"
 )
@@ -51,6 +56,10 @@ REFLECTIVE_FIELD_VALUE = re.compile(
 REFLECTIVE_METHOD_CALL = re.compile(r"\.\s*invoke\s*\(")
 TYPE_DECL = re.compile(r"\b(?:class|interface|record|enum)\s+([A-Za-z_$][\w$]*)[^{};]*\{")
 PRIVATE_FIELD = re.compile(r"\bprivate\b[^;{}]*?\b([A-Za-z_$][\w$]*)\s*(?:=|;)")
+KOTLIN_PRIVATE_FIELD = re.compile(
+    r"\bprivate\b[^;{}]*?\b(?:val|var)\s+([A-Za-z_$][\w$]*)\b"
+    r"(?:\s*:\s*[^=;{}\n]+)?(?:\s*=|\s*(?:\n|$))"
+)
 PRIVATE_METHOD = re.compile(r"\bprivate\b[^;{}]*?\b([A-Za-z_$][\w$]*)\s*\(")
 IGNORED = {"build", ".gradle", "node_modules", ".git", ".artifacts"}
 
@@ -122,7 +131,9 @@ def is_test_source(path):
 def private_members(java_root):
     """Index declared private fields and methods by declaring type name."""
     members = {}
-    for path in java_root.rglob("*.java"):
+    for path in java_root.rglob("*"):
+        if path.suffix not in {".java", ".kt"}:
+            continue
         relative = path.relative_to(java_root)
         if any(part in IGNORED for part in relative.parts):
             continue
@@ -144,6 +155,7 @@ def private_members(java_root):
                 continue
             body = masked[opening + 1 : closing]
             names = {match.group(1) for match in PRIVATE_FIELD.finditer(body)}
+            names.update(match.group(1) for match in KOTLIN_PRIVATE_FIELD.finditer(body))
             names.update(match.group(1) for match in PRIVATE_METHOD.finditer(body))
             members.setdefault(declaration.group(1), set()).update(names)
     return members
@@ -152,7 +164,11 @@ def private_members(java_root):
 def scan(java_root):
     if not java_root.is_dir():
         raise ValueError(f"Java source root does not exist: {java_root}")
-    files = sorted(p for p in java_root.rglob("*.java") if is_test_source(p.relative_to(java_root)))
+    files = sorted(
+        p
+        for p in java_root.rglob("*")
+        if p.suffix in {".java", ".kt"} and is_test_source(p.relative_to(java_root))
+    )
     if not files:
         raise ValueError(f"No Java test sources found: {java_root}")
     private_index = private_members(java_root)
@@ -185,6 +201,25 @@ def scan(java_root):
                 ensure_ascii=False,
             )
             counts[hashlib.sha256(identity.encode("utf-8")).hexdigest()] += 1
+        for access in ACCESS_FLAG_ASSIGNMENT.finditer(masked):
+            line = masked.count("\n", 0, access.start()) + 1
+            private_accesses.append(
+                f"{path.relative_to(java_root).as_posix()}:{line} private-access bypass"
+            )
+        for access in ACCESS_METHOD_REFERENCE.finditer(masked):
+            line = masked.count("\n", 0, access.start()) + 1
+            private_accesses.append(
+                f"{path.relative_to(java_root).as_posix()}:{line} private-access bypass"
+            )
+        for access in ACCESS_METHOD_LOOKUP.finditer(source):
+            # A reflective lookup inside a comment or a string literal is not executable code.
+            method_start = access.start()
+            if masked[method_start : method_start + len("getMethod")] != "getMethod":
+                continue
+            line = masked.count("\n", 0, method_start) + 1
+            private_accesses.append(
+                f"{path.relative_to(java_root).as_posix()}:{line} private-access bypass"
+            )
         for bypass in BYPASS.finditer(masked):
             line = masked.count("\n", 0, bypass.start()) + 1
             private_accesses.append(

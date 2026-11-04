@@ -213,8 +213,6 @@ final class ZLinkActorDurablePrefixPermitTest {
     @org.junit.jupiter.api.RepeatedTest(20)
     void durableOwnershipIsDetachedBeforeItsEntryBecomesVisible() throws Exception {
         var executor = new ManualExecutor();
-        var actor =
-                new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.actorDelivery());
         var observations = new ArrayList<Boolean>();
         var intercepted =
                 new ArrayDeque<ZLinkSerialExecutionQueue.Entry>() {
@@ -228,7 +226,13 @@ final class ZLinkActorDurablePrefixPermitTest {
                         super.addLast(entry);
                     }
                 };
-        actor.applicationPending = intercepted;
+        var actor =
+                new ZLinkSerialExecutionQueue(
+                        executor,
+                        ZLinkExecutionLanePolicy.actorDelivery(),
+                        ZLinkSerialExecutionQueue.DEFAULT_LIFECYCLE_BURST_LIMIT,
+                        ZLinkSerialExecutionQueue.DEFAULT_OWNER_TIME_BUDGET,
+                        intercepted);
         try (var jobs =
                 new ZLinkApplicationJobQueue(
                         ZLinkApplicationJobQueueProfile.BALANCED,

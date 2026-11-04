@@ -6,7 +6,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.spots.ZLinkInstanceSpotContext;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 import systems.zlink.framework.spots.ZLinkSpotManager;
@@ -42,15 +41,6 @@ public final class ZLinkSpotRuntimeTesting {
 
     public static ZLinkInternalMeshNode meshNode(ZLinkSpotManager manager, String meshName) {
         return ((ZLinkSpotRuntime) manager).routeMeshNodesByName.get(meshName);
-    }
-
-    public static ZLinkLocationRepository userSpotLocationStore(ZLinkSpotManager manager) {
-        return ((ZLinkSpotRuntime) manager).userSpotLocationStore;
-    }
-
-    public static void userSpotLocationStore(
-            ZLinkSpotManager manager, ZLinkLocationRepository repository) {
-        ((ZLinkSpotRuntime) manager).userSpotLocationStore = repository;
     }
 
     public static CompletableFuture<Boolean> retainedCloseAttempt(ZLinkSpotManager manager) {

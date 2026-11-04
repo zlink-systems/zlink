@@ -349,6 +349,18 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 ZLinkServiceLivenessRegistry.DEFAULT_PEER_TIMEOUT);
     }
 
+    ZLinkJavaRawMeshNode(Context context, String meshName, ZLinkStateLane spotStateLane) {
+        this(
+                context,
+                meshName,
+                System::currentTimeMillis,
+                System::nanoTime,
+                ZLinkServiceLivenessRegistry.DEFAULT_PROBE_INTERVAL,
+                ZLinkServiceLivenessRegistry.DEFAULT_PEER_TIMEOUT,
+                ZLinkJavaRawServicePort.DEFAULT_RECEIVE_POLLER,
+                spotStateLane);
+    }
+
     ZLinkJavaRawMeshNode(Context context, String meshName, LongSupplier currentTimeMillis) {
         this(
                 context,
@@ -399,6 +411,26 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             Duration livenessPeerTimeout,
             BiFunction<RouterSocket, Boolean, ZLinkJavaSocketReceivePoller> receivePollerFactory) {
         this(
+                context,
+                meshName,
+                currentTimeMillis,
+                nanoTime,
+                livenessProbeInterval,
+                livenessPeerTimeout,
+                receivePollerFactory,
+                null);
+    }
+
+    ZLinkJavaRawMeshNode(
+            Context context,
+            String meshName,
+            LongSupplier currentTimeMillis,
+            LongSupplier nanoTime,
+            Duration livenessProbeInterval,
+            Duration livenessPeerTimeout,
+            BiFunction<RouterSocket, Boolean, ZLinkJavaSocketReceivePoller> receivePollerFactory,
+            ZLinkStateLane spotStateLane) {
+        this(
                 meshName,
                 currentTimeMillis,
                 nanoTime,
@@ -409,7 +441,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 null,
                 null,
                 null,
-                Map.of());
+                Map.of(),
+                ZLinkServiceTopologyRegistry::new,
+                spotStateLane);
     }
 
     private static ZLinkJavaRawServicePort createPort(
@@ -470,6 +504,37 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             Map<RoutingId, Long> selectedRoutes,
             BiFunction<ZLinkServiceNodeDescriptor, ZLinkStateLane, ZLinkServiceTopologyRegistry>
                     topologyFactory) {
+        this(
+                meshName,
+                currentTimeMillis,
+                nanoTime,
+                livenessProbeInterval,
+                livenessPeerTimeout,
+                port,
+                applicationDispatch,
+                router,
+                localDescriptor,
+                topology,
+                selectedRoutes,
+                topologyFactory,
+                null);
+    }
+
+    ZLinkJavaRawMeshNode(
+            String meshName,
+            LongSupplier currentTimeMillis,
+            LongSupplier nanoTime,
+            Duration livenessProbeInterval,
+            Duration livenessPeerTimeout,
+            ZLinkJavaRawServicePort port,
+            Executor applicationDispatch,
+            RouterSocket router,
+            ZLinkServiceNodeDescriptor localDescriptor,
+            ZLinkServiceTopologyRegistry topology,
+            Map<RoutingId, Long> selectedRoutes,
+            BiFunction<ZLinkServiceNodeDescriptor, ZLinkStateLane, ZLinkServiceTopologyRegistry>
+                    topologyFactory,
+            ZLinkStateLane spotStateLane) {
         if (meshName == null || meshName.isBlank())
             throw new IllegalArgumentException("meshName is required");
         this.meshName = meshName;
@@ -502,7 +567,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     new PeerObservationRoot(
                             localDescriptor, Map.of(), Set.of(), this.selectedRoutes, null);
         }
-        this.spotNode = new ZLinkJavaRawSpotNode(this);
+        this.spotNode =
+                new ZLinkJavaRawSpotNode(
+                        this, spotStateLane == null ? new ZLinkStateLane() : spotStateLane);
     }
 
     ZLinkServiceOperationRegistry operationRegistry() {

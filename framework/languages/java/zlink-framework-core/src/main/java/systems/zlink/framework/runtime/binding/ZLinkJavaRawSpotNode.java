@@ -70,7 +70,7 @@ import java.util.logging.Logger;
 final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     private static final Logger LOGGER = Logger.getLogger(ZLinkJavaRawSpotNode.class.getName());
     private final ZLinkJavaRawMeshNode owner;
-    ZLinkStateLane stateLane = new ZLinkStateLane();
+    final ZLinkStateLane stateLane;
     private final Map<String, ZLinkJavaRawSpot> spots = new ConcurrentHashMap<>();
     final Map<String, NativeActorStay> actors = new ConcurrentHashMap<>();
     private final Map<SpotAuthorityKey, AuthorityFence> spotAuthorities = new ConcurrentHashMap<>();
@@ -90,12 +90,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     // the binding owner's turn changes it; Actor-side ingress fences read it.
     private final Map<String, BindingEntry> actorBindings = new ConcurrentHashMap<>();
     // Without an attached Actor runtime this node's own lane is the binding owner.
-    private volatile RemoteSessionBindingOwner remoteSessionBindingOwner =
-            (node, actor, transition) ->
-                    this.stateLane
-                            .runNowOrQueue(
-                                    () -> transition.apply(RemoteSessionBindingTransition.NONE))
-                            .thenCompose(stage -> stage);
+    private volatile RemoteSessionBindingOwner remoteSessionBindingOwner;
     private volatile Duration duplicateBindCallbackTimeout = Duration.ofMillis(30_000);
     final ZLinkJavaInstanceSpotRegistry instanceSpots;
     private volatile Function<
@@ -115,7 +110,18 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             relocationSpotForwards = new ConcurrentHashMap<>();
 
     ZLinkJavaRawSpotNode(ZLinkJavaRawMeshNode owner) {
+        this(owner, new ZLinkStateLane());
+    }
+
+    ZLinkJavaRawSpotNode(ZLinkJavaRawMeshNode owner, ZLinkStateLane stateLane) {
         this.owner = owner;
+        this.stateLane = Objects.requireNonNull(stateLane, "stateLane");
+        this.remoteSessionBindingOwner =
+                (node, actor, transition) ->
+                        this.stateLane
+                                .runNowOrQueue(
+                                        () -> transition.apply(RemoteSessionBindingTransition.NONE))
+                                .thenCompose(stage -> stage);
         this.instanceSpots =
                 new ZLinkJavaInstanceSpotRegistry(
                         stateLane, owner::executeApplication, owner.name());

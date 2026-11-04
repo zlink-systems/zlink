@@ -9,6 +9,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
@@ -36,7 +37,8 @@ final class ZLinkRelocatedTimerLifecycleTest {
         ConstructorTimerSpot.release = new CompletableFuture<>();
         ConstructorTimerSpot.deliveries.set(0);
         ConstructorTimerInstance.ticked = new CompletableFuture<>();
-        var options = new DefaultZLinkFrameworkOptions();
+        var configured = controlledOptions();
+        var options = configured.options();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
         options.addRouteMesh("mesh")
                 .listen("inproc://constructor-timer-" + UUID.randomUUID())
@@ -46,7 +48,7 @@ final class ZLinkRelocatedTimerLifecycleTest {
                         "constructor-timer",
                         ConstructorTimerSpot.class,
                         factory -> factory.disableRelocation());
-        try (var controlled = new ControlledTimerRuntime(options);
+        try (var controlled = new ControlledTimerRuntime(options, configured.serial());
                 var creator = java.util.concurrent.Executors.newSingleThreadExecutor()) {
             var lifecycle = controlled.lifecycle;
             var preparing =
@@ -74,7 +76,6 @@ final class ZLinkRelocatedTimerLifecycleTest {
             try {
                 var context =
                         ConstructorTimerSpot.entered.get(3, java.util.concurrent.TimeUnit.SECONDS);
-                controlled.controlTimerLane(context);
                 var due = controlled.scheduler.due.poll(3, java.util.concurrent.TimeUnit.SECONDS);
                 assertNotNull(due);
                 due.run();
@@ -141,8 +142,10 @@ final class ZLinkRelocatedTimerLifecycleTest {
         ConstructorTimerSpot.release = new CompletableFuture<>();
         ConstructorTimerSpot.deliveries.set(0);
         ConstructorTimerInstance.ticked = new CompletableFuture<>();
-        var options = new DefaultZLinkFrameworkOptions();
-        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        var configured = controlledOptions();
+        var options = configured.options();
+        var locationStore = new ZLinkInMemoryLocationStore();
+        options.addLocationStore(locationStore);
         options.addRelocationStore(new systems.zlink.framework.runtime.InMemoryRelocationStore());
         options.addRouteMesh("mesh")
                 .listen("inproc://instance-constructor-" + UUID.randomUUID())
@@ -152,7 +155,7 @@ final class ZLinkRelocatedTimerLifecycleTest {
                         "constructor-instance",
                         ConstructorTimerInstance.class,
                         factory -> factory.disableRelocation());
-        try (var controlled = new ControlledTimerRuntime(options)) {
+        try (var controlled = new ControlledTimerRuntime(options, configured.serial())) {
             var first =
                     controlled
                             .framework
@@ -168,7 +171,6 @@ final class ZLinkRelocatedTimerLifecycleTest {
             try {
                 var context =
                         ConstructorTimerSpot.entered.get(3, java.util.concurrent.TimeUnit.SECONDS);
-                controlled.controlTimerLane(context);
                 var due = controlled.scheduler.due.poll(3, java.util.concurrent.TimeUnit.SECONDS);
                 assertNotNull(due);
                 due.run();
@@ -274,7 +276,8 @@ final class ZLinkRelocatedTimerLifecycleTest {
 
     @Test
     void relocationTargetKeepsPendingTickAndCloseBehindItsExistingStagingSeal() throws Exception {
-        var options = new DefaultZLinkFrameworkOptions();
+        var configured = controlledOptions();
+        var options = configured.options();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
         options.addRouteMesh("mesh")
                 .listen("inproc://target-ready-" + UUID.randomUUID())
@@ -295,7 +298,7 @@ final class ZLinkRelocatedTimerLifecycleTest {
                                                 old.schedule(),
                                                 old.nextScheduledAt(),
                                                 old.pendingTick()))));
-        try (var controlled = new ControlledTimerRuntime(options)) {
+        try (var controlled = new ControlledTimerRuntime(options, configured.serial())) {
             var lifecycle = controlled.lifecycle;
             var prepared =
                     lifecycle
@@ -306,7 +309,6 @@ final class ZLinkRelocatedTimerLifecycleTest {
             boolean published = false;
             try {
                 var spot = (TargetTimerSpot) lifecycle.preparedSpot(prepared);
-                controlled.controlTimerLane(spot.context());
                 lifecycle
                         .completeRelocationReady(prepared)
                         .toCompletableFuture()
@@ -388,7 +390,8 @@ final class ZLinkRelocatedTimerLifecycleTest {
         ReadyTimerSpot.creation = new CompletableFuture<>();
         ReadyTimerSpot.initialization = new CompletableFuture<>();
         ReadyTimerSpot.requestClose = requestClose;
-        var options = new DefaultZLinkFrameworkOptions();
+        var configured = controlledOptions();
+        var options = configured.options();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
         options.addRelocationStore(new systems.zlink.framework.runtime.InMemoryRelocationStore());
         options.addRouteMesh("mesh")
@@ -402,7 +405,7 @@ final class ZLinkRelocatedTimerLifecycleTest {
                             factory.recreateOnRelocation();
                             factory.executionMode(mode);
                         });
-        try (var controlled = new ControlledTimerRuntime(options)) {
+        try (var controlled = new ControlledTimerRuntime(options, configured.serial())) {
             var scheduler = controlled.scheduler;
             var lifecycle = controlled.lifecycle;
             ZLinkSpotLifecycle.PreparedUserSpot prepared = null;
@@ -414,7 +417,6 @@ final class ZLinkRelocatedTimerLifecycleTest {
                         lifecycle.prepareReserved(
                                 "mesh", ReadyTimerSpot.class, "ready-timer", 1, null);
                 var spot = ReadyTimerSpot.entered.get(3, java.util.concurrent.TimeUnit.SECONDS);
-                controlled.controlTimerLane(spot.context);
                 var due = scheduler.due.poll(3, java.util.concurrent.TimeUnit.SECONDS);
                 assertNotNull(due, "registered timer must have a platform expiration");
                 due.run();
@@ -519,8 +521,10 @@ final class ZLinkRelocatedTimerLifecycleTest {
         ReadyTimerInstance.tickStarted = new CompletableFuture<>();
         ReadyTimerInstance.handlerFails = handlerFails;
         ReadyTimerInstance.requestClose = requestClose;
-        var options = new DefaultZLinkFrameworkOptions();
-        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        var configured = controlledOptions();
+        var options = configured.options();
+        var locationStore = new ZLinkInMemoryLocationStore();
+        options.addLocationStore(locationStore);
         options.addRelocationStore(new systems.zlink.framework.runtime.InMemoryRelocationStore());
         options.configureDispatch()
                 .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
@@ -538,90 +542,85 @@ final class ZLinkRelocatedTimerLifecycleTest {
         var pointerEntered = new CompletableFuture<Void>();
         var pointerRelease = new CompletableFuture<Void>();
         var recoveryFailure = new IllegalStateException("recovery " + failedTransition + " failed");
-        try (var controlled = new ControlledTimerRuntime(options)) {
-            var host = controlled.host;
-            var original =
-                    (systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository)
-                            ZLinkSpotRuntimeTestAccess.userSpotLocationStore(host);
-            var observed =
-                    (systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository)
-                            java.lang.reflect.Proxy.newProxyInstance(
-                                    original.getClass().getClassLoader(),
-                                    new Class<?>[] {
-                                        systems.zlink.framework.runtime.internal.locations
-                                                .ZLinkLocationRepository.class
-                                    },
-                                    (proxy, method, arguments) -> {
-                                        CompletableFuture<Void> hold = null;
-                                        String transition = "none";
-                                        if (method.getName().equals("compareExchange")
-                                                && systems.zlink.framework.runtime.locations
-                                                        .ZLinkAuthorityKeyCodec.spot(spotId)
-                                                        .equals(arguments[0])
-                                                && arguments[2]
-                                                        instanceof
-                                                        systems.zlink.framework.runtime.internal
-                                                                        .locations.ZLinkAuthorityPut
-                                                                put) {
-                                            var authority =
-                                                    new systems.zlink.framework.runtime.locations
-                                                                    .ZLinkServiceAuthorityPayloadCodec()
-                                                            .decode(put.payload())
-                                                            .orElseThrow();
-                                            if (authority.state()
-                                                    == systems.zlink.framework.runtime.locations
-                                                            .ZLinkServiceAuthorityPayloadCodec.State
-                                                            .READY) {
-                                                if (authority
-                                                        .activationRecoveryState()
-                                                        .isPresent()) {
-                                                    var pointer =
-                                                            authority
-                                                                    .activationRecoveryState()
-                                                                    .orElseThrow();
-                                                    if (pointer.replayCursor()
-                                                            == pointer.inboxSequence()) {
-                                                        cursorEntered.complete(null);
-                                                        hold = cursorRelease;
-                                                        transition = "cursor";
-                                                    }
-                                                } else {
-                                                    pointerEntered.complete(null);
-                                                    hold = pointerRelease;
-                                                    transition = "pointer";
+        var original =
+                new systems.zlink.framework.runtime.internal.locations
+                        .ZLinkProviderLocationRepository(locationStore);
+        var observed =
+                (systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                original.getClass().getClassLoader(),
+                                new Class<?>[] {
+                                    systems.zlink.framework.runtime.internal.locations
+                                            .ZLinkLocationRepository.class
+                                },
+                                (proxy, method, arguments) -> {
+                                    CompletableFuture<Void> hold = null;
+                                    String transition = "none";
+                                    if (method.getName().equals("compareExchange")
+                                            && systems.zlink.framework.runtime.locations
+                                                    .ZLinkAuthorityKeyCodec.spot(spotId)
+                                                    .equals(arguments[0])
+                                            && arguments[2]
+                                                    instanceof
+                                                    systems.zlink.framework.runtime.internal
+                                                                    .locations.ZLinkAuthorityPut
+                                                            put) {
+                                        var authority =
+                                                new systems.zlink.framework.runtime.locations
+                                                                .ZLinkServiceAuthorityPayloadCodec()
+                                                        .decode(put.payload())
+                                                        .orElseThrow();
+                                        if (authority.state()
+                                                == systems.zlink.framework.runtime.locations
+                                                        .ZLinkServiceAuthorityPayloadCodec.State
+                                                        .READY) {
+                                            if (authority.activationRecoveryState().isPresent()) {
+                                                var pointer =
+                                                        authority
+                                                                .activationRecoveryState()
+                                                                .orElseThrow();
+                                                if (pointer.replayCursor()
+                                                        == pointer.inboxSequence()) {
+                                                    cursorEntered.complete(null);
+                                                    hold = cursorRelease;
+                                                    transition = "cursor";
                                                 }
+                                            } else {
+                                                pointerEntered.complete(null);
+                                                hold = pointerRelease;
+                                                transition = "pointer";
                                             }
                                         }
-                                        java.util.function.Supplier<CompletionStage<Object>> apply =
-                                                () -> {
-                                                    try {
-                                                        return (CompletionStage<Object>)
-                                                                method.invoke(original, arguments);
-                                                    } catch (
-                                                            java.lang.reflect
-                                                                            .InvocationTargetException
-                                                                    failure) {
-                                                        return CompletableFuture.failedFuture(
-                                                                failure.getCause());
-                                                    } catch (IllegalAccessException failure) {
-                                                        return CompletableFuture.failedFuture(
-                                                                failure);
-                                                    }
-                                                };
-                                        boolean failWrite =
-                                                !failedTransition.equals("none")
-                                                        && failedTransition.equals(transition);
-                                        return hold == null
-                                                ? apply.get()
-                                                : hold.thenCompose(
-                                                        ignored ->
-                                                                failWrite
-                                                                        ? CompletableFuture
-                                                                                .failedFuture(
-                                                                                        recoveryFailure)
-                                                                        : apply.get());
-                                    });
-            controlled.replaceUserSpotLocationStore(observed);
+                                    }
+                                    java.util.function.Supplier<CompletionStage<Object>> apply =
+                                            () -> {
+                                                try {
+                                                    return (CompletionStage<Object>)
+                                                            method.invoke(original, arguments);
+                                                } catch (
+                                                        java.lang.reflect.InvocationTargetException
+                                                                failure) {
+                                                    return CompletableFuture.failedFuture(
+                                                            failure.getCause());
+                                                } catch (IllegalAccessException failure) {
+                                                    return CompletableFuture.failedFuture(failure);
+                                                }
+                                            };
+                                    boolean failWrite =
+                                            !failedTransition.equals("none")
+                                                    && failedTransition.equals(transition);
+                                    return hold == null
+                                            ? apply.get()
+                                            : hold.thenCompose(
+                                                    ignored ->
+                                                            failWrite
+                                                                    ? CompletableFuture
+                                                                            .failedFuture(
+                                                                                    recoveryFailure)
+                                                                    : apply.get());
+                                });
+        try (var controlled = new ControlledTimerRuntime(options, configured.serial(), observed)) {
+            var host = controlled.host;
             var first =
                     controlled
                             .framework
@@ -636,7 +635,6 @@ final class ZLinkRelocatedTimerLifecycleTest {
                 var spot =
                         ReadyTimerInstance.initialized.get(
                                 3, java.util.concurrent.TimeUnit.SECONDS);
-                controlled.controlTimerLane(spot.context);
                 var due = controlled.scheduler.due.poll(3, java.util.concurrent.TimeUnit.SECONDS);
                 assertNotNull(due);
                 due.run();
@@ -901,66 +899,61 @@ final class ZLinkRelocatedTimerLifecycleTest {
         }
     }
 
+    private record ControlledOptions(DefaultZLinkFrameworkOptions options, DirectExecutor serial) {}
+
+    private static ControlledOptions controlledOptions() {
+        var serial = new DirectExecutor();
+        var options =
+                systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistrationTestAccess
+                        .optionsWithSerialExecutor(serial);
+        return new ControlledOptions(options, serial);
+    }
+
     private static final class ControlledTimerRuntime implements AutoCloseable {
         final systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime framework;
         final ZLinkSpotRuntime host;
         final ZLinkSpotLifecycle lifecycle;
         final ZLinkRelocatedTimerRebindTest.ManualScheduler scheduler =
                 new ZLinkRelocatedTimerRebindTest.ManualScheduler();
-        final DirectExecutor serial = new DirectExecutor();
-        private final java.util.List<Runnable> restorations = new java.util.ArrayList<>();
+        final DirectExecutor serial;
 
-        ControlledTimerRuntime(DefaultZLinkFrameworkOptions options) throws Exception {
-            framework = ZLinkFrameworkRuntimeTestAccess.start(options);
+        ControlledTimerRuntime(DefaultZLinkFrameworkOptions options, DirectExecutor serial)
+                throws Exception {
+            this(options, serial, null);
+        }
+
+        ControlledTimerRuntime(
+                DefaultZLinkFrameworkOptions options,
+                DirectExecutor serial,
+                systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository
+                        locationStore)
+                throws Exception {
+            this.serial = serial;
+            var construction =
+                    new ZLinkFrameworkRuntimeTestAccess.Construction()
+                            .spotTimerExecutor(scheduler)
+                            .spotHandlerExecutor(serial)
+                            .spotTimerStateLaneFactory(() -> new ZLinkStateLane(serial));
+            if (locationStore != null) construction.spotLocationStore(locationStore);
+            framework =
+                    ZLinkFrameworkRuntimeTestAccess.startHostWithConstruction(
+                            options,
+                            new systems.zlink.framework.runtime.binding
+                                    .ZLinkJavaBackendAdapterFactory(),
+                            systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
+                                    .reflection(),
+                            null,
+                            construction);
             host = (ZLinkSpotRuntime) framework.spotManager();
             lifecycle = host.spotLifecycle();
-            replaceTimerExecutor(scheduler);
-            replaceHandlerExecutor(serial);
-            var previousSerialExecutor =
-                    systems.zlink.framework.runtime.configuration
-                            .ZLinkFrameworkRegistrationTestAccess.replaceSerialExecutor(
-                            host.frameworkRegistration, serial);
-            restorations.add(
-                    () ->
-                            systems.zlink.framework.runtime.configuration
-                                    .ZLinkFrameworkRegistrationTestAccess.replaceSerialExecutor(
-                                    host.frameworkRegistration, previousSerialExecutor));
-        }
-
-        void controlTimerLane(Object context) throws Exception {
-            var previous = ZLinkSpotRuntimeTestAccess.replaceTimerLaneExecutor(context, serial);
-            restorations.add(
-                    () -> ZLinkSpotRuntimeTestAccess.replaceTimerLaneExecutor(context, previous));
-        }
-
-        void replaceTimerExecutor(java.util.concurrent.ScheduledExecutorService executor) {
-            var previous = ZLinkSpotRuntimeTestAccess.replaceTimerExecutor(host, executor);
-            restorations.add(() -> ZLinkSpotRuntimeTestAccess.replaceTimerExecutor(host, previous));
-        }
-
-        void replaceHandlerExecutor(java.util.concurrent.Executor executor) {
-            var previous = ZLinkSpotRuntimeTestAccess.replaceHandlerExecutor(host, executor);
-            restorations.add(
-                    () -> ZLinkSpotRuntimeTestAccess.replaceHandlerExecutor(host, previous));
-        }
-
-        void replaceUserSpotLocationStore(
-                systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository store) {
-            var previous = ZLinkSpotRuntimeTestAccess.replaceUserSpotLocationStore(host, store);
-            restorations.add(
-                    () -> ZLinkSpotRuntimeTestAccess.replaceUserSpotLocationStore(host, previous));
         }
 
         void markDraining() {
-            boolean previous = host.draining;
             host.draining = true;
-            restorations.add(() -> host.draining = previous);
         }
 
         @Override
         public void close() throws Exception {
-            for (int index = restorations.size() - 1; index >= 0; index--)
-                restorations.get(index).run();
             try {
                 framework.close();
             } finally {

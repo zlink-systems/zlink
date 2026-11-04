@@ -64,7 +64,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
     private final ZLinkUserSpotAggregateStagingOwner.JournalReplayer fallbackReplayer;
     private final ZLinkSessionRelocationPeerClient sessionRoutes;
     private final Duration routeTimeout;
-    SteadyNormalizer normalizer;
+    final SteadyNormalizer normalizer;
     private final BiFunction<
                     ZLinkSpotRetireControl.StageRequest, Map<String, Long>, CompletionStage<Void>>
             boundSessionRestorer;

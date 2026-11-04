@@ -68,7 +68,7 @@ public final class ZLinkSerialExecutionQueue {
     private final ZLinkSerialExecutionQueue timerOwner;
     private final int lifecycleBurstLimit;
     private final long ownerTimeBudgetNanos;
-    Deque<Entry> applicationPending = new ArrayDeque<>();
+    final Deque<Entry> applicationPending;
     private boolean pendingApplicationTailDurable;
     // A resumed application turn is kept separate so it can pass a relocation
     // boundary without inserting at the front of the application FIFO.
@@ -735,7 +735,12 @@ public final class ZLinkSerialExecutionQueue {
             ZLinkExecutionLanePolicy lanePolicy,
             int lifecycleBurstLimit,
             Duration ownerTimeBudget) {
-        this(executor, lanePolicy, lifecycleBurstLimit, ownerTimeBudget, null);
+        this(
+                executor,
+                lanePolicy,
+                lifecycleBurstLimit,
+                ownerTimeBudget,
+                (ZLinkSerialExecutionQueue) null);
     }
 
     private ZLinkSerialExecutionQueue(
@@ -766,6 +771,22 @@ public final class ZLinkSerialExecutionQueue {
                 lifecyclePendingFactory);
     }
 
+    ZLinkSerialExecutionQueue(
+            Executor executor,
+            ZLinkExecutionLanePolicy lanePolicy,
+            int lifecycleBurstLimit,
+            Duration ownerTimeBudget,
+            Deque<Entry> applicationPending) {
+        this(
+                executor,
+                lanePolicy,
+                lifecycleBurstLimit,
+                ownerTimeBudget,
+                null,
+                ArrayDeque::new,
+                applicationPending);
+    }
+
     private ZLinkSerialExecutionQueue(
             Executor executor,
             ZLinkExecutionLanePolicy lanePolicy,
@@ -773,6 +794,25 @@ public final class ZLinkSerialExecutionQueue {
             Duration ownerTimeBudget,
             ZLinkSerialExecutionQueue timerOwner,
             Supplier<? extends ArrayDeque<Entry>> lifecyclePendingFactory) {
+        this(
+                executor,
+                lanePolicy,
+                lifecycleBurstLimit,
+                ownerTimeBudget,
+                timerOwner,
+                lifecyclePendingFactory,
+                new ArrayDeque<>());
+    }
+
+    private ZLinkSerialExecutionQueue(
+            Executor executor,
+            ZLinkExecutionLanePolicy lanePolicy,
+            int lifecycleBurstLimit,
+            Duration ownerTimeBudget,
+            ZLinkSerialExecutionQueue timerOwner,
+            Supplier<? extends ArrayDeque<Entry>> lifecyclePendingFactory,
+            Deque<Entry> applicationPending) {
+        this.applicationPending = Objects.requireNonNull(applicationPending, "applicationPending");
         this.lifecyclePending =
                 Objects.requireNonNull(lifecyclePendingFactory.get(), "lifecyclePending");
         if (lifecycleBurstLimit <= 0

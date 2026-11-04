@@ -388,8 +388,32 @@ final class InstanceSpotColdActivationTest {
         sourceOptions.addLocationStore(store);
         sourceOptions.addRelocationStore(recovery);
         sourceOptions.addRouteMesh("cold-test").listen("tcp://127.0.0.1:0").objects().client();
+        var sourceRepository = new ZLinkProviderLocationRepository(store);
+        var observer =
+                (ZLinkLocationRepository)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                ZLinkLocationRepository.class.getClassLoader(),
+                                new Class<?>[] {ZLinkLocationRepository.class},
+                                (proxy, method, arguments) -> {
+                                    if (method.getName().equals("reserve"))
+                                        throw new AssertionError(
+                                                "source must not reserve a Missing Instance");
+                                    try {
+                                        return method.invoke(sourceRepository, arguments);
+                                    } catch (java.lang.reflect.InvocationTargetException failure) {
+                                        throw failure.getCause();
+                                    }
+                                });
         try (var target = ZLinkFrameworkRuntimeTestAccess.start(targetOptions);
-                var source = ZLinkFrameworkRuntimeTestAccess.start(sourceOptions)) {
+                var source =
+                        ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                                sourceOptions,
+                                new ZLinkJavaBackendAdapterFactory(),
+                                systems.zlink.framework.runtime.internal.handlers
+                                        .ZLinkHandlerActivator.reflection(),
+                                null,
+                                new ZLinkFrameworkRuntimeTestAccess.Construction()
+                                        .spotLocationStore(observer))) {
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(target)
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
@@ -412,26 +436,7 @@ final class InstanceSpotColdActivationTest {
                         "source and target must complete their existing peer handshake");
                 Thread.sleep(10);
             }
-            var original = ZLinkSpotRuntimeTestAccess.userSpotLocationStore(sourceHost);
             var applicationJobQueue = sourceOptions.registration().applicationJobQueue();
-            var observer =
-                    (ZLinkLocationRepository)
-                            java.lang.reflect.Proxy.newProxyInstance(
-                                    ZLinkLocationRepository.class.getClassLoader(),
-                                    new Class<?>[] {ZLinkLocationRepository.class},
-                                    (proxy, method, arguments) -> {
-                                        if (method.getName().equals("reserve"))
-                                            throw new AssertionError(
-                                                    "source must not reserve a Missing Instance");
-                                        try {
-                                            return method.invoke(original, arguments);
-                                        } catch (
-                                                java.lang.reflect.InvocationTargetException
-                                                        failure) {
-                                            throw failure.getCause();
-                                        }
-                                    });
-            ZLinkSpotRuntimeTestAccess.replaceUserSpotLocationStore(sourceHost, observer);
             try {
                 var reply =
                         source.route()
@@ -458,7 +463,6 @@ final class InstanceSpotColdActivationTest {
                 assertEquals(1, initialized.get());
             } finally {
                 echoRelease.complete(null);
-                ZLinkSpotRuntimeTestAccess.replaceUserSpotLocationStore(sourceHost, original);
             }
         }
     }
@@ -582,7 +586,8 @@ final class InstanceSpotColdActivationTest {
         var options = new DefaultZLinkFrameworkOptions();
         options.configureDispatch()
                 .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
-        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        var locationStore = new ZLinkInMemoryLocationStore();
+        options.addLocationStore(locationStore);
         options.addRelocationStore(recovery);
         options.addRouteMesh("cold-test")
                 .listen("inproc://ready-race-" + UUID.randomUUID())
@@ -593,7 +598,48 @@ final class InstanceSpotColdActivationTest {
         var captured = new CompletableFuture<ZLinkAuthoritySnapshot>();
         var returnRead = new CompletableFuture<Void>();
         String spotId = "ready-race-" + UUID.randomUUID();
-        try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(options)) {
+        var original = new ZLinkProviderLocationRepository(locationStore);
+        var hold = new java.util.concurrent.atomic.AtomicBoolean(false);
+        var observer =
+                (ZLinkLocationRepository)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                ZLinkLocationRepository.class.getClassLoader(),
+                                new Class<?>[] {ZLinkLocationRepository.class},
+                                (proxy, method, arguments) -> {
+                                    Object result;
+                                    try {
+                                        result = method.invoke(original, arguments);
+                                    } catch (java.lang.reflect.InvocationTargetException failure) {
+                                        throw failure.getCause();
+                                    }
+                                    if (method.getName().equals("read")
+                                            && arguments[0].equals(
+                                                    ZLinkAuthorityKeyCodec.spot(spotId))
+                                            && hold.compareAndSet(true, false)) {
+                                        return ((CompletionStage<ZLinkAuthorityReadResult>) result)
+                                                .thenCompose(
+                                                        read -> {
+                                                            captured.complete(
+                                                                    assertInstanceOf(
+                                                                            ZLinkAuthoritySnapshot
+                                                                                    .class,
+                                                                            read));
+                                                            return returnRead.thenApply(
+                                                                    ignored -> read);
+                                                        });
+                                    }
+                                    return result;
+                                });
+        try (var runtime =
+                ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                        options,
+                        new ZLinkJavaBackendAdapterFactory(),
+                        systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
+                                .reflection(),
+                        null,
+                        new ZLinkFrameworkRuntimeTestAccess.Construction()
+                                .spotOperationAuthorityStore(observer)
+                                .spotLocationStore(observer))) {
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
@@ -607,7 +653,6 @@ final class InstanceSpotColdActivationTest {
             echoHandled.get(5, TimeUnit.SECONDS);
             var host =
                     (systems.zlink.framework.runtime.spots.ZLinkSpotRuntime) runtime.spotManager();
-            var original = ZLinkSpotRuntimeTestAccess.userSpotLocationStore(host);
             var snapshot =
                     assertInstanceOf(
                             ZLinkAuthoritySnapshot.class,
@@ -627,41 +672,7 @@ final class InstanceSpotColdActivationTest {
                                     .toCompletableFuture()
                                     .get(5, TimeUnit.SECONDS));
             var envelope = new ZLinkInstanceActivationRecoveryCodec().decode(root.payload());
-            var hold = new java.util.concurrent.atomic.AtomicBoolean(true);
-            var observer =
-                    (ZLinkLocationRepository)
-                            java.lang.reflect.Proxy.newProxyInstance(
-                                    ZLinkLocationRepository.class.getClassLoader(),
-                                    new Class<?>[] {ZLinkLocationRepository.class},
-                                    (proxy, method, arguments) -> {
-                                        Object result;
-                                        try {
-                                            result = method.invoke(original, arguments);
-                                        } catch (
-                                                java.lang.reflect.InvocationTargetException
-                                                        failure) {
-                                            throw failure.getCause();
-                                        }
-                                        if (method.getName().equals("read")
-                                                && arguments[0].equals(
-                                                        ZLinkAuthorityKeyCodec.spot(spotId))
-                                                && hold.compareAndSet(true, false)) {
-                                            return ((CompletionStage<ZLinkAuthorityReadResult>)
-                                                            result)
-                                                    .thenCompose(
-                                                            read -> {
-                                                                captured.complete(
-                                                                        assertInstanceOf(
-                                                                                ZLinkAuthoritySnapshot
-                                                                                        .class,
-                                                                                read));
-                                                                return returnRead.thenApply(
-                                                                        ignored -> read);
-                                                            });
-                                        }
-                                        return result;
-                                    });
-            ZLinkSpotRuntimeTestAccess.replaceUserSpotLocationStore(host, observer);
+            hold.set(true);
             var nodes = ZLinkSpotRuntimeTestAccess.routeMeshNodesByName(host);
             var node = nodes.get("cold-test");
             var parts =
@@ -717,7 +728,6 @@ final class InstanceSpotColdActivationTest {
             } finally {
                 echoRelease.complete(null);
                 returnRead.complete(null);
-                ZLinkSpotRuntimeTestAccess.replaceUserSpotLocationStore(host, original);
                 parts.forEach(systems.zlink.contracts.messaging.Message::close);
             }
         }

@@ -874,14 +874,22 @@ final class ZLinkCanonicalRelocationSettlementTest {
                             .listen("inproc://shutdown-target-" + UUID.randomUUID());
             mesh.channelName("shutdown-target").server();
             mesh.objects().server();
-            var runtime = ZLinkFrameworkRuntimeTestAccess.start(options);
+            var runtime =
+                    ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                            options,
+                            new systems.zlink.framework.runtime.binding
+                                    .ZLinkJavaBackendAdapterFactory(),
+                            systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
+                                    .reflection(),
+                            null,
+                            new ZLinkFrameworkRuntimeTestAccess.Construction()
+                                    .relocationStateMachines(List.of(target)));
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
                     .toCompletableFuture()
                     .get(3, TimeUnit.SECONDS);
             runtime.setMessageFlowModeAsync(ZLinkMessageFlowLogMode.NORMAL).join();
             Object bridge = ZLinkFrameworkRuntimeTestAccess.spotRetire(runtime);
             assertNotNull(bridge);
-            ZLinkSpotRuntimeTestAccess.replaceRelocationStateMachines(bridge, List.of(target));
             return runtime;
         }
 

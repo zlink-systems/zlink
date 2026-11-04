@@ -16,6 +16,7 @@ import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
+import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
@@ -30,8 +31,6 @@ import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.spots.*;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -483,31 +482,12 @@ final class ZLinkCommittedActorLocalIngressTest {
                 systems.zlink.framework.runtime.binding.ZLinkJavaRawSpotNodeTestAccess
                         .relocationStagingIngressHandler(node);
         Object coordinator = ZLinkSpotRuntimeTestAccess.aggregateCoordinator(endpoint);
-        var delegate =
-                systems.zlink.framework.runtime.internal.locations
-                        .ZLinkAggregateRelocationCoordinatorTestAccess.authorityStore(
-                        (systems.zlink.framework.runtime.internal.locations
-                                        .ZLinkAggregateRelocationCoordinator)
-                                coordinator);
-        var observed =
-                Proxy.newProxyInstance(
-                        ZLinkLocationRepository.class.getClassLoader(),
-                        new Class<?>[] {ZLinkLocationRepository.class},
-                        (proxy, method, arguments) -> {
-                            if (method.getName().equals("commitAggregate"))
-                                return commit.apply(delegate, arguments);
-                            try {
-                                return method.invoke(delegate, arguments);
-                            } catch (InvocationTargetException failure) {
-                                throw failure.getCause();
-                            }
-                        });
         systems.zlink.framework.runtime.internal.locations
-                .ZLinkAggregateRelocationCoordinatorTestAccess.replaceAuthorityStore(
+                .ZLinkAggregateRelocationCoordinatorTestAccess.interceptCommit(
                 (systems.zlink.framework.runtime.internal.locations
                                 .ZLinkAggregateRelocationCoordinator)
                         coordinator,
-                (ZLinkLocationRepository) observed);
+                commit);
     }
 
     private static ZLinkInternalSpotNode node(ZLinkFrameworkRuntime host) throws Exception {
@@ -515,7 +495,17 @@ final class ZLinkCommittedActorLocalIngressTest {
     }
 
     private static ZLinkFrameworkRuntime start(DefaultZLinkFrameworkOptions options) {
-        return ZLinkFrameworkRuntimeTestAccess.start(options);
+        return ZLinkFrameworkRuntimeTestAccess.startHostWithConstruction(
+                options,
+                new ZLinkJavaBackendAdapterFactory(),
+                systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
+                        .reflection(),
+                null,
+                new ZLinkFrameworkRuntimeTestAccess.Construction()
+                        .aggregateRelocationAuthorityStoreDecorator(
+                                systems.zlink.framework.runtime.internal.locations
+                                                .ZLinkAggregateRelocationCoordinatorTestAccess
+                                        ::interceptingStore));
     }
 
     private static DefaultZLinkFrameworkOptions options(

@@ -49,12 +49,20 @@ public final class ZLinkFrameworkRegistration {
     private ZLinkStreamCompressionCodec streamCompressionCodec = ZLinkStreamCompressionCodecs.lz4();
     private Executor handlerExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private boolean closeHandlerExecutor = true;
-    ExecutorService serialExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    final ExecutorService serialExecutor;
     private Duration defaultRequestTimeout = Duration.ofSeconds(30);
     private Duration sessionReplacementCallbackTimeout = Duration.ofMillis(30_000);
     private ZLinkRelocationStore relocationStore;
     private long applicationVersion;
     private String maintenanceWave;
+
+    public ZLinkFrameworkRegistration() {
+        this(Executors.newVirtualThreadPerTaskExecutor());
+    }
+
+    ZLinkFrameworkRegistration(ExecutorService serialExecutor) {
+        this.serialExecutor = java.util.Objects.requireNonNull(serialExecutor, "serialExecutor");
+    }
 
     public Duration defaultRequestTimeout() {
         return defaultRequestTimeout;

@@ -97,91 +97,131 @@ final class ZLinkSpotCloseConformanceTest {
         resetStatics();
         String spotId = "version-close-" + UUID.randomUUID();
         var options = new DefaultZLinkFrameworkOptions();
-        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        var original = (ZLinkLocationRepository) new ZLinkInMemoryLocationStore();
+        options.addLocationStore((ZLinkLocationStore) original);
         options.addRouteMesh("close-mesh")
                 .listen("inproc://" + spotId)
                 .objects()
                 .server()
                 .addSpotFactory(SPOT_TYPE, CloseSpot.class, factory -> factory.disableRelocation());
-        try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(options)) {
-            create(runtime, spotId);
-            var host = (ZLinkSpotRuntime) runtime.spotManager();
-            var handler = ZLinkSpotRuntimeTestAccess.userSpotOperationHandler(host, "close-mesh");
-            var original = ZLinkSpotRuntimeTestAccess.authorityStore(handler);
-            var raced = new AtomicBoolean();
-            var proxy =
-                    (ZLinkLocationRepository)
-                            java.lang.reflect.Proxy.newProxyInstance(
-                                    ZLinkLocationRepository.class.getClassLoader(),
-                                    new Class<?>[] {ZLinkLocationRepository.class},
-                                    (ignored, method, args) -> {
-                                        if (method.getName().equals("read")
-                                                && ZLinkAuthorityKeyCodec.spot(spotId)
-                                                        .equals(args[0])
-                                                && raced.compareAndSet(false, true)) {
-                                            return original.read((String) args[0], () -> false)
-                                                    .thenCompose(
-                                                            read -> {
-                                                                var before =
-                                                                        assertInstanceOf(
-                                                                                ZLinkAuthoritySnapshot
-                                                                                        .class,
-                                                                                read);
-                                                                return original.compareExchange(
-                                                                                (String) args[0],
-                                                                                new ZLinkAuthorityExpectFound(
-                                                                                        before
-                                                                                                .storeVersion()),
-                                                                                new ZLinkAuthorityPut(
-                                                                                        before
-                                                                                                .payload()),
-                                                                                () -> false)
-                                                                        .thenApply(
-                                                                                stored -> {
-                                                                                    assertInstanceOf(
-                                                                                            systems
+        var raced = new AtomicBoolean();
+        var proxy =
+                (java.util.function.UnaryOperator<ZLinkLocationRepository>)
+                        authorityRepository ->
+                                (ZLinkLocationRepository)
+                                        java.lang.reflect.Proxy.newProxyInstance(
+                                                ZLinkLocationRepository.class.getClassLoader(),
+                                                new Class<?>[] {ZLinkLocationRepository.class},
+                                                (ignored, method, args) -> {
+                                                    if (method.getName().equals("read")
+                                                            && ZLinkAuthorityKeyCodec.spot(spotId)
+                                                                    .equals(args[0])) {
+                                                        return authorityRepository
+                                                                .read((String) args[0], () -> false)
+                                                                .thenCompose(
+                                                                        read -> {
+                                                                            if (!(read
+                                                                                    instanceof
+                                                                                    ZLinkAuthoritySnapshot
+                                                                                            before)) {
+                                                                                return CompletableFuture
+                                                                                        .completedFuture(
+                                                                                                read);
+                                                                            }
+                                                                            var authority =
+                                                                                    new systems
                                                                                                     .zlink
                                                                                                     .framework
                                                                                                     .runtime
-                                                                                                    .internal
                                                                                                     .locations
-                                                                                                    .ZLinkAuthorityStored
-                                                                                                    .class,
-                                                                                            stored);
-                                                                                    return before;
-                                                                                });
-                                                            });
-                                        }
-                                        try {
-                                            return method.invoke(original, args);
-                                        } catch (
-                                                java.lang.reflect.InvocationTargetException
-                                                        failure) {
-                                            throw failure.getCause();
-                                        }
-                                    });
-            ZLinkSpotRuntimeTestAccess.replaceAuthorityStore(handler, proxy);
-            try {
-                var context = host.spotLifecycle().spotActivationFor(spotId).context;
-                var closing = context.close().toCompletableFuture();
-                var observed =
-                        closing.handle((value, failure) -> failure)
-                                .get(WAIT_SECONDS, TimeUnit.SECONDS);
-                assertTrue(raced.get(), "the target Close read must race an actual Store write");
-                assertTrue(
-                        observed != null,
-                        "same-incarnation Store version race must fail the accepted Close");
-                var failure =
-                        assertThrows(
-                                ExecutionException.class,
-                                () -> closing.get(WAIT_SECONDS, TimeUnit.SECONDS));
-                var typed = assertInstanceOf(ZLinkFrameworkException.class, failure.getCause());
-                assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, typed.kind());
-                assertEquals(0, ON_CLOSING_CALLS.get());
-                assertTrue(host.activeUserSpotIds().contains(spotId));
-            } finally {
-                ZLinkSpotRuntimeTestAccess.replaceAuthorityStore(handler, original);
-            }
+                                                                                                    .ZLinkServiceAuthorityPayloadCodec()
+                                                                                            .decode(
+                                                                                                    before
+                                                                                                            .payload())
+                                                                                            .orElseThrow();
+                                                                            if (authority.state()
+                                                                                            != systems
+                                                                                                    .zlink
+                                                                                                    .framework
+                                                                                                    .runtime
+                                                                                                    .locations
+                                                                                                    .ZLinkServiceAuthorityPayloadCodec
+                                                                                                    .State
+                                                                                                    .READY
+                                                                                    || !raced
+                                                                                            .compareAndSet(
+                                                                                                    false,
+                                                                                                    true)) {
+                                                                                return CompletableFuture
+                                                                                        .completedFuture(
+                                                                                                read);
+                                                                            }
+                                                                            return authorityRepository
+                                                                                    .compareExchange(
+                                                                                            (String)
+                                                                                                    args[
+                                                                                                            0],
+                                                                                            new ZLinkAuthorityExpectFound(
+                                                                                                    before
+                                                                                                            .storeVersion()),
+                                                                                            new ZLinkAuthorityPut(
+                                                                                                    before
+                                                                                                            .payload()),
+                                                                                            () ->
+                                                                                                    false)
+                                                                                    .thenApply(
+                                                                                            stored -> {
+                                                                                                assertInstanceOf(
+                                                                                                        systems
+                                                                                                                .zlink
+                                                                                                                .framework
+                                                                                                                .runtime
+                                                                                                                .internal
+                                                                                                                .locations
+                                                                                                                .ZLinkAuthorityStored
+                                                                                                                .class,
+                                                                                                        stored);
+                                                                                                return before;
+                                                                                            });
+                                                                        });
+                                                    }
+                                                    try {
+                                                        return method.invoke(
+                                                                authorityRepository, args);
+                                                    } catch (
+                                                            java.lang.reflect
+                                                                            .InvocationTargetException
+                                                                    failure) {
+                                                        throw failure.getCause();
+                                                    }
+                                                });
+        try (var runtime =
+                ZLinkFrameworkRuntimeTestAccess.startHostWithConstruction(
+                        options,
+                        new ZLinkJavaBackendAdapterFactory(),
+                        systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
+                                .reflection(),
+                        null,
+                        new ZLinkFrameworkRuntimeTestAccess.Construction()
+                                .spotOperationAuthorityStore(proxy))) {
+            create(runtime, spotId);
+            var host = (ZLinkSpotRuntime) runtime.spotManager();
+            var context = host.spotLifecycle().spotActivationFor(spotId).context;
+            var closing = context.close().toCompletableFuture();
+            var observed =
+                    closing.handle((value, failure) -> failure).get(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertTrue(raced.get(), "the target Close read must race an actual Store write");
+            assertTrue(
+                    observed != null,
+                    "same-incarnation Store version race must fail the accepted Close");
+            var failure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () -> closing.get(WAIT_SECONDS, TimeUnit.SECONDS));
+            var typed = assertInstanceOf(ZLinkFrameworkException.class, failure.getCause());
+            assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, typed.kind());
+            assertEquals(0, ON_CLOSING_CALLS.get());
+            assertTrue(host.activeUserSpotIds().contains(spotId));
         }
     }
 

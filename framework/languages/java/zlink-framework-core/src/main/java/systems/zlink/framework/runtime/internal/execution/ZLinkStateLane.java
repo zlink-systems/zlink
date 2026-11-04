@@ -69,7 +69,7 @@ public final class ZLinkStateLane {
     // The sign bit seals admission; the remaining bits count submissions still publishing a turn.
     private volatile int admission;
     private volatile CompletableFuture<Void> completed;
-    Executor executor;
+    final Executor executor;
 
     public ZLinkStateLane() {
         this(DEFAULT_EXECUTOR);

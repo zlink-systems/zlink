@@ -11,6 +11,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimed;
@@ -135,12 +136,10 @@ final class ZLinkLocationRuntimeAdmissionRecoveryTest {
                         Duration.ofSeconds(3),
                         Duration.ofSeconds(5),
                         () -> 0L,
-                        scheduler)) {
+                        scheduler,
+                        new ZLinkStateLane(Runnable::run))) {
             // Run lane turns inline so return from renew proves its publication dispatch ran.
             // The pending publication remains asynchronous and never holds a lane turn.
-            var lane = runtime.stateLane;
-            systems.zlink.framework.runtime.internal.execution.ZLinkStateLaneTestAccess
-                    .replaceExecutor(lane, Runnable::run);
             runtime.setOwnerLeaseRecoveryListener(
                     admissionWasOpen -> {
                         publications.incrementAndGet();

@@ -42,7 +42,7 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
             Logger.getLogger(ZLinkSpotPublisherRuntime.class.getName());
     private final ZLinkMessageSerializer serializer;
     private final ZLinkSpotRouteMessages messages;
-    ThreadPoolExecutor multicastExecutor;
+    final ThreadPoolExecutor multicastExecutor;
     private final Function<Class<?>, String> contentTypeResolver;
     private final ZLinkMessageFlowTracer flow;
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
@@ -83,12 +83,29 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
             int parallelism,
             Function<Class<?>, String> contentTypeResolver,
             ZLinkMessageFlowTracer flow) {
+        this(serializer, messages, parallelism, contentTypeResolver, flow, null);
+    }
+
+    ZLinkSpotPublisherRuntime(
+            ZLinkMessageSerializer serializer,
+            ZLinkSpotRouteMessages messages,
+            int parallelism,
+            Function<Class<?>, String> contentTypeResolver,
+            ZLinkMessageFlowTracer flow,
+            ThreadPoolExecutor multicastExecutor) {
         this.serializer = serializer;
         this.messages = messages;
         this.flow = flow;
         this.contentTypeResolver =
                 Objects.requireNonNull(contentTypeResolver, "contentTypeResolver");
         this.multicastExecutor =
+                multicastExecutor == null
+                        ? createMulticastExecutor(parallelism)
+                        : multicastExecutor;
+    }
+
+    private static ThreadPoolExecutor createMulticastExecutor(int parallelism) {
+        var executor =
                 new ThreadPoolExecutor(
                         parallelism,
                         parallelism,
@@ -101,7 +118,8 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
                             return thread;
                         },
                         new ThreadPoolExecutor.AbortPolicy());
-        this.multicastExecutor.allowCoreThreadTimeOut(true);
+        executor.allowCoreThreadTimeOut(true);
+        return executor;
     }
 
     void register(String channelName, ZLinkInternalSpotNode node) {

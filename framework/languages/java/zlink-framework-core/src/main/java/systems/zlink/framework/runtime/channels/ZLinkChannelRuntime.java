@@ -114,7 +114,7 @@ public final class ZLinkChannelRuntime
     private final ZLinkChannelReceiveLoops receiveLoops;
     private final Duration defaultRequestTimeout;
     final ZLinkChannelCallRuntime callRuntime;
-    SpotTransportAddressResolver spotAddressResolver;
+    final SpotTransportAddressResolver spotAddressResolver;
     private final ZLinkSpotRouteBridgeDrainer spotRouteBridgeDrainer;
     private final ZLinkBackendAdapterProvider backendFactory;
     private final ZLinkBackendAdapterOptions adapterOptions;
@@ -140,7 +140,7 @@ public final class ZLinkChannelRuntime
     // Each periodic source below owns one admission bit, so this shared
     // virtual-thread lane receives at most one queued or running task from
     // that source regardless of timer frequency.
-    ExecutorService infrastructureExecutor;
+    final ExecutorService infrastructureExecutor;
     private volatile boolean running = true;
 
     public record AutoConnectSurface(
@@ -265,20 +265,7 @@ public final class ZLinkChannelRuntime
                 serializer,
                 ZLinkHandlerActivator.reflection(),
                 null,
-                (ignoredBackend, ignoredKey) ->
-                        (ignoredSubmission, ignoredCleanup) ->
-                                CompletableFuture.failedFuture(
-                                        new IllegalStateException(
-                                                "one-way admission factory is required")),
-                System::nanoTime,
-                java.util.concurrent.locks.LockSupport::parkNanos,
-                Executors.newSingleThreadScheduledExecutor(
-                        task -> {
-                            Thread thread = new Thread(task, "zlink-java-channel-timeout");
-                            thread.setDaemon(true);
-                            return thread;
-                        }),
-                createInfrastructureExecutor(),
+                defaultAdmission(),
                 stateLane);
     }
 
@@ -405,6 +392,34 @@ public final class ZLinkChannelRuntime
                 admission);
     }
 
+    public ZLinkChannelRuntime(
+            ZLinkChannelBackendAdapter backend,
+            ZLinkBackendContext context,
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkFrameworkRegistration registration,
+            ZLinkMessageSerializer serializer,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkRuntimeEventDispatcher eventDispatcher,
+            ExecutorService infrastructureExecutor) {
+        this(
+                backend,
+                context,
+                false,
+                backendFactory,
+                adapterOptions,
+                registration,
+                serializer,
+                handlerFactory,
+                eventDispatcher,
+                defaultAdmission(),
+                null,
+                null,
+                null,
+                infrastructureExecutor,
+                null);
+    }
+
     private ZLinkChannelRuntime(
             ZLinkChannelBackendAdapter backend,
             ZLinkBackendContext context,
@@ -425,11 +440,27 @@ public final class ZLinkChannelRuntime
                 serializer,
                 handlerFactory,
                 eventDispatcher,
-                (ignoredBackend, ignoredKey) ->
-                        (ignoredSubmission, ignoredCleanup) ->
-                                CompletableFuture.failedFuture(
-                                        new IllegalStateException(
-                                                "one-way admission factory is required")));
+                defaultAdmission());
+    }
+
+    private static BiFunction<
+                    ZLinkBackendObject,
+                    ZLinkBackendAdmissionKey,
+                    BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>>
+            defaultAdmission() {
+        return (ignoredBackend, ignoredKey) ->
+                (ignoredSubmission, ignoredCleanup) ->
+                        CompletableFuture.failedFuture(
+                                new IllegalStateException("one-way admission factory is required"));
+    }
+
+    private static ScheduledExecutorService createTimeoutExecutor() {
+        return Executors.newSingleThreadScheduledExecutor(
+                task -> {
+                    Thread thread = new Thread(task, "zlink-java-channel-timeout");
+                    thread.setDaemon(true);
+                    return thread;
+                });
     }
 
     private ZLinkChannelRuntime(
@@ -458,14 +489,45 @@ public final class ZLinkChannelRuntime
                 handlerFactory,
                 eventDispatcher,
                 admission,
-                System::nanoTime,
-                java.util.concurrent.locks.LockSupport::parkNanos,
-                Executors.newSingleThreadScheduledExecutor(
-                        task -> {
-                            Thread thread = new Thread(task, "zlink-java-channel-timeout");
-                            thread.setDaemon(true);
-                            return thread;
-                        }));
+                null,
+                null,
+                null,
+                null,
+                null);
+    }
+
+    private ZLinkChannelRuntime(
+            ZLinkChannelBackendAdapter backend,
+            ZLinkBackendContext context,
+            boolean ownsContext,
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkFrameworkRegistration registration,
+            ZLinkMessageSerializer serializer,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkRuntimeEventDispatcher eventDispatcher,
+            BiFunction<
+                            ZLinkBackendObject,
+                            ZLinkBackendAdmissionKey,
+                            BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>>
+                    admission,
+            ZLinkStateLane stateLane) {
+        this(
+                backend,
+                context,
+                ownsContext,
+                backendFactory,
+                adapterOptions,
+                registration,
+                serializer,
+                handlerFactory,
+                eventDispatcher,
+                admission,
+                null,
+                null,
+                null,
+                null,
+                stateLane);
     }
 
     ZLinkChannelRuntime(
@@ -500,7 +562,8 @@ public final class ZLinkChannelRuntime
                 nanoTime,
                 parkNanos,
                 timeoutExecutor,
-                createInfrastructureExecutor());
+                null,
+                null);
     }
 
     ZLinkChannelRuntime(
@@ -537,7 +600,7 @@ public final class ZLinkChannelRuntime
                 parkNanos,
                 timeoutExecutor,
                 infrastructureExecutor,
-                new ZLinkStateLane());
+                null);
     }
 
     ZLinkChannelRuntime(
@@ -560,12 +623,19 @@ public final class ZLinkChannelRuntime
             ScheduledExecutorService timeoutExecutor,
             ExecutorService infrastructureExecutor,
             ZLinkStateLane stateLane) {
-        this.timeoutExecutor = timeoutExecutor;
+        LongSupplier actualNanoTime = nanoTime == null ? System::nanoTime : nanoTime;
+        this.timeoutExecutor = timeoutExecutor == null ? createTimeoutExecutor() : timeoutExecutor;
         this.infrastructureExecutor =
-                Objects.requireNonNull(infrastructureExecutor, "infrastructureExecutor");
+                infrastructureExecutor == null
+                        ? createInfrastructureExecutor()
+                        : Objects.requireNonNull(infrastructureExecutor, "infrastructureExecutor");
+        ZLinkStateLane actualStateLane = stateLane == null ? new ZLinkStateLane() : stateLane;
         this.sockets =
                 new ZLinkChannelSocketRegistry(
-                        registration.applicationJobQueue(), nanoTime, () -> !running, stateLane);
+                        registration.applicationJobQueue(),
+                        actualNanoTime,
+                        () -> !running,
+                        actualStateLane);
         this.clientServerRuntime = new ZLinkClientServerRuntimeView(sockets, () -> hostState.get());
         this.fanoutRuntime =
                 new ZLinkFanoutRuntimeView(
@@ -608,7 +678,7 @@ public final class ZLinkChannelRuntime
                         replyDecoder,
                         this::sendToSpotViaRouterChannel,
                         this::requestToSpotViaRouterChannel,
-                        nanoTime,
+                        actualNanoTime,
                         sockets.operationLane());
         this.dispatchReporter = new ZLinkChannelDispatchReporter(dispatchErrors);
         this.messageDispatcher =

@@ -8,8 +8,10 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.*;
 import systems.zlink.framework.locations.*;
+import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.*;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
@@ -141,65 +143,70 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
         var mesh = options.addRouteMesh(MESH).listen("inproc://deadline-" + UUID.randomUUID());
         mesh.objects().server();
         if (meshOverride) mesh.setDefaultRequestTimeout(ACTIVATION_TIMEOUT);
-        try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(options)) {
-            var host = (ZLinkSpotRuntime) runtime.spotManager();
-            var repository =
-                    (ZLinkLocationRepository)
-                            Proxy.newProxyInstance(
-                                    ZLinkLocationRepository.class.getClassLoader(),
-                                    new Class<?>[] {ZLinkLocationRepository.class},
-                                    (proxy, method, arguments) ->
-                                            switch (method.getName()) {
-                                                case "read" ->
-                                                        CompletableFuture.completedFuture(
-                                                                new ZLinkAuthorityMissing(
-                                                                        Instant.now()));
-                                                case "listMeshNodes" ->
-                                                        CompletableFuture.completedFuture(
-                                                                new ZLinkLocationPage<>(
-                                                                        List.of(descriptor()),
-                                                                        null));
-                                                case "reserve" ->
-                                                        throw new AssertionError(
-                                                                "source must not create a reservation");
-                                                default ->
-                                                        throw new UnsupportedOperationException(
-                                                                method.getName());
-                                            });
-            var originalStore = host.userSpotLocationStore;
-            host.userSpotLocationStore = repository;
-            var nodes = host.routeMeshNodesByName;
-            var originalNode = nodes.get(MESH);
-            var wireRoute = new CompletableFuture<Object>();
-            var admission = new CompletableFuture<Void>();
-            var source =
-                    (systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode)
-                            Proxy.newProxyInstance(
-                                    originalNode.getClass().getClassLoader(),
-                                    new Class<?>[] {
-                                        systems.zlink.framework.runtime.internal.backend
-                                                .ZLinkInternalMeshNode.class
-                                    },
-                                    (proxy, method, arguments) -> {
-                                        if (method.getName().equals("submitInstanceSpotSend")) {
-                                            wireRoute.complete(arguments[0]);
-                                            return admission;
-                                        }
-                                        try {
-                                            return method.invoke(originalNode, arguments);
-                                        } catch (
-                                                java.lang.reflect.InvocationTargetException
-                                                        failure) {
-                                            throw failure.getCause();
-                                        }
-                                    });
-            var substituted = new HashMap<>(nodes);
-            substituted.put(MESH, source);
-            host.routeMeshNodesByName = Map.copyOf(substituted);
-            var routeResolve = new CompletableFuture<Optional<SpotTransportAddress>>();
-            var originalResolver =
-                    ZLinkSpotRuntimeTestAccess.replaceSpotAddressResolver(
-                            host, spotId -> routeResolve);
+        var routeResolve = new CompletableFuture<Optional<SpotTransportAddress>>();
+        var wireRoute = new CompletableFuture<Object>();
+        var admission = new CompletableFuture<Void>();
+        var repository =
+                (ZLinkLocationRepository)
+                        Proxy.newProxyInstance(
+                                ZLinkLocationRepository.class.getClassLoader(),
+                                new Class<?>[] {ZLinkLocationRepository.class},
+                                (proxy, method, arguments) ->
+                                        switch (method.getName()) {
+                                            case "read" ->
+                                                    CompletableFuture.completedFuture(
+                                                            new ZLinkAuthorityMissing(
+                                                                    Instant.now()));
+                                            case "listMeshNodes" ->
+                                                    CompletableFuture.completedFuture(
+                                                            new ZLinkLocationPage<>(
+                                                                    List.of(descriptor()), null));
+                                            case "reserve" ->
+                                                    throw new AssertionError(
+                                                            "source must not create a reservation");
+                                            default ->
+                                                    throw new UnsupportedOperationException(
+                                                            method.getName());
+                                        });
+        var construction =
+                new ZLinkFrameworkRuntimeTestAccess.Construction()
+                        .spotLocationStore(repository)
+                        .channelSpotAddressResolver(spotId -> routeResolve);
+        var backendProvider =
+                ZLinkFrameworkRuntimeTestAccess.withMeshNodeDecorator(
+                        new ZLinkJavaBackendAdapterFactory(),
+                        originalNode ->
+                                (systems.zlink.framework.runtime.internal.backend
+                                                .ZLinkInternalMeshNode)
+                                        Proxy.newProxyInstance(
+                                                originalNode.getClass().getClassLoader(),
+                                                new Class<?>[] {
+                                                    systems.zlink.framework.runtime.internal.backend
+                                                            .ZLinkInternalMeshNode.class
+                                                },
+                                                (proxy, method, arguments) -> {
+                                                    if (method.getName()
+                                                            .equals("submitInstanceSpotSend")) {
+                                                        wireRoute.complete(arguments[0]);
+                                                        return admission;
+                                                    }
+                                                    try {
+                                                        return method.invoke(
+                                                                originalNode, arguments);
+                                                    } catch (
+                                                            java.lang.reflect
+                                                                            .InvocationTargetException
+                                                                    failure) {
+                                                        throw failure.getCause();
+                                                    }
+                                                }));
+        try (var runtime =
+                ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                        options,
+                        backendProvider,
+                        ZLinkHandlerActivator.reflection(),
+                        null,
+                        construction)) {
             try {
                 long started = System.currentTimeMillis();
                 var send =
@@ -230,9 +237,6 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
             } finally {
                 admission.complete(null);
                 routeResolve.complete(Optional.empty());
-                host.routeMeshNodesByName = nodes;
-                ZLinkSpotRuntimeTestAccess.replaceSpotAddressResolver(host, originalResolver);
-                host.userSpotLocationStore = originalStore;
             }
         }
     }
