@@ -25,6 +25,11 @@ Registry는 startup 뒤 바뀌지 않는다. 송신 선택 결과는 declared ty
 한도에 도달해도 기존 entry를 제거하지 않는다. 그 뒤 처음 보는 type은 송신할 때마다 등록
 목록을 다시 평가하고 결과를 저장하지 않는다.
 
+`useHandlerExecutor(executor)`에 전달한 `Executor`는 받은 작업을 모두 실행하거나
+`RejectedExecutionException`으로 거절해야 하며 조용히 버리면 안 된다. Framework는 등록할 때
+`DiscardPolicy`나 `DiscardOldestPolicy`(또는 그 하위 class)를 rejection handler로 쓰는
+`ThreadPoolExecutor`를 `ZLinkConfigurationException`으로 거부한다.
+
 ```java
 public interface ZLinkFrameworkOptions {
  Duration defaultRequestTimeout();
