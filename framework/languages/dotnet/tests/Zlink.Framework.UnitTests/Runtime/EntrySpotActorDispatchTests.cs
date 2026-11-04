@@ -4576,6 +4576,10 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             Assert.Equal("stream", sequenceRequestError.Surface);
             Assert.Equal("request", sequenceRequestError.MessageKind);
+            Assert.Equal("stale-bound-request", sequenceRequestError.PacketName);
+            Assert.Equal(actorRef.ActorId, sequenceRequestError.ActorId);
+            Assert.Equal(relayNode.ToHex(), sequenceRequestError.SourceRid);
+            Assert.Equal(sessionRid.ToHex(), sequenceRequestError.StreamSessionId);
 
             var clientDisconnectRequestHeader = new ZlinkStreamHeader(
                 ZlinkStreamMessageKind.Request,
@@ -4675,6 +4679,10 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             Assert.Equal("stream", sequenceSendDrop.Surface);
             Assert.Equal("send", sequenceSendDrop.MessageKind);
+            Assert.Equal("stale-bound-send", sequenceSendDrop.PacketName);
+            Assert.Equal(actorRef.ActorId, sequenceSendDrop.ActorId);
+            Assert.Equal(relayNode.ToHex(), sequenceSendDrop.SourceRid);
+            Assert.Equal(sessionRid.ToHex(), sequenceSendDrop.StreamSessionId);
 
             var increasingSequenceMetadata = ZLinkActorBoundSessionHandoffMetadata.Encode(
                 new ZLinkActorBoundSessionHandoffFence(
