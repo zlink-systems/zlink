@@ -1017,7 +1017,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
         private final List<PendingIngress> pendingIngress = new ArrayList<>();
         private AsyncDrainProbe debugProbe;
         private final ZLinkStateLane stateLane = new ZLinkStateLane();
-        private DurableBacklog durableBacklog;
+        DurableBacklog durableBacklog;
         private boolean published;
         private boolean ingressClosed;
         private boolean backlogSealed;

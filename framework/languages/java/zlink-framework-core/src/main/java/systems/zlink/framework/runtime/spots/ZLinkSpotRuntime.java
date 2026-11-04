@@ -47,6 +47,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.execution.ZLinkTeardownExecutor;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
@@ -130,6 +131,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
@@ -148,8 +150,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     private final ZLinkBackendContext context;
     private final boolean ownsContext;
-    private final ZLinkFrameworkRegistration frameworkRegistration;
-    private final List<ZLinkInternalSpotNode> nodes = new ArrayList<>();
+    final ZLinkFrameworkRegistration frameworkRegistration;
+    final List<ZLinkInternalSpotNode> nodes = new ArrayList<>();
     private final Map<String, ZLinkInternalSpotNode> nodesByName = new HashMap<>();
     private final ZLinkSpotLocationCoordinator spotLocations = new ZLinkSpotLocationCoordinator();
     private final ZLinkSpotLifecycle spotLifecycle;
@@ -161,10 +163,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     private final ZLinkSpotRouteMessages routeMessages;
     private final ZLinkSpotDirectOutbound directOutbound;
     private final ZLinkSpotRoutedOutbound routedOutbound;
-    private final ZLinkSpotPublisherRuntime publishers;
+    final ZLinkSpotPublisherRuntime publishers;
     private final ZLinkHandlerActivator handlerFactory;
-    private final ZLinkDispatchErrorReporter dispatchErrors;
-    private final Executor handlerExecutor;
+    final ZLinkDispatchErrorReporter dispatchErrors;
+    final Executor handlerExecutor;
+    private final Supplier<ZLinkStateLane> timerStateLaneFactory;
     private final systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue
             applicationJobQueue;
     private final List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers;
@@ -174,25 +177,25 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     private final ZLinkSpotActivationFactory activationFactory;
     private final Duration defaultRequestTimeout;
     private final ZLinkActorBoundSessionSender boundSessionSender;
-    private final ZLinkChannelRuntime channels;
+    final ZLinkChannelRuntime channels;
     private final List<ChannelRegistration> routeMeshChannels = new ArrayList<>();
     private final Set<RoutingId> manualRouterPeerNodeRids = ConcurrentHashMap.newKeySet();
-    private final Map<String, ZLinkInstanceSpotActivation> instanceSpotActivations =
+    final Map<String, ZLinkInstanceSpotActivation> instanceSpotActivations =
             new ConcurrentHashMap<>();
 
-    private record ClosingFence(String spotId, long objectGeneration, long ownerGeneration) {}
+    record ClosingFence(String spotId, long objectGeneration, long ownerGeneration) {}
 
-    private record RetainedClose(ZLinkSpotCloseCoordinator coordinator, Object commandFence) {}
+    record RetainedClose(ZLinkSpotCloseCoordinator coordinator, Object commandFence) {}
 
-    private final Map<ClosingFence, RetainedClose> closingCoordinators = new ConcurrentHashMap<>();
-    private final Map<String, ZLinkUserSpotOperationHandler> userSpotOperationHandlers =
+    final Map<ClosingFence, RetainedClose> closingCoordinators = new ConcurrentHashMap<>();
+    final Map<String, ZLinkUserSpotOperationHandler> userSpotOperationHandlers =
             new ConcurrentHashMap<>();
     private final Map<String, Duration> instanceSpotIdleTimeouts = new HashMap<>();
     private final List<ZLinkInternalMeshNode> routeMeshNodes;
-    private final Map<String, ZLinkInternalMeshNode> routeMeshNodesByName;
+    final Map<String, ZLinkInternalMeshNode> routeMeshNodesByName;
     private final Map<String, ZLinkActivationAdmission> activationAdmissions;
     private volatile ZLinkLocationRepository userSpotAuthorityStore;
-    private volatile ZLinkLocationRepository userSpotLocationStore;
+    volatile ZLinkLocationRepository userSpotLocationStore;
     private volatile systems.zlink.framework.runtime.locations.ZLinkLocationRuntime
             userSpotLocationRuntime;
     private volatile systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers
@@ -204,25 +207,28 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     private final systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec
             userSpotPayloads =
                     new systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec();
-    private final ZLinkSpotRelocationReplyRoutes relocationReplyRoutes =
+    final ZLinkSpotRelocationReplyRoutes relocationReplyRoutes =
             new ZLinkSpotRelocationReplyRoutes();
     private final ZLinkSpotOutboundScope outboundScope = new ZLinkSpotOutboundScope();
     private volatile boolean closing;
     private volatile CompletionStage<Void> applicationCleanup =
             CompletableFuture.completedFuture(null);
-    private volatile boolean draining;
+    volatile boolean draining;
     private volatile boolean relocating;
     private final ZLinkWorkerPool workerPool;
-    private final ScheduledExecutorService timerExecutor =
-            Executors.newScheduledThreadPool(
-                    1,
-                    task -> {
-                        Thread thread = new Thread(task, "zlink-java-spot-timer");
-                        thread.setDaemon(true);
-                        return thread;
-                    });
+    final ScheduledExecutorService timerExecutor;
     private final ExecutorService infrastructureExecutor =
             Executors.newVirtualThreadPerTaskExecutor();
+
+    private static ScheduledExecutorService createTimerExecutor() {
+        return Executors.newScheduledThreadPool(
+                1,
+                task -> {
+                    Thread thread = new Thread(task, "zlink-java-spot-timer");
+                    thread.setDaemon(true);
+                    return thread;
+                });
+    }
 
     public ZLinkSpotRuntime(
             ZLinkBackendAdapterProvider backendFactory,
@@ -295,6 +301,103 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 handlerFactory,
                 eventDispatcher,
                 Map.of());
+    }
+
+    ZLinkSpotRuntime(
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkFrameworkRegistration registration,
+            ZLinkChannelRuntime channels,
+            ZLinkMessageSerializer serializer,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkRuntimeEventDispatcher eventDispatcher,
+            ScheduledExecutorService timerExecutor,
+            ThreadPoolExecutor multicastExecutor,
+            Executor handlerExecutor) {
+        this(
+                backendFactory,
+                adapterOptions,
+                registration,
+                channels,
+                serializer,
+                handlerFactory,
+                eventDispatcher,
+                timerExecutor,
+                multicastExecutor,
+                handlerExecutor,
+                null);
+    }
+
+    ZLinkSpotRuntime(
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkFrameworkRegistration registration,
+            ZLinkChannelRuntime channels,
+            ZLinkMessageSerializer serializer,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkRuntimeEventDispatcher eventDispatcher,
+            ScheduledExecutorService timerExecutor,
+            ThreadPoolExecutor multicastExecutor,
+            Executor handlerExecutor,
+            Supplier<ZLinkStateLane> timerStateLaneFactory) {
+        this(
+                backendFactory,
+                adapterOptions,
+                registration,
+                channels,
+                null,
+                true,
+                serializer,
+                handlerFactory,
+                eventDispatcher,
+                Map.of(),
+                (ignoredBackend, ignoredKey) ->
+                        (ignoredSubmission, ignoredCleanup) ->
+                                CompletableFuture.failedFuture(
+                                        new IllegalStateException(
+                                                "one-way admission factory is required")),
+                timerExecutor,
+                multicastExecutor,
+                handlerExecutor,
+                timerStateLaneFactory,
+                null);
+    }
+
+    public ZLinkSpotRuntime(
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkFrameworkRegistration registration,
+            ZLinkChannelRuntime channels,
+            ZLinkBackendContext context,
+            ZLinkMessageSerializer serializer,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkRuntimeEventDispatcher eventDispatcher,
+            Map<String, ZLinkInternalMeshNode> meshNodes,
+            ScheduledExecutorService timerExecutor,
+            ThreadPoolExecutor multicastExecutor,
+            Executor handlerExecutor,
+            Supplier<ZLinkStateLane> timerStateLaneFactory) {
+        this(
+                backendFactory,
+                adapterOptions,
+                registration,
+                channels,
+                context,
+                false,
+                serializer,
+                handlerFactory,
+                eventDispatcher,
+                meshNodes,
+                (ignoredBackend, ignoredKey) ->
+                        (ignoredSubmission, ignoredCleanup) ->
+                                CompletableFuture.failedFuture(
+                                        new IllegalStateException(
+                                                "one-way admission factory is required")),
+                timerExecutor,
+                multicastExecutor,
+                handlerExecutor,
+                timerStateLaneFactory,
+                null);
     }
 
     public ZLinkSpotRuntime(
@@ -421,6 +524,46 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             ZLinkBackendAdmissionKey,
                             BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>>
                     admission) {
+        this(
+                backendFactory,
+                adapterOptions,
+                registration,
+                channels,
+                context,
+                ownsContext,
+                serializer,
+                handlerFactory,
+                eventDispatcher,
+                meshNodes,
+                admission,
+                null,
+                null,
+                null,
+                null,
+                null);
+    }
+
+    ZLinkSpotRuntime(
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkFrameworkRegistration registration,
+            ZLinkChannelRuntime channels,
+            ZLinkBackendContext context,
+            boolean ownsContext,
+            ZLinkMessageSerializer serializer,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkRuntimeEventDispatcher eventDispatcher,
+            Map<String, ZLinkInternalMeshNode> meshNodes,
+            BiFunction<
+                            ZLinkBackendObject,
+                            ZLinkBackendAdmissionKey,
+                            BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>>
+                    admission,
+            ScheduledExecutorService timerExecutor,
+            ThreadPoolExecutor multicastExecutor,
+            Executor handlerExecutor,
+            Supplier<ZLinkStateLane> timerStateLaneFactory,
+            Map<String, ZLinkInternalMeshNode> routeMeshNodesByName) {
         if (registration.spotNodes().isEmpty() && meshNodes.isEmpty()) {
             throw new ZLinkConfigurationException("at least one mesh node is required");
         }
@@ -440,7 +583,14 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         this.handlerFactory = handlerFactory;
         this.handlerExecutor =
                 ZLinkFlowContext.propagating(
-                        Objects.requireNonNull(registration.handlerExecutor(), "handlerExecutor"));
+                        Objects.requireNonNull(
+                                handlerExecutor == null
+                                        ? registration.handlerExecutor()
+                                        : handlerExecutor,
+                                "handlerExecutor"));
+        this.timerStateLaneFactory =
+                timerStateLaneFactory == null ? ZLinkStateLane::new : timerStateLaneFactory;
+        this.timerExecutor = timerExecutor == null ? createTimerExecutor() : timerExecutor;
         this.applicationJobQueue = registration.applicationJobQueue();
         this.dispatchErrors =
                 new ZLinkDispatchErrorReporter(
@@ -465,7 +615,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         routeMessages,
                         Math.max(2, Runtime.getRuntime().availableProcessors()),
                         registration.codecs()::contentTypeFor,
-                        dispatchErrors.flow());
+                        dispatchErrors.flow(),
+                        multicastExecutor);
         this.suspendHandlerInvokers = registration.suspendHandlerInvokers();
         this.spotHandlerInvoker = new ZLinkSpotHandlerInvoker(serializer, suspendHandlerInvokers);
         this.workerPool =
@@ -841,7 +992,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         this.spotLifecycle =
                 new ZLinkSpotLifecycle(
                         nodesByName::get,
-                        handlerExecutor,
+                        this.handlerExecutor,
                         spotLocations,
                         initializedSpotTypes,
                         activationFactory,
@@ -2692,8 +2843,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return frameworkRegistration.locations().options().messageFollowDuration();
     }
 
-    private static RuntimeException closeRuntimeComponent(
-            Runnable close, RuntimeException firstFailure) {
+    static RuntimeException closeRuntimeComponent(Runnable close, RuntimeException firstFailure) {
         try {
             close.run();
         } catch (RuntimeException error) {
@@ -3133,7 +3283,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 .orElse(null);
     }
 
-    private CompletionStage<String> resolveInstanceType(
+    CompletionStage<String> resolveInstanceType(
             ZLinkLocationRepository store, String meshName, String requestedType) {
         if (requestedType != null) {
             return CompletableFuture.completedFuture(requireStableType(requestedType));
@@ -3183,7 +3333,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         });
     }
 
-    private CompletionStage<InstanceTarget> selectInstanceSpotTarget(
+    CompletionStage<InstanceTarget> selectInstanceSpotTarget(
             ZLinkLocationRepository store, String meshName, String stableType) {
         var admissionFailure = spotHostAdmissionFailure(stableType);
         if (admissionFailure != null) {
@@ -3324,7 +3474,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     private static final int INSTANCE_TARGET_PAGE_SIZE = 1000;
     private static final Duration ACTIVATION_RECOVERY_RETENTION = Duration.ofHours(24);
 
-    private CompletionStage<ZLinkAuthorityReadResult> readInstanceSpotActivationTarget(
+    CompletionStage<ZLinkAuthorityReadResult> readInstanceSpotActivationTarget(
             ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope) {
         var store = requireUserSpotLocationStore();
         String key =
@@ -3448,7 +3598,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                 failure, envelope.deadlineUnixMs())));
     }
 
-    private CompletionStage<
+    CompletionStage<
                     systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                             .InstanceRouteFence>
             reserveInstanceSpotTarget(
@@ -3459,7 +3609,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 .thenCompose(read -> reserveInstanceSpotTarget(envelope, read));
     }
 
-    private CompletionStage<
+    CompletionStage<
                     systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                             .InstanceRouteFence>
             reserveInstanceSpotTarget(
@@ -5115,7 +5265,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return spotLifecycle.spotSurfaceFor(spotId);
     }
 
-    private EntrySpotActivation entrySpotActivationFor(String spotId) {
+    EntrySpotActivation entrySpotActivationFor(String spotId) {
         return spotLifecycle.entrySpotActivationFor(spotId);
     }
 
@@ -5880,7 +6030,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                             ZLinkFlowContext.enter(timerFlow)) {
                                         return operation.get();
                                     }
-                                }));
+                                }),
+                timerStateLaneFactory.get());
     }
 
     @Override

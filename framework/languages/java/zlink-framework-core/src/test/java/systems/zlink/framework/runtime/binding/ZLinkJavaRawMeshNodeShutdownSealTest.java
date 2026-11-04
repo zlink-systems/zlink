@@ -14,11 +14,9 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistryTesting;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
-import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -94,12 +92,9 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
                     Thread.sleep(1);
                 } while (System.nanoTime() < deadline);
                 assertTrue(local.peers().isEmpty());
-                assertTrue(
-                        ((ZLinkServiceTopologyRegistry) field(local, "topology"))
-                                .peer(peerRid)
-                                .isEmpty());
-                assertTrue(((java.util.Map<?, ?>) field(local, "peerIntentRoutingIds")).isEmpty());
-                assertTrue(((java.util.Set<?>) field(local, "rejectedPeers")).isEmpty());
+                assertTrue(local.topology.peer(peerRid).isEmpty());
+                assertTrue(local.peerIntentRoutingIds.isEmpty());
+                assertTrue(local.rejectedPeers.isEmpty());
             } else {
                 var receivedAdmit = new java.util.concurrent.atomic.AtomicBoolean();
                 await(
@@ -161,9 +156,9 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
                             current.pendingCapacityLimit(),
                             current.activeCapacityUsed(),
                             current.pendingCapacityUsed());
-            var port = (ZLinkJavaRawServicePort) field(peer, "port");
+            var port = peer.port;
             port.send(
-                            (RouterSocket) field(peer, "router"),
+                            peer.router,
                             local.routingId(),
                             List.of(
                                     new ZLinkServiceM6AWireCodec()
@@ -181,7 +176,7 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
                                     == ZLinkServiceNodeDescriptor.State.DRAINING);
             assertEquals(
                     descriptor(peer).descriptorRevision(),
-                    ((ZLinkServiceTopologyRegistry) field(local, "topology"))
+                    local.topology
                             .peer(peer.routingId())
                             .orElseThrow()
                             .descriptor()
@@ -398,9 +393,9 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
 
     private static void sendAdmission(
             ZLinkJavaRawMeshNode from, ZLinkJavaRawMeshNode to, int command) throws Exception {
-        var port = (ZLinkJavaRawServicePort) field(from, "port");
+        var port = from.port;
         port.send(
-                        (RouterSocket) field(from, "router"),
+                        from.router,
                         to.routingId(),
                         List.of(
                                 new ZLinkServiceM6AWireCodec()
@@ -419,7 +414,7 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
 
     private static Object livenessEpoch(ZLinkJavaRawMeshNode node, RoutingId peer)
             throws Exception {
-        return ((java.util.Map<?, ?>) field(field(node, "liveness"), "peers")).get(peer);
+        return node.livenessForTest().connection(peer);
     }
 
     private static void start(ZLinkJavaRawMeshNode node, String name) {
@@ -434,19 +429,12 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
 
     private static ZLinkServiceNodeDescriptor descriptor(ZLinkJavaRawMeshNode node)
             throws Exception {
-        return (ZLinkServiceNodeDescriptor) field(node, "localDescriptor");
+        return node.localDescriptor;
     }
 
     private static ZLinkServiceNodeDescriptor.State remoteState(
             ZLinkJavaRawMeshNode node, RoutingId peer) {
-        try {
-            return ((ZLinkServiceTopologyRegistry) field(node, "topology"))
-                    .peer(peer)
-                    .map(p -> p.descriptor().state())
-                    .orElse(null);
-        } catch (ReflectiveOperationException e) {
-            throw new AssertionError(e);
-        }
+        return node.topology.peer(peer).map(p -> p.descriptor().state()).orElse(null);
     }
 
     private static boolean admitted(ZLinkJavaRawMeshNode node) {
@@ -465,12 +453,6 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
                 () -> node.replacePeerConnection(endpoint, rid, lifecycleGeneration, "default"));
         await(() -> !node.isPeerConnectionClosing(oldIntent));
         return node.replacePeerConnection(endpoint, rid, lifecycleGeneration, "default");
-    }
-
-    private static Object field(Object owner, String name) throws ReflectiveOperationException {
-        Field field = owner.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(owner);
     }
 
     private static void await(BooleanSupplier condition) throws Exception {

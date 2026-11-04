@@ -12,7 +12,6 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorFactory;
-import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
@@ -25,7 +24,6 @@ import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 
-import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.List;
 import java.util.Map;
@@ -64,13 +62,7 @@ final class ZLinkActorDisconnectIngressTest {
             var actor = spots.actorSessions().localActor(ACTOR_ID).orElseThrow();
             var entry = (Entry) spots.localActorSpotSurface(actor);
             entry.release.complete(null);
-            var activationMethod =
-                    ZLinkSpotRuntime.class.getDeclaredMethod(
-                            "entrySpotActivationFor", String.class);
-            activationMethod.setAccessible(true);
-            var activation =
-                    (SpotActivationBase<?>)
-                            activationMethod.invoke(spots, entry.context().spotId());
+            var activation = spots.entrySpotActivationFor(entry.context().spotId());
             var ref = spots.actorSessions().runtime().currentRef(actor);
             var records =
                     new java.util.concurrent.CopyOnWriteArrayList<java.util.logging.LogRecord>();
@@ -197,13 +189,7 @@ final class ZLinkActorDisconnectIngressTest {
             var spots = (ZLinkSpotRuntime) runtime.spotManager();
             var actor = spots.actorSessions().localActor(ACTOR_ID).orElseThrow();
             var entry = (Entry) spots.localActorSpotSurface(actor);
-            var activationMethod =
-                    ZLinkSpotRuntime.class.getDeclaredMethod(
-                            "entrySpotActivationFor", String.class);
-            activationMethod.setAccessible(true);
-            var activation =
-                    (SpotActivationBase<?>)
-                            activationMethod.invoke(spots, entry.context().spotId());
+            var activation = spots.entrySpotActivationFor(entry.context().spotId());
             var ref = spots.actorSessions().runtime().currentRef(actor);
             try (var header =
                             new ZLinkBackendActorReceived(
@@ -282,13 +268,7 @@ final class ZLinkActorDisconnectIngressTest {
             var actor = spots.actorSessions().localActor(ACTOR_ID).orElseThrow();
             var entry = (Entry) spots.localActorSpotSurface(actor);
             entry.release.complete(null);
-            var activationMethod =
-                    ZLinkSpotRuntime.class.getDeclaredMethod(
-                            "entrySpotActivationFor", String.class);
-            activationMethod.setAccessible(true);
-            var activation =
-                    (SpotActivationBase<?>)
-                            activationMethod.invoke(spots, entry.context().spotId());
+            var activation = spots.entrySpotActivationFor(entry.context().spotId());
             var ref = spots.actorSessions().runtime().currentRef(actor);
             try (var header =
                             new ZLinkBackendActorReceived(
@@ -408,13 +388,7 @@ final class ZLinkActorDisconnectIngressTest {
             var actor = spots.actorSessions().localActor(ACTOR_ID).orElseThrow();
             var entry = (Entry) spots.localActorSpotSurface(actor);
             entry.release.complete(null);
-            var activationMethod =
-                    ZLinkSpotRuntime.class.getDeclaredMethod(
-                            "entrySpotActivationFor", String.class);
-            activationMethod.setAccessible(true);
-            var activation =
-                    (SpotActivationBase<?>)
-                            activationMethod.invoke(spots, entry.context().spotId());
+            var activation = spots.entrySpotActivationFor(entry.context().spotId());
             RoutingId sessionOwner = RoutingId.from("session-owner-node");
             RoutingId currentSession = RoutingId.from("current-session");
             var ref = actors.currentRef(actor);
@@ -464,18 +438,10 @@ final class ZLinkActorDisconnectIngressTest {
             actors.bindNativeSession(actor, node, ref, sessionOwner, currentSession)
                     .toCompletableFuture()
                     .join();
-            Method localNotify =
-                    ZLinkActorRuntime.class.getDeclaredMethod(
-                            "notifyDisconnected",
-                            ZLinkActor.class,
-                            systems.zlink.framework.runtime.actors.ZLinkSessionDisconnected.class);
-            localNotify.setAccessible(true);
-            ((CompletionStage<?>)
-                            localNotify.invoke(
-                                    actors,
-                                    actor,
-                                    new systems.zlink.framework.runtime.actors
-                                            .ZLinkSessionDisconnected(sessionOwner, -1L, 7L)))
+            actors.notifyDisconnected(
+                            actor,
+                            new systems.zlink.framework.runtime.actors.ZLinkSessionDisconnected(
+                                    sessionOwner, -1L, 7L))
                     .toCompletableFuture()
                     .join();
             assertEquals(

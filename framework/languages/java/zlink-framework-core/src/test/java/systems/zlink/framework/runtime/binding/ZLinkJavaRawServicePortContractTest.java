@@ -457,9 +457,7 @@ final class ZLinkJavaRawServicePortContractTest {
             var first = owner.openRouter(RoutingId.from("owner-first"));
             var second = owner.openRouter(RoutingId.from("owner-second"));
             var other = foreign.openRouter(RoutingId.from("owner-first"));
-            var registryField = ZLinkJavaRawServicePort.class.getDeclaredField("receivePollers");
-            registryField.setAccessible(true);
-            var registry = (java.util.SequencedMap<?, ?>) registryField.get(owner);
+            var registry = owner.receivePollers;
             assertEquals(List.of(second, first), List.copyOf(registry.reversed().keySet()));
             assertFalse(
                     java.util.Arrays.stream(ZLinkJavaRawServicePort.class.getDeclaredFields())

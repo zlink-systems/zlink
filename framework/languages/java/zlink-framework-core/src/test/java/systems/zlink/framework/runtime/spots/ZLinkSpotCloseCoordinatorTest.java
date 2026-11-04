@@ -1,13 +1,11 @@
 package systems.zlink.framework.runtime.spots;
 
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
-import java.lang.reflect.InvocationTargetException;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -19,9 +17,7 @@ final class ZLinkSpotCloseCoordinatorTest {
         var close = new ZLinkSpotCloseCoordinator(() -> commit, List.of(), ignored -> {});
         CompletableFuture<Boolean> result = close.close().toCompletableFuture();
 
-        InvocationTargetException failure =
-                assertThrows(InvocationTargetException.class, () -> forceSuccess(close, result));
-        assertInstanceOf(AssertionError.class, failure.getCause());
+        assertThrows(AssertionError.class, () -> close.end(result, true, null));
 
         commit.complete(true);
         assertTrue(result.get(3, TimeUnit.SECONDS));
@@ -37,9 +33,7 @@ final class ZLinkSpotCloseCoordinatorTest {
                         ignored -> {});
         CompletableFuture<Boolean> result = close.close().toCompletableFuture();
 
-        InvocationTargetException failure =
-                assertThrows(InvocationTargetException.class, () -> forceSuccess(close, result));
-        assertInstanceOf(AssertionError.class, failure.getCause());
+        assertThrows(AssertionError.class, () -> close.end(result, true, null));
 
         step.complete(null);
         assertTrue(result.get(3, TimeUnit.SECONDS));
@@ -62,14 +56,5 @@ final class ZLinkSpotCloseCoordinatorTest {
                                 () -> close.close().toCompletableFuture().join())
                         .getCause();
         assertSame(original, failure);
-    }
-
-    private static void forceSuccess(
-            ZLinkSpotCloseCoordinator close, CompletableFuture<Boolean> result) throws Exception {
-        var end =
-                ZLinkSpotCloseCoordinator.class.getDeclaredMethod(
-                        "end", CompletableFuture.class, Boolean.class, Throwable.class);
-        end.setAccessible(true);
-        end.invoke(close, result, true, null);
     }
 }

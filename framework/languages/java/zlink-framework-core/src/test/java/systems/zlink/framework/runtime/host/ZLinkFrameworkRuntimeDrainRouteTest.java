@@ -10,6 +10,10 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterOptions;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkMeshBackendAdapter;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerSource;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
@@ -18,6 +22,8 @@ import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeer;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -114,18 +120,15 @@ final class ZLinkFrameworkRuntimeDrainRouteTest {
 
     @Test
     void synchronousDrainStartFailureCompletesConcurrentShutdownWithOneTerminal() throws Exception {
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addRouteMesh("drain-failure").listen("inproc://drain-failure-" + UUID.randomUUID());
         try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
-                        new DefaultZLinkFrameworkOptions(), new ZLinkJavaBackendAdapterFactory())) {
+                ZLinkFrameworkRuntimeTestAccess.start(options, failingDrainProvider())) {
             long readyDeadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
             while (!runtime.isReady() && System.nanoTime() < readyDeadline) {
                 Thread.sleep(1);
             }
             assertTrue(runtime.isReady());
-            var drainsField = ZLinkFrameworkRuntime.class.getDeclaredField("meshDrains");
-            drainsField.setAccessible(true);
-            drainsField.set(runtime, null);
-
             var first = runtime.shutdown(Duration.ofSeconds(2)).toCompletableFuture();
             var concurrent = runtime.shutdown(Duration.ofSeconds(2)).toCompletableFuture();
             var result = first.get(3, TimeUnit.SECONDS);
@@ -134,6 +137,57 @@ final class ZLinkFrameworkRuntimeDrainRouteTest {
             assertEquals(result, concurrent.get(3, TimeUnit.SECONDS));
             assertEquals(result, runtime.status().terminationResult().orElseThrow());
         }
+    }
+
+    private static ZLinkBackendAdapterProvider failingDrainProvider() {
+        var delegate = new ZLinkJavaBackendAdapterFactory();
+        return new ZLinkBackendAdapterProvider() {
+            @Override
+            public systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter
+                    createChannelAdapter(ZLinkBackendAdapterOptions options) {
+                return delegate.createChannelAdapter(options);
+            }
+
+            @Override
+            public systems.zlink.framework.runtime.internal.backend.ZLinkSpotBackendAdapter
+                    createSpotAdapter(ZLinkBackendAdapterOptions options) {
+                return delegate.createSpotAdapter(options);
+            }
+
+            @Override
+            public ZLinkMeshBackendAdapter createMeshAdapter(ZLinkBackendAdapterOptions options) {
+                ZLinkMeshBackendAdapter adapter = delegate.createMeshAdapter(options);
+                return (context, meshName) -> {
+                    ZLinkInternalMeshNode node = adapter.createMeshNode(context, meshName);
+                    return (ZLinkInternalMeshNode)
+                            Proxy.newProxyInstance(
+                                    ZLinkInternalMeshNode.class.getClassLoader(),
+                                    new Class<?>[] {ZLinkInternalMeshNode.class},
+                                    (proxy, method, arguments) -> {
+                                        if (method.getName().equals("markServiceDraining")) {
+                                            throw new IllegalStateException("drain start failed");
+                                        }
+                                        try {
+                                            return method.invoke(node, arguments);
+                                        } catch (InvocationTargetException failure) {
+                                            throw failure.getCause();
+                                        }
+                                    });
+                };
+            }
+
+            @Override
+            public systems.zlink.framework.runtime.internal.backend.ZLinkStreamBackendAdapter
+                    createStreamAdapter(ZLinkBackendAdapterOptions options) {
+                return delegate.createStreamAdapter(options);
+            }
+
+            @Override
+            public systems.zlink.framework.runtime.internal.backend.ZLinkMonitoringBackendAdapter
+                    createMonitoringAdapter(ZLinkBackendAdapterOptions options) {
+                return delegate.createMonitoringAdapter(options);
+            }
+        };
     }
 
     @Test
@@ -149,21 +203,11 @@ final class ZLinkFrameworkRuntimeDrainRouteTest {
                 Thread.sleep(5);
             }
             assertTrue(runtime.isReady());
-            var drainsField = ZLinkFrameworkRuntime.class.getDeclaredField("meshDrains");
-            drainsField.setAccessible(true);
-            var drains =
-                    (systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator)
-                            drainsField.get(runtime);
-            var nodesField = ZLinkFrameworkRuntime.class.getDeclaredField("meshNodes");
-            nodesField.setAccessible(true);
-            var node =
-                    ((systems.zlink.framework.runtime.mesh.ZLinkMeshNodesRuntime)
-                                    nodesField.get(runtime))
-                            .nodesByName()
-                            .get("shutdown-mesh");
-            var gateField = node.getClass().getDeclaredField("peerAdmissionSealed");
-            gateField.setAccessible(true);
-            var seal = (java.util.function.BooleanSupplier) gateField.get(node);
+            var drains = runtime.meshDrains;
+            var node = runtime.meshNodes.nodesByName().get("shutdown-mesh");
+            var seal =
+                    systems.zlink.framework.runtime.binding.ZLinkJavaRawMeshNodeTestAccess
+                            .peerAdmissionSealed(node);
             assertFalse(seal.getAsBoolean());
             try (var claim = drains.tryClaim("shutdown-mesh")) {
                 assertTrue(claim != null);

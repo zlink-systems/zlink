@@ -80,13 +80,10 @@ final class ZLinkAggregateActorMembershipPublicationTest {
 
             var actors = spots.actorSessions().runtime();
             var actor = actors.localActor(ACTOR_ID).orElseThrow();
-            var nativeActors = spots.primaryNode().getClass().getDeclaredField("actors");
-            nativeActors.setAccessible(true);
-            var nativeStay = ((Map<?, ?>) nativeActors.get(spots.primaryNode())).get(ACTOR_ID);
-            assertNotNull(nativeStay);
-            var nativeSpotId = nativeStay.getClass().getDeclaredMethod("spotId");
-            nativeSpotId.setAccessible(true);
-            assertEquals(ROOM_ID, nativeSpotId.invoke(nativeStay));
+            assertEquals(
+                    ROOM_ID,
+                    systems.zlink.framework.runtime.binding.ZLinkJavaRawSpotNodeTestAccess
+                            .nativeActorSpotId(spots.primaryNode(), ACTOR_ID));
             assertSame(
                     spots.spotFor(ROOM_ID),
                     actors.currentSpot(actor),

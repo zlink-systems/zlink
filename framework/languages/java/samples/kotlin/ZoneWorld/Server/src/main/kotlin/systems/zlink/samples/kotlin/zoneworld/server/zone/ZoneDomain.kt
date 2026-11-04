@@ -396,7 +396,7 @@ class ZoneSpot(
 ) : ZLinkSuspendingSpot<PlayerActor>() {
     private val kotlinActors = actors.kotlin()
 
-    private val residents = mutableMapOf<String, PlayerActor>()
+    internal val residents = mutableMapOf<String, PlayerActor>()
     private val pending = mutableMapOf<String, Messages.EnterZoneReq>()
     private val borders = mutableMapOf<String, BorderSnapshot>()
     private var tickValue = 0L

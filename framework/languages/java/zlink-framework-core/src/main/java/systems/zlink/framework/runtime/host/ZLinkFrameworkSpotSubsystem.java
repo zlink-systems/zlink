@@ -51,7 +51,8 @@ final class ZLinkFrameworkSpotSubsystem {
             ZLinkLocationRuntime locationRuntime,
             ZLinkStoreLocationResolvers locationResolvers,
             SpotTransportAddressResolver locationTransportResolver,
-            Map<String, ZLinkInternalMeshNode> meshNodes) {
+            Map<String, ZLinkInternalMeshNode> meshNodes,
+            ZLinkFrameworkRuntimeConstruction construction) {
         SpotTransportAddressResolver remoteAddressResolver = locationTransportResolver;
         boolean hasMeshServices =
                 options.registration().meshNodes().stream()
@@ -77,15 +78,32 @@ final class ZLinkFrameworkSpotSubsystem {
                         serializer,
                         runtimeHandlers,
                         eventDispatcher,
-                        meshNodes);
+                        meshNodes,
+                        construction.spotTimerExecutor(),
+                        construction.spotMulticastExecutor(),
+                        construction.spotHandlerExecutor(),
+                        construction.spotTimerStateLaneFactory());
         spots.setLocationLifecycle(locationLifecycle);
         if (channels != null) {
             channels.registerInstanceSpotCallRuntime(spots.instanceSpotCalls());
             channels.registerRequestSourceMeshOwner(spots::primaryNode);
         }
         if (authorityStore != null && locationStore != null && locationRuntime != null) {
+            var operationAuthorityStore =
+                    construction.spotOperationAuthorityStore() == null
+                            ? authorityStore
+                            : construction.spotOperationAuthorityStore().apply(authorityStore);
             spots.installUserSpotOperationHandlers(
-                    authorityStore, locationStore, locationRuntime, locationResolvers);
+                    operationAuthorityStore,
+                    construction.spotLocationStore() == null
+                            ? locationStore
+                            : construction.spotLocationStore(),
+                    construction.spotLocationRuntime() == null
+                            ? locationRuntime
+                            : construction.spotLocationRuntime(),
+                    construction.spotLocationResolvers() == null
+                            ? locationResolvers
+                            : construction.spotLocationResolvers());
         }
         runtimeHandlers.add(ZLinkSpotManager.class, spots);
         if (!options.registration().spotNodes().isEmpty()) {

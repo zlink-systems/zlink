@@ -50,6 +50,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkSpotBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkStreamBackendAdapter;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLaneTestAccess;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
@@ -82,10 +83,15 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -275,39 +281,35 @@ final class ZLinkStreamRuntimeIngressTest {
                                 releaseReady.join();
                             }
                         });
-        ZLinkStreamRuntime runtime =
-                startDeterministic(
-                        stream, new java.util.concurrent.atomic.AtomicLong(), ignored -> {}, lane);
-        var mailboxField = lane.getClass().getDeclaredField("mailbox");
-        mailboxField.setAccessible(true);
-        var sessionsField = ZLinkStreamRuntime.class.getDeclaredField("sessions");
-        sessionsField.setAccessible(true);
-        sessionsField.set(
-                runtime,
-                new java.util.HashMap<String, Object>() {
+        var sessions =
+                new java.util.HashMap<String, ZLinkStreamRuntime.SessionState>() {
                     @Override
-                    public Object putIfAbsent(String key, Object state) {
-                        Object current = super.putIfAbsent(key, state);
+                    public ZLinkStreamRuntime.SessionState putIfAbsent(
+                            String key, ZLinkStreamRuntime.SessionState state) {
+                        ZLinkStreamRuntime.SessionState current = super.putIfAbsent(key, state);
                         if (current == null && Thread.currentThread() == readyThread.get()) {
                             published.complete(null);
                             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-                            Queue<?> mailbox = null;
+                            int queuedTurns;
                             do {
-                                try {
-                                    mailbox = (Queue<?>) mailboxField.get(lane);
-                                } catch (IllegalAccessException failure) {
-                                    throw new AssertionError(failure);
-                                }
-                                if (mailbox != null && !mailbox.isEmpty()) break;
+                                queuedTurns = ZLinkStateLaneTestAccess.queuedTurnCount(lane);
+                                if (queuedTurns > 0) break;
                                 Thread.onSpinWait();
                             } while (System.nanoTime() < deadline);
                             assertTrue(
-                                    mailbox != null && !mailbox.isEmpty(),
+                                    queuedTurns > 0,
                                     "data registration must queue behind the published Session");
                         }
                         return current;
                     }
-                });
+                };
+        ZLinkStreamRuntime runtime =
+                startDeterministic(
+                        stream,
+                        new java.util.concurrent.atomic.AtomicLong(),
+                        ignored -> {},
+                        lane,
+                        sessions);
         TestSession.constructionHook =
                 () -> {
                     if (Thread.currentThread() == readyThread.get()) {
@@ -529,6 +531,17 @@ final class ZLinkStreamRuntimeIngressTest {
                             systems.zlink.framework.configuration.ZLinkStreamNodeBuilder>
                     configure,
             systems.zlink.framework.runtime.internal.execution.ZLinkStateLane stateLane) {
+        return startDeterministic(stream, clock, configure, stateLane, new java.util.HashMap<>());
+    }
+
+    private ZLinkStreamRuntime startDeterministic(
+            FakeStream stream,
+            java.util.concurrent.atomic.AtomicLong clock,
+            java.util.function.Consumer<
+                            systems.zlink.framework.configuration.ZLinkStreamNodeBuilder>
+                    configure,
+            systems.zlink.framework.runtime.internal.execution.ZLinkStateLane stateLane,
+            Map<String, ZLinkStreamRuntime.SessionState> sessions) {
         var options = new DefaultZLinkFrameworkOptions();
         var builder =
                 options.addStreamNode("stream")
@@ -557,7 +570,8 @@ final class ZLinkStreamRuntimeIngressTest {
                                                 CompletableFuture.completedFuture(null),
                                 clock::get,
                                 () -> scheduler,
-                                stateLane)
+                                stateLane,
+                                sessions)
                         .start();
         scheduler.shutdownNow();
         runtimes.add(runtime);
@@ -566,14 +580,6 @@ final class ZLinkStreamRuntimeIngressTest {
 
     private void dispatchDeterministic(ZLinkStreamRuntime runtime, String packet, boolean control)
             throws Exception {
-        var method =
-                ZLinkStreamRuntime.class.getDeclaredMethod(
-                        "dispatchToSession",
-                        StreamNodeRegistration.class,
-                        RoutingId.class,
-                        ZLinkStreamHeader.class,
-                        Message.class);
-        method.setAccessible(true);
         var header =
                 new ZLinkStreamHeader(
                         control ? ZLinkStreamMessageKind.CONTROL : ZLinkStreamMessageKind.SEND,
@@ -584,13 +590,8 @@ final class ZLinkStreamRuntimeIngressTest {
                         Map.of());
         try (Message payload =
                 Message.from(control ? new byte[0] : "{}".getBytes(StandardCharsets.UTF_8))) {
-            ((CompletionStage<?>)
-                            method.invoke(
-                                    runtime,
-                                    lastRegistration.streamNodes().getFirst(),
-                                    PEER_A,
-                                    header,
-                                    payload))
+            runtime.dispatchToSession(
+                            lastRegistration.streamNodes().getFirst(), PEER_A, header, payload)
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
         }
@@ -1466,10 +1467,11 @@ final class ZLinkStreamRuntimeIngressTest {
     @ValueSource(booleans = {true, false})
     void boundSessionReplacementDisconnectsAfterCallbackTerminal(boolean completeClosingControlSend)
             throws Exception {
-        TestSession.replacementMode = ReplacementMode.SUCCESS;
+        TestSession.replacementMode = ReplacementMode.PENDING;
         FakeStream stream = new FakeStream();
         stream.completeClosingControlSend = completeClosingControlSend;
-        ReplacementFixture fixture = startReplacement(stream);
+        ManualScheduledExecutor replyRetryExecutor = new ManualScheduledExecutor();
+        ReplacementFixture fixture = startReplacement(stream, replyRetryExecutor);
         runtimes.add(fixture.runtime());
         TestSession session = awaitSession();
         assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
@@ -1491,28 +1493,32 @@ final class ZLinkStreamRuntimeIngressTest {
                 .toCompletableFuture()
                 .join();
 
-        CompletableFuture<Void> ingressBeforeTerminal =
-                session.replacementCompletion.thenRun(
-                        () -> {
-                            assertEquals(0, stream.disconnectCalls.get());
-                            stream.enqueue(PEER_A, frame("during-replacement", "{}"));
-                        });
         assertEquals(0, stream.disconnectCalls.get());
         fixture.runtime().handleBoundSessionReplaced(actorRef.nodeRid(), replacement(actorRef));
         try {
-            long terminalAt = session.replacementCompletion.get(5, TimeUnit.SECONDS);
-            ingressBeforeTerminal.join();
+            ScheduledCommand callbackDeadline = replyRetryExecutor.takeScheduledCommand();
+            assertEquals(TimeUnit.MILLISECONDS.toNanos(100), callbackDeadline.delayNanos());
+            assertTrue(session.replacementEntered.await(5, TimeUnit.SECONDS));
+            assertEquals(0, stream.disconnectCalls.get());
+            stream.enqueue(PEER_A, frame("during-replacement", "{}"));
+            assertFalse(session.replacementCompletion.isDone());
+            stream.secondSuccessfulReceive.get(5, TimeUnit.SECONDS);
+            assertTrue(stream.sessionClosingSendsLatch.await(5, TimeUnit.SECONDS));
+            assertEquals(1, stream.sessionClosingSends.get());
+            assertTrue(session.replacementCompletion.complete(0L));
+            assertTrue(callbackDeadline.future().isCancelled());
+            ScheduledCommand delayedClose = replyRetryExecutor.takeScheduledCommand();
+            assertEquals(TimeUnit.MILLISECONDS.toNanos(100), delayedClose.delayNanos());
+            assertEquals(0, stream.disconnectCalls.get());
+            delayedClose.command().run();
             assertEquals(PEER_A, stream.disconnectedPeer.get(5, TimeUnit.SECONDS));
-            long closeDelay = stream.disconnectStartedAt - terminalAt;
-            assertTrue(
-                    closeDelay >= TimeUnit.MILLISECONDS.toNanos(100),
-                    "callback terminal must precede transport close by 100 ms");
             assertEquals(1, session.replacementCallbacks.get());
             assertEquals(2, stream.successfulReceives.get());
             assertEquals(2, stream.sessionClosingSends.get());
             assertEquals(List.of("initial"), session.packetNames);
             assertEquals(1, stream.disconnectCalls.get());
         } finally {
+            session.replacementCompletion.complete(System.nanoTime());
             stream.closingControlCompletion.complete(null);
         }
     }
@@ -2070,13 +2076,24 @@ final class ZLinkStreamRuntimeIngressTest {
         return startReplacement(
                 stream,
                 new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane(),
-                () -> true);
+                () -> true,
+                ZLinkStreamRuntime::newReplyRetryExecutor);
+    }
+
+    private static ReplacementFixture startReplacement(
+            FakeStream stream, ManualScheduledExecutor replyRetryExecutor) {
+        return startReplacement(
+                stream,
+                new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane(),
+                () -> true,
+                () -> replyRetryExecutor);
     }
 
     private static ReplacementFixture startReplacement(
             FakeStream stream,
             systems.zlink.framework.runtime.internal.execution.ZLinkStateLane stateLane) {
-        return startReplacement(stream, stateLane, () -> true);
+        return startReplacement(
+                stream, stateLane, () -> true, ZLinkStreamRuntime::newReplyRetryExecutor);
     }
 
     @Test
@@ -2164,6 +2181,15 @@ final class ZLinkStreamRuntimeIngressTest {
             FakeStream stream,
             systems.zlink.framework.runtime.internal.execution.ZLinkStateLane stateLane,
             java.util.function.BooleanSupplier ownerAvailable) {
+        return startReplacement(
+                stream, stateLane, ownerAvailable, ZLinkStreamRuntime::newReplyRetryExecutor);
+    }
+
+    private static ReplacementFixture startReplacement(
+            FakeStream stream,
+            systems.zlink.framework.runtime.internal.execution.ZLinkStateLane stateLane,
+            java.util.function.BooleanSupplier ownerAvailable,
+            Supplier<ScheduledExecutorService> replyRetryExecutorFactory) {
         stream.enqueue(PEER_A, frame("initial", "{}"));
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setSessionReplacementCallbackTimeout(Duration.ofMillis(100));
@@ -2270,7 +2296,8 @@ final class ZLinkStreamRuntimeIngressTest {
                                                             thread.setDaemon(true);
                                                             return thread;
                                                         }),
-                                stateLane)
+                                stateLane,
+                                replyRetryExecutorFactory)
                         .start();
         return new ReplacementFixture(runtime, actors, requestedPeer, requestedGeneration);
     }
@@ -2722,10 +2749,37 @@ final class ZLinkStreamRuntimeIngressTest {
         public void shutdown() {}
     }
 
+    private record ScheduledCommand(Runnable command, long delayNanos, ScheduledFuture<?> future) {}
+
+    private static final class ManualScheduledExecutor extends ScheduledThreadPoolExecutor {
+        private final LinkedBlockingQueue<ScheduledCommand> scheduledCommands =
+                new LinkedBlockingQueue<>();
+
+        private ManualScheduledExecutor() {
+            super(1);
+        }
+
+        @Override
+        public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
+            ScheduledFuture<?> future = super.schedule(() -> {}, 1, TimeUnit.DAYS);
+            scheduledCommands.add(new ScheduledCommand(command, unit.toNanos(delay), future));
+            return future;
+        }
+
+        private ScheduledCommand takeScheduledCommand() throws InterruptedException {
+            ScheduledCommand command = scheduledCommands.poll(5, TimeUnit.SECONDS);
+            if (command == null) {
+                throw new AssertionError("scheduled command was not registered");
+            }
+            return command;
+        }
+    }
+
     private static class FakeStream implements ZLinkBackendStreamSocket {
         private Runnable readabilityObserver = () -> {};
         private final Queue<ZLinkBackendStreamReceived> received = new ConcurrentLinkedQueue<>();
         private final AtomicInteger successfulReceives = new AtomicInteger();
+        private final CompletableFuture<Void> secondSuccessfulReceive = new CompletableFuture<>();
         private final AtomicInteger readinessWaits = new AtomicInteger();
         private final AtomicInteger zeroReadinessWaits = new AtomicInteger();
         private final AtomicBoolean receiveReady = new AtomicBoolean();
@@ -2885,7 +2939,9 @@ final class ZLinkStreamRuntimeIngressTest {
                 receiveReady.set(false);
             }
             if (next != null) {
-                successfulReceives.incrementAndGet();
+                if (successfulReceives.incrementAndGet() == 2) {
+                    secondSuccessfulReceive.complete(null);
+                }
             }
             return next;
         }

@@ -9,7 +9,6 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.*;
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe;
 import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec;
@@ -61,12 +60,8 @@ final class ZLinkInstanceTakeoverMetricTest {
                     .toCompletableFuture()
                     .get(10, TimeUnit.SECONDS);
             var spots = (ZLinkSpotRuntime) runtime.spotManager();
-            var field = ZLinkSpotRuntime.class.getDeclaredField("userSpotLocationStore");
-            field.setAccessible(true);
-            var original = field.get(spots);
-            var nodesField = ZLinkSpotRuntime.class.getDeclaredField("routeMeshNodesByName");
-            nodesField.setAccessible(true);
-            var node = ((Map<String, ZLinkInternalMeshNode>) nodesField.get(spots)).get(mesh);
+            var original = spots.userSpotLocationStore;
+            var node = spots.routeMeshNodesByName.get(mesh);
             var spi =
                     (systems.zlink.framework.locationprovider.ZLinkLocationStore)
                             java.lang.reflect.Proxy.newProxyInstance(
@@ -167,15 +162,9 @@ final class ZLinkInstanceTakeoverMetricTest {
                             System.currentTimeMillis() + 30000,
                             new byte[0],
                             application);
-            var method =
-                    ZLinkSpotRuntime.class.getDeclaredMethod(
-                            "reserveInstanceSpotTarget",
-                            ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope.class,
-                            ZLinkAuthorityReadResult.class);
-            method.setAccessible(true);
-            field.set(spots, repository);
+            spots.userSpotLocationStore = repository;
             try (var metrics = ZLinkRuntimeMetricProbe.install()) {
-                var terminal = (CompletionStage<?>) method.invoke(spots, envelope, snapshot);
+                var terminal = spots.reserveInstanceSpotTarget(envelope, snapshot);
                 assertEquals(0, metrics.count("zlink.instance_spot.takeovers"));
                 if (scenario.equals("release_failed"))
                     release.completeExceptionally(
@@ -195,7 +184,7 @@ final class ZLinkInstanceTakeoverMetricTest {
                 assertFalse(release.complete(false));
                 assertEquals(1, metrics.count("zlink.instance_spot.takeovers"));
             } finally {
-                field.set(spots, original);
+                spots.userSpotLocationStore = original;
             }
         }
     }

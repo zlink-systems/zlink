@@ -822,8 +822,8 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
         private final List<PendingIngress> pendingIngress = new ArrayList<>();
         private AsyncDrainProbe debugProbe;
         private final ZLinkStateLane stateLane = new ZLinkStateLane();
-        private DurableBacklog durableBacklog;
-        private DirectJoinReplay directBacklog;
+        DurableBacklog durableBacklog;
+        DirectJoinReplay directBacklog;
         private boolean replayed;
         private boolean published;
         private boolean ingressClosed;

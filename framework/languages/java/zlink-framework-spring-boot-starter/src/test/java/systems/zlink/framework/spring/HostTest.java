@@ -19,11 +19,10 @@ import java.util.List;
 final class HostTest {
     @Test
     void springShutdownUsesFrameworkTerminationDeadline() throws Exception {
-        var field =
-                ZLinkFrameworkLifecycle.class.getDeclaredField("SPRING_SHUTDOWN_DRAIN_DEADLINE");
-        field.setAccessible(true);
-
-        assertEquals(Duration.ofSeconds(30), field.get(null));
+        assertEquals(
+                Duration.ofSeconds(30),
+                systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycleTestAccess
+                        .springShutdownDrainDeadline());
     }
 
     @Test

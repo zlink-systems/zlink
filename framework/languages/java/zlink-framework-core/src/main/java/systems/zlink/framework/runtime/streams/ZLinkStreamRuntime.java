@@ -130,7 +130,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     // native Session relay allocates it (Session-Actor binding §4).
     private final AtomicLong sessionBindingGenerations = new AtomicLong();
     private final Map<String, ZLinkInternalSpotNode> streamSessionRelaySpotNodes = new HashMap<>();
-    private final Map<String, SessionState> sessions = new HashMap<>();
+    final Map<String, SessionState> sessions;
     private final Map<SealRecordKey, AbsentSealRecord> absentSealRecords = new HashMap<>();
     private final ZLinkStateLane stateLane;
     private final ScheduledExecutorService livenessExecutor;
@@ -332,9 +332,140 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             LongSupplier nanoTime,
             Supplier<ScheduledExecutorService> livenessExecutorFactory,
             ZLinkStateLane stateLane) {
+        this(
+                backendFactory,
+                adapterOptions,
+                registration,
+                spotNodes,
+                meshNodes,
+                serializer,
+                actors,
+                handlerFactory,
+                spots,
+                eventDispatcher,
+                context,
+                ownsContext,
+                admission,
+                nanoTime,
+                livenessExecutorFactory,
+                stateLane,
+                new HashMap<>(),
+                ZLinkStreamRuntime::newReplyRetryExecutor);
+    }
+
+    ZLinkStreamRuntime(
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkFrameworkRegistration registration,
+            Map<String, ZLinkInternalSpotNode> spotNodes,
+            Map<String, ZLinkInternalMeshNode> meshNodes,
+            ZLinkMessageSerializer serializer,
+            ZLinkActorRuntime actors,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkSpotRuntime spots,
+            ZLinkRuntimeEventDispatcher eventDispatcher,
+            ZLinkBackendContext context,
+            boolean ownsContext,
+            BiFunction<
+                            ZLinkBackendObject,
+                            ZLinkBackendAdmissionKey,
+                            BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>>
+                    admission,
+            LongSupplier nanoTime,
+            Supplier<ScheduledExecutorService> livenessExecutorFactory,
+            ZLinkStateLane stateLane,
+            Supplier<ScheduledExecutorService> replyRetryExecutorFactory) {
+        this(
+                backendFactory,
+                adapterOptions,
+                registration,
+                spotNodes,
+                meshNodes,
+                serializer,
+                actors,
+                handlerFactory,
+                spots,
+                eventDispatcher,
+                context,
+                ownsContext,
+                admission,
+                nanoTime,
+                livenessExecutorFactory,
+                stateLane,
+                new HashMap<>(),
+                replyRetryExecutorFactory);
+    }
+
+    ZLinkStreamRuntime(
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkFrameworkRegistration registration,
+            Map<String, ZLinkInternalSpotNode> spotNodes,
+            Map<String, ZLinkInternalMeshNode> meshNodes,
+            ZLinkMessageSerializer serializer,
+            ZLinkActorRuntime actors,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkSpotRuntime spots,
+            ZLinkRuntimeEventDispatcher eventDispatcher,
+            ZLinkBackendContext context,
+            boolean ownsContext,
+            BiFunction<
+                            ZLinkBackendObject,
+                            ZLinkBackendAdmissionKey,
+                            BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>>
+                    admission,
+            LongSupplier nanoTime,
+            Supplier<ScheduledExecutorService> livenessExecutorFactory,
+            ZLinkStateLane stateLane,
+            Map<String, SessionState> sessions) {
+        this(
+                backendFactory,
+                adapterOptions,
+                registration,
+                spotNodes,
+                meshNodes,
+                serializer,
+                actors,
+                handlerFactory,
+                spots,
+                eventDispatcher,
+                context,
+                ownsContext,
+                admission,
+                nanoTime,
+                livenessExecutorFactory,
+                stateLane,
+                sessions,
+                ZLinkStreamRuntime::newReplyRetryExecutor);
+    }
+
+    ZLinkStreamRuntime(
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkFrameworkRegistration registration,
+            Map<String, ZLinkInternalSpotNode> spotNodes,
+            Map<String, ZLinkInternalMeshNode> meshNodes,
+            ZLinkMessageSerializer serializer,
+            ZLinkActorRuntime actors,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkSpotRuntime spots,
+            ZLinkRuntimeEventDispatcher eventDispatcher,
+            ZLinkBackendContext context,
+            boolean ownsContext,
+            BiFunction<
+                            ZLinkBackendObject,
+                            ZLinkBackendAdmissionKey,
+                            BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>>
+                    admission,
+            LongSupplier nanoTime,
+            Supplier<ScheduledExecutorService> livenessExecutorFactory,
+            ZLinkStateLane stateLane,
+            Map<String, SessionState> sessions,
+            Supplier<ScheduledExecutorService> replyRetryExecutorFactory) {
         if (registration.streamNodes().isEmpty()) {
             throw new ZLinkConfigurationException("at least one stream node is required");
         }
+        this.sessions = Objects.requireNonNull(sessions, "sessions");
         this.stateLane = Objects.requireNonNull(stateLane, "stateLane");
         this.registration = Objects.requireNonNull(registration, "registration");
         this.sessionRelocationSealTimeout =
@@ -364,12 +495,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         this.livenessExecutor =
                 Objects.requireNonNull(livenessExecutorFactory.get(), "livenessExecutor");
         this.replyRetryExecutor =
-                Executors.newSingleThreadScheduledExecutor(
-                        task -> {
-                            Thread thread = new Thread(task, "zlink-stream-reply-retry");
-                            thread.setDaemon(true);
-                            return thread;
-                        });
+                Objects.requireNonNull(replyRetryExecutorFactory.get(), "replyRetryExecutor");
         this.receiveExecutor =
                 Executors.newFixedThreadPool(
                         Math.max(1, registration.streamNodes().size()),
@@ -386,6 +512,15 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         this.spotNodes = spotNodes;
         this.context = Objects.requireNonNull(context, "context");
         this.ownsContext = ownsContext;
+    }
+
+    static ScheduledExecutorService newReplyRetryExecutor() {
+        return Executors.newSingleThreadScheduledExecutor(
+                task -> {
+                    Thread thread = new Thread(task, "zlink-stream-reply-retry");
+                    thread.setDaemon(true);
+                    return thread;
+                });
     }
 
     /**
@@ -1252,7 +1387,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
     }
 
-    private CompletionStage<Void> dispatchToSession(
+    CompletionStage<Void> dispatchToSession(
             StreamNodeRegistration streamNode,
             RoutingId routingId,
             ZLinkStreamHeader streamHeader,
@@ -2008,7 +2143,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 .whenComplete((ignored, failure) -> sessionContexts.remove(state.context()));
     }
 
-    private static final class SessionState {
+    static final class SessionState {
         private final StreamNodeRegistration streamNode;
         private long lastHeartbeatPingNanos;
         private final ZLinkSession session;

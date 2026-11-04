@@ -44,7 +44,7 @@ final class RouteSendCall
     private final String channelName;
     private final ZLinkChannelSocketRegistry sockets;
     private final RoutingId target;
-    private final ZLinkFrameworkMultipartView payload;
+    final ZLinkFrameworkMultipartView payload;
     private final String packetName;
     private final String contentType;
     private final ZLinkApplicationMetadata metadata;
@@ -230,7 +230,7 @@ final class RouteRequestCall implements ZLinkRequestCall {
     private final ZLinkChannelSocketRegistry sockets;
     private final Duration defaultTimeout;
     private final RoutingId target;
-    private final ZLinkFrameworkMultipartView payload;
+    final ZLinkFrameworkMultipartView payload;
     private final Optional<String> packetName;
     private final Duration timeout;
     private final String contentType;
@@ -580,7 +580,7 @@ final class ChannelSendCall
     private final ZLinkChannelCallRuntime runtime;
     private final String channelName;
     private final ZLinkChannelSocketRegistry sockets;
-    private final ZLinkFrameworkMultipartView payload;
+    final ZLinkFrameworkMultipartView payload;
     private final String packetName;
     private final String contentType;
     private final ZLinkApplicationMetadata metadata;
@@ -751,7 +751,7 @@ final class ChannelRequestCall implements ZLinkRequestCall {
     private final String channelName;
     private final ZLinkChannelSocketRegistry sockets;
     private final Duration defaultTimeout;
-    private final ZLinkFrameworkMultipartView payload;
+    final ZLinkFrameworkMultipartView payload;
     private final Optional<String> packetName;
     private final Duration timeout;
     private final String contentType;

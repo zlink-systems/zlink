@@ -6,7 +6,6 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.Zlink;
 
-import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.concurrent.CompletableFuture;
@@ -23,10 +22,6 @@ final class ZLinkJavaStreamMonitorProgressTest {
                         Runtime.getRuntime().availableProcessors());
         var streams = new ArrayList<ZLinkJavaStreamSocket>();
         var monitors = new ArrayList<ZLinkJavaSocketMonitor>();
-        Field monitorField = ZLinkJavaStreamSocket.class.getDeclaredField("monitor");
-        monitorField.setAccessible(true);
-        Field waitingField = ZLinkJavaSocketMonitor.class.getDeclaredField("waiting");
-        waitingField.setAccessible(true);
         try (var context = Zlink.createContext()) {
             var candidate = new ZLinkJavaStreamSocket(context.createStreamSocket(), null);
             try {
@@ -34,13 +29,13 @@ final class ZLinkJavaStreamMonitorProgressTest {
                     var stream = new ZLinkJavaStreamSocket(context.createStreamSocket(), null);
                     streams.add(stream);
                     stream.onTransportError((rid, event, code, message) -> {});
-                    var monitor = (ZLinkJavaSocketMonitor) monitorField.get(stream);
+                    var monitor = stream.monitor;
                     monitors.add(monitor);
                     long deadline = System.nanoTime() + TEST_TIMEOUT.toNanos();
                     boolean waiting = false;
                     while (!waiting && System.nanoTime() < deadline) {
                         synchronized (monitor) {
-                            waiting = waitingField.getBoolean(monitor);
+                            waiting = monitor.waiting;
                         }
                         if (!waiting) Thread.sleep(1);
                     }

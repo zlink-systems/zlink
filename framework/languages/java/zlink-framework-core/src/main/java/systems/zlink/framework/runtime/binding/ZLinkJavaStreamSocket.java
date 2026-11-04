@@ -32,6 +32,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -52,8 +53,8 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     private final AtomicLong nextBoundSessionRequestSequence = new AtomicLong(1);
     private final AtomicBoolean closed = new AtomicBoolean();
     private final ZLinkJavaSocketReceivePoller receivePoller;
-    private final ZLinkStateLane stateLane = new ZLinkStateLane();
-    private ZLinkJavaSocketMonitor monitor;
+    final ZLinkStateLane stateLane;
+    ZLinkJavaSocketMonitor monitor;
     private volatile boolean sessionServiceStarted;
 
     ZLinkJavaStreamSocket(StreamSocket socket, ZLinkJavaRawMeshNode meshNode) {
@@ -70,12 +71,27 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
             ZLinkJavaRawMeshNode meshNode,
             BoundSessionSink boundSessionSink,
             BoundSessionLifecycle boundSessionLifecycle) {
+        this(socket, meshNode, boundSessionSink, boundSessionLifecycle, new ZLinkStateLane());
+    }
+
+    ZLinkJavaStreamSocket(
+            StreamSocket socket, ZLinkJavaRawMeshNode meshNode, ZLinkStateLane stateLane) {
+        this(socket, meshNode, null, null, stateLane);
+    }
+
+    private ZLinkJavaStreamSocket(
+            StreamSocket socket,
+            ZLinkJavaRawMeshNode meshNode,
+            BoundSessionSink boundSessionSink,
+            BoundSessionLifecycle boundSessionLifecycle,
+            ZLinkStateLane stateLane) {
         this.socket = socket;
         this.socket.options().recvMode(StreamRecvMode.PACKET);
         this.meshNode = meshNode;
         this.boundSessionSink = boundSessionSink;
         this.boundSessionLifecycle = boundSessionLifecycle;
         this.receivePoller = new ZLinkJavaSocketReceivePoller(socket);
+        this.stateLane = Objects.requireNonNull(stateLane, "stateLane");
     }
 
     private <T> T inStateLane(java.util.function.Supplier<T> work) {
@@ -185,7 +201,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                 });
     }
 
-    private void receiveMonitorEvents(
+    void receiveMonitorEvents(
             ZLinkBackendSocketMonitor eventMonitor, ZLinkBackendStreamErrorHandler handler) {
         while (!closed.get() && !eventMonitor.isClosed()) {
             ZLinkBackendSocketMonitorEvent event;

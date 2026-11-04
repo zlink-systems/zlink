@@ -44,12 +44,11 @@ public final class ZLinkStatusPublisher<T> implements Flow.Publisher<ZLinkObserv
     private final Predicate<T> terminal;
     private final Predicate<T> preserve;
     private final Executor dispatcher;
-    private final CopyOnWriteArrayList<SnapshotSubscription> subscriptions =
-            new CopyOnWriteArrayList<>();
+    final CopyOnWriteArrayList<SnapshotSubscription> subscriptions = new CopyOnWriteArrayList<>();
     private final AtomicBoolean workPending = new AtomicBoolean();
     private final AtomicBoolean observationPending = new AtomicBoolean();
     private final AtomicBoolean drainScheduled = new AtomicBoolean();
-    private final Object retentionGate = new Object();
+    final Object retentionGate = new Object();
     private Consumer<Boolean> retention;
     private int activeSubscriptions;
 

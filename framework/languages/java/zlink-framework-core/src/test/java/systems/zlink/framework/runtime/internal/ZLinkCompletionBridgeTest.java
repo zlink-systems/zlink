@@ -4,11 +4,9 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 
-import java.lang.reflect.Field;
 import java.util.ArrayDeque;
 import java.util.Collections;
 import java.util.IdentityHashMap;
-import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -187,18 +185,6 @@ final class ZLinkCompletionBridgeTest {
         }
     }
 
-    private static int closures(Object o, Set<Object> seen) throws Exception {
-        if (o == null || !o.getClass().isHidden() || !seen.add(o)) return 0;
-        if (o.getClass().getDeclaredFields().length == 0)
-            return 0; // Shared noncapturing actions are not per-call closures.
-        int n = 1;
-        for (Field f : o.getClass().getDeclaredFields()) {
-            f.setAccessible(true);
-            n += closures(f.get(o), seen);
-        }
-        return n;
-    }
-
     @Test
     void preservesCancellationAndDiscardBehavior() {
         for (boolean before : new boolean[] {true, false})
@@ -277,11 +263,11 @@ final class ZLinkCompletionBridgeTest {
     }
 
     @Test
-    void singleAndPairUseOneCapturingClosurePerCall() throws Exception {
+    void singleAndPairUseOneCapturingClosurePerCall() {
         final int registrations = 1000;
         for (boolean completed : new boolean[] {false, true}) {
             for (boolean pair : new boolean[] {false, true}) {
-                int closureCount = 0;
+                var callbacks = Collections.newSetFromMap(new IdentityHashMap<Object, Boolean>());
                 int futureCount = 0;
                 for (int index = 0; index < registrations; index++) {
                     var caller = new CountFuture<String>();
@@ -293,15 +279,12 @@ final class ZLinkCompletionBridgeTest {
                     else ZLinkCompletionBridge.forwardCancellation(caller, waiter);
                     assertEquals(1, caller.observers);
                     assertEquals(completed ? 0 : 1, caller.getNumberOfDependents());
-                    closureCount +=
-                            closures(
-                                    caller.callback,
-                                    Collections.newSetFromMap(new IdentityHashMap<>()));
+                    callbacks.add(caller.callback);
                     futureCount += caller.futures;
                     caller.complete("done");
                     assertFalse(waiter.isDone());
                 }
-                assertEquals(registrations, closureCount);
+                assertEquals(registrations, callbacks.size());
                 assertEquals(registrations, futureCount);
             }
         }

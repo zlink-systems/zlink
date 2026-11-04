@@ -28,7 +28,7 @@ import java.util.function.Supplier;
 /** Owns operation correlation, request deadlines, and terminal-once completion. */
 public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private final ThreadFactory maintenanceFactory;
-    private Thread maintenance;
+    Thread maintenance;
     // The worker's reserved wheel visit survives removal of the last pending request.
     private volatile long maintenanceTick = -1;
     private final LongSupplier nanoTime;
@@ -845,7 +845,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         private Entry<?> deadlineNext;
         private int terminalKind = NONE;
         private Object terminalValue;
-        private Throwable terminalFailure;
+        Throwable terminalFailure;
 
         Entry(UUID id, CompletableFuture<T> completion, Consumer<? super T> discardValue) {
             this.discardValue = discardValue;

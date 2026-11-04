@@ -344,11 +344,9 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
         var adopted = owner.drainDurableBacklog(backlog).toCompletableFuture();
         assertSame(rejected, assertThrows(CompletionException.class, adopted::join).getCause());
         assertNull(observed.get());
-        var field = staged.getClass().getDeclaredField("durableBacklog");
-        field.setAccessible(true);
         assertSame(
                 backlog,
-                field.get(staged),
+                staged.durableBacklog,
                 "unadopted frozen payload must retain its existing backlog owner");
     }
 

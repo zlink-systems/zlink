@@ -39,9 +39,10 @@ final class ZLinkHandlerPreparationTest {
             Object extra = Array.newInstance(Known.class, new int[dimensions]);
             services.add(extra.getClass(), extra);
         }
-        var field = ZLinkHandlerActivator.MutableServices.class.getDeclaredField("serviceIndex");
-        field.setAccessible(true);
-        var index = (Map<Class<?>, Object>) field.get(services);
+        var index =
+                (Map<Class<?>, Object>)
+                        systems.zlink.framework.runtime.internal.handlers
+                                .ZLinkHandlerActivatorTestAccess.serviceIndex(services);
         var hashes = new AtomicInteger();
         var keys =
                 new AbstractSet<Class<?>>() {
@@ -62,21 +63,22 @@ final class ZLinkHandlerPreparationTest {
                         return super.hashCode();
                     }
                 };
-        field.set(
-                services,
-                new AbstractMap<Class<?>, Object>() {
-                    public Set<Map.Entry<Class<?>, Object>> entrySet() {
-                        return index.entrySet();
-                    }
+        systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivatorTestAccess
+                .serviceIndex(
+                        services,
+                        new AbstractMap<Class<?>, Object>() {
+                            public Set<Map.Entry<Class<?>, Object>> entrySet() {
+                                return index.entrySet();
+                            }
 
-                    public Object get(Object key) {
-                        return index.get(key);
-                    }
+                            public Object get(Object key) {
+                                return index.get(key);
+                            }
 
-                    public Set<Class<?>> keySet() {
-                        return keys;
-                    }
-                });
+                            public Set<Class<?>> keySet() {
+                                return keys;
+                            }
+                        });
         keys.hashCode();
         assertEquals(1, hashes.get());
         services.prepare(CatalogHandler.class);

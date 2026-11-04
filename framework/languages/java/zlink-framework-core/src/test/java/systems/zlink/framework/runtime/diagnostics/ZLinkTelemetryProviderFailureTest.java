@@ -178,8 +178,7 @@ class ZLinkTelemetryProviderFailureTest {
     }
 
     private static long traceFailures() throws Exception {
-        var state = ZLinkTelemetryOwner.state();
-        return (Long) state.getClass().getDeclaredMethod("traceFailures").invoke(state);
+        return ZLinkTelemetryOwner.state().traceFailures();
     }
 
     private static void overflow(

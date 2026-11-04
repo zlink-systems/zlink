@@ -96,11 +96,7 @@ final class ZLinkSpotTimerRegistryTest {
             registry.add("timer", Duration.ofDays(1), BlockingTimerHandler.class, null)
                     .toCompletableFuture()
                     .get(3, TimeUnit.SECONDS);
-            var field = ZLinkSpotTimerRegistry.class.getDeclaredField("stateLane");
-            field.setAccessible(true);
-            var lane =
-                    (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
-                            field.get(registry);
+            var lane = registry.stateLane;
             laneRef.set(lane);
             scheduledTick.get().run();
             attempted.get(3, TimeUnit.SECONDS);
@@ -221,13 +217,7 @@ final class ZLinkSpotTimerRegistryTest {
                         "test",
                         (timerName, operation) -> {
                             try {
-                                var field =
-                                        ZLinkSpotTimerRegistry.class.getDeclaredField("stateLane");
-                                field.setAccessible(true);
-                                var lane =
-                                        (systems.zlink.framework.runtime.internal.execution
-                                                        .ZLinkStateLane)
-                                                field.get(registryRef.get());
+                                var lane = registryRef.get().stateLane;
                                 lane.runAsync(
                                         () -> {
                                             ownerEntered.complete(null);
@@ -235,7 +225,7 @@ final class ZLinkSpotTimerRegistryTest {
                                             return null;
                                         });
                                 ownerEntered.get(3, TimeUnit.SECONDS);
-                            } catch (ReflectiveOperationException | TimeoutException failure) {
+                            } catch (TimeoutException failure) {
                                 return CompletableFuture.failedFuture(failure);
                             } catch (ExecutionException failure) {
                                 return CompletableFuture.failedFuture(failure.getCause());

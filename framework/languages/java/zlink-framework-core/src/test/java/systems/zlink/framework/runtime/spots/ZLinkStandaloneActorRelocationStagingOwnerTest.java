@@ -162,11 +162,10 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
                                 () -> adopted.toCompletableFuture().join())
                         .getCause());
         assertNull(observed.get(), "preparation failure must retain the unadopted ingress owner");
-        var field = staged.getClass().getDeclaredField(direct ? "directBacklog" : "durableBacklog");
-        field.setAccessible(true);
+        Object retainedOwner = direct ? staged.directBacklog : staged.durableBacklog;
         assertSame(
                 retained,
-                field.get(staged),
+                retainedOwner,
                 "unadopted frozen payload must retain its existing backlog owner");
     }
 
@@ -842,12 +841,8 @@ final class ZLinkStandaloneActorRelocationStagingOwnerTest {
 
     private static void assertFixtureReleased(Object actor) throws Exception {
         var helper = (ZLinkActorRelocationTestQueue) actor;
-        var fifoField = ZLinkActorRelocationTestQueue.class.getDeclaredField("fifo");
-        var jobsField = ZLinkActorRelocationTestQueue.class.getDeclaredField("jobs");
-        fifoField.setAccessible(true);
-        jobsField.setAccessible(true);
-        var fifo = (ZLinkSerialExecutionQueue) fifoField.get(helper);
-        var jobs = (ZLinkApplicationJobQueue) jobsField.get(helper);
+        var fifo = helper.fifo;
+        var jobs = helper.jobs;
         try {
             var quiet = fifo.awaitQuiescence().toCompletableFuture();
             assertTrue(quiet.isDone());

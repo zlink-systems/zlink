@@ -33,6 +33,7 @@ import org.junit.jupiter.api.Timeout
 import systems.zlink.contracts.messaging.Message
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions
 import systems.zlink.framework.streams.ZLinkStreamCompressionCodec as FrameworkStreamCompressionCodec
+import systems.zlink.stream.connector.ZLinkStreamActorRegistryTestAccess
 import systems.zlink.stream.connector.ZLinkStreamCloseReason
 import systems.zlink.stream.connector.ZLinkStreamCompression
 import systems.zlink.stream.connector.ZLinkStreamCompressionCodec
@@ -836,12 +837,11 @@ final class KotlinConnectorWrapperTest {
         action: String,
         payload: ByteArray,
     ) {
-        val registryField = connector.inner.javaClass.getDeclaredField("actorRegistry")
-        registryField.isAccessible = true
-        val registry = registryField.get(connector.inner)
-        val method = registry.javaClass.getDeclaredMethod(action, ByteArray::class.java)
-        method.isAccessible = true
-        method.invoke(registry, payload)
+        when (action) {
+            "bound" -> ZLinkStreamActorRegistryTestAccess.bound(connector.inner, payload)
+            "unbound" -> ZLinkStreamActorRegistryTestAccess.unbound(connector.inner, payload)
+            else -> error("unsupported test action: $action")
+        }
     }
 
     private fun boundControl(slot: Int, actorId: String): ByteArray {

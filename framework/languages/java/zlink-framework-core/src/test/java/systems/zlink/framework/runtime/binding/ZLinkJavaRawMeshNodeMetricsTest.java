@@ -33,7 +33,6 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescript
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
-import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -705,7 +704,7 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                 var context = Zlink.createContext();
                 var node = node(context, "selection")) {
             node.start();
-            var topology = (ZLinkServiceTopologyRegistry) field(node, "topology");
+            var topology = node.topology;
             RoutingId peer = RoutingId.from("selection-peer");
             for (String reason : List.of("no_member", "not_ready", "draining")) {
                 if (!reason.equals("no_member")) {
@@ -845,12 +844,6 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
         return node;
     }
 
-    private static Object field(Object target, String name) throws Exception {
-        Field field = target.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(target);
-    }
-
     private static void await(BooleanSupplier condition) {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
         while (!condition.getAsBoolean()) {
@@ -916,11 +909,11 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
         }
 
         ZLinkJavaRawServicePort port() throws Exception {
-            return (ZLinkJavaRawServicePort) field(source, "port");
+            return source.port;
         }
 
         RouterSocket router() throws Exception {
-            return (RouterSocket) field(source, "router");
+            return source.router;
         }
 
         void send(List<byte[]> frames) throws Exception {

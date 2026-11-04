@@ -16,16 +16,20 @@ import java.util.Objects;
 final class ZLinkJavaSocketMonitor implements ZLinkBackendSocketMonitor {
     private static final long MONITOR_SLOT = 1L;
 
-    private final SocketMonitor monitor;
-    private final Poller poller;
+    final SocketMonitor monitor;
+    final Poller poller;
     private final PollEvents events = new PollEvents(1);
     private volatile boolean closed;
-    private boolean waiting;
+    boolean waiting;
 
     ZLinkJavaSocketMonitor(SocketMonitor monitor) {
-        this.monitor = Objects.requireNonNull(monitor, "monitor");
-        poller = Zlink.createPoller();
+        this(monitor, Zlink.createPoller());
         poller.add(monitor, MONITOR_SLOT, PollEventFlags.POLLIN);
+    }
+
+    ZLinkJavaSocketMonitor(SocketMonitor monitor, Poller poller) {
+        this.monitor = Objects.requireNonNull(monitor, "monitor");
+        this.poller = Objects.requireNonNull(poller, "poller");
     }
 
     @Override

@@ -440,25 +440,31 @@ class KotlinPublicSurfaceContractTest {
     }
 
     private fun assertSuspendingSpotLifecycle(type: Class<*>, contextType: Class<*>) {
-        val contextGetter = type.getDeclaredMethod("getContext")
+        val contextGetter =
+            type.methods.single { it.name == "getContext" && it.parameterCount == 0 }
         assertTrue(Modifier.isAbstract(contextGetter.modifiers))
         assertEquals(contextType, contextGetter.returnType)
 
-        val contextBridge = type.getDeclaredMethod("context")
+        val contextBridge = type.methods.single { it.name == "context" && it.parameterCount == 0 }
         assertTrue(Modifier.isFinal(contextBridge.modifiers))
         assertEquals(contextType, contextBridge.returnType)
 
-        val closingBridge = type.getDeclaredMethod("onClosing", ZLinkSpotClosingContext::class.java)
+        val closingBridge =
+            type.methods.single {
+                it.name == "onClosing" &&
+                    it.parameterTypes.contentEquals(arrayOf(ZLinkSpotClosingContext::class.java))
+            }
         assertTrue(Modifier.isFinal(closingBridge.modifiers))
         assertEquals(CompletionStage::class.java, closingBridge.returnType)
         assertFalse(type.declaredMethods.any { it.name == "onClosing" && it.parameterCount == 0 })
 
         val suspending =
-            type.getDeclaredMethod(
-                "onClosingSuspending",
-                ZLinkSpotClosingContext::class.java,
-                Continuation::class.java,
-            )
+            type.declaredMethods.single {
+                it.name == "onClosingSuspending" &&
+                    it.parameterTypes.contentEquals(
+                        arrayOf(ZLinkSpotClosingContext::class.java, Continuation::class.java)
+                    )
+            }
         assertTrue(Modifier.isProtected(suspending.modifiers))
     }
 

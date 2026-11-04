@@ -13,18 +13,18 @@ import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
 
-import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.function.LongSupplier;
+import java.util.concurrent.atomic.AtomicLong;
 
 final class ZLinkUnansweredDescriptorPublicationTest {
     @ParameterizedTest
@@ -42,18 +42,31 @@ final class ZLinkUnansweredDescriptorPublicationTest {
         options.addRouteMesh("game")
                 .listen("inproc://unanswered-" + UUID.randomUUID())
                 .setRoutingId(RoutingId.from("unanswered"));
+        var scheduler = new PublicationScheduler(renewTimeout, store);
+        var clock = new AtomicLong(System.nanoTime());
+        var runtime =
+                new ZLinkLocationRuntime(
+                        ZLinkRegisteredLocationStores.fromUnified(
+                                new ZLinkProviderLocationRepository(store)),
+                        "unanswered",
+                        Duration.ofHours(1),
+                        Duration.ofMinutes(10),
+                        renewTimeout,
+                        Duration.ofSeconds(1),
+                        clock::get,
+                        scheduler,
+                        new ZLinkStateLane());
         try (var host =
-                ZLinkFrameworkRuntimeTestAccess.start(
-                        options, new ZLinkJavaBackendAdapterFactory())) {
-            var runtime = (ZLinkLocationRuntime) field(host, "locationRuntime").get(host);
-            var previousScheduler =
-                    (ScheduledExecutorService) field(runtime, "heartbeatExecutor").get(runtime);
-            var scheduler = new PublicationScheduler(renewTimeout);
+                ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                        options,
+                        new ZLinkJavaBackendAdapterFactory(),
+                        systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
+                                .reflection(),
+                        null,
+                        new ZLinkFrameworkRuntimeTestAccess.Construction()
+                                .locationRuntime(runtime))) {
             // The claim is held before startup continues. Observe the publication deadline
             // at its scheduler boundary rather than assuming the claim completes startup inline.
-            field(runtime, "heartbeatExecutor").set(runtime, scheduler);
-            long now = System.nanoTime();
-            field(runtime, "monotonicNow").set(runtime, (LongSupplier) () -> now);
             try {
                 store.releaseClaim();
                 var startup =
@@ -89,26 +102,20 @@ final class ZLinkUnansweredDescriptorPublicationTest {
                 store.blocking = false;
                 store.releaseClaim();
                 store.releasePending(true);
-                previousScheduler.shutdown();
-                assertTrue(previousScheduler.awaitTermination(30, TimeUnit.SECONDS));
             }
         }
-    }
-
-    private static Field field(Object target, String name) throws Exception {
-        var field = target.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field;
     }
 
     private static final class PublicationScheduler extends ScheduledThreadPoolExecutor {
         final CompletableFuture<ZLinkLocationFirstHeartbeatTest.ScheduledTask<?>>
                 publicationDeadline = new CompletableFuture<>();
         private final long renewTimeoutNanos;
+        private final PendingStore store;
 
-        PublicationScheduler(Duration renewTimeout) {
+        PublicationScheduler(Duration renewTimeout, PendingStore store) {
             super(1);
             renewTimeoutNanos = renewTimeout.toNanos();
+            this.store = store;
         }
 
         @Override
@@ -127,7 +134,7 @@ final class ZLinkUnansweredDescriptorPublicationTest {
 
         private <V> ScheduledFuture<V> record(
                 ZLinkLocationFirstHeartbeatTest.ScheduledTask<V> task) {
-            if (task.getDelay(TimeUnit.NANOSECONDS) <= renewTimeoutNanos) {
+            if (store.blocked && task.getDelay(TimeUnit.NANOSECONDS) <= renewTimeoutNanos) {
                 var first = publicationDeadline.getNow(null);
                 assertTrue(first == null || first.isDone(), "one pending publication deadline");
                 publicationDeadline.complete(task);

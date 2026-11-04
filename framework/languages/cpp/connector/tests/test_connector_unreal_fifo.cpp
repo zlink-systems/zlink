@@ -16,19 +16,33 @@
 #include <utility>
 #include <vector>
 // Verify the adapter queue boundary without an engine SDK.
-#define private public
 #include "../engines/unreal/Source/ZLinkStreamConnector/Private/ZLinkStreamConnector.cpp"
-#undef private
+
+namespace UE::ZLinkStreamConnector::Private
+{
+struct unreal_stream_connector_test_access_t
+{
+    static auto &connector (FZLinkStreamConnectorRuntime &runtime) { return runtime.Connector; }
+
+    static void enqueue_connected (FZLinkStreamConnectorRuntime &runtime)
+    {
+        FZLinkStreamConnectorRuntime::EnqueueState (runtime.Pending,
+                                                    EZLinkStreamConnectionState::Connected);
+    }
+};
+} // namespace UE::ZLinkStreamConnector::Private
 
 int main ()
 {
     using namespace zlink::stream_connector;
     using UE::ZLinkStreamConnector::Private::FZLinkStreamConnectorRuntime;
+    using UE::ZLinkStreamConnector::Private::unreal_stream_connector_test_access_t;
     UZLinkStreamConnector owner;
     FZLinkStreamConnectorRuntime runtime (owner);
     connector_options_t options;
     options.endpoint = "tcp://127.0.0.1:1";
-    runtime.Connector = connector_factory_t::create (options);
+    auto &connector = unreal_stream_connector_test_access_t::connector (runtime);
+    connector = connector_factory_t::create (options);
     std::vector<int> order;
     const auto main_thread = std::this_thread::get_id ();
     bool main_thread_only = true;
@@ -45,20 +59,18 @@ int main ()
         state_order &= owner.OnConnectionStateChanged.NumBroadcasts () == 1;
         record (3);
     });
-    auto state = std::static_pointer_cast<detail::connector_state_t> (
-      connector_internal_handle (runtime.Connector));
+    auto state =
+      std::static_pointer_cast<detail::connector_state_t> (connector_internal_handle (connector));
     std::thread receive ([&] {
-        detail::connector_runtime_t::from (runtime.Connector).receive_packet (packet_t{"push"});
-        detail::schedule_delivery (state, [&] {
-            FZLinkStreamConnectorRuntime::EnqueueState (runtime.Pending,
-                                                        EZLinkStreamConnectionState::Connected);
-        });
+        detail::connector_runtime_t::from (connector).receive_packet (packet_t{"push"});
+        detail::schedule_delivery (
+          state, [&] { unreal_stream_connector_test_access_t::enqueue_connected (runtime); });
         reply_received_context_t context;
-        detail::schedule_reply_received (connector_internal_handle (runtime.Connector), context);
+        detail::schedule_reply_received (connector_internal_handle (connector), context);
         runtime.RequestJson ("request", "{}", 1.0f,
                              [&] (const FZLinkStreamRequestResult &) { record (4); });
-        while (runtime.Connector.pending_dispatch_count () > 0)
-            runtime.Connector.dispatch ();
+        while (connector.pending_dispatch_count () > 0)
+            connector.dispatch ();
     });
     receive.join ();
     if (!order.empty ()) {

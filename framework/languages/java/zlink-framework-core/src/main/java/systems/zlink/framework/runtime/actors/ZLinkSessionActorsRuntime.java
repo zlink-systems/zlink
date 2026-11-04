@@ -61,7 +61,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 generation);
     }
 
-    private final ZLinkInternalSpotNode spotNode;
+    final ZLinkInternalSpotNode spotNode;
     private final RoutingId sessionRid;
     private final ZLinkActorRuntime actors;
     private final ZLinkMessageSerializer serializer;
@@ -69,7 +69,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     private final boolean nativeSessionRelayAttached;
     private final ZLinkStreamCodec defaultCodec;
     private final ZLinkMessageFlowTracer flow;
-    private final Duration sessionRelocationSealTimeout;
+    final Duration sessionRelocationSealTimeout;
     // This runtime is one Session owner's C2 state boundary.  Keep the concurrent
     // binding views below for the synchronous ZLinkSessionActors query surface;
     // all cross-collection state transitions run through this lane.
@@ -83,8 +83,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     //  (Session-Actor binding §8.3). A binding keeps its open seal record and at
     //  most its last closed one; the next seal or the binding's removal deletes it.
     private static final int ROUTE_TERMINAL_CAPACITY = 65_536;
-    private final java.util.HashMap<SealRecordKey, SealTerminal> sealTerminals =
-            new java.util.HashMap<>();
+    final java.util.HashMap<SealRecordKey, SealTerminal> sealTerminals = new java.util.HashMap<>();
     private final java.util.LinkedHashMap<SessionRelocationKey, RouteTerminal> routeTerminals =
             new java.util.LinkedHashMap<>();
     private final java.util.HashMap<SessionRelocationKey, RouteFlight> routeFlights =
@@ -92,9 +91,9 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     // Binding generations are unique across every Session of this Session owner
     // node lifecycle (Session-Actor binding §4). The node owns the counter.
     private final LongSupplier bindingGenerations;
-    private final java.util.HashMap<String, IngressGate> ingressGates = new java.util.HashMap<>();
+    final java.util.HashMap<String, IngressGate> ingressGates = new java.util.HashMap<>();
     private long nextFallbackIngressSequence = 1;
-    private int nextActorSlot = 1;
+    int nextActorSlot = 1;
     private ZLinkRelayMetadataPolicy metadataPolicy = ZLinkRelayMetadataPolicy.EMPTY;
     private boolean relocationStopped;
     private boolean relocationFailed;
@@ -1106,7 +1105,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         sealTerminals.keySet().removeIf(key -> key.actorId().equals(actorId));
     }
 
-    private void expireRelocationSeal(SealTerminal terminal) {
+    void expireRelocationSeal(SealTerminal terminal) {
         //  Spec 32-framework-error-model:38 — a live operation past its deadline
         //  is DeadlineExceeded, not a configuration error.
         RuntimeException failure =
@@ -1272,7 +1271,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 && seal.actor().actor().generation() == route.actor().generation();
     }
 
-    private static final class SealTerminal {
+    static final class SealTerminal {
         private final ZLinkServiceM6BWireCodec.SessionRelocationSeal seal;
         private final ZLinkServiceM6BWireCodec.SessionRelocationSealed sealed;
         private final CompletableFuture<ZLinkServiceM6BWireCodec.SessionRelocationSealed>
@@ -1688,15 +1687,15 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         }
     }
 
-    private static final class IngressGate {
-        private final long objectGeneration;
-        private final long bindingGeneration;
+    static final class IngressGate {
+        final long objectGeneration;
+        final long bindingGeneration;
         private long acceptedHighWater;
         private long activeIngress;
         private ZLinkServiceM6BWireCodec.RelocationIdentity seal;
         private final ArrayDeque<HeldIngress> held = new ArrayDeque<>();
 
-        private IngressGate(long objectGeneration, long bindingGeneration) {
+        IngressGate(long objectGeneration, long bindingGeneration) {
             this.objectGeneration = objectGeneration;
             this.bindingGeneration = bindingGeneration;
         }
