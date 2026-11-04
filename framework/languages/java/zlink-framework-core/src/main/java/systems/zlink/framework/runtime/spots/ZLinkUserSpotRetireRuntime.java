@@ -105,7 +105,7 @@ public final class ZLinkUserSpotRetireRuntime {
                 null);
     }
 
-    public ZLinkUserSpotRetireRuntime(
+    ZLinkUserSpotRetireRuntime(
             ZLinkSpotRuntime spots,
             ZLinkActorRuntime actors,
             List<MeshNodeRegistration> registrations,

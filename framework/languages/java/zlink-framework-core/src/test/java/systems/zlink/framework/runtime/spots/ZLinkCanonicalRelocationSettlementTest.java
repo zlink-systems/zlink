@@ -867,7 +867,8 @@ final class ZLinkCanonicalRelocationSettlementTest {
 
         ZLinkFrameworkRuntime startTargetHost() throws Exception {
             var options = new DefaultZLinkFrameworkOptions();
-            options.addLocationStore(new ZLinkInMemoryLocationStore());
+            var locations = new ZLinkInMemoryLocationStore();
+            options.addLocationStore(locations);
             options.addRelocationStore(new InMemoryRelocationStore());
             var mesh =
                     options.addRouteMesh("shutdown-target")
@@ -882,12 +883,37 @@ final class ZLinkCanonicalRelocationSettlementTest {
                             systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
                                     .reflection(),
                             null,
-                            new ZLinkFrameworkRuntimeTestAccess.Construction()
-                                    .relocationStateMachines(List.of(target)));
+                            new ZLinkFrameworkRuntimeTestAccess.Construction());
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
                     .toCompletableFuture()
                     .get(3, TimeUnit.SECONDS);
             runtime.setMessageFlowModeAsync(ZLinkMessageFlowLogMode.NORMAL).join();
+            var registration = options.registration();
+            var authorityStore = ZLinkFrameworkRuntimeTestAccess.authorityStore(runtime);
+            var retireRuntime =
+                    ZLinkSpotRuntimeTestAccess.userSpotRetireRuntimeWithStateMachines(
+                            (ZLinkSpotRuntime) runtime.spotManager(),
+                            (systems.zlink.framework.runtime.actors.ZLinkActorRuntime)
+                                    runtime.actorManager(),
+                            registration.meshNodes(),
+                            ZLinkFrameworkRuntimeTestAccess.meshNodes(runtime),
+                            authorityStore,
+                            ZLinkFrameworkRuntimeTestAccess.storeLocationResolvers(runtime),
+                            authorityStore,
+                            registration.locations().options(),
+                            new systems.zlink.framework.runtime.internal.relocation
+                                    .ZLinkRelocationAdapterRegistry(
+                                    registration,
+                                    systems.zlink.framework.runtime.internal.handlers
+                                            .ZLinkHandlerActivator.reflection()),
+                            registration.applicationVersion(),
+                            registration.maintenanceWave(),
+                            registration.locations().options().sessionRelocationSealTimeout(),
+                            ZLinkFrameworkRuntimeTestAccess.meshDrains(runtime)::isSealed,
+                            List.of(target),
+                            null,
+                            null);
+            ZLinkFrameworkRuntimeTestAccess.replaceSpotRetire(runtime, retireRuntime);
             Object bridge = ZLinkFrameworkRuntimeTestAccess.spotRetire(runtime);
             assertNotNull(bridge);
             return runtime;

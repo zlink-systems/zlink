@@ -40,8 +40,7 @@ final class ZLinkFrameworkChannelSubsystem {
                         options.registration(),
                         serializer,
                         runtimeHandlers,
-                        eventDispatcher,
-                        construction.channelInfrastructureExecutor());
+                        eventDispatcher);
         runtimeHandlers.add(ZLinkClient.class, channels);
         runtimeHandlers.add(ZLinkFanoutClient.class, channels);
         runtimeHandlers.add(ZLinkRouteClient.class, channels);

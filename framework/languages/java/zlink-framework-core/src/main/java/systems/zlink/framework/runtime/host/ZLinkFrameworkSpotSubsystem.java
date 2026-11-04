@@ -78,11 +78,7 @@ final class ZLinkFrameworkSpotSubsystem {
                         serializer,
                         runtimeHandlers,
                         eventDispatcher,
-                        meshNodes,
-                        construction.spotTimerExecutor(),
-                        construction.spotMulticastExecutor(),
-                        construction.spotHandlerExecutor(),
-                        construction.spotTimerStateLaneFactory());
+                        meshNodes);
         spots.setLocationLifecycle(locationLifecycle);
         if (channels != null) {
             channels.registerInstanceSpotCallRuntime(spots.instanceSpotCalls());
