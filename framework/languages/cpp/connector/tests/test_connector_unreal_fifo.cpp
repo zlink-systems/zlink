@@ -88,12 +88,13 @@ int main ()
       control_contract::connector_cases ([] (const connector_options_t &options, auto test) {
           UZLinkStreamConnector control_owner;
           FZLinkStreamConnectorRuntime control_runtime (control_owner);
-          control_runtime.Connector = connector_factory_t::create (options);
+          unreal_stream_connector_test_access_t::connector (control_runtime) =
+            connector_factory_t::create (options);
           std::size_t delivered = 0;
           control_runtime.On ("$zlink.future", [&] (const FZLinkStreamPacket &) { ++delivered; });
           control_runtime.On ("$zlink.heartbeat.pong",
                               [&] (const FZLinkStreamPacket &) { ++delivered; });
-          test (control_runtime.Connector);
+          test (unreal_stream_connector_test_access_t::connector (control_runtime));
           control_runtime.Dispatch ();
           if (delivered != 0)
               throw std::runtime_error ("Unreal delivered an ignored control");
