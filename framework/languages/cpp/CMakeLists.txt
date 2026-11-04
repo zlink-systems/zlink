@@ -918,6 +918,7 @@ function(zlink_framework_cpp_add_test)
   list(GET ZLINK_TEST_COMMAND 0 command_target)
   if(TARGET "${command_target}")
     zlink_framework_cpp_enable_test_assertions("${command_target}")
+    zlink_framework_cpp_enable_test_unused_result_errors("${command_target}")
   endif()
   add_test(NAME "${ZLINK_TEST_NAME}" COMMAND ${ZLINK_TEST_COMMAND})
   set(test_environment ${ZLINK_TEST_ENVIRONMENT})
@@ -958,6 +959,39 @@ function(zlink_framework_cpp_add_test)
   endif()
 endfunction()
 
+function(zlink_framework_cpp_enable_test_unused_result_errors target_name)
+  get_target_property(unused_result_errors_enabled "${target_name}"
+    ZLINK_FRAMEWORK_CPP_UNUSED_RESULT_ERRORS_ENABLED)
+  if(unused_result_errors_enabled)
+    return()
+  endif()
+  get_target_property(target_sources "${target_name}" SOURCES)
+  get_target_property(target_source_dir "${target_name}" SOURCE_DIR)
+  foreach(source_file IN LISTS target_sources)
+    if(source_file MATCHES "^\\$<")
+      continue()
+    endif()
+    if(IS_ABSOLUTE "${source_file}")
+      set(source_path "${source_file}")
+    else()
+      get_filename_component(source_path "${source_file}" ABSOLUTE
+        BASE_DIR "${target_source_dir}")
+    endif()
+    cmake_path(IS_PREFIX ZLINK_FRAMEWORK_CPP_TESTS_DIR "${source_path}" NORMALIZE
+      is_framework_test_source)
+    if(is_framework_test_source)
+      target_compile_options("${target_name}" PRIVATE
+        "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Werror=unused-result>"
+        "$<$<CXX_COMPILER_ID:MSVC>:/we4834>")
+      set_property(TARGET "${target_name}" PROPERTY
+        ZLINK_FRAMEWORK_CPP_UNUSED_RESULT_ERRORS_ENABLED TRUE)
+      return()
+    endif()
+  endforeach()
+endfunction()
+
+set(ZLINK_FRAMEWORK_CPP_TESTS_DIR "${ZLINK_FRAMEWORK_CPP_DIR}/tests")
+
 function(zlink_framework_cpp_enable_test_assertions target_name)
   # Several process tests keep syscall, mailbox, and future side effects in
   # assertion expressions. Release evidence must execute those expressions;
@@ -991,6 +1025,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_executable(test_cpp_framework_typed_json_noexception
       tests/Zlink.Framework.UnitTests/test_cpp_framework_typed_json_noexception.cpp)
+    zlink_framework_cpp_enable_test_unused_result_errors(test_cpp_framework_typed_json_noexception)
     target_link_libraries(test_cpp_framework_typed_json_noexception PRIVATE zlink::stream_connector)
     target_include_directories(test_cpp_framework_typed_json_noexception PRIVATE framework/include)
     target_compile_options(test_cpp_framework_typed_json_noexception PRIVATE -fno-exceptions -UNDEBUG)
@@ -1002,6 +1037,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     set(_json_connector_test test_cpp_framework_typed_json_connector_${_json_connector_variant})
     add_executable(${_json_connector_test}
       tests/Zlink.Framework.UnitTests/test_cpp_framework_typed_json_connector.cpp)
+    zlink_framework_cpp_enable_test_unused_result_errors(${_json_connector_test})
     target_link_libraries(${_json_connector_test} PRIVATE zlink::stream_connector)
     target_include_directories(${_json_connector_test} PRIVATE framework/include)
     if(_json_connector_variant STREQUAL "extension")
@@ -1015,6 +1051,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
 
   add_executable(test_cpp_framework_typed_json_message_pack
     tests/Zlink.Framework.UnitTests/test_cpp_framework_typed_json_message_pack.cpp)
+  zlink_framework_cpp_enable_test_unused_result_errors(test_cpp_framework_typed_json_message_pack)
   target_link_libraries(test_cpp_framework_typed_json_message_pack PRIVATE zlink::stream_connector)
   target_include_directories(test_cpp_framework_typed_json_message_pack PRIVATE framework/include)
   if(MSVC)
@@ -1027,6 +1064,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
 
   add_executable(test_cpp_framework_typed_json
     tests/Zlink.Framework.UnitTests/test_cpp_framework_typed_json.cpp)
+  zlink_framework_cpp_enable_test_unused_result_errors(test_cpp_framework_typed_json)
   target_link_libraries(test_cpp_framework_typed_json PRIVATE zlink_framework zlink::stream_connector)
   target_compile_definitions(test_cpp_framework_typed_json PRIVATE
     ZLINK_TYPED_JSON_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/framework-json-v1.json"
