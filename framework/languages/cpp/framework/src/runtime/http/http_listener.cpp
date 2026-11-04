@@ -500,22 +500,40 @@ class http_host_service_t::listener_t
         co_return true;
     }
 
+    asio::awaitable<void> serve_http (std::shared_ptr<connection_t> connection)
+    {
+        auto stream = std::make_shared<beast::tcp_stream> (std::move (connection->socket));
+        connection_registration_t registration (*this, connection, *stream, stream);
+        (void) co_await serve_requests_async (*stream);
+        beast::error_code ignored;
+        stream->socket ().shutdown (tcp::socket::shutdown_send, ignored);
+        co_return;
+    }
+
     void handle_http (std::shared_ptr<connection_t> connection)
     {
-        asio::co_spawn (
-          connection->io,
-          [this, connection] () -> asio::awaitable<void> {
-              auto stream = std::make_shared<beast::tcp_stream> (std::move (connection->socket));
-              connection_registration_t registration (*this, connection, *stream, stream);
-              (void) co_await serve_requests_async (*stream);
-              beast::error_code ignored;
-              stream->socket ().shutdown (tcp::socket::shutdown_send, ignored);
-              co_return;
-          },
-          asio::detached);
+        asio::co_spawn (connection->io, serve_http (connection), asio::detached);
         connection->io.run ();
     }
 
+#ifdef ZLINK_FRAMEWORK_HTTP_WITH_OPENSSL
+    asio::awaitable<void> serve_https (std::shared_ptr<connection_t> connection)
+    {
+        auto stream = std::make_shared<beast::ssl_stream<beast::tcp_stream>> (
+          std::move (connection->socket), *_tls_context);
+        connection_registration_t registration (*this, connection, stream->next_layer (), stream);
+        beast::error_code ec;
+        set_request_timeout (*stream, _options->server.request_headers_timeout);
+        co_await stream->async_handshake (asio::ssl::stream_base::server,
+                                          asio::redirect_error (asio::use_awaitable, ec));
+        if (!ec) {
+            (void) co_await serve_requests_async (*stream);
+        }
+        co_await stream->async_shutdown (asio::redirect_error (asio::use_awaitable, ec));
+        co_return;
+    }
+
+#endif
     void handle_https (std::shared_ptr<connection_t> connection)
     {
 #ifdef ZLINK_FRAMEWORK_HTTP_WITH_OPENSSL
@@ -524,24 +542,7 @@ class http_host_service_t::listener_t
             connection->socket.close (ignored);
             return;
         }
-        asio::co_spawn (
-          connection->io,
-          [this, connection] () -> asio::awaitable<void> {
-              auto stream = std::make_shared<beast::ssl_stream<beast::tcp_stream>> (
-                std::move (connection->socket), *_tls_context);
-              connection_registration_t registration (*this, connection, stream->next_layer (),
-                                                      stream);
-              beast::error_code ec;
-              set_request_timeout (*stream, _options->server.request_headers_timeout);
-              co_await stream->async_handshake (asio::ssl::stream_base::server,
-                                                asio::redirect_error (asio::use_awaitable, ec));
-              if (!ec) {
-                  (void) co_await serve_requests_async (*stream);
-              }
-              co_await stream->async_shutdown (asio::redirect_error (asio::use_awaitable, ec));
-              co_return;
-          },
-          asio::detached);
+        asio::co_spawn (connection->io, serve_https (connection), asio::detached);
         connection->io.run ();
 #else
         beast::error_code ignored;
