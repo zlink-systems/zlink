@@ -461,16 +461,11 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
             return;
         }
         traceFlow(ZLinkMessageFlowOutcome.RECEIVED, record, packetName);
-        CompletableFuture<Void> admission = null;
-        if (flow.enabled(ZLinkMessageFlowOutcome.ADMITTED)) {
-            admission = new CompletableFuture<>();
-            admission.thenRun(
-                    () -> traceFlow(ZLinkMessageFlowOutcome.ADMITTED, record, packetName));
-        }
         try {
             ZLinkHandlerDispatch.enqueue(
                     namespace.queue,
                     () -> {
+                        traceFlow(ZLinkMessageFlowOutcome.ADMITTED, record, packetName);
                         ByteBuffer payload = ZLinkFrameworkMultipartView.buffer(record.parts(), 1);
                         CompletionStage<Void> invocation =
                                 route != null
@@ -513,7 +508,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                                                         : null));
                         return invocation;
                     },
-                    admission,
+                    null,
                     claim,
                     error -> {
                         try {
@@ -603,16 +598,11 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
             return;
         }
         traceFlow(ZLinkMessageFlowOutcome.RECEIVED, record, packetName);
-        CompletableFuture<Void> admission = null;
-        if (flow.enabled(ZLinkMessageFlowOutcome.ADMITTED)) {
-            admission = new CompletableFuture<>();
-            admission.thenRun(
-                    () -> traceFlow(ZLinkMessageFlowOutcome.ADMITTED, record, packetName));
-        }
         try {
             ZLinkHandlerDispatch.enqueue(
                     namespace.queue,
                     () -> {
+                        traceFlow(ZLinkMessageFlowOutcome.ADMITTED, record, packetName);
                         try {
                             CompletionStage<Message> invocation =
                                     route != null
@@ -677,7 +667,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                             return CompletableFuture.<Void>failedFuture(failure);
                         }
                     },
-                    admission,
+                    null,
                     claim,
                     error -> closeRecord(record, null));
         } catch (RuntimeException error) {
