@@ -171,7 +171,7 @@ TEST (RequestCallAllocations, UnknownLookupRetainsTheTargetAfterTheCallerReturns
     auto store = std::make_shared<deferred_node_lookup_t> ();
     fw::detail::mesh_node_runtime_t runtime (state);
     runtime.configure_user_spot_operations (store, {}, {});
-    runtime.start ();
+    runtime.start ().result ().value ();
     struct stop_t
     {
         fw::detail::mesh_node_runtime_t &runtime;
@@ -214,7 +214,7 @@ TEST (RequestCallAllocations, UnknownLookupRetainsOwnerCancellationAcrossRuntime
     auto store = std::make_shared<deferred_node_lookup_t> ();
     fw::detail::mesh_node_runtime_t runtime (state);
     runtime.configure_user_spot_operations (store, {}, {});
-    runtime.start ();
+    runtime.start ().result ().value ();
     struct stop_t
     {
         fw::detail::mesh_node_runtime_t &runtime;
@@ -283,7 +283,7 @@ TEST (RequestCallAllocations, PendingNodeLookupDoesNotCreateAnOperationBeforeRes
     auto store = std::make_shared<deferred_node_lookup_t> ();
     fw::detail::mesh_node_runtime_t runtime (state);
     runtime.configure_user_spot_operations (store, {}, {});
-    runtime.start ();
+    runtime.start ().result ().value ();
     struct stop_t
     {
         fw::detail::mesh_node_runtime_t &runtime;

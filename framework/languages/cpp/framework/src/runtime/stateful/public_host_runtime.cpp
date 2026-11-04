@@ -1089,13 +1089,11 @@ public_host_runtime_t::public_host_runtime_t (host_options_t options) :
     _objects (),
     _sessions (
       [this] (const std::string &actor_id) {
-          return _spot_actor_index_lane
-            .run ([&] {
-                const auto found = _actors.find (actor_id);
-                return found == _actors.end () ? std::optional<stateful::object_ref_t>{}
-                                               : std::make_optional (found->second.second);
-            })
-            .get ();
+          return _spot_actor_index_lane.run_sync ([&] {
+              const auto found = _actors.find (actor_id);
+              return found == _actors.end () ? std::optional<stateful::object_ref_t>{}
+                                             : std::make_optional (found->second.second);
+          });
       },
       [this] { _transport->signal_activity (); })
 {
@@ -1133,22 +1131,20 @@ void public_host_runtime_t::configure_stateful_dispatch (
 {
     if (!resolver)
         throw std::invalid_argument ("stateful dispatch authority resolver must not be empty");
-    _lifecycle_configuration_lane
-      .run ([&] {
-          if (_started || _stateful_dispatch)
-              throw std::logic_error (
-                "stateful dispatch must be configured once before host start");
-          if (sources || _local_lease_observation)
-              _transport->configure_request_sources (sources, _local_lease_observation);
-          _stateful_dispatch = std::make_unique<stateful::raw_stateful_dispatch_t> (
-            _objects, *_transport,
-            [this, resolver = std::move (resolver)] (
-              const stateful::accepted_record_authority_query_t &query)
-              -> task_t<std::optional<stateful::accepted_record_authority_t>> {
-                using authority_t = std::optional<stateful::accepted_record_authority_t>;
-                try {
-                    auto accepted = _relocation_session_terminal_lane.run_task ([&] ()
-                                                                                  -> authority_t {
+    _lifecycle_configuration_lane.run_sync ([&] {
+        if (_started || _stateful_dispatch)
+            throw std::logic_error ("stateful dispatch must be configured once before host start");
+        if (sources || _local_lease_observation)
+            _transport->configure_request_sources (sources, _local_lease_observation);
+        _stateful_dispatch = std::make_unique<stateful::raw_stateful_dispatch_t> (
+          _objects, *_transport,
+          [this, resolver =
+                   std::move (resolver)] (const stateful::accepted_record_authority_query_t &query)
+            -> task_t<std::optional<stateful::accepted_record_authority_t>> {
+              using authority_t = std::optional<stateful::accepted_record_authority_t>;
+              try {
+                  auto accepted =
+                    _relocation_session_terminal_lane.run_task ([&] () -> authority_t {
                         for (const auto &[key, attempt] : _relocation_target_attempts) {
                             const auto &prepare = attempt.prepare;
                             if (prepare.source_node_routing_id != query.source_node_routing_id
@@ -1179,25 +1175,24 @@ void public_host_runtime_t::configure_stateful_dispatch (
                         }
                         return std::nullopt;
                     });
-                    // resolve_accepted_authority owns query until this task completes;
-                    // the configured dispatch owns resolver for the same lifetime.
-                    return continue_task<authority_t> (
-                      std::move (accepted), [&resolver, &query] (authority_t authority) {
-                          if (authority)
-                              return task_t<authority_t> (
-                                result_t<authority_t>::success (std::move (authority)));
-                          return resolver (query);
-                      });
-                }
-                catch (...) {
-                    return task_t<authority_t> (detail::current_exception_result<authority_t> ());
-                }
-            });
-          /* flow-correlation §4: the ingest path gates flow capture on the host's
+                  // resolve_accepted_authority owns query until this task completes;
+                  // the configured dispatch owns resolver for the same lifetime.
+                  return continue_task<authority_t> (
+                    std::move (accepted), [&resolver, &query] (authority_t authority) {
+                        if (authority)
+                            return task_t<authority_t> (
+                              result_t<authority_t>::success (std::move (authority)));
+                        return resolver (query);
+                    });
+              }
+              catch (...) {
+                  return task_t<authority_t> (detail::current_exception_result<authority_t> ());
+              }
+          });
+        /* flow-correlation §4: the ingest path gates flow capture on the host's
            * provider; the host outlives the dispatch it owns. */
-          _stateful_dispatch->set_flow_capture_provider ([this] { return capture_flow (); });
-      })
-      .get ();
+        _stateful_dispatch->set_flow_capture_provider ([this] { return capture_flow (); });
+    });
     // The source seal cut takes accepted originals through this stateful dispatch.
     _objects.configure_relocation_cut (
       [this] (std::vector<stateful::object_ref_t> participants,
@@ -1212,14 +1207,11 @@ void public_host_runtime_t::configure_stateful_dispatch (
 {
     if (!owner)
         throw std::invalid_argument ("stateful dispatch owner observation must not be empty");
-    _lifecycle_configuration_lane
-      .run ([&] {
-          if (_started || _stateful_dispatch)
-              throw std::logic_error (
-                "stateful dispatch must be configured once before host start");
-          _local_lease_observation = std::move (owner);
-      })
-      .get ();
+    _lifecycle_configuration_lane.run_sync ([&] {
+        if (_started || _stateful_dispatch)
+            throw std::logic_error ("stateful dispatch must be configured once before host start");
+        _local_lease_observation = std::move (owner);
+    });
     configure_stateful_dispatch (
       [this, sources] (stateful::accepted_record_authority_query_t query) {
           // A local record was accepted under the lease observation it was published with;
@@ -1334,8 +1326,7 @@ void public_host_runtime_t::forward_relocation_application (
 void public_host_runtime_t::configure_message_follow_handler (
   std::function<void (const protocol::message_follow_notice_t &)> handler)
 {
-    _lifecycle_configuration_lane.run ([&] { _message_follow_handler = std::move (handler); })
-      .get ();
+    _lifecycle_configuration_lane.run_sync ([&] { _message_follow_handler = std::move (handler); });
 }
 
 void public_host_runtime_t::configure_actor_join_relocation (
@@ -1347,17 +1338,15 @@ void public_host_runtime_t::configure_actor_join_relocation (
 {
     if (!prepare_validator || !recovery_consumer || !authority_spot_resolver || !authority_adopter)
         throw std::invalid_argument ("Actor Join relocation callbacks must not be empty");
-    _lifecycle_configuration_lane
-      .run ([&] {
-          if (_started)
-              throw std::logic_error ("Actor Join relocation must be configured before start");
-          _actor_join_relocation_prepare_validator = std::move (prepare_validator);
-          _actor_join_recovery_consumer = std::move (recovery_consumer);
-          _actor_relocation_authority_resolver = std::move (authority_spot_resolver);
-          _actor_join_recovery_rollback = std::move (recovery_rollback);
-          _actor_join_committed_authority_adopter = std::move (authority_adopter);
-      })
-      .get ();
+    _lifecycle_configuration_lane.run_sync ([&] {
+        if (_started)
+            throw std::logic_error ("Actor Join relocation must be configured before start");
+        _actor_join_relocation_prepare_validator = std::move (prepare_validator);
+        _actor_join_recovery_consumer = std::move (recovery_consumer);
+        _actor_relocation_authority_resolver = std::move (authority_spot_resolver);
+        _actor_join_recovery_rollback = std::move (recovery_rollback);
+        _actor_join_committed_authority_adopter = std::move (authority_adopter);
+    });
 }
 
 void public_host_runtime_t::configure_bound_session_operations (
@@ -1366,46 +1355,38 @@ void public_host_runtime_t::configure_bound_session_operations (
     if (!operations.bind || !operations.send || !operations.replaced
         || !operations.commit_relocation_route || !operations.prepare_relocation_target_route)
         throw std::invalid_argument ("bound Session operations must all be configured");
-    _lifecycle_configuration_lane
-      .run ([&] {
-          if (_started)
-              throw std::logic_error ("bound Session operations must be configured before start");
-          _bound_session_operations = std::move (operations);
-      })
-      .get ();
+    _lifecycle_configuration_lane.run_sync ([&] {
+        if (_started)
+            throw std::logic_error ("bound Session operations must be configured before start");
+        _bound_session_operations = std::move (operations);
+    });
 }
 
 void public_host_runtime_t::configure_late_session_route_update (
   std::function<void (const protocol::session_relocation_route_t &)> reporter)
 {
-    _lifecycle_configuration_lane
-      .run ([&] {
-          if (_started)
-              throw std::logic_error (
-                "late Session route reporter must be configured before start");
-          _late_session_route_update_reporter = std::move (reporter);
-      })
-      .get ();
+    _lifecycle_configuration_lane.run_sync ([&] {
+        if (_started)
+            throw std::logic_error ("late Session route reporter must be configured before start");
+        _late_session_route_update_reporter = std::move (reporter);
+    });
 }
 
 void public_host_runtime_t::start ()
 {
-    auto population_metrics =
-      _lifecycle_configuration_lane
-        .run ([&] {
-            if (_started || _closing) {
-                return task_t<void> (result_t<void>::success ());
-            }
-            _instance_activation_metrics.connect (_options.mesh.metric_provider);
-            auto configured = _objects.configure_population_metrics (
-              _options.mesh.descriptor.mesh_name, _options.mesh.metric_provider);
-            auto owner = std::make_unique<completion_owner_t> ();
-            _transport->start ();
-            _completion_owner = std::move (owner);
-            _started = true;
-            return configured;
-        })
-        .get ();
+    auto population_metrics = _lifecycle_configuration_lane.run_sync ([&] {
+        if (_started || _closing) {
+            return task_t<void> (result_t<void>::success ());
+        }
+        _instance_activation_metrics.connect (_options.mesh.metric_provider);
+        auto configured = _objects.configure_population_metrics (_options.mesh.descriptor.mesh_name,
+                                                                 _options.mesh.metric_provider);
+        auto owner = std::make_unique<completion_owner_t> ();
+        _transport->start ();
+        _completion_owner = std::move (owner);
+        _started = true;
+        return configured;
+    });
     detail::task_result_access_t::read (population_metrics).value ();
 }
 
@@ -1414,16 +1395,14 @@ void public_host_runtime_t::close () noexcept
     bool closing_started = false;
     std::function<void ()> maintenance_closing;
     {
-        _lifecycle_configuration_lane
-          .run ([&] {
-              if (!_started || _closing) {
-                  return;
-              }
-              _closing = true;
-              closing_started = true;
-              maintenance_closing = _maintenance_closing;
-          })
-          .get ();
+        _lifecycle_configuration_lane.run_sync ([&] {
+            if (!_started || _closing) {
+                return;
+            }
+            _closing = true;
+            closing_started = true;
+            maintenance_closing = _maintenance_closing;
+        });
         if (!closing_started)
             return;
     }
@@ -1441,23 +1420,19 @@ void public_host_runtime_t::close () noexcept
     // Hosted shutdown already drained this terminal at its original deadline.
     if (!already_sealed)
         detail::task_result_access_t::read (target_terminal).value ();
-    _lifecycle_configuration_lane.run ([&] { _started = false; }).get ();
-    _relocation_session_terminal_lane
-      .run ([&] {
-          _session_seal_terminals.clear ();
-          _session_journal_terminals.clear ();
-      })
-      .get ();
+    _lifecycle_configuration_lane.run_sync ([&] { _started = false; });
+    _relocation_session_terminal_lane.run_sync ([&] {
+        _session_seal_terminals.clear ();
+        _session_journal_terminals.clear ();
+    });
     _sessions.drop_held_relays (message_flow_reason_t::shutdown);
     _transport->close ();
     (void) _objects.retire_population_metrics_async ();
-    _local_dispatch_completion_lane.run ([&] { _local_application_dispatches.clear (); }).get ();
-    _lifecycle_configuration_lane
-      .run ([&] {
-          _completion_owner.reset ();
-          _closing = false;
-      })
-      .get ();
+    _local_dispatch_completion_lane.run_sync ([&] { _local_application_dispatches.clear (); });
+    _lifecycle_configuration_lane.run_sync ([&] {
+        _completion_owner.reset ();
+        _closing = false;
+    });
 }
 
 void public_host_runtime_t::configure_peer_reconcile (
@@ -1568,13 +1543,11 @@ node_status_t public_host_runtime_t::status () const
 std::size_t public_host_runtime_t::pending_operation_count () const noexcept
 {
     return _transport->pending_operation_count ()
-           + _relocation_session_terminal_lane
-               .run ([this] {
-                   return std::count_if (
-                     _relocation_target_attempts.begin (), _relocation_target_attempts.end (),
-                     [] (const auto &item) { return !relocation_target_terminal (item.second); });
-               })
-               .get ();
+           + _relocation_session_terminal_lane.run_sync ([this] {
+                 return std::count_if (
+                   _relocation_target_attempts.begin (), _relocation_target_attempts.end (),
+                   [] (const auto &item) { return !relocation_target_terminal (item.second); });
+             });
 }
 
 void public_host_runtime_t::set_channel_weight (const std::string &channel_name,
@@ -1666,28 +1639,24 @@ void public_host_runtime_t::configure_user_spot_operations (
     if (!store || !materializer)
         throw std::invalid_argument (
           "User Spot operations require a Location Store and materializer");
-    _lifecycle_configuration_lane
-      .run ([&] {
-          if (_started)
-              throw std::logic_error ("User Spot operations must be configured before start");
-          _user_spot_store = std::move (store);
-          _user_spot_materializer = std::move (materializer);
-          _user_spot_closer = std::move (closer);
-      })
-      .get ();
+    _lifecycle_configuration_lane.run_sync ([&] {
+        if (_started)
+            throw std::logic_error ("User Spot operations must be configured before start");
+        _user_spot_store = std::move (store);
+        _user_spot_materializer = std::move (materializer);
+        _user_spot_closer = std::move (closer);
+    });
 }
 
 void public_host_runtime_t::configure_spot_route_fence_resolver (
   spot_route_fence_resolver_t resolver)
 {
-    _lifecycle_configuration_lane
-      .run ([&] {
-          if (_started)
-              throw std::logic_error (
-                "Spot route fence resolver must be configured before host start");
-          _spot_route_fence_resolver = std::move (resolver);
-      })
-      .get ();
+    _lifecycle_configuration_lane.run_sync ([&] {
+        if (_started)
+            throw std::logic_error (
+              "Spot route fence resolver must be configured before host start");
+        _spot_route_fence_resolver = std::move (resolver);
+    });
 }
 
 void public_host_runtime_t::configure_actor_create_operations (
@@ -1695,28 +1664,24 @@ void public_host_runtime_t::configure_actor_create_operations (
 {
     if (!target)
         throw std::invalid_argument ("Actor create operation target is required");
-    _lifecycle_configuration_lane
-      .run ([&] {
-          if (_started || _actor_create_target)
-              throw std::logic_error (
-                "Actor create operations must be configured once before host start");
-          _actor_create_target = std::move (target);
-      })
-      .get ();
+    _lifecycle_configuration_lane.run_sync ([&] {
+        if (_started || _actor_create_target)
+            throw std::logic_error (
+              "Actor create operations must be configured once before host start");
+        _actor_create_target = std::move (target);
+    });
 }
 
 void public_host_runtime_t::configure_actor_join_operations (actor_join_operation_target_t target)
 {
     if (!target)
         throw std::invalid_argument ("Actor join operation target is required");
-    _lifecycle_configuration_lane
-      .run ([&] {
-          if (_started || _actor_join_target)
-              throw std::logic_error (
-                "Actor join operations must be configured once before host start");
-          _actor_join_target = std::move (target);
-      })
-      .get ();
+    _lifecycle_configuration_lane.run_sync ([&] {
+        if (_started || _actor_join_target)
+            throw std::logic_error (
+              "Actor join operations must be configured once before host start");
+        _actor_join_target = std::move (target);
+    });
 }
 
 void public_host_runtime_t::configure_instance_spot_operations (
@@ -1728,23 +1693,21 @@ void public_host_runtime_t::configure_instance_spot_operations (
     if (!store || !relocations || !owner || !materializer)
         throw std::invalid_argument ("Instance Spot operations require Location and Relocation "
                                      "Stores, an owner lease resolver, and a materializer");
-    _lifecycle_configuration_lane
-      .run ([&] {
-          if (_started)
-              throw std::logic_error ("Instance Spot operations must be configured before start");
-          _user_spot_store = std::move (store);
-          _session_relocations = relocations;
-          _instance_spot_relocations = std::move (relocations);
-          _instance_spot_owner = std::move (owner);
-          for (const auto &type : materializer.metric_types)
-              _instance_admission_metrics.emplace (
-                type, std::make_shared<runtime::instance_spot_admission_metrics_t> (
-                        _options.mesh.descriptor.mesh_name, type, _options.mesh.metric_provider));
-          _instance_spot_materializer =
-            std::make_shared<const instance_spot_activation_materializer_t> (
-              std::move (materializer));
-      })
-      .get ();
+    _lifecycle_configuration_lane.run_sync ([&] {
+        if (_started)
+            throw std::logic_error ("Instance Spot operations must be configured before start");
+        _user_spot_store = std::move (store);
+        _session_relocations = relocations;
+        _instance_spot_relocations = std::move (relocations);
+        _instance_spot_owner = std::move (owner);
+        for (const auto &type : materializer.metric_types)
+            _instance_admission_metrics.emplace (
+              type, std::make_shared<runtime::instance_spot_admission_metrics_t> (
+                      _options.mesh.descriptor.mesh_name, type, _options.mesh.metric_provider));
+        _instance_spot_materializer =
+          std::make_shared<const instance_spot_activation_materializer_t> (
+            std::move (materializer));
+    });
 }
 
 namespace
@@ -1862,12 +1825,10 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
 
     std::shared_ptr<zlink::framework::location_repository_t> store;
     std::function<std::optional<location_owner_token_t> ()> instance_owner_resolver;
-    _lifecycle_configuration_lane
-      .run ([&] {
-          store = _user_spot_store;
-          instance_owner_resolver = _instance_spot_owner;
-      })
-      .get ();
+    _lifecycle_configuration_lane.run_sync ([&] {
+        store = _user_spot_store;
+        instance_owner_resolver = _instance_spot_owner;
+    });
     const auto instance_owner = instance_owner_resolver ? instance_owner_resolver () : std::nullopt;
     if (!store || !instance_owner) {
         complete_close_step (completion, {});
@@ -2135,9 +2096,8 @@ void public_host_runtime_t::configure_session_route_owner (
 {
     if (!owner_resolver)
         throw std::invalid_argument ("Session route owner resolver is required");
-    _lifecycle_configuration_lane
-      .run ([&] { _session_route_owner_resolver = std::move (owner_resolver); })
-      .get ();
+    _lifecycle_configuration_lane.run_sync (
+      [&] { _session_route_owner_resolver = std::move (owner_resolver); });
 }
 
 void public_host_runtime_t::configure_session_relocation_store (
@@ -2145,13 +2105,11 @@ void public_host_runtime_t::configure_session_relocation_store (
 {
     if (!relocations)
         throw std::invalid_argument ("Session relocation Store is required");
-    _lifecycle_configuration_lane
-      .run ([&] {
-          if (_started)
-              throw std::logic_error ("Session relocation Store must be configured before start");
-          _session_relocations = std::move (relocations);
-      })
-      .get ();
+    _lifecycle_configuration_lane.run_sync ([&] {
+        if (_started)
+            throw std::logic_error ("Session relocation Store must be configured before start");
+        _session_relocations = std::move (relocations);
+    });
 }
 
 std::pair<bool, std::optional<protocol::session_relocation_sealed_t>>
@@ -2189,26 +2147,24 @@ public_host_runtime_t::admit_session_relocation_seal (
         std::optional<protocol::session_relocation_sealed_t> immediate;
         bool late_consumed;
     };
-    const auto existing_result =
-      _relocation_session_terminal_lane
-        .run ([&] () -> std::optional<existing_session_seal_result_t> {
-            const auto cached = _session_seal_terminals.find (relocation_key);
-            if (cached != _session_seal_terminals.end ()) {
-                if (cached->second.seal != seal)
-                    return existing_session_seal_result_t{false, std::nullopt, false};
-                if (cached->second.consumed)
-                    return existing_session_seal_result_t{true, std::nullopt, true};
-                if (!response_routing_id.empty ())
-                    cached->second.response_routing_id = std::move (response_routing_id);
-                if (cached->second.ready)
-                    return existing_session_seal_result_t{true, cached->second.sealed, false};
-                if (local_completion)
-                    cached->second.local_completions.push_back (std::move (local_completion));
-                return existing_session_seal_result_t{true, std::nullopt, false};
-            }
-            return std::nullopt;
-        })
-        .get ();
+    const auto existing_result = _relocation_session_terminal_lane.run_sync (
+      [&] () -> std::optional<existing_session_seal_result_t> {
+          const auto cached = _session_seal_terminals.find (relocation_key);
+          if (cached != _session_seal_terminals.end ()) {
+              if (cached->second.seal != seal)
+                  return existing_session_seal_result_t{false, std::nullopt, false};
+              if (cached->second.consumed)
+                  return existing_session_seal_result_t{true, std::nullopt, true};
+              if (!response_routing_id.empty ())
+                  cached->second.response_routing_id = std::move (response_routing_id);
+              if (cached->second.ready)
+                  return existing_session_seal_result_t{true, cached->second.sealed, false};
+              if (local_completion)
+                  cached->second.local_completions.push_back (std::move (local_completion));
+              return existing_session_seal_result_t{true, std::nullopt, false};
+          }
+          return std::nullopt;
+      });
     if (existing_result) {
         if (existing_result->late_consumed) {
             const auto &logger = detail::dispatch_options_access_t::logger (_options.mesh.dispatch);
@@ -2244,59 +2200,54 @@ public_host_runtime_t::admit_session_relocation_seal (
       || _sessions.remote_route_seal_ready (admission.barrier);
     bool inserted = false;
     std::optional<protocol::session_relocation_sealed_t> immediate;
-    _relocation_session_terminal_lane
-      .run ([&] {
-          session_seal_terminal_record_t record{seal,
-                                                ack,
-                                                admission.barrier,
-                                                std::chrono::steady_clock::now ()
-                                                  + _options.session_relocation_seal_timeout,
-                                                false,
-                                                ready,
-                                                response_routing_id,
-                                                {}};
-          if (local_completion && !ready)
-              record.local_completions.push_back (local_completion);
-          // A binding retains only its last closed record. The new seal owns its successor.
-          for (auto it = _session_seal_terminals.begin (); it != _session_seal_terminals.end ();) {
-              if (it->second.consumed && it->second.seal.actor.actor_id == seal.actor.actor_id)
-                  it = _session_seal_terminals.erase (it);
-              else
-                  ++it;
-          }
-          const auto [stored, was_inserted] =
-            _session_seal_terminals.emplace (relocation_key, std::move (record));
-          lower_relocation_next_due_on_lane (relocation_due_now);
-          inserted = was_inserted;
-          if (inserted)
-              _transport->signal_activity ();
-          if (!inserted) {
-              if (stored->second.seal != seal) {
-                  immediate.reset ();
-              } else if (stored->second.ready) {
-                  if (!response_routing_id.empty ())
-                      stored->second.response_routing_id = response_routing_id;
-                  immediate = stored->second.sealed;
-              } else {
-                  if (!response_routing_id.empty ())
-                      stored->second.response_routing_id = response_routing_id;
-                  if (local_completion)
-                      stored->second.local_completions.push_back (local_completion);
-              }
-          } else if (ready) {
-              immediate = ack;
-          }
-      })
-      .get ();
+    _relocation_session_terminal_lane.run_sync ([&] {
+        session_seal_terminal_record_t record{seal,
+                                              ack,
+                                              admission.barrier,
+                                              std::chrono::steady_clock::now ()
+                                                + _options.session_relocation_seal_timeout,
+                                              false,
+                                              ready,
+                                              response_routing_id,
+                                              {}};
+        if (local_completion && !ready)
+            record.local_completions.push_back (local_completion);
+        // A binding retains only its last closed record. The new seal owns its successor.
+        for (auto it = _session_seal_terminals.begin (); it != _session_seal_terminals.end ();) {
+            if (it->second.consumed && it->second.seal.actor.actor_id == seal.actor.actor_id)
+                it = _session_seal_terminals.erase (it);
+            else
+                ++it;
+        }
+        const auto [stored, was_inserted] =
+          _session_seal_terminals.emplace (relocation_key, std::move (record));
+        lower_relocation_next_due_on_lane (relocation_due_now);
+        inserted = was_inserted;
+        if (inserted)
+            _transport->signal_activity ();
+        if (!inserted) {
+            if (stored->second.seal != seal) {
+                immediate.reset ();
+            } else if (stored->second.ready) {
+                if (!response_routing_id.empty ())
+                    stored->second.response_routing_id = response_routing_id;
+                immediate = stored->second.sealed;
+            } else {
+                if (!response_routing_id.empty ())
+                    stored->second.response_routing_id = response_routing_id;
+                if (local_completion)
+                    stored->second.local_completions.push_back (local_completion);
+            }
+        } else if (ready) {
+            immediate = ack;
+        }
+    });
     if (!inserted) {
         (void) _sessions.abort_barrier (admission.barrier);
-        const auto stored_matches =
-          _relocation_session_terminal_lane
-            .run ([&] {
-                const auto stored = _session_seal_terminals.find (relocation_key);
-                return stored != _session_seal_terminals.end () && stored->second.seal == seal;
-            })
-            .get ();
+        const auto stored_matches = _relocation_session_terminal_lane.run_sync ([&] {
+            const auto stored = _session_seal_terminals.find (relocation_key);
+            return stored != _session_seal_terminals.end () && stored->second.seal == seal;
+        });
         if (!stored_matches)
             return {false, std::nullopt};
     }
@@ -2305,7 +2256,7 @@ public_host_runtime_t::admit_session_relocation_seal (
 }
 
 task_t<bool> public_host_runtime_t::seal_session_remote (
-  const zlink::routing_id_t &session_owner_node,
+  zlink::routing_id_t session_owner_node,
   protocol::session_relocation_seal_t seal,
   std::chrono::milliseconds timeout,
   std::chrono::steady_clock::time_point operation_deadline,
@@ -2318,19 +2269,16 @@ task_t<bool> public_host_runtime_t::seal_session_remote (
     const auto relocation_key = session_relocation_key (seal);
     std::optional<session_relocation_seal_result_t> cached_result;
     std::shared_ptr<stateful::relocation_store_port_t> relocations;
-    const auto journal_admitted = _relocation_session_terminal_lane
-                                    .run ([&] {
-                                        const auto cached =
-                                          _session_journal_terminals.find (relocation_key);
-                                        if (cached != _session_journal_terminals.end ()) {
-                                            if (cached->second.first != seal)
-                                                return false;
-                                            cached_result = cached->second.second;
-                                        }
-                                        relocations = _session_relocations;
-                                        return true;
-                                    })
-                                    .get ();
+    const auto journal_admitted = co_await _relocation_session_terminal_lane.run_task ([&] {
+        const auto cached = _session_journal_terminals.find (relocation_key);
+        if (cached != _session_journal_terminals.end ()) {
+            if (cached->second.first != seal)
+                return false;
+            cached_result = cached->second.second;
+        }
+        relocations = _session_relocations;
+        return true;
+    });
     if (!journal_admitted)
         co_return false;
     if (cached_result) {
@@ -2402,18 +2350,16 @@ task_t<bool> public_host_runtime_t::seal_session_remote (
                 const session_relocation_seal_result_t result{sealed, root};
                 std::optional<session_relocation_seal_result_t> existing_result;
                 bool conflicting_terminal = false;
-                host->_relocation_session_terminal_lane
-                  .run ([&] {
-                      const auto [stored, inserted] = host->_session_journal_terminals.emplace (
-                        relocation_key, std::pair{expected, result});
-                      if (!inserted) {
-                          journal_store.cleanup (root);
-                          conflicting_terminal = stored->second.first != expected;
-                          if (!conflicting_terminal)
-                              existing_result = stored->second.second;
-                      }
-                  })
-                  .get ();
+                host->_relocation_session_terminal_lane.run_sync ([&] {
+                    const auto [stored, inserted] = host->_session_journal_terminals.emplace (
+                      relocation_key, std::pair{expected, result});
+                    if (!inserted) {
+                        journal_store.cleanup (root);
+                        conflicting_terminal = stored->second.first != expected;
+                        if (!conflicting_terminal)
+                            existing_result = stored->second.second;
+                    }
+                });
                 if (conflicting_terminal) {
                     completion (foundation::operation_terminal_t::transport_failed, std::nullopt);
                     return;
@@ -2438,8 +2384,8 @@ task_t<bool> public_host_runtime_t::seal_session_remote (
     if (local.routing_id ().to_bytes () == session_owner_node.to_bytes ()) {
         std::function<std::optional<location_owner_token_t> ()> owner_resolver;
         std::function<void (const std::vector<std::uint8_t> &)> reconcile;
-        _lifecycle_configuration_lane.run ([&] { owner_resolver = _session_route_owner_resolver; })
-          .get ();
+        co_await _lifecycle_configuration_lane.run_task (
+          [&] { owner_resolver = _session_route_owner_resolver; });
         reconcile = _transport->peer_reconcile ();
         if (local.lifecycle_generation () != seal.session_owner_node_generation || !owner_resolver)
             co_return false;
@@ -2597,25 +2543,23 @@ public_host_runtime_t::route_session_remote (const zlink::routing_id_t &session_
                                                                   route);
 }
 
-std::size_t public_host_runtime_t::recover_instance_spot_activations ()
+task_t<std::size_t> public_host_runtime_t::recover_instance_spot_activations ()
 {
     std::shared_ptr<zlink::framework::location_repository_t> store;
     std::shared_ptr<stateful::relocation_store_port_t> relocations;
     std::shared_ptr<const instance_spot_activation_materializer_t> materializer;
-    _lifecycle_configuration_lane
-      .run ([&] {
-          store = _user_spot_store;
-          relocations = _instance_spot_relocations;
-          materializer = _instance_spot_materializer;
-      })
-      .get ();
+    co_await _lifecycle_configuration_lane.run_task ([&] {
+        store = _user_spot_store;
+        relocations = _instance_spot_relocations;
+        materializer = _instance_spot_materializer;
+    });
     if (!store || !relocations || !materializer)
-        return 0;
+        co_return 0;
     const auto local = _transport->topology ().local_descriptor ();
     std::size_t recovered = 0;
     std::optional<authority_scan_cursor_t> cursor;
     do {
-        const auto scanned = store->list_authorities ("zla1:s:", cursor, 256).result ().value ();
+        const auto scanned = co_await store->list_authorities ("zla1:s:", cursor, 256);
         const auto *page = std::get_if<authority_page_t> (&scanned);
         if (!page)
             break;
@@ -2627,9 +2571,8 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
                       != zlink::routing_id_t::from (local.node_routing_id).to_string ()
                     || entry.snapshot.allocation.target.node_lifecycle_generation
                          != local.lifecycle_generation)) {
-                if (store->release_ended_reservation (entry.key, entry.snapshot.store_version)
-                      .result ()
-                      .value ())
+                if (co_await store->release_ended_reservation (entry.key,
+                                                               entry.snapshot.store_version))
                     relocations->remove (
                       entry.snapshot.pending_creation->request_content_reference);
                 continue;
@@ -2648,12 +2591,8 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
                 && entry.snapshot.object_generation == closing->object_generation
                 && entry.snapshot.authority_owner_generation
                      == closing->authority_owner_generation) {
-                const auto deleted =
-                  store
-                    ->compare_exchange_authority (entry.key, entry.snapshot.store_version,
-                                                  authority_delete_t{})
-                    .result ()
-                    .value ();
+                const auto deleted = co_await store->compare_exchange_authority (
+                  entry.key, entry.snapshot.store_version, authority_delete_t{});
                 if (std::holds_alternative<authority_deleted_t> (deleted))
                     ++recovered;
                 continue;
@@ -2703,38 +2642,30 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
             if (recovery_pointer.replay_cursor < recovery_pointer.inbox_sequence) {
                 bool prepared = false;
                 try {
-                    prepared = materializer->prepare (recovery.activation, entry.snapshot,
-                                                      activation_terminal.preparation);
+                    prepared = co_await materializer->prepare (recovery.activation, entry.snapshot,
+                                                               activation_terminal.preparation);
                 }
                 catch (...) {
                     prepared = false;
                 }
                 if (!prepared) {
-                    activation_terminal.finish (false).result ().value ();
+                    co_await activation_terminal.finish (false);
                     continue;
                 }
-                auto dispatched =
-                  materializer
-                    ->dispatch (
-                      std::make_shared<const protocol::instance_activation_recovery_t> (recovery),
-                      {}, [] {})
-                    .result ()
-                    .value ();
+                auto dispatched = co_await materializer->dispatch (
+                  std::make_shared<const protocol::instance_activation_recovery_t> (recovery), {},
+                  [] {});
                 activation_terminal.accepted = std::move (dispatched.accepted_turn_terminal);
                 auto updated = *state;
                 updated.activation_recovery->replay_cursor =
                   updated.activation_recovery->inbox_sequence;
-                const auto terminal =
-                  store
-                    ->compare_exchange_authority (
-                      entry.key, entry.snapshot.store_version,
-                      authority_restore_t{encode_instance_spot_authority_payload (updated),
-                                          entry.snapshot.owner})
-                    .result ()
-                    .value ();
+                const auto terminal = co_await store->compare_exchange_authority (
+                  entry.key, entry.snapshot.store_version,
+                  authority_restore_t{encode_instance_spot_authority_payload (updated),
+                                      entry.snapshot.owner});
                 const auto *stored = std::get_if<authority_stored_t> (&terminal);
                 if (!stored) {
-                    activation_terminal.finish (false).result ().value ();
+                    co_await activation_terminal.finish (false);
                     continue;
                 }
                 completed = stored->snapshot;
@@ -2743,30 +2674,26 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
             if (!completed_state || !completed_state->activation_recovery
                 || completed_state->activation_recovery->replay_cursor
                      != completed_state->activation_recovery->inbox_sequence) {
-                activation_terminal.finish (false).result ().value ();
+                co_await activation_terminal.finish (false);
                 continue;
             }
             auto released = *completed_state;
             released.activation_recovery.reset ();
-            const auto cleared =
-              store
-                ->compare_exchange_authority (
-                  entry.key, completed.store_version,
-                  authority_restore_t{encode_instance_spot_authority_payload (released),
-                                      completed.owner})
-                .result ()
-                .value ();
+            const auto cleared = co_await store->compare_exchange_authority (
+              entry.key, completed.store_version,
+              authority_restore_t{encode_instance_spot_authority_payload (released),
+                                  completed.owner});
             if (!std::holds_alternative<authority_stored_t> (cleared)) {
-                activation_terminal.finish (false).result ().value ();
+                co_await activation_terminal.finish (false);
                 continue;
             }
             relocations->remove (recovery_pointer.reference);
-            activation_terminal.finish ().result ().value ();
+            co_await activation_terminal.finish ();
             ++recovered;
         }
         cursor = page->next_cursor;
     } while (cursor);
-    return recovered;
+    co_return recovered;
 }
 
 task_t<bool>
@@ -2821,7 +2748,7 @@ public_host_runtime_t::create_user_spot_remote (const zlink::routing_id_t &targe
 }
 
 task_t<bool>
-public_host_runtime_t::create_actor_remote (const zlink::routing_id_t &target_node,
+public_host_runtime_t::create_actor_remote (zlink::routing_id_t target_node,
                                             protocol::actor_create_header_t request,
                                             std::chrono::milliseconds timeout,
                                             actor_create_operation_completion_t completion)
@@ -2830,7 +2757,7 @@ public_host_runtime_t::create_actor_remote (const zlink::routing_id_t &target_no
         throw std::invalid_argument ("Actor create completion is required");
     if (target_node == status ().routing_id ()) {
         actor_create_operation_target_t target;
-        _lifecycle_configuration_lane.run ([&] { target = _actor_create_target; }).get ();
+        co_await _lifecycle_configuration_lane.run_task ([&] { target = _actor_create_target; });
         if (!target)
             co_return false;
         auto completed = std::make_shared<std::atomic_bool> (false);
@@ -3009,18 +2936,16 @@ public_host_runtime_t::advance_local_actor_authority (stateful::object_ref_t com
 
 actor_handle_t public_host_runtime_t::create_actor (std::string actor_type, std::string actor_id)
 {
-    const auto existing =
-      _spot_actor_index_lane
-        .run ([&] () -> std::optional<std::pair<actor_ref_t, stateful::object_ref_t>> {
-            const auto found = _actors.find (actor_id);
-            if (found != _actors.end ()) {
-                return std::make_pair (
-                  framework_actor_ref (found->second.second, found->second.first),
-                  found->second.second);
-            }
-            return std::nullopt;
-        })
-        .get ();
+    const auto existing = _spot_actor_index_lane.run_sync (
+      [&] () -> std::optional<std::pair<actor_ref_t, stateful::object_ref_t>> {
+          const auto found = _actors.find (actor_id);
+          if (found != _actors.end ()) {
+              return std::make_pair (
+                framework_actor_ref (found->second.second, found->second.first),
+                found->second.second);
+          }
+          return std::nullopt;
+      });
     if (existing)
         return actor_handle_t (shared_from_this (), existing->first, existing->second);
     auto created =
@@ -3042,9 +2967,8 @@ actor_handle_t public_host_runtime_t::create_actor (std::string actor_type, std:
     if (!object) {
         throw std::runtime_error ("framework Actor authority is unavailable");
     }
-    _spot_actor_index_lane
-      .run ([&] { _actors.insert_or_assign (actor_id, std::make_pair (actor_type, *object)); })
-      .get ();
+    _spot_actor_index_lane.run_sync (
+      [&] { _actors.insert_or_assign (actor_id, std::make_pair (actor_type, *object)); });
     return actor_handle_t (shared_from_this (), framework_actor_ref (*object, actor_type), *object);
 }
 
@@ -3440,19 +3364,16 @@ task_t<void> public_host_runtime_t::discard_unverified_relocation_targets (
         && !_options.mesh.shutdown_admission_seal->load (std::memory_order_acquire))
         co_return;
     std::vector<relocation_target_attempt_t> discarded;
-    _relocation_session_terminal_lane
-      .run ([&] {
-          const auto sealed =
-            _options.mesh.shutdown_admission_seal->load (std::memory_order_acquire);
-          for (auto &[key, attempt] : _relocation_target_attempts) {
-              if (attempt.cutover_received)
-                  continue;
-              if (sealed || std::find (observed.begin (), observed.end (), key) != observed.end ())
-                  if (auto staging = take_relocation_target_discard (attempt))
-                      discarded.push_back (std::move (*staging));
-          }
-      })
-      .get ();
+    co_await _relocation_session_terminal_lane.run_task ([&] {
+        const auto sealed = _options.mesh.shutdown_admission_seal->load (std::memory_order_acquire);
+        for (auto &[key, attempt] : _relocation_target_attempts) {
+            if (attempt.cutover_received)
+                continue;
+            if (sealed || std::find (observed.begin (), observed.end (), key) != observed.end ())
+                if (auto staging = take_relocation_target_discard (attempt))
+                    discarded.push_back (std::move (*staging));
+        }
+    });
     co_await discard_relocation_target_attempts (std::move (discarded));
 }
 
@@ -3460,24 +3381,21 @@ task_t<void> public_host_runtime_t::seal_relocation_targets ()
 {
     std::vector<std::shared_ptr<std::stop_source>> cancellations;
     std::vector<pending_relocation_assembly_t> assemblies;
-    auto terminals =
-      _relocation_session_terminal_lane
-        .run ([this, &cancellations, &assemblies] {
-            _options.mesh.shutdown_admission_seal->store (true, std::memory_order_release);
-            lower_relocation_next_due_on_lane (relocation_due_now);
-            std::vector<task_t<void>> result;
-            for (const auto &[key, attempt] : _relocation_target_attempts) {
-                if (attempt.terminal)
-                    result.push_back (attempt.terminal->task ());
-                if (attempt.pending)
-                    cancellations.push_back (attempt.pending->cancellation);
-            }
-            for (auto &[key, assembly] : _relocation_assemblies)
-                assemblies.push_back (std::move (assembly));
-            _relocation_assemblies.clear ();
-            return result;
-        })
-        .get ();
+    std::vector<task_t<void>> terminals;
+    co_await _relocation_session_terminal_lane.run_task (
+      [this, &cancellations, &assemblies, &terminals] {
+          _options.mesh.shutdown_admission_seal->store (true, std::memory_order_release);
+          lower_relocation_next_due_on_lane (relocation_due_now);
+          for (const auto &[key, attempt] : _relocation_target_attempts) {
+              if (attempt.terminal)
+                  terminals.push_back (attempt.terminal->task ());
+              if (attempt.pending)
+                  cancellations.push_back (attempt.pending->cancellation);
+          }
+          for (auto &[key, assembly] : _relocation_assemblies)
+              assemblies.push_back (std::move (assembly));
+          _relocation_assemblies.clear ();
+      });
     for (const auto &cancellation : cancellations)
         cancellation->request_stop ();
     for (const auto &assembly : assemblies)
@@ -3485,10 +3403,8 @@ task_t<void> public_host_runtime_t::seal_relocation_targets ()
           assembly, static_cast<protocol::framework_error_code> (
                       messaging::request_failure_mapper_t{}.target_failure_code (
                         framework_error_kind_t::shutting_down)));
-    auto activations =
-      _lifecycle_configuration_lane
-        .run ([this] { return std::exchange (_instance_spot_activation_admissions, {}); })
-        .get ();
+    auto activations = co_await _lifecycle_configuration_lane.run_task (
+      [this] { return std::exchange (_instance_spot_activation_admissions, {}); });
     for (const auto &[spot_id, operation] : activations)
         operation->admission.complete (result_t<instance_activation_admission_t>::failure (
           framework_error_kind_t::shutting_down, "Instance Spot activation target stopped"));
@@ -3503,17 +3419,15 @@ task_t<void> public_host_runtime_t::discard_relocation_target_attempts (
   std::vector<relocation_target_attempt_t> attempts, std::optional<framework_exception_t> failure)
 {
     for (auto &attempt : attempts) {
-        _spot_actor_index_lane
-          .run ([&] {
-              for (const auto &target : attempt.targets) {
-                  if (target.kind != stateful::object_kind_t::actor)
-                      continue;
-                  const auto current = _actors.find (target.key);
-                  if (current != _actors.end () && current->second.second == target)
-                      _actors.erase (current);
-              }
-          })
-          .get ();
+        co_await _spot_actor_index_lane.run_task ([&] {
+            for (const auto &target : attempt.targets) {
+                if (target.kind != stateful::object_kind_t::actor)
+                    continue;
+                const auto current = _actors.find (target.key);
+                if (current != _actors.end () && current->second.second == target)
+                    _actors.erase (current);
+            }
+        });
         if (attempt.authority_fence && _aggregate_relocation_authority) {
             try {
                 _aggregate_relocation_authority->abort (*attempt.authority_fence);
@@ -3564,14 +3478,12 @@ task_t<void> public_host_runtime_t::discard_relocation_target_attempts (
                                   messaging::request_failure_mapper_t{}.target_failure_code (
                                     cause.kind (), detail::failure_code (cause))));
         }
-        _relocation_session_terminal_lane
-          .run ([&] {
-              const auto found = _relocation_target_attempts.find (key);
-              if (found != _relocation_target_attempts.end ()
-                  && found->second.terminal == attempt.terminal)
-                  _relocation_target_attempts.erase (found);
-          })
-          .get ();
+        co_await _relocation_session_terminal_lane.run_task ([&] {
+            const auto found = _relocation_target_attempts.find (key);
+            if (found != _relocation_target_attempts.end ()
+                && found->second.terminal == attempt.terminal)
+                _relocation_target_attempts.erase (found);
+        });
         attempt.terminal->complete (result_t<void>::success ());
     }
 }
@@ -3629,30 +3541,28 @@ task_t<void> public_host_runtime_t::poll_relocation_target_attempts ()
       unverified;
     std::size_t cutover_warnings = 0;
     const auto now = std::chrono::steady_clock::now ();
-    _relocation_session_terminal_lane
-      .run ([&] {
-          for (auto &[key, attempt] : _relocation_target_attempts) {
-              if (relocation_target_terminal (attempt) || !relocation_target_wire_ready (attempt)
-                  || attempt.next_finalize_at > now)
-                  continue;
-              if (attempt.cutover_received) {
-                  pending.push_back (key);
-                  continue;
-              }
-              /* RelocationCutoverWaitTimeout is a Warning threshold only
+    co_await _relocation_session_terminal_lane.run_task ([&] {
+        for (auto &[key, attempt] : _relocation_target_attempts) {
+            if (relocation_target_terminal (attempt) || !relocation_target_wire_ready (attempt)
+                || attempt.next_finalize_at > now)
+                continue;
+            if (attempt.cutover_received) {
+                pending.push_back (key);
+                continue;
+            }
+            /* RelocationCutoverWaitTimeout is a Warning threshold only
                * (28 §4.4): it never starts the CAS or dispatch. */
-              if (!attempt.cutover_warned) {
-                  attempt.cutover_warned = true;
-                  ++cutover_warnings;
-                  if (_relocation_metrics && !attempt.sources.empty ())
-                      _relocation_metrics->timeout (attempt.sources.front ().kind);
-              }
-              set_relocation_finalize_at_on_lane (attempt,
-                                                  now + dispatch_limits::management_retry_interval);
-              unverified.emplace_back (key, relocation_target_fence (attempt));
-          }
-      })
-      .get ();
+            if (!attempt.cutover_warned) {
+                attempt.cutover_warned = true;
+                ++cutover_warnings;
+                if (_relocation_metrics && !attempt.sources.empty ())
+                    _relocation_metrics->timeout (attempt.sources.front ().kind);
+            }
+            set_relocation_finalize_at_on_lane (attempt,
+                                                now + dispatch_limits::management_retry_interval);
+            unverified.emplace_back (key, relocation_target_fence (attempt));
+        }
+    });
     for (std::size_t index = 0; index != cutover_warnings; ++index) {
         trace_mesh_host ("relocation-cutover-timeout", "warning=cutover_timeout");
         if (_relocation_target_metrics.cutover_timeout)
@@ -3672,18 +3582,14 @@ void public_host_runtime_t::flush_pending_session_relocation_seals ()
     std::vector<session_relocation_key_t> pending;
     std::vector<session_relocation_key_t> expired;
     const auto now = std::chrono::steady_clock::now ();
-    const auto consumed =
-      _relocation_session_terminal_lane
-        .run ([&] {
-            std::map<session_relocation_key_t, protocol::session_relocation_seal_t> records;
-            for (const auto &[key, record] : _session_seal_terminals)
-                if (record.consumed
-                    && record.sealed.seal_result
-                         == protocol::session_relocation_seal_result_t::sealed)
-                    records.emplace (key, record.seal);
-            return records;
-        })
-        .get ();
+    const auto consumed = _relocation_session_terminal_lane.run_sync ([&] {
+        std::map<session_relocation_key_t, protocol::session_relocation_seal_t> records;
+        for (const auto &[key, record] : _session_seal_terminals)
+            if (record.consumed
+                && record.sealed.seal_result == protocol::session_relocation_seal_result_t::sealed)
+                records.emplace (key, record.seal);
+        return records;
+    });
     // Read each registry fact outside the terminal turn. Only the captured
     // records may be pruned with it; a successor record needs its own observation.
     std::map<std::string, std::optional<stateful::stream_binding_t>> current_bindings;
@@ -3692,52 +3598,47 @@ void public_host_runtime_t::flush_pending_session_relocation_seals ()
         if (inserted)
             current->second = _sessions.current_binding (seal.actor.actor_id);
     }
-    _relocation_session_terminal_lane
-      .run ([&] {
-          for (auto it = _session_seal_terminals.begin (); it != _session_seal_terminals.end ();) {
-              const auto &[key, record] = *it;
-              if (record.sealed.seal_result
-                  == protocol::session_relocation_seal_result_t::binding_absent) {
-                  if (record.expires_at <= now) {
-                      it = _session_seal_terminals.erase (it);
-                      continue;
-                  }
-              } else if (record.consumed) {
-                  const auto captured = consumed.find (key);
-                  if (captured != consumed.end () && captured->second == record.seal) {
-                      const auto &current = current_bindings.at (record.seal.actor.actor_id);
-                      if (!current || current->binding_generation != record.seal.binding_generation
-                          || current->connection.connection_id
-                               != stateful::stream_session_registry_t::connection_key (
-                                 zlink::routing_id_t::from (record.seal.session_routing_id))) {
-                          it = _session_seal_terminals.erase (it);
-                          continue;
-                      }
-                  }
-              } else if (record.expires_at <= now)
-                  expired.push_back (key);
-              else if (!record.ready)
-                  pending.push_back (key);
-              ++it;
-          }
-      })
-      .get ();
+    _relocation_session_terminal_lane.run_sync ([&] {
+        for (auto it = _session_seal_terminals.begin (); it != _session_seal_terminals.end ();) {
+            const auto &[key, record] = *it;
+            if (record.sealed.seal_result
+                == protocol::session_relocation_seal_result_t::binding_absent) {
+                if (record.expires_at <= now) {
+                    it = _session_seal_terminals.erase (it);
+                    continue;
+                }
+            } else if (record.consumed) {
+                const auto captured = consumed.find (key);
+                if (captured != consumed.end () && captured->second == record.seal) {
+                    const auto &current = current_bindings.at (record.seal.actor.actor_id);
+                    if (!current || current->binding_generation != record.seal.binding_generation
+                        || current->connection.connection_id
+                             != stateful::stream_session_registry_t::connection_key (
+                               zlink::routing_id_t::from (record.seal.session_routing_id))) {
+                        it = _session_seal_terminals.erase (it);
+                        continue;
+                    }
+                }
+            } else if (record.expires_at <= now)
+                expired.push_back (key);
+            else if (!record.ready)
+                pending.push_back (key);
+            ++it;
+        }
+    });
     for (const auto &key : expired) {
         stateful::stream_barrier_t barrier;
         std::vector<session_seal_local_completion_t> local_completions;
-        const auto expired_current =
-          _relocation_session_terminal_lane
-            .run ([&] {
-                const auto found = _session_seal_terminals.find (key);
-                if (found == _session_seal_terminals.end () || found->second.consumed
-                    || found->second.expires_at > now)
-                    return false;
-                barrier = found->second.barrier;
-                local_completions = std::move (found->second.local_completions);
-                found->second.consumed = true;
-                return true;
-            })
-            .get ();
+        const auto expired_current = _relocation_session_terminal_lane.run_sync ([&] {
+            const auto found = _session_seal_terminals.find (key);
+            if (found == _session_seal_terminals.end () || found->second.consumed
+                || found->second.expires_at > now)
+                return false;
+            barrier = found->second.barrier;
+            local_completions = std::move (found->second.local_completions);
+            found->second.consumed = true;
+            return true;
+        });
         if (!expired_current)
             continue;
         (void) _sessions.close_remote_route_seal (barrier);
@@ -3747,16 +3648,14 @@ void public_host_runtime_t::flush_pending_session_relocation_seals ()
     }
     for (const auto &key : pending) {
         stateful::stream_barrier_t barrier;
-        const auto pending_current = _relocation_session_terminal_lane
-                                       .run ([&] {
-                                           const auto found = _session_seal_terminals.find (key);
-                                           if (found == _session_seal_terminals.end ()
-                                               || found->second.consumed || found->second.ready)
-                                               return false;
-                                           barrier = found->second.barrier;
-                                           return true;
-                                       })
-                                       .get ();
+        const auto pending_current = _relocation_session_terminal_lane.run_sync ([&] {
+            const auto found = _session_seal_terminals.find (key);
+            if (found == _session_seal_terminals.end () || found->second.consumed
+                || found->second.ready)
+                return false;
+            barrier = found->second.barrier;
+            return true;
+        });
         if (!pending_current)
             continue;
         if (!_sessions.remote_route_seal_ready (barrier))
@@ -3764,19 +3663,16 @@ void public_host_runtime_t::flush_pending_session_relocation_seals ()
         protocol::session_relocation_sealed_t sealed;
         std::vector<std::uint8_t> target;
         std::vector<session_seal_local_completion_t> local_completions;
-        const auto completed =
-          _relocation_session_terminal_lane
-            .run ([&] {
-                const auto found = _session_seal_terminals.find (key);
-                if (found == _session_seal_terminals.end () || found->second.consumed)
-                    return false;
-                found->second.ready = true;
-                sealed = found->second.sealed;
-                target = found->second.response_routing_id;
-                local_completions = std::move (found->second.local_completions);
-                return true;
-            })
-            .get ();
+        const auto completed = _relocation_session_terminal_lane.run_sync ([&] {
+            const auto found = _session_seal_terminals.find (key);
+            if (found == _session_seal_terminals.end () || found->second.consumed)
+                return false;
+            found->second.ready = true;
+            sealed = found->second.sealed;
+            target = found->second.response_routing_id;
+            local_completions = std::move (found->second.local_completions);
+            return true;
+        });
         if (!completed)
             continue;
         if (!target.empty ())
@@ -3804,23 +3700,20 @@ task_t<void> public_host_runtime_t::submit_relocation_session_routes (relocation
         protocol::session_relocation_route_t route;
     };
     std::vector<due_route_t> due;
-    const auto routes_current =
-      _relocation_session_terminal_lane
-        .run ([&] {
-            const auto found = _relocation_target_attempts.find (key);
-            if (found == _relocation_target_attempts.end ()
-                || found->second.authority_committed_at == std::chrono::steady_clock::time_point{})
-                return false;
-            for (std::size_t index = 0; index != found->second.session_routes.size (); ++index) {
-                auto &state = found->second.session_routes[index];
-                if (state.completed || state.send_attempted)
-                    continue;
-                state.send_attempted = true;
-                due.push_back ({index, state.route});
-            }
-            return true;
-        })
-        .get ();
+    const auto routes_current = co_await _relocation_session_terminal_lane.run_task ([&] {
+        const auto found = _relocation_target_attempts.find (key);
+        if (found == _relocation_target_attempts.end ()
+            || found->second.authority_committed_at == std::chrono::steady_clock::time_point{})
+            return false;
+        for (std::size_t index = 0; index != found->second.session_routes.size (); ++index) {
+            auto &state = found->second.session_routes[index];
+            if (state.completed || state.send_attempted)
+                continue;
+            state.send_attempted = true;
+            due.push_back ({index, state.route});
+        }
+        return true;
+    });
     if (!routes_current)
         co_return;
 
@@ -3841,36 +3734,33 @@ task_t<void> public_host_runtime_t::submit_relocation_session_routes (relocation
          * left to release it on. */
         std::optional<stateful::durable_session_journal_root_t> completed_journal;
         std::shared_ptr<stateful::relocation_store_port_t> session_relocations;
-        const auto route_current =
-          _relocation_session_terminal_lane
-            .run ([&] {
-                const auto found = _relocation_target_attempts.find (key);
-                if (found == _relocation_target_attempts.end ()
-                    || pending.index >= found->second.session_routes.size ())
-                    return false;
-                auto &state = found->second.session_routes[pending.index];
-                if (state.completed || state.route != pending.route)
-                    return false;
-                if (submitted) {
-                    state.completed = true;
-                } else {
-                    /* Record the failure in the (already-bounded, retention-
+        const auto route_current = co_await _relocation_session_terminal_lane.run_task ([&] {
+            const auto found = _relocation_target_attempts.find (key);
+            if (found == _relocation_target_attempts.end ()
+                || pending.index >= found->second.session_routes.size ())
+                return false;
+            auto &state = found->second.session_routes[pending.index];
+            if (state.completed || state.route != pending.route)
+                return false;
+            if (submitted) {
+                state.completed = true;
+            } else {
+                /* Record the failure in the (already-bounded, retention-
                  * limited) per-attempt state rather than swallow it --
                  * there is no gated trace/diagnostics sink reachable from
                  * public_host_runtime_t to route this through instead.
                  * This is a one-way send: it is not retried. */
-                    state.send_failed = true;
-                }
-                const auto journal =
-                  _session_journal_terminals.find (session_relocation_key (state.route));
-                if (journal != _session_journal_terminals.end ()) {
-                    completed_journal = journal->second.second.journal_root;
-                    session_relocations = _session_relocations;
-                    _session_journal_terminals.erase (journal);
-                }
-                return true;
-            })
-            .get ();
+                state.send_failed = true;
+            }
+            const auto journal =
+              _session_journal_terminals.find (session_relocation_key (state.route));
+            if (journal != _session_journal_terminals.end ()) {
+                completed_journal = journal->second.second.journal_root;
+                session_relocations = _session_relocations;
+                _session_journal_terminals.erase (journal);
+            }
+            return true;
+        });
         if (!route_current)
             continue;
         if (completed_journal && session_relocations) {
@@ -4017,14 +3907,12 @@ bool public_host_runtime_t::submit_relocation_target_authority (
             const relocation_attempt_key_t key{attempt.prepare.relocation.high,
                                                attempt.prepare.relocation.low,
                                                attempt.prepare.target_attempt_generation};
-            _relocation_session_terminal_lane
-              .run ([&] {
-                  const auto found = _relocation_target_attempts.find (key);
-                  if (found != _relocation_target_attempts.end ()
-                      && found->second.prepare == attempt.prepare)
-                      found->second.authority_fence = attempt.authority_fence;
-              })
-              .get ();
+            _relocation_session_terminal_lane.run_sync ([&] {
+                const auto found = _relocation_target_attempts.find (key);
+                if (found != _relocation_target_attempts.end ()
+                    && found->second.prepare == attempt.prepare)
+                    found->second.authority_fence = attempt.authority_fence;
+            });
         }
         /* The committed aggregate record identifies this move; adopt the
          * Store-assigned owner generation of every staged participant. */
@@ -4119,26 +4007,23 @@ bool public_host_runtime_t::adopt_committed_session_route_authorities (
 task_t<bool> public_host_runtime_t::try_finalize_relocation_target (relocation_attempt_key_t key)
 {
     relocation_target_attempt_t attempt;
-    const auto attempt_current =
-      _relocation_session_terminal_lane
-        .run ([&] {
-            const auto found = _relocation_target_attempts.find (key);
-            if (found == _relocation_target_attempts.end ())
+    const auto attempt_current = co_await _relocation_session_terminal_lane.run_task ([&] {
+        const auto found = _relocation_target_attempts.find (key);
+        if (found == _relocation_target_attempts.end ())
+            return false;
+        if (relocation_target_terminal (found->second)) {
+            attempt = found->second;
+        } else {
+            const auto now = std::chrono::steady_clock::now ();
+            if (!found->second.cutover_received || !relocation_target_wire_ready (found->second)
+                || now < found->second.next_finalize_at)
                 return false;
-            if (relocation_target_terminal (found->second)) {
-                attempt = found->second;
-            } else {
-                const auto now = std::chrono::steady_clock::now ();
-                if (!found->second.cutover_received || !relocation_target_wire_ready (found->second)
-                    || now < found->second.next_finalize_at)
-                    return false;
-                attempt = found->second;
-                set_relocation_finalize_at_on_lane (
-                  found->second, now + dispatch_limits::management_retry_interval);
-            }
-            return true;
-        })
-        .get ();
+            attempt = found->second;
+            set_relocation_finalize_at_on_lane (found->second,
+                                                now + dispatch_limits::management_retry_interval);
+        }
+        return true;
+    });
     if (!attempt_current)
         co_return false;
     if (relocation_target_terminal (attempt))
@@ -4146,16 +4031,14 @@ task_t<bool> public_host_runtime_t::try_finalize_relocation_target (relocation_a
 
     const auto discard_attempt = [&] () -> task_t<void> {
         std::vector<relocation_target_attempt_t> discarded;
-        _relocation_session_terminal_lane
-          .run ([&] {
-              const auto found = _relocation_target_attempts.find (key);
-              if (found == _relocation_target_attempts.end ()
-                  || relocation_target_terminal (found->second))
-                  return;
-              if (auto staging = take_relocation_target_discard (found->second))
-                  discarded.push_back (std::move (*staging));
-          })
-          .get ();
+        co_await _relocation_session_terminal_lane.run_task ([&] {
+            const auto found = _relocation_target_attempts.find (key);
+            if (found == _relocation_target_attempts.end ()
+                || relocation_target_terminal (found->second))
+                return;
+            if (auto staging = take_relocation_target_discard (found->second))
+                discarded.push_back (std::move (*staging));
+        });
         co_await discard_relocation_target_attempts (std::move (discarded));
     };
     const auto settlement = commit_relocation_target_authority (attempt);
@@ -4171,29 +4054,26 @@ task_t<bool> public_host_runtime_t::try_finalize_relocation_target (relocation_a
     /* S2 (owner CAS confirmed): stamp once, on the first tick that
      * observes the authority commit, so a retried finalize does not push
      * the target_resume window forward. */
-    const auto stamped =
-      _relocation_session_terminal_lane
-        .run ([&] {
-            const auto found = _relocation_target_attempts.find (key);
-            if (found == _relocation_target_attempts.end ())
+    const auto stamped = co_await _relocation_session_terminal_lane.run_task ([&] {
+        const auto found = _relocation_target_attempts.find (key);
+        if (found == _relocation_target_attempts.end ())
+            return false;
+        if (found->second.prepare != attempt.prepare
+            || found->second.session_routes.size () != attempt.session_routes.size ())
+            return false;
+        found->second.sources = attempt.sources;
+        found->second.targets = attempt.targets;
+        found->second.authority_fence = attempt.authority_fence;
+        for (std::size_t index = 0; index != attempt.session_routes.size (); ++index) {
+            if (found->second.session_routes[index].send_attempted)
                 return false;
-            if (found->second.prepare != attempt.prepare
-                || found->second.session_routes.size () != attempt.session_routes.size ())
-                return false;
-            found->second.sources = attempt.sources;
-            found->second.targets = attempt.targets;
-            found->second.authority_fence = attempt.authority_fence;
-            for (std::size_t index = 0; index != attempt.session_routes.size (); ++index) {
-                if (found->second.session_routes[index].send_attempted)
-                    return false;
-                found->second.session_routes[index].route = attempt.session_routes[index].route;
-            }
-            if (found->second.authority_committed_at == std::chrono::steady_clock::time_point{})
-                found->second.authority_committed_at = std::chrono::steady_clock::now ();
-            attempt.authority_committed_at = found->second.authority_committed_at;
-            return true;
-        })
-        .get ();
+            found->second.session_routes[index].route = attempt.session_routes[index].route;
+        }
+        if (found->second.authority_committed_at == std::chrono::steady_clock::time_point{})
+            found->second.authority_committed_at = std::chrono::steady_clock::now ();
+        attempt.authority_committed_at = found->second.authority_committed_at;
+        return true;
+    });
     if (!stamped)
         co_return false;
 
@@ -4251,14 +4131,12 @@ task_t<bool> public_host_runtime_t::try_finalize_relocation_target (relocation_a
         (void) _relocation_wire->unregister_target (
           attempt.prepare.relocation, attempt.prepare.target_attempt_generation, object);
 
-    const auto finalized = _relocation_session_terminal_lane
-                             .run ([&] {
-                                 const auto found = _relocation_target_attempts.find (key);
-                                 if (found == _relocation_target_attempts.end ())
-                                     return std::shared_ptr<task_completion_source_t<void>>{};
-                                 return found->second.terminal;
-                             })
-                             .get ();
+    const auto finalized = co_await _relocation_session_terminal_lane.run_task ([&] {
+        const auto found = _relocation_target_attempts.find (key);
+        if (found == _relocation_target_attempts.end ())
+            return std::shared_ptr<task_completion_source_t<void>>{};
+        return found->second.terminal;
+    });
     if (!finalized)
         co_return false;
     /* Metrics 25 §"zlink.relocation": target_resume is the target-local S2
@@ -5120,17 +4998,15 @@ bool public_host_runtime_t::register_relocation_target_queue (
                 * cutover alone stages the batch. A record after that
                 * cutover can only be the source's retransmission of the
                 * batch the target already took, so it is not staged again. */
-               return _relocation_session_terminal_lane
-                 .run ([&] {
-                     const auto found = _relocation_target_attempts.find (attempt_key);
-                     if (found == _relocation_target_attempts.end ()
-                         || !relocation_target_wire_ready (found->second))
-                         return false;
-                     if (!found->second.cutover_received)
-                         found->second.boundary_batch.emplace_back (target, data, participant_id);
-                     return true;
-                 })
-                 .get ();
+               return _relocation_session_terminal_lane.run_sync ([&] {
+                   const auto found = _relocation_target_attempts.find (attempt_key);
+                   if (found == _relocation_target_attempts.end ()
+                       || !relocation_target_wire_ready (found->second))
+                       return false;
+                   if (!found->second.cutover_received)
+                       found->second.boundary_batch.emplace_back (target, data, participant_id);
+                   return true;
+               });
            },
            [] (const protocol::relocation_data_t &) {}});
     }
@@ -5327,28 +5203,25 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
     std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> previous_admission;
     std::shared_ptr<instance_activation_operation_t> previous;
     try {
-        previous =
-          _lifecycle_configuration_lane
-            .run ([&] {
-                if (_closing || !_started
-                    || _options.mesh.shutdown_admission_seal->load (std::memory_order_acquire))
-                    throw framework_exception_t (framework_error_kind_t::shutting_down,
-                                                 "Instance Spot activation target stopped");
-                const auto found = _instance_spot_activation_admissions.find (spot_id);
-                const auto pending = found != _instance_spot_activation_admissions.end ()
-                                     && !found->second->admission.task ().await_ready ();
-                if (owned_command->activation.target.authority_owner_generation != 0 && !pending)
-                    return std::shared_ptr<instance_activation_operation_t>{};
-                operation = std::make_shared<instance_activation_operation_t> ();
-                auto previous =
-                  std::exchange (_instance_spot_activation_admissions[spot_id], operation);
-                if (pending)
-                    previous_admission =
-                      std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> (
-                        previous, &previous->admission);
-                return previous;
-            })
-            .get ();
+        previous = co_await _lifecycle_configuration_lane.run_task ([&] {
+            if (_closing || !_started
+                || _options.mesh.shutdown_admission_seal->load (std::memory_order_acquire))
+                throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                             "Instance Spot activation target stopped");
+            const auto found = _instance_spot_activation_admissions.find (spot_id);
+            const auto pending = found != _instance_spot_activation_admissions.end ()
+                                 && !found->second->admission.task ().await_ready ();
+            if (owned_command->activation.target.authority_owner_generation != 0 && !pending)
+                return std::shared_ptr<instance_activation_operation_t>{};
+            operation = std::make_shared<instance_activation_operation_t> ();
+            auto previous =
+              std::exchange (_instance_spot_activation_admissions[spot_id], operation);
+            if (pending)
+                previous_admission =
+                  std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> (
+                    previous, &previous->admission);
+            return previous;
+        });
     }
     catch (...) {
         fail_activation (std::current_exception ());
@@ -5448,13 +5321,11 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
     const auto observed_result = co_await runtime::await_result (std::move (observed));
     if (previous)
         co_await previous->terminal.task ();
-    _lifecycle_configuration_lane
-      .run ([&] {
-          const auto found = _instance_spot_activation_admissions.find (spot_id);
-          if (found != _instance_spot_activation_admissions.end () && found->second == operation)
-              _instance_spot_activation_admissions.erase (found);
-      })
-      .get ();
+    co_await _lifecycle_configuration_lane.run_task ([&] {
+        const auto found = _instance_spot_activation_admissions.find (spot_id);
+        if (found != _instance_spot_activation_admissions.end () && found->second == operation)
+            _instance_spot_activation_admissions.erase (found);
+    });
     operation->terminal.complete (result_t<void>::success ());
     observed_result.value ();
 }
@@ -5474,14 +5345,12 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
     std::shared_ptr<stateful::relocation_store_port_t> instance_relocations;
     std::shared_ptr<const instance_spot_activation_materializer_t> instance_materializer;
     std::function<std::optional<location_owner_token_t> ()> instance_owner_resolver;
-    _lifecycle_configuration_lane
-      .run ([&] {
-          store = _user_spot_store;
-          instance_relocations = _instance_spot_relocations;
-          instance_materializer = _instance_spot_materializer;
-          instance_owner_resolver = _instance_spot_owner;
-      })
-      .get ();
+    co_await _lifecycle_configuration_lane.run_task ([&] {
+        store = _user_spot_store;
+        instance_relocations = _instance_spot_relocations;
+        instance_materializer = _instance_spot_materializer;
+        instance_owner_resolver = _instance_spot_owner;
+    });
     const auto registered_metric = _instance_admission_metrics.find (request.target.stable_type);
     const auto instance_metric =
       registered_metric == _instance_admission_metrics.end () ? nullptr : registered_metric->second;
@@ -5506,7 +5375,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
             if (admission->complete (result_t<instance_activation_admission_t>::success (
                   instance_activation_ready_t{ready, admission_command})))
                 return;
-            const auto terminal = admission->task ().result ();
+            const auto terminal = detail::task_result_access_t::read (admission->task ());
             terminal.value ();
             if (const auto *failure =
                   std::get_if<instance_spot_activation_result_t> (&terminal.value ())) {
@@ -5756,9 +5625,10 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
                 bool prepared = false;
                 std::exception_ptr preparation_error;
                 try {
-                    prepared = ready_state->state == instance_spot_authority_state_t::closing
-                               || instance_materializer->prepare (request, *snapshot,
-                                                                  activation_terminal->preparation);
+                    prepared = ready_state->state == instance_spot_authority_state_t::closing;
+                    if (!prepared)
+                        prepared = co_await instance_materializer->prepare (
+                          request, *snapshot, activation_terminal->preparation);
                 }
                 catch (...) {
                     preparation_error = std::current_exception ();
@@ -5995,8 +5865,8 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
     bool prepared = false;
     std::exception_ptr preparation_error;
     try {
-        prepared = instance_materializer->prepare (request, reservation->creating,
-                                                   activation_terminal->preparation);
+        prepared = co_await instance_materializer->prepare (request, reservation->creating,
+                                                            activation_terminal->preparation);
     }
     catch (...) {
         preparation_error = std::current_exception ();
@@ -6197,28 +6067,25 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
         const auto now = std::chrono::steady_clock::now ();
         if (relocation_management_due (now)) {
             std::vector<pending_relocation_assembly_t> expired_relocation_assemblies;
-            _relocation_session_terminal_lane
-              .run ([&] {
-                  for (auto pending = _relocation_assemblies.begin ();
-                       pending != _relocation_assemblies.end ();) {
-                      if (pending->second.expires_at > now) {
-                          ++pending;
-                          continue;
-                      }
-                      expired_relocation_assemblies.push_back (std::move (pending->second));
-                      pending = _relocation_assemblies.erase (pending);
-                  }
-              })
-              .get ();
+            _relocation_session_terminal_lane.run_sync ([&] {
+                for (auto pending = _relocation_assemblies.begin ();
+                     pending != _relocation_assemblies.end ();) {
+                    if (pending->second.expires_at > now) {
+                        ++pending;
+                        continue;
+                    }
+                    expired_relocation_assemblies.push_back (std::move (pending->second));
+                    pending = _relocation_assemblies.erase (pending);
+                }
+            });
             for (const auto &expired : expired_relocation_assemblies)
                 reply_relocation_assembly_failure (
                   expired, protocol::framework_error_code::relocationDataLost);
             return continue_task<std::size_t> (
               poll_relocation_target_attempts (), [this, dispatch_claim] {
                   flush_pending_session_relocation_seals ();
-                  _relocation_session_terminal_lane
-                    .run ([this] { publish_relocation_next_due_on_lane (); })
-                    .get ();
+                  _relocation_session_terminal_lane.run_sync (
+                    [this] { publish_relocation_next_due_on_lane (); });
 
                   return dispatch_claim ();
               });
@@ -6508,35 +6375,33 @@ public_host_runtime_t::dispatch_user_spot_batch (
                 std::shared_ptr<pending_relocation_assembly_t> completed;
                 std::optional<pending_relocation_assembly_t> failed;
                 const auto assembly_current =
-                  _relocation_session_terminal_lane
-                    .run ([&] {
-                        const auto found = _relocation_assemblies.find (key);
-                        if (found == _relocation_assemblies.end ()
-                            || found->second.prepare.coordinator != state->coordinator
-                            || found->second.prepare.object != state->object
-                            || found->second.prepare.source_node_routing_id
-                                 != mailbox_record.source_routing_id
-                            || found->second.prepare.source_node_generation
-                                 != mailbox_record.source_node_generation)
-                            return false;
-                        const auto accepted = found->second.assembly.accept (*state);
-                        if (accepted == stateful::relocation_assembly_result_t::conflict) {
-                            failed.emplace (std::move (found->second));
-                            _relocation_assemblies.erase (found);
-                        } else if (accepted == stateful::relocation_assembly_result_t::completed) {
-                            completed = std::make_shared<pending_relocation_assembly_t> (
-                              std::move (found->second));
-                            relocation_target_attempt_t attempt;
-                            attempt.prepare = completed->prepare;
-                            attempt.pending = completed;
-                            attempt.terminal = std::make_shared<task_completion_source_t<void>> ();
-                            lower_relocation_next_due_on_lane (relocation_due_now);
-                            _relocation_target_attempts.emplace (key, std::move (attempt));
-                            _relocation_assemblies.erase (found);
-                        }
-                        return true;
-                    })
-                    .get ();
+                  co_await _relocation_session_terminal_lane.run_task ([&] {
+                      const auto found = _relocation_assemblies.find (key);
+                      if (found == _relocation_assemblies.end ()
+                          || found->second.prepare.coordinator != state->coordinator
+                          || found->second.prepare.object != state->object
+                          || found->second.prepare.source_node_routing_id
+                               != mailbox_record.source_routing_id
+                          || found->second.prepare.source_node_generation
+                               != mailbox_record.source_node_generation)
+                          return false;
+                      const auto accepted = found->second.assembly.accept (*state);
+                      if (accepted == stateful::relocation_assembly_result_t::conflict) {
+                          failed.emplace (std::move (found->second));
+                          _relocation_assemblies.erase (found);
+                      } else if (accepted == stateful::relocation_assembly_result_t::completed) {
+                          completed = std::make_shared<pending_relocation_assembly_t> (
+                            std::move (found->second));
+                          relocation_target_attempt_t attempt;
+                          attempt.prepare = completed->prepare;
+                          attempt.pending = completed;
+                          attempt.terminal = std::make_shared<task_completion_source_t<void>> ();
+                          lower_relocation_next_due_on_lane (relocation_due_now);
+                          _relocation_target_attempts.emplace (key, std::move (attempt));
+                          _relocation_assemblies.erase (found);
+                      }
+                      return true;
+                  });
                 if (!assembly_current)
                     continue;
                 if (failed)
@@ -6561,76 +6426,72 @@ public_host_runtime_t::dispatch_user_spot_batch (
                   std::tuple<stateful::object_ref_t, protocol::relocation_data_t, std::uint64_t>>>
                   verified;
                 std::optional<relocation_target_attempt_t> mismatched;
-                _relocation_session_terminal_lane
-                  .run ([&] {
-                      const auto found = _relocation_target_attempts.find (key);
-                      if (found == _relocation_target_attempts.end ()
-                          || !relocation_target_wire_ready (found->second)
-                          || found->second.prepare.coordinator != cutover->coordinator
-                          || found->second.prepare.object != cutover->object
-                          || found->second.prepare.source_node_routing_id
-                               != mailbox_record.source_routing_id
-                          || found->second.prepare.source_node_generation
-                               != mailbox_record.source_node_generation
-                          || _options.mesh.shutdown_admission_seal->load (std::memory_order_acquire)
-                          || found->second.cutover_received) {
-                          /* Late or duplicate cutover (28 §4.4): the
-                               * boundary already resolved and is never
-                               * re-verified or changed. */
-                          return;
-                      }
-                      /* The batch the source sent right before this
-                           * cutover on the ordered connection is the
-                           * received suffix of the declared length; a
-                           * retransmitted whole batch replaces any partial
-                           * earlier copy (28 §4.4). */
-                      auto &batch = found->second.boundary_batch;
-                      const auto count = cutover->boundary_record_count;
-                      bool matches = count <= batch.size ();
-                      if (matches) {
-                          stateful::relocation_crc32c_accumulator_t accumulator;
-                          for (auto record = batch.end () - static_cast<std::ptrdiff_t> (count);
-                               record != batch.end (); ++record)
-                              accumulator.update (
-                                protocol::encode_relocation_control (std::get<1> (*record)));
-                          matches = accumulator.value () == cutover->boundary_checksum_crc32c;
-                      }
-                      if (matches) {
-                          found->second.cutover_received = true;
-                          lower_relocation_next_due_on_lane (relocation_due_now);
-                          verified.emplace (std::make_move_iterator (
-                                              batch.end () - static_cast<std::ptrdiff_t> (count)),
-                                            std::make_move_iterator (batch.end ()));
-                          batch.clear ();
-                          return;
-                      }
-                      /* Ordered connection: a declared batch that does
-                           * not match what arrived before it is an
-                           * implementation defect, not a retryable
-                           * condition (28 §4.4) — no CAS on a possibly
-                           * incomplete batch; discard the staging. */
-                      mismatched = take_relocation_target_discard (found->second);
-                  })
-                  .get ();
+                co_await _relocation_session_terminal_lane.run_task ([&] {
+                    const auto found = _relocation_target_attempts.find (key);
+                    if (found == _relocation_target_attempts.end ()
+                        || !relocation_target_wire_ready (found->second)
+                        || found->second.prepare.coordinator != cutover->coordinator
+                        || found->second.prepare.object != cutover->object
+                        || found->second.prepare.source_node_routing_id
+                             != mailbox_record.source_routing_id
+                        || found->second.prepare.source_node_generation
+                             != mailbox_record.source_node_generation
+                        || _options.mesh.shutdown_admission_seal->load (std::memory_order_acquire)
+                        || found->second.cutover_received) {
+                        /* Late or duplicate cutover (28 §4.4): the
+                           * boundary already resolved and is never
+                           * re-verified or changed. */
+                        return;
+                    }
+                    /* The batch the source sent right before this
+                       * cutover on the ordered connection is the
+                       * received suffix of the declared length; a
+                       * retransmitted whole batch replaces any partial
+                       * earlier copy (28 §4.4). */
+                    auto &batch = found->second.boundary_batch;
+                    const auto count = cutover->boundary_record_count;
+                    bool matches = count <= batch.size ();
+                    if (matches) {
+                        stateful::relocation_crc32c_accumulator_t accumulator;
+                        for (auto record = batch.end () - static_cast<std::ptrdiff_t> (count);
+                             record != batch.end (); ++record)
+                            accumulator.update (
+                              protocol::encode_relocation_control (std::get<1> (*record)));
+                        matches = accumulator.value () == cutover->boundary_checksum_crc32c;
+                    }
+                    if (matches) {
+                        found->second.cutover_received = true;
+                        lower_relocation_next_due_on_lane (relocation_due_now);
+                        verified.emplace (std::make_move_iterator (
+                                            batch.end () - static_cast<std::ptrdiff_t> (count)),
+                                          std::make_move_iterator (batch.end ()));
+                        batch.clear ();
+                        return;
+                    }
+                    /* Ordered connection: a declared batch that does
+                       * not match what arrived before it is an
+                       * implementation defect, not a retryable
+                       * condition (28 §4.4) — no CAS on a possibly
+                       * incomplete batch; discard the staging. */
+                    mismatched = take_relocation_target_discard (found->second);
+                });
                 if (verified) {
                     bool staged = true;
                     for (const auto &[target, data, participant_id] : *verified)
                         if (staged)
                             staged =
                               co_await stage_relocation_record (target, data, participant_id);
-                    _relocation_session_terminal_lane
-                      .run ([&] {
-                          const auto found = _relocation_target_attempts.find (key);
-                          if (found == _relocation_target_attempts.end ())
-                              return;
-                          if (staged) {
-                              set_relocation_finalize_at_on_lane (
-                                found->second, std::chrono::steady_clock::now ());
-                              return;
-                          }
-                          mismatched = take_relocation_target_discard (found->second);
-                      })
-                      .get ();
+                    co_await _relocation_session_terminal_lane.run_task ([&] {
+                        const auto found = _relocation_target_attempts.find (key);
+                        if (found == _relocation_target_attempts.end ())
+                            return;
+                        if (staged) {
+                            set_relocation_finalize_at_on_lane (found->second,
+                                                                std::chrono::steady_clock::now ());
+                            return;
+                        }
+                        mismatched = take_relocation_target_discard (found->second);
+                    });
                     if (staged)
                         (void) co_await try_finalize_relocation_target (key);
                 }
@@ -6740,33 +6601,31 @@ public_host_runtime_t::dispatch_user_spot_batch (
                 const auto relocation_key = session_relocation_key (route);
                 bool late_session_route_update = false;
                 const auto route_matches_seal =
-                  _relocation_session_terminal_lane
-                    .run ([&] {
-                        const auto sealed = _session_seal_terminals.find (relocation_key);
-                        if (sealed == _session_seal_terminals.end () || sealed->second.consumed
-                            || sealed->second.sealed.seal_result
-                                 == protocol::session_relocation_seal_result_t::binding_absent) {
-                            late_session_route_update = true;
-                            return true;
-                        }
-                        if (!sealed->second.ready
-                            || sealed->second.seal.relocation != route.relocation
-                            || sealed->second.seal.actor.actor_id != route.actor.actor_id
-                            || sealed->second.seal.actor.object_generation
-                                 != route.actor.object_generation
-                            || sealed->second.seal.session_owner_node_routing_id
-                                 != route.session_owner_node_routing_id
-                            || sealed->second.seal.session_owner_node_generation
-                                 != route.session_owner_node_generation
-                            || sealed->second.seal.session_owner_id != route.session_owner_id
-                            || sealed->second.seal.session_owner_lease_generation
-                                 != route.session_owner_lease_generation
-                            || sealed->second.seal.session_routing_id != route.session_routing_id
-                            || sealed->second.seal.binding_generation != route.binding_generation)
-                            return false;
-                        return true;
-                    })
-                    .get ();
+                  co_await _relocation_session_terminal_lane.run_task ([&] {
+                      const auto sealed = _session_seal_terminals.find (relocation_key);
+                      if (sealed == _session_seal_terminals.end () || sealed->second.consumed
+                          || sealed->second.sealed.seal_result
+                               == protocol::session_relocation_seal_result_t::binding_absent) {
+                          late_session_route_update = true;
+                          return true;
+                      }
+                      if (!sealed->second.ready
+                          || sealed->second.seal.relocation != route.relocation
+                          || sealed->second.seal.actor.actor_id != route.actor.actor_id
+                          || sealed->second.seal.actor.object_generation
+                               != route.actor.object_generation
+                          || sealed->second.seal.session_owner_node_routing_id
+                               != route.session_owner_node_routing_id
+                          || sealed->second.seal.session_owner_node_generation
+                               != route.session_owner_node_generation
+                          || sealed->second.seal.session_owner_id != route.session_owner_id
+                          || sealed->second.seal.session_owner_lease_generation
+                               != route.session_owner_lease_generation
+                          || sealed->second.seal.session_routing_id != route.session_routing_id
+                          || sealed->second.seal.binding_generation != route.binding_generation)
+                          return false;
+                      return true;
+                  });
                 if (!route_matches_seal)
                     continue;
                 if (late_session_route_update) {
@@ -6819,14 +6678,12 @@ public_host_runtime_t::dispatch_user_spot_batch (
                     continue;
                 }
 
-                _relocation_session_terminal_lane
-                  .run ([&] {
-                      const auto sealed = _session_seal_terminals.find (relocation_key);
-                      if (sealed != _session_seal_terminals.end () && !sealed->second.consumed
-                          && sealed->second.ready)
-                          sealed->second.consumed = true;
-                  })
-                  .get ();
+                co_await _relocation_session_terminal_lane.run_task ([&] {
+                    const auto sealed = _session_seal_terminals.find (relocation_key);
+                    if (sealed != _session_seal_terminals.end () && !sealed->second.consumed
+                        && sealed->second.ready)
+                        sealed->second.consumed = true;
+                });
                 continue;
             }
 
@@ -6954,20 +6811,18 @@ public_host_runtime_t::dispatch_user_spot_batch (
                   user_spot_operation_key (request.source_node_routing_id,
                                            request.source_node_generation, request.operation);
                 std::optional<user_spot_terminal_record_t> cached;
-                _user_spot_terminal_lane
-                  .run ([&] {
-                      const auto now = unix_milliseconds_now ();
-                      std::erase_if (_user_spot_terminals, [this, now] (const auto &entry) {
-                          return (!entry.second.header || !entry.second.header.value ().empty ())
-                                 && user_spot_operation_replay_expired (
-                                   entry.second.deadline_unix_ms, now,
-                                   _options.user_spot_operation_replay_retention);
-                      });
-                      const auto found = _user_spot_terminals.find (operation_key);
-                      if (found != _user_spot_terminals.end ())
-                          cached = found->second;
-                  })
-                  .get ();
+                co_await _user_spot_terminal_lane.run_task ([&] {
+                    const auto now = unix_milliseconds_now ();
+                    std::erase_if (_user_spot_terminals, [this, now] (const auto &entry) {
+                        return (!entry.second.header || !entry.second.header.value ().empty ())
+                               && user_spot_operation_replay_expired (
+                                 entry.second.deadline_unix_ms, now,
+                                 _options.user_spot_operation_replay_retention);
+                    });
+                    const auto found = _user_spot_terminals.find (operation_key);
+                    if (found != _user_spot_terminals.end ())
+                        cached = found->second;
+                });
                 if (cached) {
                     if (cached->kind != protocol::command::userSpotCreate
                         || cached->request_fingerprint != request_fingerprint)
@@ -6996,40 +6851,38 @@ public_host_runtime_t::dispatch_user_spot_batch (
                     (void) _transport->reply_user_spot_create (mailbox_record, reply, std::nullopt);
                     continue;
                 }
-                auto terminal = [&] (
-                                  std::uint32_t terminal_result, std::uint32_t failure_code,
-                                  protocol::user_spot_create_result_t result,
-                                  const std::string &spot, std::uint64_t generation,
-                                  std::optional<protocol::application_payload_t> application_reply =
-                                    std::nullopt,
-                                  result_t<void> outcome = result_t<void>::success ()) {
-                    protocol::user_spot_create_reply_t reply{
-                      {request.correlation, terminal_result, failure_code},
-                      result,
-                      spot,
-                      generation};
-                    user_spot_terminal_record_t stored{
-                      protocol::command::userSpotCreate, request.deadline_unix_ms,
-                      request_fingerprint,
-                      outcome ? result_t<std::vector<std::uint8_t>>::success (
-                                  protocol::encode_user_spot_create_reply (
-                                    request.correlation, terminal_result, failure_code, result,
-                                    spot, generation))
-                              : detail::propagate_failure<std::vector<std::uint8_t>> (
-                                  outcome, "User Spot creation failed"),
-                      application_reply};
-                    _user_spot_terminal_lane
-                      .run ([&] {
+                auto terminal =
+                  [&] (std::uint32_t terminal_result, std::uint32_t failure_code,
+                       protocol::user_spot_create_result_t result, const std::string &spot,
+                       std::uint64_t generation,
+                       std::optional<protocol::application_payload_t> application_reply =
+                         std::nullopt,
+                       result_t<void> outcome = result_t<void>::success ()) {
+                      protocol::user_spot_create_reply_t reply{
+                        {request.correlation, terminal_result, failure_code},
+                        result,
+                        spot,
+                        generation};
+                      user_spot_terminal_record_t stored{
+                        protocol::command::userSpotCreate, request.deadline_unix_ms,
+                        request_fingerprint,
+                        outcome ? result_t<std::vector<std::uint8_t>>::success (
+                                    protocol::encode_user_spot_create_reply (
+                                      request.correlation, terminal_result, failure_code, result,
+                                      spot, generation))
+                                : detail::propagate_failure<std::vector<std::uint8_t>> (
+                                    outcome, "User Spot creation failed"),
+                        application_reply};
+                      _user_spot_terminal_lane.run_sync ([&] {
                           _user_spot_terminals.insert_or_assign (operation_key, std::move (stored));
-                      })
-                      .get ();
-                    (void) _transport->reply_user_spot_create (
-                      mailbox_record,
-                      outcome ? result_t<protocol::user_spot_create_reply_t>::success (reply)
-                              : detail::propagate_failure<protocol::user_spot_create_reply_t> (
-                                  outcome, "User Spot creation failed"),
-                      std::move (application_reply));
-                };
+                      });
+                      (void) _transport->reply_user_spot_create (
+                        mailbox_record,
+                        outcome ? result_t<protocol::user_spot_create_reply_t>::success (reply)
+                                : detail::propagate_failure<protocol::user_spot_create_reply_t> (
+                                    outcome, "User Spot creation failed"),
+                        std::move (application_reply));
+                  };
                 if (!store || !materializer) {
                     terminal (
                       static_cast<std::uint32_t> (protocol::request_terminal_result::internalError),
@@ -7044,8 +6897,7 @@ public_host_runtime_t::dispatch_user_spot_batch (
                     continue;
                 }
                 const auto &global_id = request.spot_id;
-                const auto read =
-                  store->read_authority (spot_authority_key (global_id)).result ().value ();
+                const auto read = co_await store->read_authority (spot_authority_key (global_id));
                 const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
                 const auto &reservation = request.reservation;
                 const auto exact =
@@ -7146,32 +6998,34 @@ public_host_runtime_t::dispatch_user_spot_batch (
                     continue;
                 }
                 user_spot_materialize_result_t materialized;
+                auto materialization = result_t<void>::success ();
                 try {
-                    materialized = materializer (exact_ref, request.stable_type, *creation_payload);
+                    materialized =
+                      co_await materializer (exact_ref, request.stable_type, *creation_payload);
                 }
                 catch (...) {
-                    const auto failure = detail::current_exception_result<void> ();
+                    materialization = detail::current_exception_result<void> ();
+                }
+                if (!materialization) {
                     (void) _objects.abort_create (local.attempt);
-                    (void) store
-                      ->abort ({{placement_object_kind_t::user_spot, global_id},
-                                public_fence (reservation, snapshot->allocation.target.mesh_name,
-                                              request.stable_type)})
-                      .result ();
+                    (void) co_await await_result (store->abort (
+                      {{placement_object_kind_t::user_spot, global_id},
+                       public_fence (reservation, snapshot->allocation.target.mesh_name,
+                                     request.stable_type)}));
                     terminal (
                       static_cast<std::uint32_t> (protocol::request_terminal_result::internalError),
                       static_cast<std::uint32_t> (protocol::framework_error_code::spotCreateFailed),
-                      protocol::user_spot_create_result_t::rejected, {}, 0, std::nullopt, failure);
+                      protocol::user_spot_create_result_t::rejected, {}, 0, std::nullopt,
+                      materialization);
                     continue;
                 }
                 preparation_terminal.preparation = std::move (materialized.preparation_terminal);
                 if (!materialized.accepted) {
                     co_await preparation_terminal.finish (false);
-                    (void) store
-                      ->abort ({{placement_object_kind_t::user_spot, global_id}, fence}, {},
-                               std::chrono::system_clock::time_point (
-                                 std::chrono::milliseconds (request.deadline_unix_ms)))
-                      .result ()
-                      .value ();
+                    (void) co_await store->abort (
+                      {{placement_object_kind_t::user_spot, global_id}, fence}, {},
+                      std::chrono::system_clock::time_point (
+                        std::chrono::milliseconds (request.deadline_unix_ms)));
                     (void) _objects.abort_create (local.attempt);
                     terminal (static_cast<std::uint32_t> (protocol::request_terminal_result::ok), 0,
                               protocol::user_spot_create_result_t::rejected, request.spot_id,
@@ -7180,16 +7034,13 @@ public_host_runtime_t::dispatch_user_spot_batch (
                     continue;
                 }
                 const auto committed =
-                  store
-                    ->commit ({{placement_object_kind_t::user_spot, global_id},
-                               fence,
-                               ready_user_spot_authority_payload (exact_ref, request.stable_type,
-                                                                  fence.target)},
-                              {},
-                              std::chrono::system_clock::time_point (
-                                std::chrono::milliseconds (request.deadline_unix_ms)))
-                    .result ()
-                    .value ();
+                  co_await store->commit ({{placement_object_kind_t::user_spot, global_id},
+                                           fence,
+                                           ready_user_spot_authority_payload (
+                                             exact_ref, request.stable_type, fence.target)},
+                                          {},
+                                          std::chrono::system_clock::time_point (
+                                            std::chrono::milliseconds (request.deadline_unix_ms)));
                 const auto *ready = std::get_if<object_committed_t> (&committed);
                 const auto *already = std::get_if<object_already_committed_t> (&committed);
                 if (!ready && !already) {
@@ -7241,8 +7092,8 @@ public_host_runtime_t::dispatch_user_spot_batch (
             const auto operation_key = user_spot_operation_key (
               request.source_node_routing_id, request.source_node_generation, request.operation);
             /* One operation ID has one terminal result (§7.1). The table
-                 * decides in one lane turn whether this record replays the
-                 * terminal, joins the running operation, or starts it. */
+             * decides in one lane turn whether this record replays the
+             * terminal, joins the running operation, or starts it. */
             enum class admission_t
             {
                 start,
@@ -7251,44 +7102,41 @@ public_host_runtime_t::dispatch_user_spot_batch (
                 expired
             };
             std::optional<user_spot_terminal_record_t> cached;
-            const auto admission =
-              _user_spot_terminal_lane
-                .run ([&] {
-                    const auto now = unix_milliseconds_now ();
-                    std::erase_if (_user_spot_terminals, [this, now] (const auto &entry) {
-                        return (!entry.second.header || !entry.second.header.value ().empty ())
-                               && user_spot_operation_replay_expired (
-                                 entry.second.deadline_unix_ms, now,
-                                 _options.user_spot_operation_replay_retention);
-                    });
-                    const auto found = _user_spot_terminals.find (operation_key);
-                    if (found != _user_spot_terminals.end ()) {
-                        if (found->second.kind != protocol::command::userSpotClose
-                            || found->second.request_fingerprint != request_fingerprint)
-                            throw protocol::service_wire_error_t (
-                              "user spot operation identity was reused with a different "
-                              "request");
-                        if (found->second.header && found->second.header.value ().empty ()) {
-                            found->second.waiting.emplace_back (mailbox_record.reply_source (),
-                                                                request.correlation);
-                            return admission_t::joined;
-                        }
-                        cached = found->second;
-                        return admission_t::replay;
+            const auto admission = co_await _user_spot_terminal_lane.run_task ([&] {
+                const auto now = unix_milliseconds_now ();
+                std::erase_if (_user_spot_terminals, [this, now] (const auto &entry) {
+                    return (!entry.second.header || !entry.second.header.value ().empty ())
+                           && user_spot_operation_replay_expired (
+                             entry.second.deadline_unix_ms, now,
+                             _options.user_spot_operation_replay_retention);
+                });
+                const auto found = _user_spot_terminals.find (operation_key);
+                if (found != _user_spot_terminals.end ()) {
+                    if (found->second.kind != protocol::command::userSpotClose
+                        || found->second.request_fingerprint != request_fingerprint)
+                        throw protocol::service_wire_error_t (
+                          "user spot operation identity was reused with a different "
+                          "request");
+                    if (found->second.header && found->second.header.value ().empty ()) {
+                        found->second.waiting.emplace_back (mailbox_record.reply_source (),
+                                                            request.correlation);
+                        return admission_t::joined;
                     }
-                    if (request.deadline_unix_ms <= now)
-                        return admission_t::expired;
-                    _user_spot_terminals.insert_or_assign (
-                      operation_key,
-                      user_spot_terminal_record_t{protocol::command::userSpotClose,
-                                                  request.deadline_unix_ms,
-                                                  request_fingerprint,
-                                                  result_t<std::vector<std::uint8_t>>::success ({}),
-                                                  std::nullopt,
-                                                  {}});
-                    return admission_t::start;
-                })
-                .get ();
+                    cached = found->second;
+                    return admission_t::replay;
+                }
+                if (request.deadline_unix_ms <= now)
+                    return admission_t::expired;
+                _user_spot_terminals.insert_or_assign (
+                  operation_key,
+                  user_spot_terminal_record_t{protocol::command::userSpotClose,
+                                              request.deadline_unix_ms,
+                                              request_fingerprint,
+                                              result_t<std::vector<std::uint8_t>>::success ({}),
+                                              std::nullopt,
+                                              {}});
+                return admission_t::start;
+            });
             if (admission == admission_t::joined)
                 continue;
             if (admission == admission_t::replay) {
@@ -7310,15 +7158,13 @@ public_host_runtime_t::dispatch_user_spot_batch (
                 std::vector<
                   std::pair<std::shared_ptr<const mesh::service_mailbox_record_t>, std::uint64_t>>
                   waiting;
-                _user_spot_terminal_lane
-                  .run ([&] {
-                      auto &stored = _user_spot_terminals[operation_key];
-                      stored.header = result_t<std::vector<std::uint8_t>>::success (
-                        protocol::encode_user_spot_close_reply (correlation, terminal_result,
-                                                                failure_code, closed));
-                      waiting = std::exchange (stored.waiting, {});
-                  })
-                  .get ();
+                _user_spot_terminal_lane.run_sync ([&] {
+                    auto &stored = _user_spot_terminals[operation_key];
+                    stored.header = result_t<std::vector<std::uint8_t>>::success (
+                      protocol::encode_user_spot_close_reply (correlation, terminal_result,
+                                                              failure_code, closed));
+                    waiting = std::exchange (stored.waiting, {});
+                });
                 waiting.emplace (waiting.begin (), reply_source, correlation);
                 for (const auto &[record, record_correlation] : waiting) {
                     protocol::user_spot_close_reply_t reply{
@@ -7414,19 +7260,17 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
     bound_session_operations_t bound_session_operations;
     std::function<void (const protocol::session_relocation_route_t &)>
       late_session_route_update_reporter;
-    _lifecycle_configuration_lane
-      .run ([&] {
-          store = _user_spot_store;
-          materializer = _user_spot_materializer;
-          user_spot_closer = _user_spot_closer;
-          actor_create_target = _actor_create_target;
-          actor_join_target = _actor_join_target;
-          session_route_owner_resolver = _session_route_owner_resolver;
-          message_follow_handler = _message_follow_handler;
-          bound_session_operations = _bound_session_operations;
-          late_session_route_update_reporter = _late_session_route_update_reporter;
-      })
-      .get ();
+    co_await _lifecycle_configuration_lane.run_task ([&] {
+        store = _user_spot_store;
+        materializer = _user_spot_materializer;
+        user_spot_closer = _user_spot_closer;
+        actor_create_target = _actor_create_target;
+        actor_join_target = _actor_join_target;
+        session_route_owner_resolver = _session_route_owner_resolver;
+        message_follow_handler = _message_follow_handler;
+        bound_session_operations = _bound_session_operations;
+        late_session_route_update_reporter = _late_session_route_update_reporter;
+    });
     std::size_t count = 0;
     // Record-processing storage belongs to a claimed infrastructure batch.
     const auto dispatch_batch = [&] (const std::shared_ptr<mesh::service_mailbox_claim_t> &claim)
@@ -9135,15 +8979,13 @@ void public_host_runtime_t::configure_relocation_gate (
   native_spot_target_t target,
   mesh::service_mailbox_t::application_dispatch_t resume)
 {
-    _lifecycle_configuration_lane
-      .run ([&] {
-          if (_started || _closing)
-              throw std::logic_error ("relocation gate must be configured before start");
-          _relocation_gate = std::move (gate);
-          _native_spot_target = std::move (target);
-          _relocation_resume = std::move (resume);
-      })
-      .get ();
+    _lifecycle_configuration_lane.run_sync ([&] {
+        if (_started || _closing)
+            throw std::logic_error ("relocation gate must be configured before start");
+        _relocation_gate = std::move (gate);
+        _native_spot_target = std::move (target);
+        _relocation_resume = std::move (resume);
+    });
 }
 
 task_t<std::optional<std::vector<std::vector<stateful::turn_record_t>>>>

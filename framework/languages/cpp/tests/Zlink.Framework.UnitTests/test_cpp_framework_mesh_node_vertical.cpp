@@ -29,6 +29,8 @@ extern "C" zlink_connect_result_t __wrap_zlink_disconnect (void *socket, const c
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/dispatch/completion_turn.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/locations/live_location_reader.hpp"
@@ -371,7 +373,7 @@ void verify_object_client_registration_boundary ()
     client_state->object_role = zlink::framework::object_role_t::client;
     client_state->channels.clear ();
     zlink::framework::detail::mesh_node_runtime_t client (client_state);
-    client.start ();
+    client.start ().result ().value ();
     const auto descriptor = client.native_node ().transport ().topology ().local_descriptor ();
     assert (descriptor.object_role
             == zlink::framework::runtime::mesh::service_object_role_t::client);
@@ -384,7 +386,7 @@ void verify_object_client_registration_boundary ()
     zlink::framework::detail::mesh_node_runtime_t invalid (invalid_state);
     bool rejected = false;
     try {
-        invalid.start ();
+        invalid.start ().result ().value ();
     }
     catch (const zlink::framework::framework_exception_t &) {
         rejected = true;
@@ -552,6 +554,65 @@ make_named_node (std::string mesh_name, std::string routing_id)
     // The host admits object creation only for declared stable types.
     state->spot_state->snapshot.actor_types.emplace_back ("vertical.actor");
     return state;
+}
+
+void verify_mesh_start_and_rollback_from_completion_turn ()
+{
+    using namespace zlink::framework;
+    completion_owner_t completion_owner;
+    // Plain provider continuations always resume on completion turns. This
+    // makes the pre-fix lifecycle violation independent of lane timing.
+    runtime::configure_handler_coroutine_executor (1);
+    runtime::shutdown_handler_coroutine_executor ();
+    for (const bool fail_second : {false, true}) {
+        auto first = make_named_node ("completion-start", "completion-start-first");
+        auto second = make_named_node ("completion-start", "completion-start-second");
+        if (fail_second)
+            second->socket.receive_timeout = std::chrono::milliseconds::zero ();
+        serializer_registry_t serializers;
+        service_collection_t services;
+        auto provider = services.build_provider ();
+        auto failures = std::make_shared<runtime::runtime_failure_collector_t> ();
+        runtime::mesh_node_host_service_t service (failures, {first, second}, serializers);
+        auto completion = std::make_shared<task_completion_source_t<void>> ();
+        auto started = completion->task ();
+        detail::dispatch_completion ([&service, &provider, completion] {
+            assert (detail::current_completion_owner () != nullptr);
+            bool rejected = false;
+            try {
+                completion_owner_t forbidden;
+            }
+            catch (const framework_exception_t &error) {
+                rejected = error.kind () == framework_error_kind_t::invalid_operation;
+            }
+            assert (rejected);
+            auto pending = service.start (provider);
+            detail::observe_task_completion (pending, [completion] (const result_t<void> &result) {
+                completion->complete (result);
+            });
+        });
+        const auto result = started.result ();
+        if (fail_second) {
+            assert (!result);
+            assert (std::string_view (result.error ()->what ()).find ("receive timeout")
+                    != std::string_view::npos);
+            // Failure is returned only after the already-started first node is closed.
+            bool stopped = false;
+            try {
+                (void) service.nodes ().front ()->native_node ();
+            }
+            catch (const framework_exception_t &) {
+                stopped = true;
+            }
+            assert (stopped);
+        } else {
+            result.value ();
+            assert (
+              !service.nodes ().front ()->native_node ().status ().local_endpoint ().empty ());
+        }
+        service.stop ();
+        failures->rethrow_if_failed ();
+    }
 }
 
 void verify_unselected_object_role_defaults_to_none ()
@@ -862,7 +923,7 @@ void verify_local_join_timeout_releases_membership ()
     using namespace std::chrono_literals;
     auto state = make_node ("tcp://127.0.0.1:*", "join-timeout-owner");
     zlink::framework::detail::mesh_node_runtime_t node (state);
-    node.start ();
+    node.start ().result ().value ();
     auto &runtime = node.native_node ();
     auto actor = runtime.create_actor ("vertical.actor", "join-timeout-actor");
     auto target = runtime.get_or_create_spot_async ("join-timeout-spot").result ().value ();
@@ -1638,7 +1699,7 @@ void LocalPlacementIgnoresStaleStoreResult ()
         auto registration = make_node ("tcp://127.0.0.1:0", "stale-store-placement");
         registration->placement_weight = 100;
         auto node = std::make_shared<fw::detail::mesh_node_runtime_t> (registration);
-        node->start ();
+        node->start ().result ().value ();
         const auto status = node->status ();
         fw::mesh_node_descriptor_t stale;
         stale.mesh_name = "vertical-mesh";
@@ -1724,7 +1785,7 @@ void LocalLifecycleIgnoresStaleStoreResult ()
          {fw::framework_runtime_state_t::serving, fw::framework_runtime_state_t::preparing}) {
         auto registration = make_node ("tcp://127.0.0.1:0", "stale-store-lifecycle");
         auto node = std::make_shared<fw::detail::mesh_node_runtime_t> (registration);
-        node->start ();
+        node->start ().result ().value ();
         const auto status = node->status ();
         fw::mesh_node_descriptor_t stale;
         stale.mesh_name = "vertical-mesh";
@@ -1809,7 +1870,7 @@ void verify_local_host_lifecycle_uses_runtime_owner ()
     namespace fw = zlink::framework;
     auto registration = make_node ("tcp://127.0.0.1:0", "local-host-lifecycle");
     auto node = std::make_shared<fw::detail::mesh_node_runtime_t> (registration);
-    node->start ();
+    node->start ().result ().value ();
     std::atomic host_state{fw::framework_runtime_state_t::serving};
     fw::runtime::route_mesh_runtime_service_t runtime ({node}, nullptr, nullptr, nullptr,
                                                        [&] { return host_state.load (); });
@@ -1836,7 +1897,7 @@ void verify_observation_starts_with_weight_changed_before_subscription ()
     auto registration = make_node ("tcp://127.0.0.1:0", "observe-initial-weight");
     registration->placement_weight = 100;
     auto node = std::make_shared<fw::detail::mesh_node_runtime_t> (registration);
-    node->start ();
+    node->start ().result ().value ();
     monitoring_mesh_store_t monitoring_store;
     fw::runtime::route_mesh_runtime_service_t runtime ({node}, nullptr, &monitoring_store);
     runtime.start ();
@@ -1894,7 +1955,7 @@ void verify_public_runtime_surface ()
     registration->spot_state->activation_admission->set_limit (5);
     registration->placement_weight = 42;
     auto node = std::make_shared<zlink::framework::detail::mesh_node_runtime_t> (registration);
-    node->start ();
+    node->start ().result ().value ();
     monitoring_mesh_store_t monitoring_store;
     const auto node_status = node->status ();
     zlink::framework::mesh_node_descriptor_t local_descriptor;
@@ -2190,10 +2251,10 @@ void verify_automatic_intent_respects_manual_peer ()
     auto local_state = make_node ("tcp://127.0.0.1:0", "A-auto-local");
     auto remote_state = make_node ("tcp://127.0.0.1:0", "Z-auto-remote");
     zlink::framework::detail::mesh_node_runtime_t local (local_state), remote (remote_state);
-    remote.start ();
+    remote.start ().result ().value ();
     const auto rid = remote.status ().routing_id ();
     local_state->peer_connections.push_back ({1, rid, "tcp://127.0.0.1:1"});
-    local.start ();
+    local.start ().result ().value ();
     // A manual intent at another endpoint owns the direction even before admission.
     assert (
       !local.native_node ().connect_peer (remote.listen_endpoint (), rid, 0, "default", true));
@@ -2212,8 +2273,8 @@ void verify_automatic_intent_respects_manual_peer ()
     auto outbound_state = make_node ("tcp://127.0.0.1:0", "Z-auto-outbound");
     zlink::framework::detail::mesh_node_runtime_t inbound (inbound_state),
       outbound (outbound_state);
-    inbound.start ();
-    outbound.start ();
+    inbound.start ().result ().value ();
+    outbound.start ().result ().value ();
     const auto outbound_rid = outbound.status ().routing_id ();
     assert (outbound.native_node ().connect_peer (inbound.listen_endpoint (),
                                                   inbound.status ().routing_id ()));
@@ -2259,8 +2320,8 @@ void verify_manual_peer_public_status ()
       std::make_shared<zlink::framework::detail::mesh_node_runtime_t> (local_registration);
     auto remote =
       std::make_shared<zlink::framework::detail::mesh_node_runtime_t> (remote_registration);
-    local->start ();
-    remote->start ();
+    local->start ().result ().value ();
+    remote->start ().result ().value ();
     const auto remote_endpoint = remote->listen_endpoint ();
     const auto remote_status = remote->status ();
     auto runtime = std::make_shared<zlink::framework::runtime::route_mesh_runtime_service_t> (
@@ -2318,7 +2379,7 @@ void verify_location_store_blocks_placement ()
     auto registration = make_node ("tcp://127.0.0.1:0", "placement-store-node");
     registration->placement_weight = 100;
     auto node = std::make_shared<zlink::framework::detail::mesh_node_runtime_t> (registration);
-    node->start ();
+    node->start ().result ().value ();
 
     const auto node_status = node->status ();
     zlink::framework::mesh_node_descriptor_t descriptor;
@@ -2429,7 +2490,7 @@ void verify_monitor_pump_does_not_wait_for_spot_lane ()
 {
     auto registration = make_node ("tcp://127.0.0.1:0", "monitor-pump-node");
     auto node = std::make_shared<zlink::framework::detail::mesh_node_runtime_t> (registration);
-    node->start ();
+    node->start ().result ().value ();
 
     const auto status = node->status ();
     zlink::framework::mesh_node_descriptor_t descriptor;
@@ -2496,7 +2557,7 @@ void verify_slow_observer_does_not_block_stop ()
 {
     auto registration = make_node ("tcp://127.0.0.1:0", "slow-observer");
     auto node = std::make_shared<zlink::framework::detail::mesh_node_runtime_t> (registration);
-    node->start ();
+    node->start ().result ().value ();
     auto runtime = std::make_shared<zlink::framework::runtime::route_mesh_runtime_service_t> (
       std::vector<std::shared_ptr<zlink::framework::detail::mesh_node_runtime_t>>{node}, nullptr);
     runtime->start ();
@@ -2561,7 +2622,7 @@ void verify_host_shutdown_seal_reaches_raw_mesh ()
     auto seal = std::make_shared<std::atomic_bool> (false);
     zlink::framework::detail::spot_node_runtime_t (registration->spot_state).bind_drain_flag (seal);
     zlink::framework::detail::mesh_node_runtime_t node (registration);
-    node.start ();
+    node.start ().result ().value ();
     auto remote_options = mesh::raw_mesh_node_options_t{
       .descriptor = node.native_node ().transport ().topology ().local_descriptor (),
       .runtime_failures =
@@ -2863,6 +2924,14 @@ bool verify_application_terminal_drain_waits_for_capture_destruction ()
 }
 
 #if defined(__unix__)
+// A child process reports each step's result to the parent as one status byte. A
+// short write exits with the step's own code so the parent's exit-code check names it.
+void write_status_byte (int fd_, char value_, int exit_code_)
+{
+    if (write (fd_, &value_, sizeof (value_)) != static_cast<ssize_t> (sizeof (value_)))
+        _exit (exit_code_);
+}
+
 // A node process binds "tcp://127.0.0.1:*" and passes the endpoint it resolved to
 // the other process through a pipe, so no port is reserved before the bind.
 bool write_endpoint (int fd_, const std::string &endpoint_)
@@ -2980,7 +3049,7 @@ int run_cross_process_delivery ()
         close (reciprocal_child_endpoint_pipe[1]);
         auto state = make_node ("tcp://127.0.0.1:*", "vertical-b");
         zlink::framework::detail::mesh_node_runtime_t node (state);
-        node.start ();
+        node.start ().result ().value ();
         auto target_spot = node.get_or_create_spot_async ("target-spot").result ().value ();
         auto target_actor = node.create_actor ("vertical.actor", "target-actor", {}, 5s);
         const std::uint64_t formal_descriptors[2]{target_spot.status ().lifecycle_generation (),
@@ -3002,7 +3071,7 @@ int run_cross_process_delivery ()
 
         const bool multi_peer_admitted = wait_until_admitted_count (node, 2);
         const char reciprocal_ready = multi_peer_admitted ? 1 : 0;
-        (void) write (reciprocal_ready_pipe[1], &reciprocal_ready, sizeof (reciprocal_ready));
+        write_status_byte (reciprocal_ready_pipe[1], reciprocal_ready, 15);
         close (reciprocal_ready_pipe[1]);
 
         const std::map<std::string, std::string> metadata{{"trace-id", "vertical-1"},
@@ -3014,39 +3083,41 @@ int run_cross_process_delivery ()
           receive_one (node, zlink::framework::runtime::host::record_kind_t::node_send, "direct",
                        encoded_metadata);
         const char direct_ack = direct ? 1 : 0;
-        (void) write (direct_ack_pipe[1], &direct_ack, sizeof (direct_ack));
+        write_status_byte (direct_ack_pipe[1], direct_ack, 16);
         close (direct_ack_pipe[1]);
         const bool channel =
           receive_one (node, zlink::framework::runtime::host::record_kind_t::channel_send,
                        "channel", encoded_metadata);
         const char channel_ack = channel ? 1 : 0;
-        (void) write (channel_ack_pipe[1], &channel_ack, sizeof (channel_ack));
+        write_status_byte (channel_ack_pipe[1], channel_ack, 17);
         close (channel_ack_pipe[1]);
         const bool request = reply_to_one_request (
           node, zlink::framework::runtime::host::record_kind_t::node_request, "request", "reply");
         const char request_ack = request ? 1 : 0;
-        (void) write (request_ack_pipe[1], &request_ack, sizeof (request_ack));
+        write_status_byte (request_ack_pipe[1], request_ack, 18);
         close (request_ack_pipe[1]);
         char completion_ack = 0;
-        if (request)
-            (void) read (completion_ack_pipe[0], &completion_ack, sizeof (completion_ack));
+        if (request
+            && read (completion_ack_pipe[0], &completion_ack, sizeof (completion_ack))
+                 != static_cast<ssize_t> (sizeof (completion_ack)))
+            _exit (19);
         close (completion_ack_pipe[0]);
         const bool spot =
           receive_one (node, zlink::framework::runtime::host::record_kind_t::spot_send, "spot",
                        encoded_metadata);
         const char spot_ack = spot ? 1 : 0;
-        (void) write (formal_ack_pipe[1], &spot_ack, sizeof (spot_ack));
+        write_status_byte (formal_ack_pipe[1], spot_ack, 20);
         const bool spot_request =
           reply_to_one_request (node, zlink::framework::runtime::host::record_kind_t::spot_request,
                                 "spot-request", "spot-reply");
         const char spot_request_ack = spot_request ? 1 : 0;
-        (void) write (spot_request_ack_pipe[1], &spot_request_ack, sizeof (spot_request_ack));
+        write_status_byte (spot_request_ack_pipe[1], spot_request_ack, 21);
         close (spot_request_ack_pipe[1]);
         const bool actor =
           receive_one (node, zlink::framework::runtime::host::record_kind_t::actor_send, "actor",
                        encoded_metadata);
         const char actor_ack = actor ? 1 : 0;
-        (void) write (formal_ack_pipe[1], &actor_ack, sizeof (actor_ack));
+        write_status_byte (formal_ack_pipe[1], actor_ack, 22);
         close (formal_ack_pipe[1]);
         node.stop ();
         int exit_code = 0;
@@ -3104,12 +3175,12 @@ int run_cross_process_delivery ()
         reciprocal_state->peer_connections.push_back (zlink::framework::mesh_peer_connection_t{
           1, zlink::routing_id_t::from (std::string ("vertical-b")), endpoint});
         zlink::framework::detail::mesh_node_runtime_t reciprocal_node (reciprocal_state);
-        reciprocal_node.start ();
+        reciprocal_node.start ().result ().value ();
         const bool endpoint_sent = write_endpoint (reciprocal_child_endpoint_pipe[1],
                                                    reciprocal_node.status ().local_endpoint ());
         close (reciprocal_child_endpoint_pipe[1]);
         const char ready = endpoint_sent && wait_until_admitted (reciprocal_node) ? 1 : 0;
-        (void) write (reciprocal_child_ready_pipe[1], &ready, sizeof (ready));
+        write_status_byte (reciprocal_child_ready_pipe[1], ready, 14);
         close (reciprocal_child_ready_pipe[1]);
         char stop = 0;
         (void) read_byte_while_dispatching (reciprocal_node, reciprocal_child_stop_pipe[0], stop);
@@ -3138,7 +3209,7 @@ int run_cross_process_delivery ()
     state->peer_connections.push_back (zlink::framework::mesh_peer_connection_t{1, {}, endpoint});
     zlink::framework::detail::mesh_node_runtime_t node (state);
     configure_vertical_route_fences (node);
-    node.start ();
+    node.start ().result ().value ();
     assert (wait_until_admitted (node));
     char reciprocal_ready = 0;
     assert (read_byte_while_dispatching (node, reciprocal_ready_pipe[0], reciprocal_ready));
@@ -3311,7 +3382,7 @@ int run_cross_process_delivery ()
     auto race_state = make_node ("tcp://127.0.0.1:*", "local-race");
     zlink::framework::detail::mesh_node_runtime_t race_node (race_state);
     configure_vertical_route_fences (race_node);
-    race_node.start ();
+    race_node.start ().result ().value ();
     auto race_source = race_node.get_or_create_spot_async ("race-source").result ().value ();
     auto race_target = race_node.get_or_create_spot_async ("race-target").result ().value ();
     const auto race_node_rid = race_node.status ().routing_id ();
@@ -3394,7 +3465,7 @@ void verify_peer_intent_ids_and_callback_lifetime ()
     state->core_context = std::make_shared<zlink::context_t> ();
     state->spot_state->monitoring = monitoring;
     auto runtime = std::make_unique<zlink::framework::detail::mesh_node_runtime_t> (state);
-    runtime->start ();
+    runtime->start ().result ().value ();
     assert (connections.list_connections ()[0].intent_id == configured[0].intent_id);
     assert (connections.list_connections ()[1].intent_id == configured[1].intent_id);
 
@@ -3538,6 +3609,10 @@ void verify_repeated_mesh_connect_keeps_one_physical_connection ()
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--completion-start") {
+        verify_mesh_start_and_rollback_from_completion_turn ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--route-internal-owner-lease") {
         verify_route_internal_packets_precede_application_dispatch ();
         return 0;
@@ -3638,5 +3713,6 @@ int main (int argc, char **argv)
     // different in-process smoke check must not stand in for that scenario.
 #endif
     verify_actor_route_resolver_preserves_unavailable ();
+    verify_mesh_start_and_rollback_from_completion_turn ();
     return 0;
 }

@@ -2381,8 +2381,7 @@ void app_t::_apply_zlink_framework ()
                 }
                 auto completion = std::make_shared<task_completion_source_t<zlink::message_t>> ();
                 auto output = completion->task ();
-                auto admitted = co_await detail::request_admission_source_t{};
-                detail::observe_request_failure (output, admitted);
+                // Submission owns source admission, including when a reply arrives first.
                 const auto submitted =
                   co_await selected.value ().source->activate_instance_spot_remote (
                     selected.value ().target.rid, std::move (header),

@@ -70,7 +70,7 @@ int server_cases (bool debug, bool core)
               fw::detail::zlink_builder_access_t::shared_core_context (builder);
         mesh = fw::detail::mesh_node_runtime_t::from (builder, "control-mesh");
         mesh->bind_serializers (serializers);
-        mesh->start ();
+        mesh->start ().result ().value ();
     }
     fw::detail::bind_stream_serializers (builder, serializers);
     auto runtime = fw::detail::stream_runtime_t::from (builder);

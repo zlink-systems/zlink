@@ -1831,8 +1831,8 @@ TEST (RoutePayloadOwnership, BoundSessionInternalSendSkipsUserTargetClassificati
     detail::mesh_node_runtime_t source (source_state), target (target_state);
     auto store = std::make_shared<client_node_store_t> ();
     source.configure_user_spot_operations (store, {});
-    source.start ();
-    target.start ();
+    source.start ().result ().value ();
+    target.start ().result ().value ();
     source.connect_peer (*target_state->routing_id, target.status ().local_endpoint ());
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
     auto pump = [] (detail::mesh_node_runtime_t &node) {
@@ -1910,7 +1910,7 @@ TEST (RoutePayloadOwnership, UnconnectedObjectClientNodeDirectTargetIsNotFound)
     detail::mesh_node_runtime_t source (state);
     auto store = std::make_shared<client_node_store_t> ();
     source.configure_user_spot_operations (store, {});
-    source.start ();
+    source.start ().result ().value ();
     const auto client_rid = zlink::routing_id_t::from ("session-node");
     const std::vector<zlink::message_t> parts{zlink::message_t::from (std::string ("payload"))};
     EXPECT_EQ (std::move (source.send_to_node (client_rid, parts)).result ().value (),
@@ -2067,8 +2067,8 @@ TEST_P (ActorSendRelayAdmission, CompletesWithoutRemoteReply)
     auto source_state = make_wire_test_node ("wire-source", object_role_t::server);
     auto target_state = make_wire_test_node ("wire-target", object_role_t::server);
     detail::mesh_node_runtime_t source (source_state), target (target_state);
-    source.start ();
-    target.start ();
+    source.start ().result ().value ();
+    target.start ().result ().value ();
     source.connect_peer (*target_state->routing_id, target.status ().local_endpoint ());
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
     while ((source.admitted_peer_count () == 0 || target.admitted_peer_count () == 0)

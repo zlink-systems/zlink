@@ -538,7 +538,8 @@ struct mesh_node_host_service_test_access_t
 {
     static void configure (mesh_node_host_service_t &service,
                            std::shared_ptr<location_repository_t> store,
-                           location_runtime_t &runtime)
+                           location_runtime_t &runtime,
+                           bool published = false)
     {
         service._location_store = std::move (store);
         service._location_runtime = &runtime;
@@ -548,6 +549,20 @@ struct mesh_node_host_service_test_access_t
         descriptor.lifecycle_generation = 1;
         descriptor.descriptor_revision = 1;
         descriptor.endpoint = "inproc://publication-mesh";
+        descriptor.security_identity = "default";
+        descriptor.activation_concurrency.limit = 1;
+        if (published) {
+            const auto owner = runtime.current_owner_token ().value ();
+            descriptor.owner_id = owner.owner_id;
+            descriptor.lease_generation = owner.lease_generation;
+            EXPECT_EQ (location_write_status_t::stored,
+                       service._location_store
+                         ->update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                         .result ()
+                         .value ()
+                         .status);
+            service._published_mesh_nodes.push_back ({descriptor.mesh_name, descriptor.rid});
+        }
         service._published_mesh_descriptors.push_back (std::move (descriptor));
     }
     static bool publication_mutex_available (mesh_node_host_service_t &service)
@@ -2490,7 +2505,7 @@ void check_mesh_and_host_async_wrappers ()
     state->routing_id = zlink::routing_id_t::from ("local");
     state->core_context = std::make_shared<zlink::context_t> ();
     auto node = std::make_shared<detail::mesh_node_runtime_t> (state);
-    node->start ();
+    node->start ().result ().value ();
     auto &host = node->native_node ();
     auto &raw_lane = auto_connect_owner_lane (host.transport ());
     const auto rid = zlink::routing_id_t::from ("remote");
@@ -2679,7 +2694,7 @@ void check_auto_manual ()
     state->peer_connections.push_back (
       {.expected_routing_id = rid, .endpoint = "inproc://l4-manual"});
     detail::mesh_node_runtime_t node (state);
-    node.start ();
+    node.start ().result ().value ();
     auto &topology = node.native_node ().transport ().topology ();
     auto peer = topology.local_descriptor ();
     peer.node_routing_id = rid.to_bytes ();
@@ -2982,7 +2997,7 @@ void check_synchronous_stop (bool mesh, bool raw_owner)
     state->routing_id = zlink::routing_id_t::from ("local");
     state->core_context = std::make_shared<zlink::context_t> ();
     auto node = std::make_shared<detail::mesh_node_runtime_t> (state);
-    node->start ();
+    node->start ().result ().value ();
     production_auto_fixture_t fixture ({node});
     detail::route_channel_runtime_t route ("l4-mesh");
     const auto rid = zlink::routing_id_t::from ("remote");
@@ -3019,7 +3034,7 @@ void check_mesh_stop_without_infrastructure (int operation)
     state->routing_id = zlink::routing_id_t::from ("local");
     state->core_context = std::make_shared<zlink::context_t> ();
     auto node = std::make_shared<detail::mesh_node_runtime_t> (state);
-    node->start ();
+    node->start ().result ().value ();
     auto &raw = node->native_node ().transport ();
     const auto rid = zlink::routing_id_t::from ("remote");
     const std::string endpoint = "inproc://l4-peer";
@@ -3113,7 +3128,7 @@ void check_synchronous_auto_wrappers ()
     state->routing_id = zlink::routing_id_t::from ("local");
     state->core_context = std::make_shared<zlink::context_t> ();
     detail::mesh_node_runtime_t node (state);
-    node.start ();
+    node.start ().result ().value ();
     auto &host = node.native_node ();
     auto &raw = host.transport ();
     auto &raw_lane = auto_connect_owner_lane (raw);
@@ -3345,4 +3360,59 @@ TEST (AutoConnectSyncDeathTest, ContendedWrappersCompleteWithoutCompletionDispat
           std::_Exit (::testing::Test::HasFailure () ? 1 : 0);
       },
       ::testing::ExitedWithCode (0), "");
+}
+
+TEST (ZLinkFrameworkLocationRuntime, DrainingPublicationDoesNotHoldRecoveryMutex)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    auto state =
+      test::runtime_failure_fixture<detail::mesh_node_builder_state_t> ("publication-mesh");
+    state->routing_id = zlink::routing_id_t::from ("local");
+    state->core_context = std::make_shared<zlink::context_t> ();
+    auto store = std::make_shared<in_memory_location_repository_t> ();
+    location_runtime_t runtime (*store);
+    runtime.renew_owner_lease_once ();
+    serializer_registry_t serializers;
+    mesh_node_host_service_t service (std::make_shared<runtime_failure_collector_t> (), {state},
+                                      serializers);
+    mesh_node_host_service_test_access_t::configure (service, store, runtime, true);
+    auto node = service.nodes ().front ();
+    node->start ().result ().value ();
+    std::promise<void> entered, release;
+    auto released = release.get_future ().share ();
+    auto &topology = node->native_node ().transport ().topology ();
+    topology.set_change_handler ([&] {
+        entered.set_value ();
+        released.wait ();
+    });
+    auto draining = std::async (std::launch::async, [&] {
+        return service.publish_descriptor_state (framework_runtime_state_t::draining);
+    });
+    const auto pending = entered.get_future ().wait_for (std::chrono::seconds (5));
+    const bool available =
+      mesh_node_host_service_test_access_t::publication_mutex_available (service);
+    auto recovery = std::async (std::launch::async, [&] {
+        return service
+          .republish_after_store_recovery (location_write_intent_t::new_claim, {},
+                                           std::chrono::steady_clock::time_point::max ())
+          .result ()
+          .value ();
+    });
+    const bool recovered_while_pending =
+      recovery.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
+    release.set_value ();
+    const bool recovered = recovery.get ();
+    const bool drained = draining.get ();
+    topology.set_change_handler ({});
+    const auto descriptors = store->list_mesh_nodes ("publication-mesh").result ().value ();
+    EXPECT_EQ (std::future_status::ready, pending);
+    EXPECT_TRUE (available);
+    EXPECT_TRUE (recovered_while_pending);
+    EXPECT_TRUE (recovered);
+    EXPECT_TRUE (drained);
+    ASSERT_EQ (1u, descriptors.items.size ());
+    EXPECT_EQ (framework_runtime_state_t::draining, descriptors.items.front ().state);
+    service.stop ();
+    runtime.stop ();
 }

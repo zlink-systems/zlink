@@ -1312,6 +1312,83 @@ TEST_P (InMemoryStoreContinuationDeathTest, FanoutPublicationKeepsLeaseAndConfli
       ::testing::ExitedWithCode (0), "");
 }
 
+TEST_P (InMemoryStoreContinuationDeathTest, SpotCreationKeepsCommitAndRollbackOffWorkerWaits)
+{
+    const bool pending = GetParam ();
+    ASSERT_EXIT (single_worker_store_child ([&] {
+                     in_memory_location_repository_t store;
+                     const auto owner = claim_owner (store, "creation-continuation");
+                     publish_mesh_node (store, "creation-node", owner);
+                     const object_reserve_request_t request{
+                       .key = {placement_object_kind_t::user_spot, "creation-spot"},
+                       .intent = {.stable_type = "room"},
+                       .target = {"play", node_rid_t::from_string ("creation-node"), 1, owner},
+                       .creating_payload = {std::byte{1}},
+                       .capacity_bundle = {.spot_slots = 1,
+                                           .spot_type = spot_type_capacity_delta_t{
+                                             placement_object_kind_t::user_spot, "room", 1}}};
+                     auto &lane = in_memory_store_continuation_test_access_t::lane (store);
+                     object_reserved_t reserved;
+                     authority_snapshot_t ready;
+                     auto reserve = [&] () -> task_t<void> {
+                         const auto result = co_await store.reserve (request);
+                         reserved = std::get<object_reserved_t> (result);
+                         EXPECT_EQ (request.creating_payload, reserved.creating.payload);
+                     };
+                     probe_store_continuation (lane, pending, reserve);
+                     auto commit = [&] () -> task_t<void> {
+                         const auto result = co_await store.commit (
+                           {request.key, reserved.fence, {std::byte{2}}}, {},
+                           std::chrono::system_clock::now () + std::chrono::seconds (5));
+                         ready = std::get<object_committed_t> (result).ready;
+                         EXPECT_EQ (placement_allocation_state_t::active, ready.allocation.state);
+                         EXPECT_EQ (std::vector<std::byte> ({std::byte{2}}), ready.payload);
+                         EXPECT_TRUE (std::holds_alternative<object_already_committed_t> (
+                           co_await store.commit ({request.key, reserved.fence, {std::byte{2}}})));
+                         EXPECT_EQ (nullptr, state_lane_t::current ());
+                     };
+                     probe_store_continuation (lane, pending, commit);
+                     const auto key = spot_authority_key (request.key.global_id);
+                     auto read = [&] () -> task_t<void> {
+                         const auto result = co_await store.read_authority (key);
+                         EXPECT_EQ (ready.store_version,
+                                    std::get<authority_snapshot_t> (result).store_version);
+                     };
+                     probe_store_continuation (lane, pending, read);
+                     auto scan = [&] () -> task_t<void> {
+                         const auto result = co_await store.list_authorities ("zla1:s:", {}, 256);
+                         const auto &page = std::get<authority_page_t> (result);
+                         EXPECT_EQ (1u, page.items.size ());
+                         EXPECT_EQ (ready.store_version,
+                                    page.items.front ().snapshot.store_version);
+                     };
+                     probe_store_continuation (lane, pending, scan);
+                     auto erase = [&] () -> task_t<void> {
+                         const auto result = co_await store.compare_exchange_authority (
+                           key, ready.store_version, authority_delete_t{});
+                         EXPECT_TRUE (std::holds_alternative<authority_deleted_t> (result));
+                     };
+                     probe_store_continuation (lane, pending, erase);
+                     probe_store_continuation (lane, pending, reserve);
+                     auto release = [&] () -> task_t<void> {
+                         EXPECT_FALSE (co_await store.release_ended_reservation (
+                           key, reserved.creating.store_version, {}, request));
+                     };
+                     probe_store_continuation (lane, pending, release);
+                     auto abort = [&] () -> task_t<void> {
+                         const auto result = co_await store.abort ({request.key, reserved.fence});
+                         EXPECT_TRUE (std::holds_alternative<object_aborted_t> (result));
+                         EXPECT_TRUE (std::holds_alternative<object_already_aborted_t> (
+                           co_await store.abort ({request.key, reserved.fence})));
+                         EXPECT_TRUE (std::holds_alternative<object_commit_stale_t> (
+                           co_await store.commit ({request.key, reserved.fence, {std::byte{3}}})));
+                         EXPECT_EQ (nullptr, state_lane_t::current ());
+                     };
+                     probe_store_continuation (lane, pending, abort);
+                 }),
+                 ::testing::ExitedWithCode (0), "");
+}
+
 INSTANTIATE_TEST_SUITE_P (ReadyAndPending,
                           InMemoryStoreContinuationDeathTest,
                           ::testing::Values (false, true));
