@@ -293,27 +293,38 @@ class async_write_connection_t final : public zlink::stream_connector::detail::s
                           std::function<void (boost::system::error_code, std::vector<std::uint8_t>)>
                             completion) override
     {
-        read_completion = std::move (completion);
+        std::lock_guard lock (_mutex);
+        _read_completion = std::move (completion);
     }
 
     void async_write (std::vector<std::uint8_t> bytes,
                       std::function<void (boost::system::error_code)> completion) override
     {
-        written.push_back (std::move (bytes));
+        {
+            std::lock_guard lock (_mutex);
+            _written.push_back (std::move (bytes));
+        }
         completion (_fail_write ? boost::asio::error::operation_aborted
                                 : boost::system::error_code{});
     }
 
     boost::system::error_code shutdown_and_close () override
     {
-        read_completion = {};
+        std::lock_guard lock (_mutex);
+        _read_completion = {};
         return {};
     }
 
-    std::vector<std::vector<std::uint8_t>> written;
-    std::function<void (boost::system::error_code, std::vector<std::uint8_t>)> read_completion;
+    std::vector<std::vector<std::uint8_t>> written () const
+    {
+        std::lock_guard lock (_mutex);
+        return _written;
+    }
 
   private:
+    mutable std::mutex _mutex;
+    std::vector<std::vector<std::uint8_t>> _written;
+    std::function<void (boost::system::error_code, std::vector<std::uint8_t>)> _read_completion;
     bool _fail_write = false;
 };
 
@@ -578,41 +589,55 @@ class early_reply_connection_t final : public zlink::stream_connector::detail::s
         // inline with empty data re-enters the read pump on the caller stack
         // until it overflows, so hold the completion once the scripted reply
         // has been consumed.
+        std::unique_lock lock (_mutex);
         if (_reply.empty ()) {
             _pending_read = std::move (completion);
             return;
         }
         auto reply = std::move (_reply);
         _reply.clear ();
+        lock.unlock ();
         completion (boost::system::error_code{}, std::move (reply));
     }
 
     void async_write (std::vector<std::uint8_t> bytes,
                       std::function<void (boost::system::error_code)> completion) override
     {
-        written.push_back (std::move (bytes));
-        write_completion = std::move (completion);
+        std::lock_guard lock (_mutex);
+        _written.push_back (std::move (bytes));
+        _write_completion = std::move (completion);
     }
 
     void complete_write ()
     {
-        if (write_completion) {
-            auto completion = std::move (write_completion);
+        std::function<void (boost::system::error_code)> completion;
+        {
+            std::lock_guard lock (_mutex);
+            completion = std::move (_write_completion);
+        }
+        if (completion) {
             completion (boost::system::error_code{});
         }
     }
 
     boost::system::error_code shutdown_and_close () override
     {
+        std::lock_guard lock (_mutex);
         _pending_read = {};
-        write_completion = {};
+        _write_completion = {};
         return {};
     }
 
-    std::vector<std::vector<std::uint8_t>> written;
-    std::function<void (boost::system::error_code)> write_completion;
+    bool write_pending () const
+    {
+        std::lock_guard lock (_mutex);
+        return !_written.empty () && static_cast<bool> (_write_completion);
+    }
 
   private:
+    mutable std::mutex _mutex;
+    std::vector<std::vector<std::uint8_t>> _written;
+    std::function<void (boost::system::error_code)> _write_completion;
     std::vector<std::uint8_t> _reply;
     std::function<void (boost::system::error_code, std::vector<std::uint8_t>)> _pending_read;
 };
@@ -716,8 +741,8 @@ class send_results_t
             {
                 std::lock_guard<std::mutex> lock (_mutex);
                 _codes.push_back (result.error_code ());
+                _changed.notify_all ();
             }
-            _changed.notify_all ();
         };
     }
 
@@ -1664,7 +1689,7 @@ int main (int argc, char **argv)
         const auto wait_for_written_frame =
           [] (const std::shared_ptr<async_write_connection_t> &connection) {
               for (int i = 0; i < 1000; ++i) {
-                  if (!connection->written.empty ()) {
+                  if (!connection->written ().empty ()) {
                       return true;
                   }
                   std::this_thread::sleep_for (std::chrono::milliseconds (2));
@@ -1691,7 +1716,7 @@ int main (int argc, char **argv)
         if (!wait_for_written_frame (connection)) {
             return fail (211);
         }
-        const auto sent = decode_frame_header (connection->written.front ());
+        const auto sent = decode_frame_header (connection->written ().front ());
         if (!sent || sent.value ().kind != message_kind_t::send
             || !sent.value ().correlation_id.empty ()
             || (static_cast<std::uint8_t> (sent.value ().flags) & 0x18) != 0) {
@@ -1711,7 +1736,7 @@ int main (int argc, char **argv)
         if (!wait_for_written_frame (connection)) {
             return fail (213);
         }
-        const auto requested = decode_frame_header (connection->written.front ());
+        const auto requested = decode_frame_header (connection->written ().front ());
         if (!requested || requested.value ().kind != message_kind_t::request
             || requested.value ().correlation_id.empty ()
             || (static_cast<std::uint8_t> (requested.value ().flags) & 0x18) != 0x08) {
@@ -1744,7 +1769,8 @@ int main (int argc, char **argv)
                  result) { exhausted_error = result.error_code (); },
           /*deliver_direct=*/true);
         if (exhausted_error != zlink::stream_connector::error_code_t::send_failed
-            || !exhausted_connection->written.empty () || exhausted_state->next_request_seq != 0) {
+            || !exhausted_connection->written ().empty ()
+            || exhausted_state->next_request_seq != 0) {
             return fail (301);
         }
         exhausted_connection->shutdown_and_close ();
@@ -3384,13 +3410,13 @@ int main (int argc, char **argv)
               async_send_seen = static_cast<bool> (result);
           });
         if (!eventually ([&] { return async_send_seen.load (); })
-            || async_send_connection->written.size () != 1) {
+            || async_send_connection->written ().size () != 1) {
             return fail (155);
         }
-        std::string async_send_wire (async_send_connection->written[0].begin (),
-                                     async_send_connection->written[0].end ());
+        const auto async_send_written = async_send_connection->written ();
+        std::string async_send_wire (async_send_written[0].begin (), async_send_written[0].end ());
         const auto async_send_frame = try_read_server_frame (async_send_wire);
-        if (async_send_connection->written.size () != 1 || !async_send_frame
+        if (async_send_connection->written ().size () != 1 || !async_send_frame
             || async_send_frame->header.name != "async.send"
             || async_send_frame->payload != "payload") {
             return fail (155);
@@ -3411,20 +3437,25 @@ int main (int argc, char **argv)
                 !result
                 && result.error_code () == zlink::stream_connector::error_code_t::send_failed;
           });
-        if (!eventually ([&] {
-                if (!async_write_failure_seen.load ()
-                    || async_write_failure_state->state
-                         != zlink::stream_connector::connection_state_t::disconnected) {
-                    return false;
-                }
-                // §6.2: the write result can precede publication of the ending reason.
-                std::lock_guard<std::mutex> lock (async_write_failure_state->lifecycle_mutex);
-                return async_write_failure_state->last_close_reason.has_value ();
-            })
-            || async_write_failure_connection->written.size () != 1
-            || async_write_failure_state->last_close_reason
-                 != zlink::stream_connector::close_reason_t::transport_error) {
-            return fail (158);
+        const auto async_write_failure_settled = eventually ([&] {
+            std::lock_guard<std::mutex> lock (async_write_failure_state->lifecycle_mutex);
+            if (!async_write_failure_seen.load ()
+                || async_write_failure_state->state
+                     != zlink::stream_connector::connection_state_t::disconnected) {
+                return false;
+            }
+            // §6.2: the write result can precede publication of the ending reason.
+            return async_write_failure_state->last_close_reason.has_value ();
+        });
+        {
+            std::lock_guard<std::mutex> async_write_failure_lock (
+              async_write_failure_state->lifecycle_mutex);
+            if (!async_write_failure_settled
+                || async_write_failure_connection->written ().size () != 1
+                || async_write_failure_state->last_close_reason
+                     != zlink::stream_connector::close_reason_t::transport_error) {
+                return fail (158);
+            }
         }
 
         /* §9 and §12: the request whose write completed remains pending
@@ -3648,9 +3679,8 @@ int main (int argc, char **argv)
                 result && as_string (result.value ().packet.payload) == "early-reply";
           });
         if (!eventually ([&] {
-                return !early_reply_connection->written.empty ()
-                       && static_cast<bool> (early_reply_connection->write_completion)
-                       && early_reply_seen.load () && early_reply_callback_count.load () == 1
+                return early_reply_connection->write_pending () && early_reply_seen.load ()
+                       && early_reply_callback_count.load () == 1
                        && no_pending_requests (early_reply_state);
             })) {
             return fail (171);
@@ -3833,9 +3863,7 @@ int main (int argc, char **argv)
                 result && as_string (result.value ().packet.payload) == "reply-payload";
           });
         if (!eventually ([&] {
-                return !interleaved_connection->written.empty ()
-                       && static_cast<bool> (interleaved_connection->write_completion)
-                       && interleaved_push_seen.load ()
+                return interleaved_connection->write_pending () && interleaved_push_seen.load ()
                        && interleaved_wait_callback_count.load () == 1
                        && interleaved_reply_seen.load () && no_pending_requests (interleaved_state)
                        && no_pending_waits (interleaved_state);

@@ -105,6 +105,66 @@ test('stream header codec round-trips actor slots and rejects malformed slot fie
   );
 });
 
+test('stream connector ignores future controls and unknown heartbeat versions', async () => {
+  const transportFactory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory,
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  await instance.connect();
+
+  transportFactory.connection.pushFrame(actorControlFrame('$zlink.future.control', [7, 8]));
+  await instance.dispatch();
+  transportFactory.connection.pushFrame(actorControlFrame('$zlink.heartbeat.ping', [2, 3]));
+  await instance.dispatch();
+  const pong = protocolCodecs.ZlinkStreamFrameCodec.decode(
+    transportFactory.connection.frames.at(-1)
+  );
+  assert.equal(protocolCodecs.ZlinkStreamHeaderCodec.decode(pong.header).name, '$zlink.heartbeat.pong');
+  assert.deepEqual([...pong.payload], []);
+  transportFactory.connection.pushFrame(actorControlFrame('$zlink.heartbeat.pong', [2]));
+  await instance.dispatch();
+  transportFactory.connection.pushFrame(sendFrame('StillConnected', 'ok'));
+  await instance.dispatch();
+  assert.equal(instance.state, connector.ZlinkStreamConnectionState.Connected);
+  assert.equal(instance.receivedCount('StillConnected'), 1);
+  await instance.close();
+});
+
+test('stream connector closes for malformed known controls, malformed control headers, and unprefixed names', async () => {
+  const malformedHeader = protocolCodecs.ZlinkStreamHeaderCodec.encode({
+    kind: connector.ZlinkStreamMessageKind.Control,
+    codec: connector.ZlinkStreamCodec.Raw,
+    flags: connector.ZlinkStreamHeaderFlags.None,
+    name: '$zlink.future.header',
+    metadata: connector.ZlinkStreamMetadataMap.empty
+  });
+  malformedHeader[3] |= connector.ZlinkStreamHeaderFlags.HasActorSlot;
+  const frames = [
+    actorControlFrame('$zlink.actor.bound', [1]),
+    protocolCodecs.ZlinkStreamFrameCodec.encode(malformedHeader, new Uint8Array()),
+    actorControlFrame('future.control', [])
+  ];
+  for (const frame of frames) {
+    const transportFactory = new MemoryTransportFactory();
+    const instance = createStreamConnector({
+      endpoint: 'ws://127.0.0.1:19000',
+      transportFactory,
+      heartbeat: { enabled: false },
+      reconnect: { enabled: false }
+    });
+    const disconnected = new Promise((resolve) => instance.onDisconnected(resolve));
+    await instance.connect();
+    transportFactory.connection.pushFrame(frame);
+    await instance.dispatch();
+    await disconnected;
+    assert.equal(instance.state, connector.ZlinkStreamConnectionState.Disconnected);
+    assert.equal(instance.closeReason, 'ProtocolError');
+  }
+});
+
 for (const kind of [
   connector.ZlinkStreamMessageKind.Response,
   connector.ZlinkStreamMessageKind.Error
