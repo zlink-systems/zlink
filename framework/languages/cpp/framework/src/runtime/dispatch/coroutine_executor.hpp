@@ -57,26 +57,8 @@ class coroutine_executor_t
     {
         task_completion_source_t<TResult> completion;
         auto task = completion.task ();
-        boost::asio::co_spawn (
-          _pool,
-          [work = std::move (work),
-           completion = std::move (completion)] () mutable -> boost::asio::awaitable<void> {
-              result_t<TResult> result = result_t<TResult>::failure (
-                framework_error_kind_t::internal_failure, "coroutine handler failed");
-              try {
-                  result = co_await work ();
-              }
-              catch (const framework_exception_t &error) {
-                  result = detail::result_access_t::failure<TResult> (error);
-              }
-              catch (...) {
-                  result = result_t<TResult>::failure (framework_error_kind_t::internal_failure,
-                                                       "coroutine handler threw an exception");
-              }
-              work = nullptr;
-              completion.complete (std::move (result));
-          },
-          boost::asio::detached);
+        boost::asio::co_spawn (_pool, execute<TResult> (std::move (work), std::move (completion)),
+                               boost::asio::detached);
         return task;
     }
 
@@ -99,6 +81,27 @@ class coroutine_executor_t
     }
 
   private:
+    template <typename TResult>
+    static boost::asio::awaitable<void>
+    execute (std::function<boost::asio::awaitable<result_t<TResult>> ()> work,
+             task_completion_source_t<TResult> completion)
+    {
+        result_t<TResult> result = result_t<TResult>::failure (
+          framework_error_kind_t::internal_failure, "coroutine handler failed");
+        try {
+            result = co_await work ();
+        }
+        catch (const framework_exception_t &error) {
+            result = detail::result_access_t::failure<TResult> (error);
+        }
+        catch (...) {
+            result = result_t<TResult>::failure (framework_error_kind_t::internal_failure,
+                                                 "coroutine handler threw an exception");
+        }
+        work = nullptr;
+        completion.complete (std::move (result));
+    }
+
     detail::completion_dispatcher_borrow_t _completion_dispatcher{};
     std::mutex _mutex;
     bool _drained = false;

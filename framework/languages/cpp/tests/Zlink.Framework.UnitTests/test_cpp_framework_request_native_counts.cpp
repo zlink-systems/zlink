@@ -8,8 +8,28 @@
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime_failure_fixture.hpp"
+#include "runtime/actors/actor_gateway_runtime.hpp"
+#include "runtime/locations/in_memory_store_providers.hpp"
+#include <future>
+#include <thread>
 #include <cstdio>
 #include <zlink.h>
+namespace zlink::framework::runtime::host
+{
+struct public_host_runtime_test_access_t
+{
+    static bool complete_join (public_host_runtime_t &host,
+                               pending_operation_t operation,
+                               const std::vector<zlink::message_t> &parts)
+    {
+        return host.complete_local_actor_join (
+          std::move (operation), "count-actor", {},
+          result_t<actor_join_operation_result_t>::failure (framework_error_kind_t::unavailable,
+                                                            "counted join failure"),
+          parts);
+    }
+};
+}
 namespace
 {
 namespace fw = zlink::framework;
@@ -235,6 +255,109 @@ TEST (RequestNativeCounts, HostResultProjectionBorrowsItsNativeParts)
     EXPECT_EQ (calls[3], 0u);
     EXPECT_EQ (calls[4], 0u);
 }
+TEST (RequestNativeCounts, LocalActorJoinMovesTheCapturedReplyParts)
+{
+    fw::completion_owner_t owner;
+    auto state =
+      fw::test::runtime_failure_fixture<fw::detail::mesh_node_builder_state_t> ("join-copy-count");
+    state->core_context = std::make_shared<zlink::context_t> ();
+    state->listen_endpoint = "tcp://127.0.0.1:0";
+    state->routing_id = zlink::routing_id_t::from ("join-copy-count");
+    state->object_role = fw::object_role_t::none;
+    fw::detail::mesh_node_runtime_t runtime (state);
+    runtime.start ();
+    struct stop_t
+    {
+        fw::detail::mesh_node_runtime_t &runtime;
+        ~stop_t () { runtime.stop (); }
+    } stop{runtime};
+    auto host = runtime.native_node ().shared_from_this ();
+    fw::runtime::host::pending_operation_t operation;
+    operation.local_result = std::make_shared<fw::runtime::host::operation_completion_t> ();
+    std::promise<void> finished;
+    const auto registered = host->transport ()
+                              .register_local_operation_async (
+                                std::chrono::steady_clock::now () + std::chrono::seconds (5),
+                                [&] (auto, auto) { finished.set_value (); })
+                              .result ();
+    ASSERT_TRUE (registered);
+    ASSERT_TRUE (registered.value ());
+    operation.id = *registered.value ();
+    std::vector<zlink::message_t> parts;
+    parts.push_back (zlink::message_t::from (std::string (128, 'j')));
+    native_call_scope_t calls (service_control_message);
+    ASSERT_TRUE (fw::runtime::host::public_host_runtime_test_access_t::complete_join (
+      *host, operation, parts));
+    ASSERT_EQ (finished.get_future ().wait_for (std::chrono::seconds (5)),
+               std::future_status::ready);
+    ASSERT_EQ (operation.local_result->parts.size (), 1u);
+    EXPECT_EQ (operation.local_result->parts[0].to_string (), std::string (128, 'j'));
+    EXPECT_EQ (parts[0].to_string (), std::string (128, 'j'));
+    std::printf ("local actor join copies=%zu\n", calls[3]);
+    EXPECT_EQ (calls[3], 1u); // Only the borrowed input's ownership copy.
+}
+
+struct relay_capture_t final : fw::hosted_service_t
+{
+    fw::detail::actor_gateway_state_t::relay_dispatcher_t relay;
+    fw::detail::actor_gateway_runtime_t *gateway = nullptr;
+    fw::task_t<void> start (fw::service_provider_t &services) override
+    {
+        gateway = &services.get_required<fw::detail::actor_gateway_runtime_t> ();
+        relay = gateway->weak_state ().lock ()->relay_dispatcher;
+        co_return;
+    }
+    void stop () noexcept override {}
+};
+
+TEST (RequestNativeCounts, AppRelayMovesItsOwnedPayloadIntoDelivery)
+{
+    auto app = fw::app_t::create ();
+    auto capture = std::make_unique<relay_capture_t> ();
+    auto *service = capture.get ();
+    app.add_hosted_service (std::move (capture));
+    app.use_metric_provider (opentelemetry::metrics::Provider::GetMeterProvider ());
+    auto &options = app.add_zlink_framework ();
+    options.add_location_store (std::make_shared<fw::runtime::in_memory_location_store_t> ());
+    options.add_route_mesh ("relay-copy-count")
+      .set_object_role (fw::object_role_t::none)
+      .listen ("tcp://127.0.0.1:0")
+      .set_routing_id (zlink::routing_id_t::from ("relay-copy-count"));
+    std::atomic<bool> exited{false};
+    std::thread runner ([&] {
+        app.run (0, nullptr);
+        exited.store (true);
+    });
+    struct stop_t
+    {
+        fw::app_t &app;
+        std::thread &runner;
+        ~stop_t ()
+        {
+            app.request_stop ();
+            runner.join ();
+        }
+    } stop{app, runner};
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+    while (!app.is_ready () && !exited.load () && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::yield ();
+    ASSERT_TRUE (app.is_ready ());
+    ASSERT_TRUE (service->relay);
+    const auto actor = fw::detail::actor_ref_access_t::make (
+      fw::node_rid_t::from_string ("missing-copy-target"), "count-actor", "a", 1);
+    fw::detail::stream_header_t header;
+    auto payload = zlink::message_t::from (std::string (128, 'r'));
+    native_call_scope_t calls (service_control_message);
+    auto delivered = fw::detail::request_submission (
+      service->relay (actor, service->gateway->actor_context (actor), header, payload, {},
+                      std::chrono::milliseconds (100)));
+    const auto result = delivered.reply.result ();
+    EXPECT_FALSE (result);
+    EXPECT_EQ (payload.to_string (), std::string (128, 'r'));
+    std::printf ("app relay copies=%zu\n", calls[3]);
+    EXPECT_EQ (calls[3], 2u); // Borrowed relay input and the Mesh value parameter.
+}
+
 TEST (RequestNativeCounts, NativeCountersDetectAnInjectedCopyAndItsLifecycle)
 {
     auto source = zlink::message_t::from (std::string (128, 'x'));
