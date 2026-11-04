@@ -878,47 +878,63 @@ mesh_node_host_service_t::create_actor (bool exclusive,
             std::string (actor_id.value ()), current.object_generation)});
     };
     std::vector<mesh_node_descriptor_t> candidates;
-    auto refresh_candidates = [&] () -> task_t<void> {
-        candidates.clear ();
-        location_page_request_t page;
-        do {
-            auto listed = co_await _location_store->list_mesh_nodes (selected_mesh, page);
-            for (auto &descriptor : listed.items) {
-                if (mesh_name && descriptor.mesh_name != *mesh_name)
-                    continue;
-                const auto capability = std::find_if (
-                  descriptor.object_capabilities.begin (), descriptor.object_capabilities.end (),
-                  [&] (const object_capability_t &value) {
-                      return value.object_kind == placement_object_kind_t::actor
-                             && value.stable_type == stable_type;
-                  });
-                //  Actor model §6.3: a new Actor is created only where an Entry Spot accepts its type.
-                if (descriptor.state != framework_runtime_state_t::serving
-                    || descriptor.object_role != object_role_t::server
-                    || descriptor.placement_weight <= 0
-                    || capability == descriptor.object_capabilities.end ()
-                    || !capability->entry_accepted)
-                    continue;
-                if (unavailable_targets.contains (
-                      {descriptor.rid.to_hex (), descriptor.lifecycle_generation, std::nullopt}))
-                    continue;
-                if (descriptor.rid == source_rid) {
-                    candidates.push_back (std::move (descriptor));
-                    continue;
+    struct refresh_actor_candidates_t
+    {
+        static task_t<std::vector<mesh_node_descriptor_t>>
+        run (mesh_node_host_service_t *self,
+             std::decay_t<decltype (selected_mesh)> selected_mesh,
+             std::decay_t<decltype (mesh_name)> mesh_name,
+             std::decay_t<decltype (stable_type)> stable_type,
+             std::decay_t<decltype (unavailable_targets)> unavailable_targets,
+             std::decay_t<decltype (source_node)> source_node,
+             std::decay_t<decltype (source_rid)> source_rid)
+        {
+            std::vector<mesh_node_descriptor_t> candidates;
+            location_page_request_t page;
+            do {
+                auto listed = co_await self->_location_store->list_mesh_nodes (selected_mesh, page);
+                for (auto &descriptor : listed.items) {
+                    if (mesh_name && descriptor.mesh_name != *mesh_name)
+                        continue;
+                    const auto capability =
+                      std::find_if (descriptor.object_capabilities.begin (),
+                                    descriptor.object_capabilities.end (),
+                                    [&] (const object_capability_t &value) {
+                                        return value.object_kind == placement_object_kind_t::actor
+                                               && value.stable_type == stable_type;
+                                    });
+                    //  Actor model §6.3: a new Actor is created only where an Entry Spot accepts its type.
+                    if (descriptor.state != framework_runtime_state_t::serving
+                        || descriptor.object_role != object_role_t::server
+                        || descriptor.placement_weight <= 0
+                        || capability == descriptor.object_capabilities.end ()
+                        || !capability->entry_accepted)
+                        continue;
+                    if (unavailable_targets.contains ({descriptor.rid.to_hex (),
+                                                       descriptor.lifecycle_generation,
+                                                       std::nullopt}))
+                        continue;
+                    if (descriptor.rid == source_rid) {
+                        candidates.push_back (std::move (descriptor));
+                        continue;
+                    }
+                    const auto epoch = source_node->admitted_peer_epoch (
+                      descriptor.rid, descriptor.lifecycle_generation);
+                    if (epoch
+                        && !unavailable_targets.contains (
+                          {descriptor.rid.to_hex (), descriptor.lifecycle_generation, *epoch}))
+                        candidates.push_back (std::move (descriptor));
                 }
-                const auto epoch =
-                  (*source_runtime)
-                    ->admitted_peer_epoch (descriptor.rid, descriptor.lifecycle_generation);
-                if (epoch
-                    && !unavailable_targets.contains (
-                      {descriptor.rid.to_hex (), descriptor.lifecycle_generation, *epoch}))
-                    candidates.push_back (std::move (descriptor));
-            }
-            page.continuation_token = std::move (listed.continuation_token);
-        } while (page.continuation_token);
-        co_return;
+                page.continuation_token = std::move (listed.continuation_token);
+            } while (page.continuation_token);
+            co_return candidates;
+        }
     };
-    co_await refresh_candidates ();
+    auto refresh_candidates = [&] () -> task_t<std::vector<mesh_node_descriptor_t>> {
+        return refresh_actor_candidates_t::run (this, selected_mesh, mesh_name, stable_type,
+                                                unavailable_targets, source_node, source_rid);
+    };
+    candidates = co_await refresh_candidates ();
     if (candidates.empty ()) {
         // Entry acceptance restricts new creation; an existing Ready Actor needs no candidate.
         if (!exclusive) {
@@ -959,14 +975,22 @@ mesh_node_host_service_t::create_actor (bool exclusive,
         return selected;
     };
     mesh_node_descriptor_t target;
-    const auto find_target_runtime = [&] () -> task_t<decltype (_nodes.begin ())> {
-        for (auto it = _nodes.begin (); it != _nodes.end (); ++it) {
-            const auto &node = *it;
-            const auto [node_mesh, rid] = co_await node->identity_async ();
-            if (node_mesh == target.mesh_name && rid && rid->to_hex () == target.rid.to_hex ())
-                co_return it;
+    using actor_target_selection_t =
+      std::tuple<mesh_node_descriptor_t, decltype (_nodes)::iterator, std::optional<std::uint64_t>,
+                 object_reserve_request_t>;
+    struct find_actor_target_t
+    {
+        static task_t<decltype (_nodes)::iterator> run (mesh_node_host_service_t *self,
+                                                        std::decay_t<decltype (target)> target)
+        {
+            for (auto it = self->_nodes.begin (); it != self->_nodes.end (); ++it) {
+                const auto &node = *it;
+                const auto [node_mesh, rid] = co_await node->identity_async ();
+                if (node_mesh == target.mesh_name && rid && rid->to_hex () == target.rid.to_hex ())
+                    co_return it;
+            }
+            co_return self->_nodes.end ();
         }
-        co_return _nodes.end ();
     };
     auto target_runtime = _nodes.end ();
     std::optional<std::uint64_t> target_peer_epoch;
@@ -995,23 +1019,40 @@ mesh_node_host_service_t::create_actor (bool exclusive,
         if (factory != source_registration->spot_state->actor_factories.end ())
             reserve.relocation_policy = factory->second.relocation.kind;
     }
-    const auto select_target = [&] () -> task_t<void> {
-        target = choose_target ();
-        target_runtime = co_await find_target_runtime ();
-        target_peer_epoch =
-          target.rid == source_rid
-            ? std::optional<std::uint64_t>{}
-            : (*source_runtime)->admitted_peer_epoch (target.rid, target.lifecycle_generation);
-        reserve.target = {.mesh_name = target.mesh_name,
-                          .node_rid = node_rid_t::from_string (target.rid.to_string ()),
-                          .node_lifecycle_generation = target.lifecycle_generation,
-                          .owner = {target.owner_id, target.lease_generation}};
-        //  The authority payload names the placement target, so it is
-        //  rewritten with the reservation target it belongs to.
-        reserve.creating_payload = target_actor_authority_payload (
-          actor_authority_state_t::creating, stable_type, actor_id, target);
+    struct select_actor_target_t
+    {
+        static task_t<actor_target_selection_t>
+        run (mesh_node_host_service_t *self,
+             std::decay_t<decltype (choose_target ())> target,
+             std::decay_t<decltype (source_node)> source_node,
+             std::decay_t<decltype (source_rid)> source_rid,
+             std::decay_t<decltype (reserve)> reserve,
+             std::decay_t<decltype (stable_type)> stable_type,
+             std::decay_t<decltype (actor_id)> actor_id)
+        {
+            auto target_runtime = co_await find_actor_target_t::run (self, target);
+            auto target_peer_epoch =
+              target.rid == source_rid
+                ? std::optional<std::uint64_t>{}
+                : source_node->admitted_peer_epoch (target.rid, target.lifecycle_generation);
+            reserve.target = {.mesh_name = target.mesh_name,
+                              .node_rid = node_rid_t::from_string (target.rid.to_string ()),
+                              .node_lifecycle_generation = target.lifecycle_generation,
+                              .owner = {target.owner_id, target.lease_generation}};
+            //  The authority payload names the placement target, so it is
+            //  rewritten with the reservation target it belongs to.
+            reserve.creating_payload = target_actor_authority_payload (
+              actor_authority_state_t::creating, stable_type, actor_id, target);
+
+            co_return std::tuple{std::move (target), target_runtime, target_peer_epoch,
+                                 std::move (reserve)};
+        }
     };
-    co_await select_target ();
+    const auto select_target = [&] () -> task_t<actor_target_selection_t> {
+        return select_actor_target_t::run (this, choose_target (), source_node, source_rid, reserve,
+                                           stable_type, actor_id);
+    };
+    std::tie (target, target_runtime, target_peer_epoch, reserve) = co_await select_target ();
     if (const auto terminal = co_await _location_store->read_creation_terminal (operation))
         co_return result_t<actor_create_result_t>::success (actor_result_from_terminal (
           *terminal, node_rid_t::from_string (target.rid.to_string ()), stable_type,
@@ -1020,8 +1061,8 @@ mesh_node_host_service_t::create_actor (bool exclusive,
           }));
     //  Location runtime §7 and Actor model §6.3: a target that cannot take this creation (no
     //  capacity, no longer serving, or no Entry Spot accepting the type) is excluded for its host
-    //  execution generation and another candidate is chosen. False when none remains.
-    const auto exclude_target = [&] () -> task_t<bool> {
+    //  execution generation and another candidate is chosen. No task when none remains.
+    const auto exclude_target = [&] () -> std::optional<task_t<actor_target_selection_t>> {
         unavailable_targets.insert (
           {target.rid.to_hex (), target.lifecycle_generation, std::nullopt});
         candidates.erase (std::remove_if (candidates.begin (), candidates.end (),
@@ -1033,9 +1074,8 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                                           }),
                           candidates.end ());
         if (candidates.empty ())
-            co_return false;
-        co_await select_target ();
-        co_return true;
+            return std::nullopt;
+        return select_target ();
     };
     while (std::chrono::steady_clock::now () < deadline) {
         const auto reserved = co_await _location_store->reserve (reserve);
@@ -1051,10 +1091,12 @@ mesh_node_host_service_t::create_actor (bool exclusive,
           && std::holds_alternative<authority_missing_t> (reserve_conflict->current);
         if (std::holds_alternative<object_placement_capacity_exhausted_t> (reserved)
             || target_unavailable) {
-            const auto has_next_target = co_await exclude_target ();
+            auto has_next_target = exclude_target ();
             if (!has_next_target)
                 co_return result_t<actor_create_result_t>::failure (
                   framework_error_kind_t::unavailable, "Actor placement candidates were exhausted");
+            std::tie (target, target_runtime, target_peer_epoch, reserve) =
+              co_await *has_next_target;
             continue;
         }
         if (const auto *winner = std::get_if<object_reserved_t> (&reserved)) {
@@ -1072,12 +1114,13 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                     }
                     (void) co_await await_result (_location_store->abort (
                       {reserve.key, winner->fence}, {}, operation_deadline));
-                    co_await refresh_candidates ();
+                    candidates = co_await refresh_candidates ();
                     if (candidates.empty ())
                         co_return result_t<actor_create_result_t>::failure (
                           framework_error_kind_t::unavailable,
                           "Actor placement target is not RouteMesh-admitted");
-                    co_await select_target ();
+                    std::tie (target, target_runtime, target_peer_epoch, reserve) =
+                      co_await select_target ();
                     continue;
                 }
                 const auto source_status = (*source_runtime)->native_node ().status ();
@@ -1110,11 +1153,13 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                 if (remote.value ())
                     co_return result_t<actor_create_result_t>::success (
                       std::move (*remote.value ()));
-                const auto has_next_target = co_await exclude_target ();
+                auto has_next_target = exclude_target ();
                 if (!has_next_target)
                     co_return result_t<actor_create_result_t>::failure (
                       framework_error_kind_t::unavailable,
                       "Actor placement candidates were exhausted");
+                std::tie (target, target_runtime, target_peer_epoch, reserve) =
+                  co_await *has_next_target;
                 continue;
             }
             //  Actor model §6.3: this local target has no Entry Spot accepting the type, so the
@@ -1129,11 +1174,13 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                 if (!aborted)
                     co_return detail::propagate_failure<actor_create_result_t> (
                       aborted, "Actor reservation abort failed");
-                const auto has_next_target = co_await exclude_target ();
+                auto has_next_target = exclude_target ();
                 if (!has_next_target)
                     co_return result_t<actor_create_result_t>::failure (
                       framework_error_kind_t::unavailable,
                       "Actor placement candidates were exhausted");
+                std::tie (target, target_runtime, target_peer_epoch, reserve) =
+                  co_await *has_next_target;
                 continue;
             }
             std::optional<zlink::message_t> raw_request;
@@ -2559,21 +2606,30 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                 continue;
             const auto gate = _actor_destroy_gate;
             detail::spot_node_runtime_t spot_runtime (registration->spot_state);
+            struct destroy_actor_cleanup_t
+            {
+                static task_t<result_t<void>> run (mesh_node_host_service_t *self,
+                                                   std::decay_t<decltype (gate)> gate,
+                                                   actor_ref_t actor)
+                {
+                    if (!gate->try_enter ())
+                        co_return result_t<void>::failure (
+                          framework_error_kind_t::shutting_down,
+                          "Actor destroy cleanup was rejected during Mesh shutdown");
+                    try {
+                        auto result = co_await self->finalize_local_actor_destroy (actor);
+                        gate->leave ();
+                        co_return result;
+                    }
+                    catch (...) {
+                        gate->leave ();
+                        throw;
+                    }
+                }
+            };
             spot_runtime.on_destroy_actor (
               [this, gate] (actor_ref_t actor) -> task_t<result_t<void>> {
-                  if (!gate->try_enter ())
-                      co_return result_t<void>::failure (
-                        framework_error_kind_t::shutting_down,
-                        "Actor destroy cleanup was rejected during Mesh shutdown");
-                  try {
-                      auto result = co_await finalize_local_actor_destroy (actor);
-                      gate->leave ();
-                      co_return result;
-                  }
-                  catch (...) {
-                      gate->leave ();
-                      throw;
-                  }
+                  return destroy_actor_cleanup_t::run (this, gate, std::move (actor));
               });
             if (actor_gateway) {
                 spot_runtime.on_actor_ref_updated (
@@ -2633,6 +2689,69 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                            : std::shared_ptr<const location_owner_token_t>{};
               },
               _location_runtime ? &services.get_required<live_location_reader_t> () : nullptr);
+            struct materialize_user_spot_t
+            {
+                static task_t<host::user_spot_materialize_result_t>
+                run (std::decay_t<decltype (source)> source,
+                     std::decay_t<decltype (registration)> registration,
+                     serializer_registry_t *serializers,
+                     stateful::object_ref_t object,
+                     std::string stable_type,
+                     std::vector<std::byte> payload)
+                {
+                    std::vector<std::uint8_t> rid_bytes;
+                    rid_bytes.reserve (object.key.size ());
+                    for (const auto value : object.key)
+                        rid_bytes.push_back (
+                          static_cast<std::uint8_t> (static_cast<unsigned char> (value)));
+                    std::vector<std::uint8_t> request_bytes;
+                    request_bytes.reserve (payload.size ());
+                    for (const auto value : payload)
+                        request_bytes.push_back (std::to_integer<std::uint8_t> (value));
+                    auto spot_id = spot_id_t (zlink::routing_id_t::from (rid_bytes).to_string ());
+                    const auto native_id = std::string (spot_id);
+                    auto native_spot = std::make_shared<host::spot_handle_t> (
+                      source->native_node ().shared_from_this (), object);
+                    co_await registration->spot_state->lane.run_task ([&] {
+                        registration->spot_state->native_spots_by_id.insert_or_assign (native_id,
+                                                                                       native_spot);
+                    });
+                    detail::spot_node_runtime_t spots (registration->spot_state);
+                    std::optional<detail::local_spot_create_result_t> created;
+                    std::function<task_t<void> (bool)> preparation_terminal;
+                    std::exception_ptr failure;
+                    try {
+                        auto creation = co_await spots.get_or_create_spot_async (
+                          stable_type, std::move (spot_id), zlink::message_t::from (request_bytes),
+                          object.object_generation, object.mesh_name,
+                          object.authority_owner_generation, &preparation_terminal);
+                        created.emplace (std::move (*creation));
+                    }
+                    catch (...) {
+                        failure = std::current_exception ();
+                    }
+                    if (failure) {
+                        co_await registration->spot_state->lane.run_task ([&] {
+                            const auto found =
+                              registration->spot_state->native_spots_by_id.find (native_id);
+                            if (found != registration->spot_state->native_spots_by_id.end ()
+                                && found->second == native_spot)
+                                registration->spot_state->native_spots_by_id.erase (found);
+                        });
+                        std::rethrow_exception (failure);
+                    }
+                    std::optional<protocol::application_payload_t> application_reply;
+                    if (created->reply) {
+                        application_reply = protocol::application_payload_t{
+                          stable_type, "application/octet-stream",
+                          detail::message_to_raw (*created->reply, *serializers).to_bytes ()};
+                    }
+                    co_return host::user_spot_materialize_result_t{
+                      created->state == spot_create_state_t::created
+                        || created->state == spot_create_state_t::existing,
+                      std::move (application_reply), std::move (preparation_terminal)};
+                }
+            };
             _nodes[index]->configure_user_spot_operations (
               store,
               [this, weak_registration = std::weak_ptr (registration),
@@ -2640,59 +2759,10 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                                       const std::string &stable_type,
                                                       const std::vector<std::byte> &payload)
                 -> task_t<host::user_spot_materialize_result_t> {
-                  const auto source = detail::lock_runtime_owner (weak_source);
-                  const auto registration = detail::lock_runtime_owner (weak_registration);
-                  std::vector<std::uint8_t> rid_bytes;
-                  rid_bytes.reserve (object.key.size ());
-                  for (const auto value : object.key)
-                      rid_bytes.push_back (
-                        static_cast<std::uint8_t> (static_cast<unsigned char> (value)));
-                  std::vector<std::uint8_t> request_bytes;
-                  request_bytes.reserve (payload.size ());
-                  for (const auto value : payload)
-                      request_bytes.push_back (std::to_integer<std::uint8_t> (value));
-                  auto spot_id = spot_id_t (zlink::routing_id_t::from (rid_bytes).to_string ());
-                  const auto native_id = std::string (spot_id);
-                  auto native_spot = std::make_shared<host::spot_handle_t> (
-                    source->native_node ().shared_from_this (), object);
-                  co_await registration->spot_state->lane.run_task ([&] {
-                      registration->spot_state->native_spots_by_id.insert_or_assign (native_id,
-                                                                                     native_spot);
-                  });
-                  detail::spot_node_runtime_t spots (registration->spot_state);
-                  std::optional<detail::local_spot_create_result_t> created;
-                  std::function<task_t<void> (bool)> preparation_terminal;
-                  std::exception_ptr failure;
-                  try {
-                      auto creation = co_await spots.get_or_create_spot_async (
-                        stable_type, std::move (spot_id), zlink::message_t::from (request_bytes),
-                        object.object_generation, object.mesh_name,
-                        object.authority_owner_generation, &preparation_terminal);
-                      created.emplace (std::move (*creation));
-                  }
-                  catch (...) {
-                      failure = std::current_exception ();
-                  }
-                  if (failure) {
-                      co_await registration->spot_state->lane.run_task ([&] {
-                          const auto found =
-                            registration->spot_state->native_spots_by_id.find (native_id);
-                          if (found != registration->spot_state->native_spots_by_id.end ()
-                              && found->second == native_spot)
-                              registration->spot_state->native_spots_by_id.erase (found);
-                      });
-                      std::rethrow_exception (failure);
-                  }
-                  std::optional<protocol::application_payload_t> application_reply;
-                  if (created->reply) {
-                      application_reply = protocol::application_payload_t{
-                        stable_type, "application/octet-stream",
-                        detail::message_to_raw (*created->reply, *_serializers).to_bytes ()};
-                  }
-                  co_return host::user_spot_materialize_result_t{
-                    created->state == spot_create_state_t::created
-                      || created->state == spot_create_state_t::existing,
-                    std::move (application_reply), std::move (preparation_terminal)};
+                  return materialize_user_spot_t::run (
+                    detail::lock_runtime_owner (weak_source),
+                    detail::lock_runtime_owner (weak_registration), _serializers, object,
+                    stable_type, payload);
               },
               [weak_registration = std::weak_ptr (registration)] (
                 const std::string &spot_id, std::uint64_t object_generation,
@@ -2734,14 +2804,14 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                         std::string (stable_type), std::string (spot_id), object_generation,
                         authority_owner_generation);
                   };
-                _nodes[index]->configure_instance_spot_operations (
-                  store, instance_relocations, [this] { return current_location_owner (); },
-                  host::instance_spot_activation_materializer_t{
-                    [weak_registration = std::weak_ptr (registration)] (
-                      const protocol::instance_spot_activation_header_t &request,
-                      const authority_snapshot_t &snapshot,
-                      std::function<task_t<void> (bool)> &preparation_terminal) -> task_t<bool> {
-                        const auto registration = detail::lock_runtime_owner (weak_registration);
+                struct prepare_instance_spot_t
+                {
+                    static task_t<bool>
+                    run (std::decay_t<decltype (registration)> registration,
+                         protocol::instance_spot_activation_header_t request,
+                         authority_snapshot_t snapshot,
+                         std::function<task_t<void> (bool)> &preparation_terminal)
+                    {
                         if (snapshot.allocation.object_kind
                               != placement_object_kind_t::instance_spot
                             || snapshot.allocation.stable_type != request.target.stable_type
@@ -2762,6 +2832,18 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                               &preparation_terminal);
                         co_return created->state == spot_create_state_t::created
                           || created->state == spot_create_state_t::existing;
+                    }
+                };
+                _nodes[index]->configure_instance_spot_operations (
+                  store, instance_relocations, [this] { return current_location_owner (); },
+                  host::instance_spot_activation_materializer_t{
+                    [weak_registration = std::weak_ptr (registration)] (
+                      const protocol::instance_spot_activation_header_t &request,
+                      const authority_snapshot_t &snapshot,
+                      std::function<task_t<void> (bool)> &preparation_terminal) -> task_t<bool> {
+                        return prepare_instance_spot_t::run (
+                          detail::lock_runtime_owner (weak_registration), request, snapshot,
+                          preparation_terminal);
                     },
                     [this, weak_registration = std::weak_ptr (registration), &services] (
                       std::shared_ptr<const protocol::instance_activation_recovery_t>

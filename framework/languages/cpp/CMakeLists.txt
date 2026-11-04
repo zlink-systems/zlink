@@ -1894,6 +1894,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-contract"
     TIMEOUT 30)
 
+  add_executable(test_cpp_framework_capturing_coroutine_scan
+    tests/Zlink.Framework.ContractTests/test_cpp_framework_capturing_coroutine_scan.cpp)
+  target_compile_features(test_cpp_framework_capturing_coroutine_scan PRIVATE cxx_std_20)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_capturing_coroutine_scan
+    COMMAND test_cpp_framework_capturing_coroutine_scan
+    LABELS "framework-contract"
+    TIMEOUT 30)
+
   add_executable(test_cpp_framework_target_contract
     tests/Zlink.Framework.ContractTests/test_cpp_framework_target_contract.cpp)
   target_compile_definitions(test_cpp_framework_target_contract PRIVATE
