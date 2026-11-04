@@ -1778,6 +1778,7 @@ struct relay_peer_pair_t
     fw::runtime::in_memory_location_repository_t source_store;
     fw::runtime::live_location_reader_t source_reader{source_store};
     std::shared_ptr<host_type> source, target;
+    std::array<std::future<void>, 2> hosts_destroyed;
     descriptor_type source_wire, target_wire;
     std::shared_ptr<const fw::mesh_node_descriptor_t> original;
     std::shared_ptr<const fw::location_owner_token_t> lease =
@@ -1792,7 +1793,8 @@ struct relay_peer_pair_t
       fw::runtime::stateful::accepted_record_authority_resolver_t authority = {})
     {
         const auto make = [] (const char *rid, std::uint64_t generation,
-                              fw::runtime::mesh::service_object_role_t role) {
+                              fw::runtime::mesh::service_object_role_t role,
+                              std::future<void> &destroyed) {
             fw::runtime::host::host_options_t options;
             options.mesh.descriptor.mesh_name = mesh_name;
             options.mesh.descriptor.node_routing_id = zlink::routing_id_t::from (rid).to_bytes ();
@@ -1802,14 +1804,20 @@ struct relay_peer_pair_t
             options.mesh.descriptor.object_role = role;
             options.mesh.runtime_failures =
               std::make_shared<fw::runtime::runtime_failure_collector_t> ();
-            auto host = std::make_shared<host_type> (std::move (options));
+            auto completion = std::make_shared<std::promise<void>> ();
+            destroyed = completion->get_future ();
+            auto host = std::shared_ptr<host_type> (new host_type (std::move (options)),
+                                                    [completion] (host_type *value) {
+                                                        delete value;
+                                                        completion->set_value ();
+                                                    });
             // An object node runs under an auto-connect owner (MeshNode 7.1).
             if (role != fw::runtime::mesh::service_object_role_t::none)
                 host->configure_peer_reconcile ([] (const std::vector<std::uint8_t> &) {});
             return host;
         };
-        source = make ("relay-source", 7, source_role);
-        target = make ("relay-target", 11, target_role);
+        source = make ("relay-source", 7, source_role, hosts_destroyed[0]);
+        target = make ("relay-target", 11, target_role, hosts_destroyed[1]);
         if (authority)
             target->configure_stateful_dispatch (std::move (authority), &source_reader);
         else
@@ -1830,6 +1838,12 @@ struct relay_peer_pair_t
     {
         target->close ();
         source->close ();
+        target.reset ();
+        source.reset ();
+        // A task publishes its result before final_suspend destroys the frame.
+        // Its last host reference and the Core context can still belong to that frame.
+        for (auto &destroyed : hosts_destroyed)
+            destroyed.get ();
     }
     static std::shared_ptr<const fw::mesh_node_descriptor_t> discovery (const descriptor_type &wire,
                                                                         const char *owner)
