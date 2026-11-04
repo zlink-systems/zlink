@@ -12,6 +12,15 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 
 ## [Unreleased]
 
+## [1.23.0]
+
+### Fixed
+
+- Restart the poller before its final drain so handlers posted after `stop()` run, including deferred engine deletion (#3453, #3513).
+- Transfer pending asynchronous commands to the inline owner when monitor command processing is released, without waiting for an idle turn (#3495).
+
+Public API and ABI are unchanged; linker SOVERSION remains 0.
+
 ## [1.22.0]
 
 ### Fixed
