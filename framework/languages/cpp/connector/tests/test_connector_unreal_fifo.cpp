@@ -2,6 +2,7 @@
 #include "ZLinkStreamConnector.h"
 #include <zlink/stream_connector.hpp>
 #include "runtime/connector_runtime.hpp"
+#include "control_frame_contract.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -71,5 +72,19 @@ int main ()
     for (const auto value : order)
         std::cout << value << ' ';
     std::cout << '\n';
-    return pass ? 0 : 1;
+    const auto control_failures =
+      control_contract::connector_cases ([] (const connector_options_t &options, auto test) {
+          UZLinkStreamConnector control_owner;
+          FZLinkStreamConnectorRuntime control_runtime (control_owner);
+          control_runtime.Connector = connector_factory_t::create (options);
+          std::size_t delivered = 0;
+          control_runtime.On ("$zlink.future", [&] (const FZLinkStreamPacket &) { ++delivered; });
+          control_runtime.On ("$zlink.heartbeat.pong",
+                              [&] (const FZLinkStreamPacket &) { ++delivered; });
+          test (control_runtime.Connector);
+          control_runtime.Dispatch ();
+          if (delivered != 0)
+              throw std::runtime_error ("Unreal delivered an ignored control");
+      });
+    return pass && control_failures == 0 ? 0 : 1;
 }

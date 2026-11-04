@@ -11,6 +11,7 @@
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
+#include "runtime/diagnostics/diagnostic_event_sink.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
@@ -1862,10 +1863,35 @@ void stream_runtime_t::send_heartbeat_pong (stream_t &stream) const noexcept
 }
 
 void stream_runtime_t::dispatch_control_frame (stream_t &stream,
-                                               const stream_header_t &header) const noexcept
+                                               const stream_header_t &header,
+                                               const zlink::message_t &payload) const
 {
-    if (header.packet_name () == detail::heartbeat_ping_name)
+    const auto name = header.packet_name ();
+    const auto log_ignored = [&] {
+        const auto &logger = dispatch_options_access_t::logger (_state->dispatch);
+        if (logger && logger->is_enabled (log_level_t::debug)) {
+            const auto rid = stream.routing_id ();
+            diagnostic_event_sink_t::log_if_configured (
+              logger, log_level_t::debug, "Ignored STREAM control",
+              {{"control_name", std::string (name)},
+               {"payload_bytes", std::to_string (payload.size ())},
+               {"peer_session_rid", rid ? rid->to_hex () : std::string{}}});
+        }
+    };
+    if (name == detail::heartbeat_ping_name) {
+        if (payload.size () != 0)
+            log_ignored ();
         send_heartbeat_pong (stream);
+    } else if (name == detail::heartbeat_pong_name) {
+        if (payload.size () != 0)
+            log_ignored ();
+    } else if (name == "$zlink.actor.bound" || name == "$zlink.actor.unbound"
+               || !name.starts_with (zlink::detail::stream_wire::reserved_packet_name_prefix)) {
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     "Unexpected STREAM control packet");
+    } else {
+        log_ignored ();
+    }
 }
 
 stream_t stream_runtime_t::open_session (std::string stream_name) const

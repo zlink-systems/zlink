@@ -227,9 +227,8 @@ decode_packet (connector_state_t &state,
      * pong on the next pump pass. Control packets stay out of the
      * application inbound surface. */
         state.heartbeat_pong_due = true;
-    }
-    if (header.kind == message_kind_t::control
-        && header.name == session_closing_codec_t::control_name) {
+    } else if (header.kind == message_kind_t::control
+               && header.name == session_closing_codec_t::control_name) {
         /* graceful-drain-handoff §7.1: store the close reason before the
      * server closes the connection; malformed controls close as a
      * protocol error. */
@@ -240,9 +239,8 @@ decode_packet (connector_state_t &state,
               closing.error ()->message);
         }
         state.pending_close_reason = closing.value ().reason;
-    }
-    if (header.kind == message_kind_t::control
-        && header.name == actor_binding_control_codec_t::bound_name) {
+    } else if (header.kind == message_kind_t::control
+               && header.name == actor_binding_control_codec_t::bound_name) {
         auto bound = actor_binding_control_codec_t::decode_bound (payload);
         if (!bound)
             return result_t<dispatch_envelope_t>::failure (bound.error ()->code,
@@ -269,9 +267,8 @@ decode_packet (connector_state_t &state,
             schedule_actor_delivery (connector_state, &connector_state_t::actor_bound_handlers,
                                      std::move (handler_ids), std::move (actor));
         };
-    }
-    if (header.kind == message_kind_t::control
-        && header.name == actor_binding_control_codec_t::unbound_name) {
+    } else if (header.kind == message_kind_t::control
+               && header.name == actor_binding_control_codec_t::unbound_name) {
         auto slot = actor_binding_control_codec_t::decode_unbound (payload);
         if (!slot)
             return result_t<dispatch_envelope_t>::failure (slot.error ()->code,
@@ -298,6 +295,11 @@ decode_packet (connector_state_t &state,
             schedule_actor_delivery (connector_state, &connector_state_t::actor_unbound_handlers,
                                      std::move (handler_ids), std::move (actor));
         };
+    } else if (header.kind == message_kind_t::control
+               && !header.name.starts_with (
+                 zlink::detail::stream_wire::reserved_packet_name_prefix)) {
+        return result_t<dispatch_envelope_t>::failure (error_code_t::frame_decode_failed,
+                                                       "Unknown stream control packet.");
     }
     packet_t packet{header.name, header.metadata, header.codec, compressed, std::move (payload)};
     std::optional<std::uint16_t> actor_slot;

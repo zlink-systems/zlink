@@ -2485,11 +2485,13 @@ int main (int argc, char **argv)
     }
 
     auto heartbeat_stream = runtime.open_session ("client-stream");
-    runtime.dispatch_control_frame (
-      heartbeat_stream, zlink::framework::detail::stream_header_t (
-                          stream_message_kind_t::control, stream_codec_t::raw,
-                          zlink::framework::detail::stream_header_flags_t::none, std::nullopt,
-                          zlink::framework::detail::heartbeat_ping_name, {}));
+    runtime.dispatch_control_frame (heartbeat_stream,
+                                    zlink::framework::detail::stream_header_t (
+                                      stream_message_kind_t::control, stream_codec_t::raw,
+                                      zlink::framework::detail::stream_header_flags_t::none,
+                                      std::nullopt, zlink::framework::detail::heartbeat_ping_name,
+                                      {}),
+                                    zlink::message_t{});
     const auto heartbeat_headers = runtime.written_headers (heartbeat_stream);
     if (heartbeat_headers.size () != 1
         || heartbeat_headers[0].kind () != stream_message_kind_t::control
