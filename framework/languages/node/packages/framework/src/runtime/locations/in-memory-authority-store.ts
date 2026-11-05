@@ -138,7 +138,9 @@ export class ZLinkInMemoryAuthorityStore {
   ): Promise<ZLinkAuthorityReadResult> {
     signal?.throwIfAborted();
     const value = requireText(key.value, 'authority key');
-    return this.read(value);
+    const result = this.read(value);
+    if (result.kind === 'missing') this.ownerLeaseReleaseDelay.clearAuthority(value);
+    return result;
   }
 
   async compareExchangeAuthority(
@@ -156,6 +158,7 @@ export class ZLinkInMemoryAuthorityStore {
       row.snapshot.allocation.state !== 'active' ||
       row.snapshot.storeVersion.value !== expectedStoreVersion.value
     ) {
+      if (row === undefined) this.ownerLeaseReleaseDelay.clearAuthority(keyValue);
       return { kind: 'conflict', current: this.read(keyValue) };
     }
 
@@ -168,6 +171,13 @@ export class ZLinkInMemoryAuthorityStore {
       this.adjustCapacity(this.activeCapacity, row.snapshot.allocation, -1);
       this.rows.delete(keyValue);
       this.scanRevision++;
+      this.ownerLeaseReleaseDelay.clearAuthority(keyValue);
+      const decodedKey = decodeAuthorityKey(key);
+      if (decodedKey.kind === 'user_spot')
+        this.ownerLeaseReleaseDelay.clearUserSpotMembers(
+          decodedKey.globalId,
+          row.snapshot.objectGeneration
+        );
       return { kind: 'deleted', storeVersion: version(nextVersion), storeNow: this.now() };
     }
 
@@ -369,14 +379,7 @@ export class ZLinkInMemoryAuthorityStore {
     const releaseDelayScope = ownerLeaseReleaseDelayScope.authority(key.value);
     const current = this.rows.get(key.value);
     if (current === undefined) {
-      this.ownerLeaseReleaseDelay.clear(releaseDelayScope);
-      const decodedKey = decodeAuthorityKey(key);
-      if (decodedKey.kind === 'user_spot') {
-        this.ownerLeaseReleaseDelay.clearExcept(
-          ownerLeaseReleaseDelayScope.userSpotMembers(decodedKey.globalId),
-          new Set()
-        );
-      }
+      this.ownerLeaseReleaseDelay.clearAuthority(key.value);
       return false;
     }
     if (
@@ -431,24 +434,24 @@ export class ZLinkInMemoryAuthorityStore {
       const ownerLive = this.validation.isOwnerLive(owner);
       const releaseAllowed = releaseCandidate
         ? this.ownerLeaseReleaseDelay.allows(releaseDelayScope, owner, ownerLive)
-        : (this.ownerLeaseReleaseDelay.clear(releaseDelayScope), false);
+        : (this.ownerLeaseReleaseDelay.clearAuthority(key.value), false);
       if (ownerLive) return false;
       if (unavailable || request?.actorRelocationPolicy !== 'disabled')
         throw new ZLinkFrameworkException(
           ZLinkFrameworkErrorKind.Unavailable,
           'Object owner lease is unavailable.'
         );
+      if (spot?.kind === 'user_spot') {
+        endedSpotId = spot.spotId;
+        members = this.endedSpotMembers(key.value, current.snapshot, spot.spotId);
+      }
       if (releaseCandidate && !releaseAllowed)
         throw new ZLinkFrameworkException(
           ZLinkFrameworkErrorKind.Unavailable,
           'Object owner lease release is waiting for the invalid lease delay.'
         );
-      if (spot?.kind === 'user_spot') {
-        endedSpotId = spot.spotId;
-        members = this.endedSpotMembers(key.value, current.snapshot, spot.spotId);
-      }
     } else {
-      this.ownerLeaseReleaseDelay.clear(releaseDelayScope);
+      this.ownerLeaseReleaseDelay.clearAuthority(key.value);
       if (
         this.validation.isTargetLive(
           current.snapshot.allocation.descriptor,
@@ -472,11 +475,12 @@ export class ZLinkInMemoryAuthorityStore {
       this.adjustCapacity(this.activeCapacity, member.snapshot.allocation, -1);
       this.rows.delete(memberKey);
     }
-    this.ownerLeaseReleaseDelay.clear(releaseDelayScope);
+    this.ownerLeaseReleaseDelay.clearAuthority(key.value);
+    for (const memberKey of members) this.ownerLeaseReleaseDelay.clearAuthority(memberKey);
     if (endedSpotId !== undefined) {
-      this.ownerLeaseReleaseDelay.clearExcept(
-        ownerLeaseReleaseDelayScope.userSpotMembers(endedSpotId),
-        new Set()
+      this.ownerLeaseReleaseDelay.clearUserSpotMembers(
+        endedSpotId,
+        current.snapshot.objectGeneration
       );
     }
     if (current.snapshot.allocation.state === 'reserved' && current.creation !== undefined)
@@ -494,7 +498,10 @@ export class ZLinkInMemoryAuthorityStore {
   private endedSpotMembers(spotKey: string, spot: StoredSnapshot, spotId: string): string[] {
     const descriptorKey = (descriptor: ZLinkMeshNodeDescriptorKey) =>
       `${descriptor.meshName}\0${String(descriptor.rid)}`;
-    const memberScopePrefix = ownerLeaseReleaseDelayScope.userSpotMembers(spotId);
+    const memberScopePrefix = ownerLeaseReleaseDelayScope.userSpotMembers(
+      spotId,
+      spot.objectGeneration
+    );
     const batchKeys = new Set<string>([
       `authority:${spotKey}`,
       `owner:${spot.ownerId}`,
@@ -587,13 +594,7 @@ export class ZLinkInMemoryAuthorityStore {
     }
     const current = this.rows.get(key);
     if (current === undefined) {
-      this.ownerLeaseReleaseDelay.clear(ownerLeaseReleaseDelayScope.authority(key));
-      if (request.key.kind === 'user_spot') {
-        this.ownerLeaseReleaseDelay.clearExcept(
-          ownerLeaseReleaseDelayScope.userSpotMembers(request.key.globalId),
-          new Set()
-        );
-      }
+      this.ownerLeaseReleaseDelay.clearAuthority(key);
     }
     if (current !== undefined) {
       if (

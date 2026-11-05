@@ -1527,13 +1527,13 @@ for (const liveMember of [false, true]) {
         error => error instanceof framework.ZLinkFrameworkException
           && error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
       );
-      monotonicMs = 15_000;
+      monotonicMs = 14_999;
       await assert.rejects(
         repository.reserve(spotRequest(next)),
         error => error instanceof framework.ZLinkFrameworkException
           && error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
       );
-      monotonicMs = 30_000;
+      monotonicMs = 15_000;
       const recreated = await repository.reserve(spotRequest(next));
       assert.equal(recreated.kind, 'reserved');
       assert.ok(recreated.creating.objectGeneration > spot.ready.objectGeneration);

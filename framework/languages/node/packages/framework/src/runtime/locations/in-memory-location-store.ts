@@ -166,6 +166,10 @@ export class ZLinkInMemoryLocationStore
     );
   }
 
+  get ownerLeaseReleaseDelayForTesting(): ZLinkOwnerLeaseReleaseDelay {
+    return this.ownerLeaseReleaseDelay;
+  }
+
   async readAuthority(
     key: ZLinkAuthorityKey,
     signal?: AbortSignal

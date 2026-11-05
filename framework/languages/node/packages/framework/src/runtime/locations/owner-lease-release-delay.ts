@@ -19,6 +19,10 @@ export class ZLinkOwnerLeaseReleaseDelay {
     return this.monotonicNowMs();
   }
 
+  get observationCountForTesting(): number {
+    return this.observations.size;
+  }
+
   allows(
     scope: string,
     owner: ZLinkLocationOwnerToken,
@@ -50,6 +54,17 @@ export class ZLinkOwnerLeaseReleaseDelay {
     this.observations.delete(scope);
   }
 
+  clearAuthority(authorityKey: string): void {
+    this.clear(ownerLeaseReleaseDelayScope.authority(authorityKey));
+  }
+
+  clearUserSpotMembers(spotId: string, objectGeneration: bigint): void {
+    this.clearExcept(
+      ownerLeaseReleaseDelayScope.userSpotMembers(spotId, objectGeneration),
+      new Set()
+    );
+  }
+
   clearExcept(scopePrefix: string, retainedScopes: ReadonlySet<string>): void {
     for (const scope of this.observations.keys()) {
       if (scope.startsWith(scopePrefix) && !retainedScopes.has(scope)) {
@@ -66,10 +81,10 @@ export const ownerLeaseReleaseDelayScope = {
   meshNode(meshName: string, rid: string): string {
     return `mesh-node\0${meshName}\0${rid}`;
   },
-  userSpotMembers(spotId: string): string {
-    return `user-spot-member\0${spotId}\0`;
+  userSpotMembers(spotId: string, objectGeneration: bigint): string {
+    return `user-spot-member\0${spotId}\0${objectGeneration}\0`;
   },
   userSpotMember(spotId: string, objectGeneration: bigint, authorityKey: string): string {
-    return `${this.userSpotMembers(spotId)}${objectGeneration}\0${authorityKey}`;
+    return `${this.userSpotMembers(spotId, objectGeneration)}${authorityKey}`;
   }
 };

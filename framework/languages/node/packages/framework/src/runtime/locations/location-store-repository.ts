@@ -139,6 +139,7 @@ interface AuthorityRecord {
 /** An Actor membership of an ended User Spot incarnation (location runtime §6.1). */
 interface EndedSpotMember {
   readonly key: ZLinkStoreKey;
+  readonly authorityKey: string;
   readonly version: ZLinkStoreVersion;
   readonly ownerId: string;
   readonly leaseGeneration: bigint;
@@ -307,6 +308,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   ): Promise<ZLinkAuthorityReadResult> {
     const result = await this.provider.read(authorityKey(key.value), signal);
     if (result.kind === 'missing') {
+      this.ownerLeaseReleaseDelay.clearAuthority(key.value);
       return { kind: 'missing', storeNow: result.storeNow };
     }
     return await this.projectAuthority(
@@ -394,6 +396,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       signal?.throwIfAborted();
       const current = await this.provider.read(rowKey, signal);
       if (current.kind === 'missing') {
+        this.ownerLeaseReleaseDelay.clearAuthority(key.value);
         return { kind: 'conflict', current: { kind: 'missing', storeNow: current.storeNow } };
       }
       const record = decodeAuthorityRecord(current.value.bytes);
@@ -624,6 +627,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         (entry) => entry.key.value === rowKey.value
       )?.version;
       if (mutation.kind === 'delete') {
+        this.ownerLeaseReleaseDelay.clearAuthority(key.value);
+        const decodedKey = decodeAuthorityKey(key);
+        if (decodedKey.kind === 'user_spot')
+          this.ownerLeaseReleaseDelay.clearUserSpotMembers(
+            decodedKey.globalId,
+            record.snapshot.objectGeneration
+          );
         return {
           kind: 'deleted',
           storeVersion: {
@@ -1361,14 +1371,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const rowKey = authorityKey(key.value);
       const current = await this.provider.read(rowKey, signal);
       if (current.kind === 'missing') {
-        this.ownerLeaseReleaseDelay.clear(releaseDelayScope);
-        const decodedKey = decodeAuthorityKey(key);
-        if (decodedKey.kind === 'user_spot') {
-          this.ownerLeaseReleaseDelay.clearExcept(
-            ownerLeaseReleaseDelayScope.userSpotMembers(decodedKey.globalId),
-            new Set()
-          );
-        }
+        this.ownerLeaseReleaseDelay.clearAuthority(key.value);
         return 'conflict';
       }
       const record = decodeAuthorityRecord(current.value.bytes);
@@ -1413,7 +1416,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             readySpot.stableType === request.intent.stableType &&
             readySpot.spotId === request.key.globalId &&
             readySpot.activationRecovery === undefined));
-      if (!releaseCandidate) this.ownerLeaseReleaseDelay.clear(releaseDelayScope);
+      if (!releaseCandidate) this.ownerLeaseReleaseDelay.clearAuthority(key.value);
       const descriptorKey = meshKey(
         snapshot.allocation.descriptor.meshName,
         snapshot.allocation.descriptor.rid
@@ -1422,25 +1425,83 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         snapshot.allocation.descriptor.meshName,
         String(snapshot.allocation.descriptor.rid)
       );
-      const leaseRead = this.provider.read(leaseKey, signal).then((read) => ({
-        read,
-        observedAtMs: this.ownerLeaseReleaseDelay.nowMs()
-      }));
-      const [leaseObservation, descriptor, capacity] = await Promise.all([
+      const leaseRead = this.provider.read(leaseKey, signal).then((read) => {
+        const observedAtMs = this.ownerLeaseReleaseDelay.nowMs();
+        const ownerLive = sameLiveOwner(read, snapshot);
+        const ownerReleaseAllowed = releaseCandidate
+          ? this.ownerLeaseReleaseDelay.allows(releaseDelayScope, owner, ownerLive, observedAtMs)
+          : false;
+        return { read, observedAtMs, ownerLive, ownerReleaseAllowed };
+      });
+      const memberObservations = leaseRead.then(async (leaseObservation) => {
+        if (
+          snapshot.allocation.state !== 'active' ||
+          leaseObservation.ownerLive ||
+          !releaseCandidate ||
+          readySpot?.kind !== 'user_spot'
+        )
+          return {
+            members: [] as EndedSpotMember[],
+            owners: new Map<string, { read: ZLinkStoreReadResult; observedAtMs: number }>(),
+            releaseStates: new Map<string, { ownerLive: boolean; allowed: boolean }>()
+          };
+
+        const members = await this.readEndedSpotMembers(
+          readySpot.spotId,
+          snapshot.objectGeneration,
+          signal
+        );
+        const targetsByOwner = new Map<
+          string,
+          { member: EndedSpotMember; scope: string; owner: ZLinkLocationOwnerToken }[]
+        >();
+        for (const member of members) {
+          const targets = targetsByOwner.get(member.ownerId) ?? [];
+          targets.push({
+            member,
+            scope: ownerLeaseReleaseDelayScope.userSpotMember(
+              readySpot.spotId,
+              snapshot.objectGeneration,
+              member.authorityKey
+            ),
+            owner: { ownerId: member.ownerId, leaseGeneration: member.leaseGeneration }
+          });
+          targetsByOwner.set(member.ownerId, targets);
+        }
+        const owners = new Map<string, { read: ZLinkStoreReadResult; observedAtMs: number }>();
+        const releaseStates = new Map<string, { ownerLive: boolean; allowed: boolean }>();
+        await Promise.all(
+          [...targetsByOwner].map(async ([ownerId, targets]) => {
+            const observation = await this.provider.read(ownerKey(ownerId), signal).then((read) => {
+              const observedAtMs = this.ownerLeaseReleaseDelay.nowMs();
+              for (const target of targets) {
+                const ownerLive =
+                  read.kind === 'found' &&
+                  matchesLiveOwnerLease(read, target.owner.ownerId, target.owner.leaseGeneration);
+                const allowed = this.ownerLeaseReleaseDelay.allows(
+                  target.scope,
+                  target.owner,
+                  ownerLive,
+                  observedAtMs
+                );
+                releaseStates.set(target.member.key.value, { ownerLive, allowed });
+              }
+              return { read, observedAtMs };
+            });
+            owners.set(ownerId, observation);
+          })
+        );
+        return { members, owners, releaseStates };
+      });
+      const [leaseObservation, descriptor, capacity, memberObservation] = await Promise.all([
         leaseRead,
         this.provider.read(descriptorKey, signal),
-        this.provider.read(capacityRowKey, signal)
+        this.provider.read(capacityRowKey, signal),
+        memberObservations
       ]);
       const lease = leaseObservation.read;
-      const ownerLive = sameLiveOwner(lease, snapshot);
-      const ownerReleaseAllowed = releaseCandidate
-        ? this.ownerLeaseReleaseDelay.allows(
-            releaseDelayScope,
-            owner,
-            ownerLive,
-            leaseObservation.observedAtMs
-          )
-        : false;
+      const ownerLive = leaseObservation.ownerLive;
+      const ownerReleaseAllowed = leaseObservation.ownerReleaseAllowed;
       if (
         requiredOwner !== undefined &&
         (!ownerLive ||
@@ -1448,7 +1509,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           requiredOwner.leaseGeneration !== snapshot.ownerLeaseGeneration)
       )
         return 'notReclaimable';
-      let members: EndedSpotMember[] = [];
+      const members = memberObservation.members;
       if (snapshot.allocation.state === 'active') {
         if (ownerLive) return 'notReclaimable';
         let unavailable =
@@ -1472,14 +1533,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             ZLinkFrameworkErrorKind.Unavailable,
             'Object owner lease release is waiting for the invalid lease delay.'
           );
-        if (readySpot?.kind === 'user_spot')
-          members = await this.readEndedSpotMembers(
-            readySpot.spotId,
-            snapshot.objectGeneration,
-            signal
-          );
       } else {
-        this.ownerLeaseReleaseDelay.clear(releaseDelayScope);
+        this.ownerLeaseReleaseDelay.clearAuthority(key.value);
         if (
           ownerLive &&
           descriptor.kind === 'found' &&
@@ -1508,42 +1563,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const owners = new Map<string, { read: ZLinkStoreReadResult; observedAtMs: number }>([
         [snapshot.ownerId, { read: lease, observedAtMs: leaseObservation.observedAtMs }]
       ]);
+      for (const [ownerId, observation] of memberObservation.owners)
+        owners.set(ownerId, observation);
       const endedSpotId = readySpot?.kind === 'user_spot' ? readySpot.spotId : undefined;
       let memberReleasePending = false;
       for (const member of members) {
-        const cachedOwnerObservation = owners.get(member.ownerId);
-        let memberLeaseObservation: { read: ZLinkStoreReadResult; observedAtMs: number };
-        if (cachedOwnerObservation === undefined) {
-          memberLeaseObservation = await this.provider
-            .read(ownerKey(member.ownerId), signal)
-            .then((read) => ({ read, observedAtMs: this.ownerLeaseReleaseDelay.nowMs() }));
-          owners.set(member.ownerId, memberLeaseObservation);
-        } else {
-          memberLeaseObservation = cachedOwnerObservation;
-        }
-        const memberOwner = {
-          ownerId: member.ownerId,
-          leaseGeneration: member.leaseGeneration
-        };
-        const memberOwnerLive =
-          memberLeaseObservation.read.kind === 'found' &&
-          matchesLiveOwnerLease(
-            memberLeaseObservation.read,
-            member.ownerId,
-            member.leaseGeneration
-          );
-        const memberScope = ownerLeaseReleaseDelayScope.userSpotMember(
-          endedSpotId!,
-          snapshot.objectGeneration,
-          member.key.value
-        );
-        const memberReleaseAllowed = this.ownerLeaseReleaseDelay.allows(
-          memberScope,
-          memberOwner,
-          memberOwnerLive,
-          memberLeaseObservation.observedAtMs
-        );
-        if (!memberReleaseAllowed || memberOwnerLive) {
+        const memberRelease = memberObservation.releaseStates.get(member.key.value);
+        if (memberRelease === undefined || !memberRelease.allowed || memberRelease.ownerLive) {
           memberReleasePending = true;
           continue;
         }
@@ -1622,12 +1648,11 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         );
       const result = await this.provider.write({ conditions, mutations }, signal);
       if (result.kind === 'applied') {
-        this.ownerLeaseReleaseDelay.clear(releaseDelayScope);
+        this.ownerLeaseReleaseDelay.clearAuthority(key.value);
+        for (const member of members)
+          this.ownerLeaseReleaseDelay.clearAuthority(member.authorityKey);
         if (endedSpotId !== undefined) {
-          this.ownerLeaseReleaseDelay.clearExcept(
-            ownerLeaseReleaseDelayScope.userSpotMembers(endedSpotId),
-            new Set()
-          );
+          this.ownerLeaseReleaseDelay.clearUserSpotMembers(endedSpotId, snapshot.objectGeneration);
         }
         return 'reclaimed';
       }
@@ -1648,7 +1673,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   ): Promise<EndedSpotMember[]> {
     membershipSnapshot: for (;;) {
       const members: EndedSpotMember[] = [];
-      const memberScopePrefix = ownerLeaseReleaseDelayScope.userSpotMembers(spotId);
+      const memberScopePrefix = ownerLeaseReleaseDelayScope.userSpotMembers(spotId, spotGeneration);
       const observedMemberScopes = new Set<string>();
       let unavailableMember = false;
       let cursor: ZLinkStoreScanCursor | undefined;
@@ -1675,10 +1700,11 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             actor.currentSpotGeneration !== spotGeneration
           )
             continue;
+          const memberAuthorityKey = authorityContractValueFromPreimage(item.key.value);
           const memberScope = ownerLeaseReleaseDelayScope.userSpotMember(
             spotId,
             spotGeneration,
-            item.key.value
+            memberAuthorityKey
           );
           observedMemberScopes.add(memberScope);
           if (
@@ -1693,6 +1719,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           }
           members.push({
             key: item.key,
+            authorityKey: memberAuthorityKey,
             version: item.value.version,
             ownerId: authority.ownerId,
             leaseGeneration: authority.ownerLeaseGeneration,
@@ -1737,15 +1764,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const capacityRowKey = capacityKey(request.target.meshName, String(request.target.nodeRid));
       const current = await this.provider.read(rowKey, signal);
       if (current.kind === 'missing') {
-        this.ownerLeaseReleaseDelay.clear(
-          ownerLeaseReleaseDelayScope.authority(encodedAuthorityKey.value)
-        );
-        if (request.key.kind === 'user_spot') {
-          this.ownerLeaseReleaseDelay.clearExcept(
-            ownerLeaseReleaseDelayScope.userSpotMembers(request.key.globalId),
-            new Set()
-          );
-        }
+        this.ownerLeaseReleaseDelay.clearAuthority(encodedAuthorityKey.value);
       }
       if (current.kind === 'found') {
         const record = decodeAuthorityRecord(current.value.bytes);
@@ -3164,7 +3183,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (releaseDelayScope !== undefined) this.ownerLeaseReleaseDelay.clear(releaseDelayScope);
     }
 
-    return this.writeDescriptorWithReconciliation(
+    const result = await this.writeDescriptorWithReconciliation(
       leaseKey,
       descriptor.ownerId,
       descriptor.leaseGeneration,
@@ -3174,6 +3193,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       generation,
       signal
     );
+    if (result.status === WriteStatus.Stored && releaseDelayScope !== undefined)
+      this.ownerLeaseReleaseDelay.clear(releaseDelayScope);
+    return result;
   }
 
   private async writeDescriptorWithReconciliation(
