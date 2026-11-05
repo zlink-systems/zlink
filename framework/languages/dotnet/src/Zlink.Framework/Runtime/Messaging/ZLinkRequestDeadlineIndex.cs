@@ -63,12 +63,7 @@ internal sealed class ZLinkDeadlineIndex<T>(long rotation)
         NextVisit = previousVisit;
     }
 
-    internal void Visit(
-        long now,
-        Func<T, long, bool> visit,
-        Func<bool> budgetSpent,
-        Func<long> clock
-    )
+    internal void Visit(long now, Func<T, long, bool> visit, Func<bool> budgetSpent)
     {
         if (_cursor is null)
         {
@@ -76,10 +71,11 @@ internal sealed class ZLinkDeadlineIndex<T>(long rotation)
             _lowerBound = now + rotation;
             _cursor = Head;
         }
+        // One visit timestamp bounds timeout candidacy; elapsed budget is checked per entry.
         while (_cursor is { } entry)
         {
             _cursor = entry.DeadlineNext;
-            if (!visit(entry, clock()))
+            if (!visit(entry, now))
                 Remove(entry);
             else
                 _lowerBound = Math.Min(_lowerBound, entry.AbsoluteDeadline);
@@ -249,14 +245,12 @@ internal sealed class ZLinkRequestDeadlineIndex : IAsyncDisposable
         _time.GetElapsedTime(_visitStarted).TotalMilliseconds
         >= Zlink.Framework.Runtime.Dispatch.ZLinkReceiveBatchBudget.MaximumMilliseconds;
 
-    private long Now() => _time.GetTimestamp();
-
     private void Visit()
     {
         if (_timer is null)
             return;
-        _visitStarted = Now();
-        _index.Visit(_visitStarted, VisitEntry, BudgetSpent, Now);
+        _visitStarted = _time.GetTimestamp();
+        _index.Visit(_visitStarted, VisitEntry, BudgetSpent);
         Schedule();
     }
 
