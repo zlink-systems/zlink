@@ -417,25 +417,43 @@ class state_lane_t
         auto task = completion->task ();
         // A dependent may wait for another turn on this lane. Result delivery
         // must therefore leave its executor, as well as its lane-current scope.
-        auto deliver = [dispatcher = detail::borrow_completion_dispatcher (),
-                        completion] (result_t<value_t> terminal) {
+        const auto dispatcher = detail::borrow_completion_dispatcher ();
+        auto deliver = [dispatcher] (std::shared_ptr<task_completion_source_t<value_t>> completion,
+                                     result_t<value_t> result, auto work) {
+            const auto *owner = completion.get ();
             detail::dispatch_completion (
-              [completion, result = std::move (terminal)] () mutable {
-                  completion->complete (std::move (result));
-              },
-              false, completion.get (), dispatcher);
+              [completion = std::move (completion), result = std::move (result),
+               work = std::move (work)] () mutable { completion->complete (std::move (result)); },
+              false, owner, dispatcher);
         };
+        // Successful turns must not leave a second result owner in abandonment.
+        const std::weak_ptr<task_completion_source_t<value_t>> abandoned = completion;
         if (!enqueue (
-              [deliver, invoke_work = std::move (invoke_work)] () mutable {
+              [deliver, dispatcher, completion = std::move (completion),
+               invoke_work = std::move (invoke_work)] () mutable {
                   auto result = invoke_work ();
-                  if constexpr (traits_t::asynchronous)
-                      detail::observe_task_completion (result, std::move (deliver));
-                  else
-                      deliver (std::move (result));
+                  if constexpr (traits_t::asynchronous) {
+                      detail::observe_task_completion (
+                        result, [deliver, completion] (result_t<value_t> terminal) mutable {
+                            deliver (std::move (completion), std::move (terminal), [] {});
+                        });
+                      // Release invocation captures outside this drain without
+                      // retaining their lane until the inner task completes.
+                      const auto *owner = completion.get ();
+                      detail::dispatch_completion (
+                        [work = std::move (invoke_work), completion = std::move (completion)] {},
+                        false, owner, dispatcher);
+                  } else {
+                      // A queued capture may own this lane. Its final release
+                      // must leave the worker together with result delivery.
+                      deliver (std::move (completion), std::move (result), std::move (invoke_work));
+                  }
               },
-              [deliver] (std::exception_ptr) {
-                  deliver (result_t<value_t>::failure (framework_error_kind_t::shutting_down,
-                                                       "state lane is closed"));
+              [deliver, abandoned] (std::exception_ptr) {
+                  auto error = result_t<value_t>::failure (framework_error_kind_t::shutting_down,
+                                                           "state lane is closed");
+                  // An abandoned mailbox item still owns its work callback.
+                  deliver (abandoned.lock (), std::move (error), [] {});
               }))
             throw std::runtime_error ("state lane is closed");
         schedule_drain (true);
