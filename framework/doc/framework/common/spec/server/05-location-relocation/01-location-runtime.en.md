@@ -897,7 +897,11 @@ retention does not shorten §6.1's release wait.
   completions, discard retained memory, and rejoin empty. Peer recovery or a successful new
   claim never reopens or restores discarded state. Detected Store rollback triggers the same
   cleanup regardless of `T`. This does not authorize deleting other owners' Store records or
-  flushing the namespace.
+  flushing the namespace. When a User Spot is discarded, the incoming Join attempts it accepted as
+  target that are still before verified cutover end with this discard record under
+  [Relocation flow §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). The order of
+  the discard record and cutover verification is settled once at the execution boundary owning that
+  attempt, and this ending waits for neither cutover arrival nor a handler turn.
 - A confirmed change to another owner/incarnation or loss of local execution rights stops new
   execution of the affected object regardless of mesh connectivity or `T`. Do not mutate the
   Store with an invalid token.
@@ -908,10 +912,11 @@ retention does not shorten §6.1's release wait.
   shared Spot gate for SpotWide) only after its Spot's gate has reopened; the shared gate also blocks
   a discarded member's records through the discard record. Objects in relocation when the outage
   starts (both source and target) are outside this binding and outside §5.1 retention, and follow
-  the failure table in Relocation flow §9 and §10. If the source remains owner after settlement,
-  reopen its gate under the recovery rules above, and for a local member only after its Spot's gate
-  reopens; if the Spot was discarded meanwhile, discard that member then and apply the cleanup
-  rules. `Creating` and `Closing` objects follow §7 and their own lifecycle procedures.
+  the failure table in Relocation flow §9 and §10 of this document. If the source remains owner
+  after settlement, reopen its gate under the recovery rules below, and for a local member only after
+  its Spot's gate reopens; if the Spot was discarded meanwhile, discard that member then and apply the
+  cleanup rules. Even when settlement ends by source lease expiry, if the record still points at this
+  host as owner, apply the same cleanup rules (release in the second case for an old invalid token). `Creating` and `Closing` objects follow §7 and their own lifecycle procedures.
   Member Actors on other hosts are outside this binding. Their respective owners
   own their authority and execution rights, so they follow the existing membership contract in
   [Spot/Actor membership §1 and §3](../03-spot-actor/05-spot-actor-membership.en.md#1-identity-and-authority)
@@ -969,16 +974,20 @@ retention does not shorten §6.1's release wait.
     object ends.
 - Clean a discarded User Spot only after confirming cleanup of every discarded local member
   Actor. The Spot itself follows the three cases above. Spot cleanup starts only after every
-  incoming target Join attempt the Spot accepted before discard has settled under the pre-cutover
-  termination rule of [Relocation flow §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover)
-  (including the discard record), Relocation flow §9, and §10 of this document. That confirmation arrives through the existing attempt continuation, without waiting in
-  a handler turn or adding a gate or queue. An Actor whose target commit is confirmed has become a
-  local member of that Spot, so apply the discard and cleanup rules above to it and confirm its row
-  removal. Once the source is confirmed as owner, that attempt adds no row. Then, like §6.1 release,
+  membership-adding operation the Spot accepted before discard (both incoming target Join attempts
+  from other nodes and same-node Joins) has settled. Target Join attempts settle under the
+  pre-cutover termination rule of
+  [Relocation flow §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover) (including the
+  discard record), Relocation flow §9, and §10 of this document. A same-node Join does not resubmit its
+  transaction after the discard record and settles its result only through the §10 recheck. That
+  confirmation arrives through the existing operation continuation, without waiting in a handler turn
+  or adding a gate or queue. On either path, an Actor whose commit is confirmed has become a local
+  member of that Spot, so apply the discard and cleanup rules above to it and confirm its row removal. Once the source is confirmed as owner, that attempt adds no row. Then, like §6.1 release,
   Spot cleanup reads the membership snapshot of that SpotId and `ObjectGeneration` to the end and
   submits the `Delete` or release batch only after confirming that no row remains. The batch conditions are those §6.1
   requires (authority `StoreVersion`, owner lease, descriptor, capacity). The discarded
-  incarnation's gate is closed to new joins and accepted attempts settle before the snapshot, so no
+  incarnation's gate is closed to new joins and accepted membership-adding operations settle before
+  the snapshot, so no
   new row commits after the snapshot. A Store failure or an unfinished scan is never treated as empty membership.
   This keeps a live owner's Actor from pointing at a `Missing` Spot. While rows of members on other
   hosts remain, do not change the Spot authority and recheck at each existing renew interval. Those
@@ -1986,7 +1995,9 @@ store record golden fixture. Each item maps to one test.
   after discard, the Spot must be cleaned only after that Actor is cleaned as a local member, and an
   attempt whose source is confirmed as owner must add no row. For an attempt whose source process
   ended before sending cutover, the discard record must end the staging, and cleanup must proceed to
-  the empty snapshot, Spot `Delete`, and creation of a new incarnation. An old cutover arriving after
+  the empty snapshot, Spot `Delete`, and creation of a new incarnation. When a same-node Join
+  transaction was applied but its response was lost and the Spot is then discarded, the commit must be
+  confirmed by the §10 recheck, that Actor cleaned as a local member, and then the Spot cleaned. An old cutover arriving after
   discard creates no row. When cutover verification precedes discard, the CAS result follows §10
   settlement to the end.
   A normal shutdown with the same token lets §11 reclaim the record; after claiming a new token,
