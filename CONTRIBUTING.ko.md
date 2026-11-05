@@ -100,6 +100,16 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   라이브러리 동작을 보는 테스트는 통합 테스트이며 공개 C API만으로 공유 `libzlink`를 상대한다
   (`core/tests/README.md`의 "Interface Boundary").
 - `sleep`으로 타이밍을 추정하는 테스트를 추가하지 않는다. 새 테스트는 5회 반복 green을 확인한다.
+- **시간 흐름에 기대는 테스트는 실제 시계 대신 제어 가능한 시계를 쓴다.** Deadline·timeout·주기·만료를
+  검사하는 테스트는 각 runtime의 시계 주입 지점(예: .NET `TimeProvider`, Node `monotonicNowMs` 옵션)으로
+  시간을 직접 진행한다. 실제 시계의 deadline과 짧은 sleep을 반복하는 polling으로 조건을 기다리지 않는다.
+  피할 수 없는 상한 대기는 실패를 진단하기 위한 상한일 뿐 동기화 수단이 아니다.
+- **두 시계가 같다고 가정하지 않는다.** Wall clock과 monotonic clock, 테스트가 주입한 시계와 runtime 내부
+  시계는 서로 다르게 진행할 수 있다. 한 시계로 잰 경과로 다른 시계의 deadline을 판정하지 않는다.
+- **Trace·log 인도를 유휴 상태로 보지 않는다.** Trace나 log가 도착했다는 사실은 작업이 끝났거나 queue가
+  비었다는 증거가 아니다. 유휴·완료는 공개 API로 관측할 수 있는 완료·상태 이벤트로 판정한다.
+- 매일 밤 worker 1개 실행과 sanitizer(ASan·UBSan) 실행이 main에서 돈다(`.github/workflows/nightly-stress.yml`).
+  여기서 드러난 실패는 병렬·실제 시계 실행에서 드물게 보이던 결함으로 다루며, 재실행 통과로 닫지 않는다.
 - 알려진 load flake: `test_single_lane_flow_snapshot_accounting`(병렬 suite에서 드물게 즉시 실패 →
   단독 재실행 1회로 판정), C++ 바인딩 테스트의 exit 86/134(재링크 직후 → 1회 재실행).
 

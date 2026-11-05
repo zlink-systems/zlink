@@ -11,6 +11,12 @@ project="$1"; configuration="$2"; framework="$3"
 results="${RUNNER_TEMP:-/tmp}/zlink-test-results/$(basename "${project%.csproj}")-${configuration}-${framework}"
 rm -rf "$results"; mkdir -p "$results"
 
+runsettings_args=()
+if [[ "${ZLINK_SINGLE_WORKER:-false}" == "true" ]]; then
+  runsettings_args=(-- RunConfiguration.MaxCpuCount=1 xUnit.ParallelizeTestCollections=false)
+fi
+
 dotnet test "$project" -c "$configuration" -f "$framework" --no-build \
   --logger "trx;LogFileName=test.trx" --results-directory "$results" \
-  --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full
+  --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
+  "${runsettings_args[@]}"

@@ -39,11 +39,15 @@ build_comment_body() {
     "$run_url" "$head_sha" "$failed_job_lines" "$label_note"
 }
 
+should_pause_merge_queue() {
+  [[ "$1" != "Nightly stress" ]]
+}
+
 main() {
   local title="nightly: ${WORKFLOW_NAME} 실패"
   local label="nightly-failure"
   local jobs_json failed_jobs failed_job_lines labels_json search_query open_issues existing
-  local issue_number issue_url label_note label_state=unknown label_exists=false
+  local issue_number issue_url label_note label_state=unknown label_exists=false pause_queue
 
   jobs_json="$(gh run view "$RUN_ID" --repo "$GH_REPOSITORY" --json jobs)"
   failed_jobs="$(jq -r '
@@ -95,7 +99,14 @@ main() {
     fi
   fi
 
+  if should_pause_merge_queue "$WORKFLOW_NAME"; then
+    pause_queue=true
+  else
+    pause_queue=false
+  fi
+
   printf 'issue_url=%s\n' "$issue_url" >> "$GITHUB_OUTPUT"
+  printf 'pause_queue=%s\n' "$pause_queue" >> "$GITHUB_OUTPUT"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
