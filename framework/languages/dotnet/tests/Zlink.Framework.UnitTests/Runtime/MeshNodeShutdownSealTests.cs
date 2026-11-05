@@ -294,8 +294,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
                 visited++;
                 return false;
             },
-            static () => false,
-            () => rotation
+            static () => false
         );
         Assert.Equal(1000, visited);
         Assert.Null(index.Head);
@@ -314,8 +313,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
                 visited++;
                 return false;
             },
-            static () => false,
-            () => rotation + 1
+            static () => false
         );
         Assert.Equal(1, visited);
         Assert.Null(index.Head);
@@ -543,28 +541,51 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         var now = TimeSpan.FromMilliseconds(232).Ticks;
         Assert.Equal(TimeSpan.FromMilliseconds(24).Ticks, index.NextVisit - now);
         now = TimeSpan.FromMilliseconds(256).Ticks;
-        index.Visit(
-            now,
-            static (entry, at) => entry.AbsoluteDeadline > at,
-            static () => false,
-            () => now
-        );
+        index.Visit(now, static (entry, at) => entry.AbsoluteDeadline > at, static () => false);
         var second = new DeadlineEntry(TimeSpan.FromMilliseconds(756).Ticks);
         index.Register(second, now);
         Assert.Equal(TimeSpan.FromMilliseconds(256).Ticks, index.NextVisit - now);
         index.Register(new DeadlineEntry(TimeSpan.FromMilliseconds(276).Ticks), now);
         Assert.Equal(TimeSpan.FromMilliseconds(20).Ticks, index.NextVisit - now);
         now = TimeSpan.FromMilliseconds(276).Ticks;
-        index.Visit(
-            now,
-            static (entry, at) => entry.AbsoluteDeadline > at,
-            static () => false,
-            () => now
-        );
+        index.Visit(now, static (entry, at) => entry.AbsoluteDeadline > at, static () => false);
         Assert.Equal(TimeSpan.FromMilliseconds(256).Ticks, index.NextVisit - now);
         Assert.Same(first, index.Head);
         Assert.Same(second, first.DeadlineNext);
         Assert.Null(second.DeadlineNext);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(64)]
+    public void RequestIndex_ManagementVisitsDoNotScaleWithCompletedRequests(int requestsPerTick)
+    {
+        var index = new ZLinkDeadlineIndex<DeadlineEntry>(256);
+        var visits = 0;
+        var examined = 0;
+        for (var now = 0; now <= 1027; now++)
+        {
+            if (now < 1024)
+                for (var request = 0; request < requestsPerTick; request++)
+                    index.Register(new DeadlineEntry(now + 60000), now);
+            if (now < index.NextVisit)
+                continue;
+            visits++;
+            index.Visit(
+                now,
+                (_, _) =>
+                {
+                    examined++;
+                    return false;
+                },
+                static () => false
+            );
+        }
+        Assert.Equal(4, visits);
+        Assert.Equal(1024 * requestsPerTick, examined);
+        Assert.Null(index.Head);
+        Assert.Equal(long.MaxValue, index.NextVisit);
+        output.WriteLine($"requests={examined} management_visits={visits}");
     }
 
     [Fact]
@@ -604,12 +625,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         index.Register(new DeadlineEntry(TimeSpan.FromMilliseconds(1000).Ticks), 0);
         Assert.Equal(TimeSpan.FromMilliseconds(10).Ticks, index.NextVisit);
         var now = TimeSpan.FromMilliseconds(10).Ticks;
-        index.Visit(
-            now,
-            static (entry, at) => entry.AbsoluteDeadline > at,
-            static () => false,
-            () => now
-        );
+        index.Visit(now, static (entry, at) => entry.AbsoluteDeadline > at, static () => false);
         Assert.Equal(ZLinkRequestDeadlineIndex.DefaultRotation.Ticks, index.NextVisit - now);
     }
 
@@ -621,28 +637,13 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         );
         index.Register(new DeadlineEntry(TimeSpan.FromMilliseconds(257).Ticks), 0);
         var now = TimeSpan.FromMilliseconds(256).Ticks;
-        index.Visit(
-            now,
-            static (entry, at) => entry.AbsoluteDeadline > at,
-            static () => false,
-            () => now
-        );
+        index.Visit(now, static (entry, at) => entry.AbsoluteDeadline > at, static () => false);
         Assert.Equal(TimeSpan.FromMilliseconds(1).Ticks, index.NextVisit - now);
         now = TimeSpan.FromMilliseconds(257).Ticks;
-        index.Visit(
-            now,
-            static (entry, at) => entry.AbsoluteDeadline > at,
-            static () => false,
-            () => now
-        );
+        index.Visit(now, static (entry, at) => entry.AbsoluteDeadline > at, static () => false);
         Assert.Equal(long.MaxValue, index.NextVisit);
         now = TimeSpan.FromMilliseconds(10_000).Ticks;
-        index.Visit(
-            now,
-            static (entry, at) => entry.AbsoluteDeadline > at,
-            static () => false,
-            () => now
-        );
+        index.Visit(now, static (entry, at) => entry.AbsoluteDeadline > at, static () => false);
         Assert.Equal(long.MaxValue, index.NextVisit);
         index.Register(new DeadlineEntry(now + TimeSpan.FromMilliseconds(50).Ticks), now);
         Assert.Equal(TimeSpan.FromMilliseconds(50).Ticks, index.NextVisit - now);
