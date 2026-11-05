@@ -94,8 +94,10 @@ for (const backend of ['provider', 'memory'] as const) {
         ? (['laterPageMember', 'scanExpired', 'scanExpiredClearsMember', 'storeFailure'] as const)
         : [])
     ] as const) {
-      test(`ended Spot re-creation: ${backend} ${kind} ${scenario}`, async () => {
+      test(`ended Spot re-creation: ${backend} ${kind} ${scenario}`, async (t) => {
         let now = new Date(100);
+        let monotonicMs = 0;
+        t.mock.method(performance, 'now', () => monotonicMs);
         const provider = new ZLinkInMemoryProviderLocationStore(() => now);
         const store =
           backend === 'provider'
@@ -346,6 +348,36 @@ for (const backend of ['provider', 'memory'] as const) {
             return result;
           };
         }
+        if (
+          [
+            'expired',
+            'race',
+            'member',
+            'lateJoin',
+            'factory',
+            'laterPageMember',
+            'scanExpired',
+            'scanExpiredClearsMember',
+            'storeFailure'
+          ].includes(scenario)
+        ) {
+          await assert.rejects(
+            store.reserve(next),
+            (error: unknown) =>
+              error instanceof ZLinkFrameworkException &&
+              error.kind === ZLinkFrameworkErrorKind.Unavailable
+          );
+          monotonicMs = 15_000;
+          if (['member', 'laterPageMember', 'scanExpired'].includes(scenario)) {
+            await assert.rejects(
+              store.reserve(next),
+              (error: unknown) =>
+                error instanceof ZLinkFrameworkException &&
+                error.kind === ZLinkFrameworkErrorKind.Unavailable
+            );
+            monotonicMs = 30_000;
+          }
+        }
         if (scenario === 'storeFailure') {
           provider.scan = async () => {
             throw new Error('Store unavailable');
@@ -518,8 +550,10 @@ for (const backend of ['provider', 'memory'] as const) {
       ? (['memberReclaimed', 'memberCapacityCorrupt', 'memberMissingExpiry'] as const)
       : [])
   ] as const) {
-    test(`ended User Spot member release: ${backend} ${scenario}`, async () => {
+    test(`ended User Spot member release: ${backend} ${scenario}`, async (t) => {
       let now = new Date(100);
+      let monotonicMs = 0;
+      t.mock.method(performance, 'now', () => monotonicMs);
       const provider = new ZLinkInMemoryProviderLocationStore(() => now);
       const store =
         backend === 'provider'
@@ -756,6 +790,50 @@ for (const backend of ['provider', 'memory'] as const) {
         target: placement(live),
         actorRelocationPolicy: 'disabled' as const
       };
+      if (scenario === 'memberReclaimed')
+        await assert.rejects(
+          store.reserve({
+            key: { kind: 'actor', globalId: 'member-a' },
+            intent: {
+              stableType: 'player',
+              requestContentReference: 'request:member-a-reclaimed',
+              requestSha256: Buffer.alloc(32, 3),
+              requestEncodedSize: 10n
+            },
+            target: placement(live),
+            creatingPayload: Buffer.from('creating'),
+            capacity: { actors: 1, spots: 0 },
+            actorRelocationPolicy: 'disabled'
+          }),
+          (error: unknown) =>
+            error instanceof ZLinkFrameworkException &&
+            error.kind === ZLinkFrameworkErrorKind.Unavailable
+        );
+      await assert.rejects(
+        store.reserve(next),
+        (error: unknown) =>
+          error instanceof ZLinkFrameworkException &&
+          error.kind === ZLinkFrameworkErrorKind.Unavailable
+      );
+      monotonicMs = 15_000;
+      if (
+        [
+          'dead',
+          'batchFits',
+          'batchBound',
+          'memberReclaimed',
+          'memberCapacityCorrupt',
+          'memberMissingExpiry'
+        ].includes(scenario)
+      ) {
+        await assert.rejects(
+          store.reserve(next),
+          (error: unknown) =>
+            error instanceof ZLinkFrameworkException &&
+            error.kind === ZLinkFrameworkErrorKind.Unavailable
+        );
+        monotonicMs = 30_000;
+      }
       if (scenario === 'memberMissingExpiry') {
         const memberOwnerKey = storeKey(
           opaqueRecordPreimage('owner-lease', memberDescriptor.ownerId)
@@ -1157,6 +1235,202 @@ for (const backend of ['provider', 'memory'] as const) {
       }
     });
   }
+}
+
+for (const backend of ['provider', 'memory'] as const) {
+  test(`steady Ready release waits three margins after an invalid owner read: ${backend}`, async () => {
+    let now = new Date(100);
+    let monotonicMs = 0;
+    const marginMs = 10_000;
+    const provider = new ZLinkInMemoryProviderLocationStore(() => now);
+    const store =
+      backend === 'provider'
+        ? new ZLinkLocationStoreRepository(
+            provider,
+            () => now,
+            undefined,
+            () => monotonicMs,
+            marginMs
+          )
+        : new ZLinkInMemoryLocationStore(
+            () => now,
+            () => monotonicMs,
+            marginMs
+          );
+    const oldDescriptor = await writeTargetDescriptor(store, 'owner-a', 'node-a', 100);
+    const oldTarget = {
+      meshName: oldDescriptor.meshName,
+      nodeRid: oldDescriptor.rid,
+      nodeLifecycleGeneration: oldDescriptor.lifecycleGeneration,
+      owner: owner(oldDescriptor.ownerId, oldDescriptor.leaseGeneration)
+    };
+    const ready = await createActive(store, 'release-delay', oldTarget);
+
+    now = new Date(201);
+    const newDescriptor = await writeTargetDescriptor(store, 'owner-b', 'node-b', 60_000);
+    const request = {
+      ...reserveRequest('release-delay', {
+        meshName: newDescriptor.meshName,
+        nodeRid: newDescriptor.rid,
+        nodeLifecycleGeneration: newDescriptor.lifecycleGeneration,
+        owner: owner(newDescriptor.ownerId, newDescriptor.leaseGeneration)
+      }),
+      actorRelocationPolicy: 'disabled' as const
+    };
+    const key = encodeAuthorityKey('user_spot', 'release-delay');
+    const expectUnavailable = async (observer: typeof store) => {
+      await assert.rejects(
+        observer.reserve(request),
+        (error: unknown) =>
+          error instanceof ZLinkFrameworkException &&
+          error.kind === ZLinkFrameworkErrorKind.Unavailable
+      );
+      const retained = await observer.readAuthority(key);
+      assert.equal(retained.kind, 'snapshot');
+      if (retained.kind === 'snapshot') {
+        assert.equal(retained.storeVersion.value, ready.storeVersion.value);
+      }
+    };
+
+    await expectUnavailable(store);
+    monotonicMs = 29_999;
+    await expectUnavailable(store);
+
+    let observer = store;
+    if (backend === 'provider') {
+      monotonicMs = 0;
+      observer = new ZLinkLocationStoreRepository(
+        provider,
+        () => now,
+        undefined,
+        () => monotonicMs,
+        marginMs
+      ) as typeof store;
+      await expectUnavailable(observer);
+    }
+    monotonicMs = 30_000;
+    assert.equal((await observer.reserve(request)).kind, 'reserved');
+  });
+}
+
+test('a Missing authority row clears its previous owner release delay', async (t) => {
+  let now = new Date(100);
+  let monotonicMs = 0;
+  t.mock.method(performance, 'now', () => monotonicMs);
+  const provider = new ZLinkInMemoryProviderLocationStore(() => now);
+  const store = new ZLinkLocationStoreRepository(provider, () => now);
+  const oldDescriptor = await writeTargetDescriptor(store, 'missing-old', 'missing-old-node', 100);
+  const oldTarget = {
+    meshName: oldDescriptor.meshName,
+    nodeRid: oldDescriptor.rid,
+    nodeLifecycleGeneration: oldDescriptor.lifecycleGeneration,
+    owner: owner(oldDescriptor.ownerId, oldDescriptor.leaseGeneration)
+  };
+  await createActive(store, 'missing-release', oldTarget);
+  now = new Date(201);
+  const newDescriptor = await writeTargetDescriptor(
+    store,
+    'missing-new',
+    'missing-new-node',
+    60_000
+  );
+  const request = {
+    ...reserveRequest('missing-release', {
+      meshName: newDescriptor.meshName,
+      nodeRid: newDescriptor.rid,
+      nodeLifecycleGeneration: newDescriptor.lifecycleGeneration,
+      owner: owner(newDescriptor.ownerId, newDescriptor.leaseGeneration)
+    }),
+    actorRelocationPolicy: 'disabled' as const
+  };
+  await assert.rejects(
+    store.reserve(request),
+    (error: unknown) =>
+      error instanceof ZLinkFrameworkException && error.kind === ZLinkFrameworkErrorKind.Unavailable
+  );
+
+  const rowKey = storeKey(opaqueRecordPreimage('authority', 'spot', 'missing-release'));
+  const row = await provider.read(rowKey);
+  assert.equal(row.kind, 'found');
+  if (row.kind !== 'found') throw new Error('authority missing before external deletion');
+  assert.equal(
+    (
+      await provider.write({
+        conditions: [{ kind: 'version', key: rowKey, expected: row.value.version }],
+        mutations: [{ kind: 'delete', key: rowKey }]
+      })
+    ).kind,
+    'applied'
+  );
+
+  const replacement = await store.reserve(request);
+  assert.equal(replacement.kind, 'reserved');
+});
+
+for (const backend of ['provider', 'memory'] as const) {
+  test(`Fixed RID claim waits three margins after an invalid owner read: ${backend}`, async (t) => {
+    let now = new Date(100);
+    let monotonicMs = 0;
+    t.mock.method(performance, 'now', () => monotonicMs);
+    const provider = new ZLinkInMemoryProviderLocationStore(() => now);
+    const store =
+      backend === 'provider'
+        ? new ZLinkLocationStoreRepository(provider, () => now)
+        : new ZLinkInMemoryLocationStore(() => now);
+    const oldDescriptor = await writeTargetDescriptor(store, 'fixed-old', 'fixed-rid', 100);
+    now = new Date(201);
+    const nextOwner = await store.claimOwnerLease('fixed-next', 60_000);
+    assert.equal(nextOwner.kind, 'claimed');
+    if (nextOwner.kind !== 'claimed') throw new Error('new owner lease claim failed');
+    const replacement = {
+      ...oldDescriptor,
+      lifecycleGeneration: 2n,
+      descriptorRevision: 1n,
+      endpoint: 'tcp://fixed-rid-next',
+      ownerId: nextOwner.token.ownerId,
+      leaseGeneration: nextOwner.token.leaseGeneration,
+      updatedAt: now
+    };
+    const expectUnavailable = async () =>
+      await assert.rejects(
+        store.updateMeshNode(replacement, ZLinkLocationWriteIntent.NewClaim),
+        (error: unknown) =>
+          error instanceof ZLinkFrameworkException &&
+          error.kind === ZLinkFrameworkErrorKind.Unavailable
+      );
+    const assertPreviousDescriptorRetained = async () => {
+      const descriptors = await store.listMeshNodes('mesh');
+      assert.equal(descriptors.items.length, 1);
+      assert.equal(descriptors.items[0]?.ownerId, oldDescriptor.ownerId);
+      assert.equal(descriptors.items[0]?.lifecycleGeneration, oldDescriptor.lifecycleGeneration);
+    };
+
+    await expectUnavailable();
+    await assertPreviousDescriptorRetained();
+    monotonicMs = 14_999;
+    await expectUnavailable();
+    await assertPreviousDescriptorRetained();
+    monotonicMs = 15_000;
+    assert.equal(
+      (await store.updateMeshNode(replacement, ZLinkLocationWriteIntent.NewClaim)).status,
+      ZLinkLocationWriteStatus.Stored
+    );
+
+    const liveOwner = await store.claimOwnerLease('fixed-live', 60_000);
+    assert.equal(liveOwner.kind, 'claimed');
+    if (liveOwner.kind !== 'claimed') throw new Error('live owner lease claim failed');
+    const conflicting = {
+      ...replacement,
+      lifecycleGeneration: 3n,
+      ownerId: liveOwner.token.ownerId,
+      leaseGeneration: liveOwner.token.leaseGeneration,
+      endpoint: 'tcp://fixed-rid-live'
+    };
+    assert.equal(
+      (await store.updateMeshNode(conflicting, ZLinkLocationWriteIntent.NewClaim)).status,
+      ZLinkLocationWriteStatus.RejectedConflict
+    );
+  });
 }
 
 for (const scenario of ['live', 'expired', 'missingCapacity', 'underflow'] as const) {

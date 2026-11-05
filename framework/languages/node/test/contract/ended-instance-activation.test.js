@@ -42,15 +42,21 @@ async function fixture(
   placementTypes = ['room', 'other-room']
 ) {
   let now = new Date(1000);
+  const clock = { monotonicMs: 0 };
+  const monotonicNowMs = () => clock.monotonicMs;
   const store = provider
-    ? new ZLinkLocationStoreRepository(new ZLinkInMemoryProviderLocationStore(() => now), () => now)
-    : new internal.ZLinkInMemoryLocationStore(() => now);
+    ? new ZLinkLocationStoreRepository(
+        new ZLinkInMemoryProviderLocationStore(() => now),
+        () => now,
+        undefined,
+        monotonicNowMs
+      )
+    : new internal.ZLinkInMemoryLocationStore(() => now, monotonicNowMs);
   async function descriptor(ownerId, rid) {
     const lease = await store.claimOwnerLease(ownerId, 30000);
     assert.equal(lease.kind, 'claimed');
     const owner = lease.token;
-    await store.updateMeshNode(
-      {
+    const meshNode = {
         meshName: 'mesh',
         rid,
         lifecycleGeneration: 1n,
@@ -83,9 +89,17 @@ async function fixture(
         ownerId,
         leaseGeneration: owner.leaseGeneration,
         updatedAt: now
-      },
-      ZLinkLocationWriteIntent.NewClaim
-    );
+      };
+    const claim = () => store.updateMeshNode(meshNode, ZLinkLocationWriteIntent.NewClaim);
+    if (now.getTime() > 31_000 && rid === 'node-a') {
+      await assert.rejects(
+        claim(),
+        (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+      );
+      clock.monotonicMs = 15_000;
+    }
+    const result = await claim();
+    assert.equal(result.status, internal.ZLinkLocationWriteStatus.Stored);
     return owner;
   }
   const oldOwner = await descriptor('old-owner', 'node-a');
@@ -137,6 +151,11 @@ async function fixture(
     'node-a': await descriptor('new-owner-a', 'node-a'),
     'node-b': await descriptor('new-owner-b', 'node-b')
   };
+  await assert.rejects(
+    store.reserve({ ...request, target: { ...oldTarget, owner: owners['node-a'] } }),
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+  );
+  clock.monotonicMs = 30_000;
   const roots = new Map();
   const relocationStore = {
     async put(reference, bytes) {
@@ -269,6 +288,7 @@ async function fixture(
     store,
     key,
     before: committed.ready,
+    clock,
     activation,
     activate,
     resolver,

@@ -1,5 +1,5 @@
 import type { RoutingId } from '../../contracts/Common';
-import { ZLinkSpotKind } from '../../contracts';
+import { ZLinkFrameworkErrorKind, ZLinkFrameworkException, ZLinkSpotKind } from '../../contracts';
 import { ZLINK_MAX_IDENTITY_TEXT_BYTES } from '../../contracts/Common/CoreTypes';
 import {
   isValidPublicWeight,
@@ -79,6 +79,11 @@ import {
 } from './internal-location-contracts';
 import type { ZLinkFanoutLocationStore } from './internal-store-contracts';
 import { ZLinkLocationKeyCodec } from './key-codec';
+import { zlinkRuntimeDefaultLocationOptions } from '../../contracts/Locations/Options';
+import {
+  ZLinkOwnerLeaseReleaseDelay,
+  ownerLeaseReleaseDelayScope
+} from './owner-lease-release-delay';
 const MAX_LOCATION_GENERATION = 0x7fff_ffff_ffff_ffffn;
 
 const MAX_DESCRIPTOR_OBJECT_CAPABILITIES = 1024;
@@ -99,8 +104,17 @@ export class ZLinkInMemoryLocationStore
   private readonly entrySpotClaims = new Map<string, InMemoryEntrySpotClaim>();
   private ownerLeaseGeneration = 0n;
   private readonly authority: ZLinkInMemoryAuthorityStore;
+  protected readonly ownerLeaseReleaseDelay: ZLinkOwnerLeaseReleaseDelay;
 
-  constructor(private readonly now: () => Date = () => new Date()) {
+  constructor(
+    private readonly now: () => Date = () => new Date(),
+    monotonicNowMs: () => number = () => performance.now(),
+    ownerLeaseFencingMarginMs = zlinkRuntimeDefaultLocationOptions.ownerLeaseFencingMarginMs
+  ) {
+    this.ownerLeaseReleaseDelay = new ZLinkOwnerLeaseReleaseDelay(
+      3 * ownerLeaseFencingMarginMs,
+      monotonicNowMs
+    );
     const isOwnerLive = (owner: ZLinkLocationOwnerToken): boolean =>
       this.liveOwnerLease(owner.ownerId, this.now())?.token.leaseGeneration ===
       owner.leaseGeneration;
@@ -147,7 +161,8 @@ export class ZLinkInMemoryLocationStore
         },
         identityClaimed: (authorityKey) => this.entrySpotClaims.has(authorityKey)
       },
-      now
+      now,
+      this.ownerLeaseReleaseDelay
     );
   }
 
@@ -247,6 +262,10 @@ export class ZLinkInMemoryLocationStore
   ): Promise<ZLinkLocationWriteResult> {
     validateMeshNodeDescriptor(descriptor);
     const key = meshNodeKey(descriptor.meshName, descriptor.rid);
+    const releaseDelayScope = ownerLeaseReleaseDelayScope.meshNode(
+      descriptor.meshName,
+      String(descriptor.rid)
+    );
     const current = this.meshNodes.rows.get(key);
     const lease = this.leases.get(descriptor.ownerId);
     const updatedAt = this.now();
@@ -258,6 +277,7 @@ export class ZLinkInMemoryLocationStore
       return rejectedConflict();
     }
     if (current === undefined) {
+      this.ownerLeaseReleaseDelay.clear(releaseDelayScope);
       if (
         intent !== ZLinkLocationWriteIntent.NewClaim &&
         intent !== ZLinkLocationWriteIntent.Takeover
@@ -270,6 +290,27 @@ export class ZLinkInMemoryLocationStore
       return stored(1n, updatedAt);
     }
     const currentLease = this.leases.get(current.ownerId);
+    const currentOwner = {
+      ownerId: current.ownerId,
+      leaseGeneration: current.leaseGeneration
+    };
+    const currentOwnerLive =
+      currentLease !== undefined &&
+      currentLease.token.leaseGeneration === current.leaseGeneration &&
+      currentLease.leaseExpiresAt.getTime() > updatedAt.getTime();
+    if (intent === ZLinkLocationWriteIntent.NewClaim) {
+      const claimAllowed = this.ownerLeaseReleaseDelay.allows(
+        releaseDelayScope,
+        currentOwner,
+        currentOwnerLive
+      );
+      if (!currentOwnerLive && !claimAllowed) {
+        throw new ZLinkFrameworkException(
+          ZLinkFrameworkErrorKind.Unavailable,
+          'Fixed RID claim is waiting for the previous owner lease release delay.'
+        );
+      }
+    }
     if (
       canTakeOver(
         current.ownerId,
@@ -281,6 +322,7 @@ export class ZLinkInMemoryLocationStore
         updatedAt
       )
     ) {
+      this.ownerLeaseReleaseDelay.clear(releaseDelayScope);
       if (!this.claimEntrySpotIdentity(descriptor, key)) return rejectedConflict();
       this.releaseEntrySpotIdentity(current);
       const next = (this.meshNodes.generations.get(key) ?? 0n) + 1n;
@@ -296,6 +338,7 @@ export class ZLinkInMemoryLocationStore
       descriptor.descriptorRevision === current.descriptorRevision &&
       meshNodeDescriptorFingerprint(current) === meshNodeDescriptorFingerprint(descriptor)
     ) {
+      this.ownerLeaseReleaseDelay.clear(releaseDelayScope);
       return stored(this.meshNodes.generations.get(key) ?? 1n, current.updatedAt);
     }
     if (

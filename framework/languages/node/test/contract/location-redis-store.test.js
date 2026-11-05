@@ -450,6 +450,8 @@ test('redis Location Store persists and validates a 10,100-participant inventory
 });
 
 test('redis-backed descriptor NewClaim reports an active owner conflict', async (t) => {
+  let monotonicMs = 0;
+  t.mock.method(performance, 'now', () => monotonicMs);
   const fixture = await redisFixture(t);
   if (fixture === undefined) return;
   const prefix = testPrefix('descriptor-claim-conflict');
@@ -493,6 +495,11 @@ test('redis-backed descriptor NewClaim reports an active owner conflict', async 
     );
     assert.equal((await repository.listMeshNodes('game')).items[0].ownerId, first.token.ownerId);
     assert.equal(await repository.releaseOwnerLease(first.token), 'released');
+    await assert.rejects(
+      repository.updateMeshNode(replacement, frameworkInternal.ZLinkLocationWriteIntent.NewClaim),
+      (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+    );
+    monotonicMs = 15_000;
     assert.equal(
       (await repository.updateMeshNode(
         replacement,
@@ -1368,6 +1375,8 @@ test('redis-backed repository completes Actor creation from a canonical authorit
 
 for (const liveMember of [false, true]) {
   test(`redis-backed ended User Spot re-creation ${liveMember ? 'keeps a live member' : 'releases ended-owner members'}`, async (t) => {
+    let monotonicMs = 0;
+    t.mock.method(performance, 'now', () => monotonicMs);
     const fixture = await redisFixture(t);
     if (fixture === undefined) return;
     const {
@@ -1501,12 +1510,30 @@ for (const liveMember of [false, true]) {
           error => error instanceof framework.ZLinkFrameworkException
             && error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
         );
+        monotonicMs = 15_000;
+        await assert.rejects(
+          repository.reserve(spotRequest(next)),
+          error => error instanceof framework.ZLinkFrameworkException
+            && error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+        );
         const retained = await repository.readAuthority(encodeAuthorityKey('user_spot', spotId));
         assert.equal(retained.kind, 'snapshot');
         assert.equal(retained.storeVersion.value, spot.ready.storeVersion.value);
         assert.equal((await repository.readAuthority(memberKey)).kind, 'snapshot');
         return;
       }
+      await assert.rejects(
+        repository.reserve(spotRequest(next)),
+        error => error instanceof framework.ZLinkFrameworkException
+          && error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+      );
+      monotonicMs = 15_000;
+      await assert.rejects(
+        repository.reserve(spotRequest(next)),
+        error => error instanceof framework.ZLinkFrameworkException
+          && error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+      );
+      monotonicMs = 30_000;
       const recreated = await repository.reserve(spotRequest(next));
       assert.equal(recreated.kind, 'reserved');
       assert.ok(recreated.creating.objectGeneration > spot.ready.objectGeneration);

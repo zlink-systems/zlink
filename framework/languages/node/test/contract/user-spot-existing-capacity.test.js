@@ -259,11 +259,18 @@ async function creationFixture(policy = 'disabled') {
   };
 }
 for (const conflict of [false, true]) {
-  test(`expired Ready owner is released before capacity selection (conflict=${conflict})`, async () => {
+  test(`expired Ready owner is released before capacity selection (conflict=${conflict})`, async (t) => {
+    let monotonicMs = 0;
+    t.mock.method(performance, 'now', () => monotonicMs);
     const f = await creationFixture();
     assert.equal((await f.create('expired-room')).result.state, ZLinkSpotCreateState.Created);
     f.expire();
     if (conflict) f.conflictReleaseOnce();
+    await assert.rejects(
+      f.create('expired-room'),
+      (e) => e.kind === ZLinkFrameworkErrorKind.Unavailable
+    );
+    monotonicMs = 15_000;
     await assert.rejects(
       f.create('expired-room'),
       (e) => e.kind === ZLinkFrameworkErrorKind.Unavailable
@@ -316,7 +323,9 @@ test('capacity race follows the same ID winner after a capacity-exhausted reserv
     await observed;
   }
 });
-test('provider descriptors project reserved, active and released capacity across repositories', async () => {
+test('provider descriptors project reserved, active and released capacity across repositories', async (t) => {
+  let monotonicMs = 0;
+  t.mock.method(performance, 'now', () => monotonicMs);
   const f = await creationFixture(),
     entered = deferred(),
     release = deferred();
@@ -336,14 +345,17 @@ test('provider descriptors project reserved, active and released capacity across
     f.expire();
     const key = encodeAuthorityKey('user_spot', 'view-room'),
       authority = await f.store.readAuthority(key);
-    assert.equal(
-      await f.store.releaseEndedReservation(key, authority.storeVersion.value, undefined, {
+    const releaseAuthority = () => f.store.releaseEndedReservation(key, authority.storeVersion.value, undefined, {
         key: { kind: 'user_spot', globalId: 'view-room' },
         intent: { stableType: 'room' },
         actorRelocationPolicy: 'disabled'
-      }),
-      true
+      });
+    await assert.rejects(
+      releaseAuthority(),
+      (error) => error.kind === ZLinkFrameworkErrorKind.Unavailable
     );
+    monotonicMs = 15_000;
+    assert.equal(await releaseAuthority(), true);
     assert.ok(created.spot.objectGeneration > 0n);
     const final = (await f.observer.listMeshNodes('mesh')).items[0];
     assert.deepEqual(final.populationCapacity.spots, { active: 0, reserved: 0, limit: 1 });

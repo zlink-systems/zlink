@@ -2451,7 +2451,9 @@ test('production repository persists owner lease and MeshNode records through on
   assert.equal((await writer.listMeshNodes('play')).items.length, 0);
 });
 
-test('production repository lets NewClaim replace only descriptors whose owner lease is Missing', async () => {
+test('production repository lets NewClaim replace only descriptors whose owner lease is Missing', async (t) => {
+  let monotonicMs = 0;
+  t.mock.method(performance, 'now', () => monotonicMs);
   let nowMs = Date.UTC(2026, 8, 20, 0, 0, 0);
   const provider = new internal.ZLinkInMemoryProviderLocationStore(() => new Date(nowMs));
   const repository = new internal.ZLinkLocationStoreRepository(provider, () => new Date(nowMs));
@@ -2480,12 +2482,18 @@ test('production repository lets NewClaim replace only descriptors whose owner l
   assert.equal(successorClaim.kind, 'claimed');
   if (successorClaim.kind !== 'claimed') throw new Error('owner lease claim failed');
   assert.ok(successorClaim.token.leaseGeneration > expiredClaim.token.leaseGeneration);
-  assert.equal(
-    (await repository.updateMeshNode({
+  const replacement = {
       ...expiredDescriptor,
       ownerId: successorClaim.token.ownerId,
       leaseGeneration: successorClaim.token.leaseGeneration
-    }, internal.ZLinkLocationWriteIntent.NewClaim)).status,
+  };
+  await assert.rejects(
+    repository.updateMeshNode(replacement, internal.ZLinkLocationWriteIntent.NewClaim),
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+  );
+  monotonicMs = 15_000;
+  assert.equal(
+    (await repository.updateMeshNode(replacement, internal.ZLinkLocationWriteIntent.NewClaim)).status,
     internal.ZLinkLocationWriteStatus.Stored
   );
 
