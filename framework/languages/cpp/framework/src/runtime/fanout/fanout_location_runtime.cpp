@@ -810,7 +810,7 @@ task_t<void> fanout_location_runtime_t::publish (const std::string &channel_name
                                      "fanout runtime is shutting down");
     auto encoded = protocol::application_payload_t{std::move (packet_name),
                                                    std::move (content_type), message.to_bytes ()};
-    co_await publisher->publish (channel_name, topic, encoded);
+    co_await publisher->publish (channel_name, topic, std::move (encoded));
 }
 
 bool fanout_location_runtime_t::accepted_callbacks_drained (const resource_snapshot_t &resources)

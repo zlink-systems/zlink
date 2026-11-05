@@ -1670,8 +1670,9 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
                         }
                     }
                     if (saved.application_record) {
-                        saved.frozen_record =
-                          protocol::encode_frozen_application_record (*saved.application_record);
+                        saved.frozen_record = protocol::encode_frozen_application_record (
+                          std::move (*saved.application_record));
+                        saved.application_record.reset ();
                         saved.payload = saved.frozen_record->canonical_bytes;
                     }
                     frozen.pending_application.push_back (std::move (saved));

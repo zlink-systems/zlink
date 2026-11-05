@@ -120,6 +120,9 @@ class raw_route_port_t
     raw_send_submission_t submit_send (const raw_bytes_t &target_routing_id,
                                        raw_message_t parts,
                                        raw_send_stage_trace_t trace = {});
+    raw_send_submission_t submit_send (const raw_bytes_t &target_routing_id,
+                                       std::vector<zlink::message_t> parts,
+                                       raw_send_stage_trace_t trace = {});
     task_t<zlink::submit_result_t> send_result (const raw_bytes_t &target_routing_id,
                                                 raw_message_t parts,
                                                 raw_send_stage_trace_t trace = {});
@@ -132,6 +135,12 @@ class raw_route_port_t
     }
     void request (const raw_bytes_t &target_routing_id,
                   raw_message_t parts,
+                  std::chrono::milliseconds timeout,
+                  std::function<void (result_t<raw_request_completion_t>)> completion,
+                  runtime::mesh::service_liveness_registry_t::connection_t admission = {},
+                  std::shared_ptr<task_completion_source_t<void>> admitted = {});
+    void request (const raw_bytes_t &target_routing_id,
+                  std::vector<zlink::message_t> parts,
                   std::chrono::milliseconds timeout,
                   std::function<void (result_t<raw_request_completion_t>)> completion,
                   runtime::mesh::service_liveness_registry_t::connection_t admission = {},
@@ -152,6 +161,18 @@ class raw_route_port_t
     void close ();
 
   private:
+    template <typename Parts>
+    raw_send_submission_t submit_send_impl (const raw_bytes_t &target_routing_id,
+                                            Parts parts,
+                                            raw_send_stage_trace_t trace);
+    template <typename Parts>
+    void request_impl (const raw_bytes_t &target_routing_id,
+                       Parts parts,
+                       std::chrono::milliseconds timeout,
+                       std::function<void (result_t<raw_request_completion_t>)> completion,
+                       runtime::mesh::service_liveness_registry_t::connection_t admission,
+                       std::shared_ptr<task_completion_source_t<void>> admitted);
+
     std::function<runtime::mesh::service_liveness_registry_t::connection_t (const raw_bytes_t &)>
       _request_receive_source;
     std::unique_ptr<zlink::poller_t> _owned_poller;

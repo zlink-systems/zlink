@@ -56,8 +56,9 @@ mesh_record_dispatcher_t::dispatch (const runtime::host::receive_record_t &recor
       channel_dispatch ? handler_dispatch_kind_t::channel_request
                        : handler_dispatch_kind_t::node_direct_request,
       _before_application_handler, _registration,
-      [token = record.reply_token] (const route_dispatch_reply_t &reply) {
-          if (runtime::host::reply (token, reply.parts.items ()) != zlink::submit_result_t::ok)
+      [token = record.reply_token] (route_dispatch_reply_t &&reply) {
+          if (runtime::host::reply (token, std::move (reply.parts).take_items ())
+              != zlink::submit_result_t::ok)
               return result_t<void>::failure (framework_error_kind_t::internal_failure,
                                               "MeshNode reply submit failed");
           return result_t<void>::success ();

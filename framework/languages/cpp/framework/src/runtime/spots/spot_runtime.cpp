@@ -8038,11 +8038,14 @@ task_t<bool> spot_node_runtime_t::consume_actor_join_recovery_async (
         try {
             for (auto current = frozen.pending_application.begin ();
                  current != frozen.pending_application.end (); ++current) {
-                std::optional<runtime::protocol::frozen_record_t> canonical;
+                std::optional<runtime::protocol::frozen_record_t> decoded_record;
+                const runtime::protocol::frozen_record_t *canonical = nullptr;
                 if (current->frozen_record)
-                    canonical = *current->frozen_record;
-                else if (!current->payload.empty ())
-                    canonical = runtime::protocol::decode_frozen_record (current->payload);
+                    canonical = &*current->frozen_record;
+                else if (!current->payload.empty ()) {
+                    decoded_record = runtime::protocol::decode_frozen_record (current->payload);
+                    canonical = &*decoded_record;
+                }
                 if (!canonical)
                     continue;
                 auto decoded =

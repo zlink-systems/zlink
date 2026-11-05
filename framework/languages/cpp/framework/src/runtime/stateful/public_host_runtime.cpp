@@ -4266,13 +4266,13 @@ task_t<bool> public_host_runtime_t::restore_relocation_assembly (
         for (std::size_t index = 0; index < restored_state.size (); ++index) {
             if (staging->targets[index].kind != stateful::object_kind_t::actor)
                 continue;
-            for (const auto &turn : restored_state[index].pending_application)
+            for (auto &turn : restored_state[index].pending_application)
                 saved_application.emplace_back (
                   staging->targets[index],
                   protocol::relocation_data_t{
                     pending->prepare.relocation, pending->prepare.target_attempt_generation,
                     pending->prepare.coordinator, protocol::relocation_role_t::source,
-                    staging->wire_objects[index], turn.frozen_record.value ()},
+                    staging->wire_objects[index], std::move (turn.frozen_record.value ())},
                   index + 1);
             restored_state[index].pending_application.clear ();
         }
@@ -5021,18 +5021,18 @@ public_host_runtime_t::stage_relocation_record (const stateful::object_ref_t &ta
                                                 const protocol::relocation_data_t &data,
                                                 std::uint64_t participant_id)
 {
-    const auto frozen_record = data.record;
     if (!_stateful_dispatch)
         co_return false;
     const auto staged = co_await _stateful_dispatch->stage_relocated (
-      target, {0, protocol::encode_frozen_record (frozen_record)},
-      [this, data, participant_id,
-       frozen_record] (const std::optional<protocol::application_payload_t> &reply) {
+      target, {0, protocol::encode_frozen_record (data.record)},
+      [this, relocation = data.relocation,
+       target_attempt_generation = data.target_attempt_generation, coordinator = data.coordinator,
+       participant_id,
+       frozen_record = data.record] (const std::optional<protocol::application_payload_t> &reply) {
           if (!frozen_record.reply_route_id)
               return true;
           auto relay = stateful::maintenance_runtime_t::terminal_identity (
-            data.relocation, data.target_attempt_generation, data.coordinator, participant_id,
-            frozen_record);
+            relocation, target_attempt_generation, coordinator, participant_id, frozen_record);
           relay.terminal_result =
             reply ? 0u
                   : static_cast<std::uint32_t> (protocol::request_terminal_result::internalError);
@@ -6737,13 +6737,13 @@ public_host_runtime_t::dispatch_user_spot_batch (
             if (wire.kind == protocol::command::actorJoin) {
                 if (mailbox_record.parts.empty () || mailbox_record.parts.size () > 2)
                     throw protocol::service_wire_error_t ("Actor join has an invalid part count");
-                const auto canonical = try_decode_canonical_actor_join (
+                auto canonical = try_decode_canonical_actor_join (
                   ::zlink::framework::detail::backend::copy_binding_parts (mailbox_record.parts));
                 if (!canonical)
                     throw protocol::service_wire_error_t (
                       "Actor join is not a canonical command-28 record");
                 const auto &request = canonical->request;
-                const auto &payload = canonical->payload;
+                auto payload = std::move (canonical->payload);
                 if (!actor_join_target) {
                     (void) _transport->reply_actor_join (
                       mailbox_record, protocol::actor_join_result_t::rejected, std::nullopt, 0, 0);
@@ -6769,7 +6769,7 @@ public_host_runtime_t::dispatch_user_spot_batch (
                     }
                 };
                 try {
-                    actor_join_target (request, payload, reply);
+                    actor_join_target (request, std::move (payload), reply);
                 }
                 catch (...) {
                     reply (actor_join_operation_result_t{});
@@ -8546,20 +8546,32 @@ public_host_runtime_t::prepare_actor_transfer_async (const actor_transfer_prepar
     co_return true;
 }
 
-bool public_host_runtime_t::reply (const reply_token_t &token,
-                                   const std::vector<zlink::message_t> &parts)
+template <typename Parts>
+bool public_host_runtime_t::reply_parts (const reply_token_t &token, Parts &&parts)
 {
     try {
-        if (token.local_reply) {
+        if (token.local_reply)
             return token.local_reply (parts);
-        }
-        return token.request && _transport->reply (*token.request, encode_application (parts));
+        return token.request
+               && _transport->reply (*token.request,
+                                     encode_application (std::forward<Parts> (parts)));
     }
     catch (const zlink::submit_error_t &) {
         return false;
     }
 }
 
+bool public_host_runtime_t::reply (const reply_token_t &token,
+                                   const std::vector<zlink::message_t> &parts)
+{
+    return reply_parts (token, parts);
+}
+
+bool public_host_runtime_t::reply (const reply_token_t &token,
+                                   std::vector<zlink::message_t> &&parts)
+{
+    return reply_parts (token, std::move (parts));
+}
 
 task_t<std::optional<stateful::object_ref_t>>
 public_host_runtime_t::resolve_actor_async (const actor_ref_t &actor) const
@@ -9785,12 +9797,24 @@ task_t<bool> actor_transfer_token_t::commit_membership ()
     co_return error == stateful::stateful_error_t::none;
 }
 
+template <typename Parts>
+zlink::submit_result_t submit_reply (const reply_token_t &token, Parts &&parts)
+{
+    const auto host = token.host.lock ();
+    return host && host->reply (token, std::forward<Parts> (parts))
+             ? zlink::submit_result_t::ok
+             : zlink::submit_result_t::terminated;
+}
+
 zlink::submit_result_t reply (const reply_token_t &token,
                               const std::vector<zlink::message_t> &parts)
 {
-    const auto host = token.host.lock ();
-    return host && host->reply (token, parts) ? zlink::submit_result_t::ok
-                                              : zlink::submit_result_t::terminated;
+    return submit_reply (token, parts);
+}
+
+zlink::submit_result_t reply (const reply_token_t &token, std::vector<zlink::message_t> &&parts)
+{
+    return submit_reply (token, std::move (parts));
 }
 
 bool actor_join_reply (const reply_token_t &token,

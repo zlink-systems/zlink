@@ -33,7 +33,7 @@ class route_packet_dispatcher_t
       handler_dispatch_kind_t request_dispatch_kind = handler_dispatch_kind_t::node_direct_request,
       std::function<void ()> before_application_handler = {},
       std::shared_ptr<void> registration = {},
-      std::function<result_t<void> (const route_dispatch_reply_t &)> submit_reply = {});
+      std::function<result_t<void> (route_dispatch_reply_t &&)> submit_reply = {});
 
     task_t<std::optional<route_dispatch_reply_t>>
     dispatch (const route_received_packet_t &received) const;
@@ -69,7 +69,7 @@ class route_packet_dispatcher_t
     handler_dispatch_kind_t _request_dispatch_kind = handler_dispatch_kind_t::node_direct_request;
     std::function<void ()> _before_application_handler;
     std::shared_ptr<void> _registration;
-    std::function<result_t<void> (const route_dispatch_reply_t &)> _submit_reply;
+    std::function<result_t<void> (route_dispatch_reply_t &&)> _submit_reply;
 };
 
 } // namespace zlink::framework::detail

@@ -823,15 +823,16 @@ task_t<void> mesh_node_runtime_t::start (
     // until the transfer commit installs the route. The negotiated receive
     // chunk limit is carried into direct-transfer capture below.
     node->configure_actor_join_operations (
-      [spot_state, routing_id, serializers = _serializers] (
-        const runtime::protocol::actor_join_request_t &request,
-        const std::optional<runtime::protocol::application_payload_t> &payload,
-        host::actor_join_operation_target_completion_t completion) {
+      [spot_state, routing_id,
+       serializers = _serializers] (const runtime::protocol::actor_join_request_t &request,
+                                    std::optional<runtime::protocol::application_payload_t> payload,
+                                    host::actor_join_operation_target_completion_t completion) {
           spot_node_runtime_t spot (spot_state);
           spot.dispatch_wire_actor_join_admission (
             spot_id_t (request.target_spot.spot_id),
             request.entry ? std::string_view{} : request.actor.actor_id,
-            [spot_state, routing_id, request, payload, serializers, completion] () -> task_t<void> {
+            [spot_state, routing_id, request, payload = std::move (payload), serializers,
+             completion] () -> task_t<void> {
                 completion (
                   admit_wire_actor_join (spot_state, routing_id, request, payload, serializers));
                 co_return;
