@@ -269,6 +269,11 @@ public final class ZLinkChannelEnvelope {
         long size = ascii(json, offset, "\"");
         for (int index = 0; index < value.length(); index++) {
             char c = value.charAt(index);
+            if (c >= 0x20 && c < 0x80 && c != '"' && c != '\\') {
+                if (json != null) json[(int) (offset + size)] = (byte) c;
+                size++;
+                continue;
+            }
             String escape =
                     switch (c) {
                         case '"' -> "\\\"";
@@ -480,6 +485,11 @@ public final class ZLinkChannelEnvelope {
      * must outlive this call.
      */
     public static Header decodeHeader(ByteBuffer headerPart, boolean captureFlow) {
+        return decodeHeader(headerPart, captureFlow, false);
+    }
+
+    private static Header decodeHeader(
+            ByteBuffer headerPart, boolean captureFlow, boolean allowNonEnvelope) {
         int start = headerPart == null ? 0 : headerPart.position();
         int limit = headerPart == null ? 0 : headerPart.limit();
         int length = limit - start;
@@ -490,7 +500,7 @@ public final class ZLinkChannelEnvelope {
             return cached;
         }
 
-        return decodeHeader(headerPart, captureFlow, start, limit, cacheableSize);
+        return decodeHeader(headerPart, captureFlow, start, limit, cacheableSize, allowNonEnvelope);
     }
 
     private static Header findDecodedHeaderCacheEntry(ByteBuffer bytes) {
@@ -552,10 +562,7 @@ public final class ZLinkChannelEnvelope {
      */
     public static Header decodeDispatchHeader(List<Message> parts, boolean captureFlow) {
         ByteBuffer first = envelopeHeader(parts);
-        if (first == null || !looksLikeEnvelope(first)) {
-            return null;
-        }
-        return decodeHeader(first, captureFlow);
+        return first == null ? null : decodeHeader(first, captureFlow, true);
     }
 
     /**
@@ -694,7 +701,8 @@ public final class ZLinkChannelEnvelope {
             boolean captureFlow,
             int start,
             int limit,
-            boolean cacheableSize) {
+            boolean cacheableSize,
+            boolean allowNonEnvelope) {
         String correlationId = null;
         String deadline = null;
         Map<String, String> metadata = Map.of();
@@ -706,6 +714,10 @@ public final class ZLinkChannelEnvelope {
             input.feedInput(headerPart);
             input.endOfInput();
             if (json.nextToken() != JsonToken.START_OBJECT) {
+                if (allowNonEnvelope) {
+                    headerPart.position(start);
+                    return null;
+                }
                 throw protocolError("ZLink envelope header must be a JSON object", null);
             }
 
@@ -977,6 +989,10 @@ public final class ZLinkChannelEnvelope {
 
             headerPart.position(limit);
         } catch (Exception ex) {
+            if (allowNonEnvelope && !looksLikeEnvelope(headerPart.duplicate().position(start))) {
+                headerPart.position(start);
+                return null;
+            }
             if (ex instanceof ZLinkFrameworkException frameworkError) {
                 throw frameworkError;
             }
