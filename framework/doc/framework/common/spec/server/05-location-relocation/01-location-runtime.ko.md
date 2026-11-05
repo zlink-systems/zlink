@@ -857,18 +857,24 @@ Downgrade나 이전 버전 host 추가 전에는 보존을 끄고 기존 `T` 보
     relocation 정책 조건은 적용하지 않는다. 무효 token으로 `Delete`하지 않는다.
   - 다른 owner·incarnation으로 바뀌었거나 authority가 `Missing`이면 그 객체의 정리를 끝낸다.
 - 폐기한 User Spot은 폐기한 local member Actor의 정리 완료를 모두 확인한 뒤 정리한다. Spot 자신도 위
-  세 경우를 따른다. Spot 정리는 §6.1 해제와 같은 방식으로 그 SpotId·`ObjectGeneration`의 membership
-  snapshot을 끝까지 읽어 row가 하나도 없음을 확인한 뒤에만 `Delete`나 해제 batch를 제출한다. Batch
+  세 경우를 따른다. Spot 정리는 그 Spot이 폐기 전에 수락한 incoming target Join attempt가 모두
+  Relocation flow §9·§10으로 settle된 것을 확인한 뒤 시작한다. 이 확인은 기존 attempt의 continuation으로
+  받으며 handler turn에서 기다리거나 새 gate·queue를 만들지 않는다. Target commit이 확인된 Actor는 그
+  Spot의 local member가 된 것이므로 위 폐기·정리 규칙을 적용하고 row 제거를 확인한다. Source가 owner로
+  확정되면 그 attempt는 더 이상 row를 추가하지 않는다. 그 뒤 §6.1 해제와 같은 방식으로 그
+  SpotId·`ObjectGeneration`의 membership snapshot을 끝까지 읽어 row가 하나도 없음을 확인한 뒤에만
+  `Delete`나 해제 batch를 제출한다. Batch
   조건은 §6.1이 요구하는 것(authority `StoreVersion`, owner lease, descriptor, 수용 공간)이다. 폐기한
-  incarnation의 gate가 닫혀 있어 가입이 그 Spot을 통해 수락되지 않으므로 snapshot 뒤에 새 row가
-  commit되지 않는다. Store failure나 끝까지 읽지 못한 scan은 빈 membership으로 보지 않는다. 살아 있는
+  incarnation의 gate가 닫혀 새 가입을 수락하지 않고, 이미 수락한 attempt는 snapshot 전에 settle되므로
+  snapshot 뒤에 새 row가 commit되지 않는다. Store failure나 끝까지 읽지 못한 scan은 빈 membership으로 보지 않는다. 살아 있는
   owner의 Actor가 `Missing` Spot을 가리키지 않게 하기 위해서다. 다른 host member의 row가 남아 있으면
   Spot authority를 바꾸지 않고 기존 renew interval마다 재확인한다. 그 row는 해당 owner의 leave·destroy,
   그 ActorId의 생성 operation이 시작하는 §6.1 Actor 해제, 또는 이 Spot의 lease도 무효가 된 뒤 생성
   operation이 시작하는 §6.1 Spot 해제로만 줄어든다. Owner가 끝난 remote member가 남고 생성 호출이
-  없으면 이 Spot record는 owner host의 정상 종료(§11)까지 남는다. Local 폐기만으로 다른 owner의
-  Actor나 그 row를 지우지 않는다. 이 대기는 §5.1 정리에만 적용하며, §11의 owner 정리는 기존대로
-  그 host의 authority row를 회수한다. 그동안 Spot authority record는 폐기한 incarnation을 가리킨 채 남는다.
+  없으면 이 Spot record는 남는다. §11의 owner 정리는 종료 token과 일치하는 record만 회수하므로, 폐기
+  record가 옛 token을 가리키면 정상 종료 뒤에도 남을 수 있으며 해제는 §6.1의 조건을 만족하는 생성
+  operation을 따른다. Local 폐기만으로 다른 owner의 Actor나 그 row를 지우지 않는다. 이 대기는 §5.1
+  정리에만 적용하며 §11의 동작을 바꾸지 않는다. 그동안 Spot authority record는 폐기한 incarnation을 가리킨 채 남는다.
   폐기한 incarnation의 gate는 다시 열지 않으며, 폐기한 Spot의 token을 새로 교체하지 않는다. 이 record를
   읽은 `GetOrCreate`는 그 owner lease가 유효하면 §7 표의 `Ready` 결과를, 무효이면 §6.1과 §7의 무효 lease
   결과를 따른다. Local member의 row는 각 Actor batch가 이미 지웠으므로 local member 수는
@@ -1750,7 +1756,12 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   어느 경우든 폐기된 member 중 유효 token member는 `Delete`, 옛 token member는 무효 첫 관찰 뒤 `3·margin`의
   해제로 각자의 row와 함께 정리돼야 하고, 폐기한 Spot은 그 뒤 정리가 끝나야 한다. 둘째 조합에서 유지한
   Spot과 member의 authority·row·binding은 그대로 남아야 한다. 원격 row 대기 중 다시 장애가 나 owner lease가
-  만료되고 새 lease를 claim해도 폐기한 Spot은 복원되지 않으며, 그 `GetOrCreate`는 `Unavailable`이어야 한다. 다른 host member 1개가 남은
+  만료되고 새 lease를 claim해도 폐기한 Spot은 복원되지 않으며, 적어도 한 remote member의 owner lease가 계속
+  유효한 동안 그 `GetOrCreate`는 `Unavailable`이어야 한다(모든 member owner가 끝난 경우는 §6.1 생성 검증을
+  따른다). 폐기 전에 수락한 incoming Join의 target CAS가 폐기 뒤 commit되는 순서에서는 그 Actor를
+  local member로 정리한 뒤에만 Spot을 정리하고, source가 owner로 확정된 attempt는 row를 추가하지 않아야
+  한다. 같은 token으로 정상 종료하면 §11이 그 record를 회수하고, 새 token claim
+  뒤 종료하면 옛 token record는 남아야 한다. 다른 host member 1개가 남은
   Spot을 폐기하면 local member 정리 뒤 Spot 정리는 row가 남아 있는 동안 변경 없이 기다리고, 그
   member가 leave하면 다음 renew interval에 끝나야 한다. 각 batch에
   §6.1의 필수 condition과 index 변경이 포함되며, condition이 달라진 batch는 변경 없이 `Conflict`여야 한다. 모든

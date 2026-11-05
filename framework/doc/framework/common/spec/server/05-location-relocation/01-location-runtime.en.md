@@ -968,20 +968,27 @@ retention does not shorten §6.1's release wait.
   - If authority changed to another owner or incarnation, or is `Missing`, cleanup for that
     object ends.
 - Clean a discarded User Spot only after confirming cleanup of every discarded local member
-  Actor. The Spot itself follows the three cases above. Like §6.1 release, Spot cleanup reads the
-  membership snapshot of that SpotId and `ObjectGeneration` to the end and submits the `Delete` or
-  release batch only after confirming that no row remains. The batch conditions are those §6.1
+  Actor. The Spot itself follows the three cases above. Spot cleanup starts only after every
+  incoming target Join attempt the Spot accepted before discard has settled under Relocation flow
+  §9 and §10. That confirmation arrives through the existing attempt continuation, without waiting in
+  a handler turn or adding a gate or queue. An Actor whose target commit is confirmed has become a
+  local member of that Spot, so apply the discard and cleanup rules above to it and confirm its row
+  removal. Once the source is confirmed as owner, that attempt adds no row. Then, like §6.1 release,
+  Spot cleanup reads the membership snapshot of that SpotId and `ObjectGeneration` to the end and
+  submits the `Delete` or release batch only after confirming that no row remains. The batch conditions are those §6.1
   requires (authority `StoreVersion`, owner lease, descriptor, capacity). The discarded
-  incarnation's gate is closed, so no join is accepted through that Spot and no new row commits
-  after the snapshot. A Store failure or an unfinished scan is never treated as empty membership.
+  incarnation's gate is closed to new joins and accepted attempts settle before the snapshot, so no
+  new row commits after the snapshot. A Store failure or an unfinished scan is never treated as empty membership.
   This keeps a live owner's Actor from pointing at a `Missing` Spot. While rows of members on other
   hosts remain, do not change the Spot authority and recheck at each existing renew interval. Those
   rows decrease only through that owner's leave/destroy, a §6.1 Actor release started by a create
   operation for that ActorId, or a §6.1 Spot release started by a create operation after this
   Spot's lease is also invalid. If a remote member whose owner ended remains and no create call
-  arrives, this Spot record stays until the owner host shuts down normally (§11). Discarding
-  locally never deletes another owner's Actor or its row. This wait applies only to §5.1 cleanup;
-  the owner cleanup of §11 still reclaims that host's authority rows as before. Meanwhile the Spot authority record stays,
+  arrives, this Spot record stays. The owner cleanup of §11 reclaims only records matching the
+  shutting-down token, so a discarded record pointing at an old token can remain even after a normal
+  shutdown; its release then follows a create operation meeting the conditions of §6.1. Discarding
+  locally never deletes another owner's Actor or its row. This wait applies only to §5.1 cleanup and
+  does not change §11. Meanwhile the Spot authority record stays,
   pointing at the discarded incarnation. The discarded incarnation's gate never reopens, and the
   discarded Spot's token is never replaced. A `GetOrCreate` that reads this record follows the
   `Ready` result of §7 when its owner lease is valid, and the invalid-lease results of §6.1 and §7
@@ -1972,7 +1979,13 @@ store record golden fixture. Each item maps to one test.
   observation, each with its own row, and a discarded Spot's cleanup must then finish. In the second
   combination the retained Spot's and members' authority, rows, and bindings must stay. If another
   outage expires the owner lease while remote rows are pending and a new lease is claimed, the
-  discarded Spot must not be restored and its `GetOrCreate` must be `Unavailable`. When a discarded Spot still has one member
+  discarded Spot must not be restored, and while at least one remote member's owner lease stays
+  valid its `GetOrCreate` must be `Unavailable` (when every member owner has ended, the §6.1
+  creation checks apply). When an incoming Join accepted before discard commits its target CAS
+  after discard, the Spot must be cleaned only after that Actor is cleaned as a local member, and an
+  attempt whose source is confirmed as owner must add no row.
+  A normal shutdown with the same token lets §11 reclaim the record; after claiming a new token,
+  a shutdown must leave the old-token record. When a discarded Spot still has one member
   on another host, Spot cleanup must wait without change while the row remains after local member
   cleanup, and finish at the next renew interval after that member leaves. Each batch includes §6.1's required conditions and index changes, and a batch whose
   conditions changed must end in `Conflict` with no change. The same order must also finish when
