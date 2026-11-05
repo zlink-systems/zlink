@@ -21,6 +21,7 @@ import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -236,6 +237,97 @@ final class ZLinkChannelEnvelopeGoldenTest {
             try (Message encoded = ZLinkChannelEnvelope.encodeHeader(header)) {
                 assertArrayEquals(expected, encoded.toByteArray(), "attempt=" + attempt);
             }
+        }
+    }
+
+    @Test
+    void dispatchDecodeMatchesStrictHeaderDecodeInOneParserPass() {
+        byte[] headerBytes =
+                ("{\"formatMarker\":242,\"flowId\":null,\"flowOrigin\":null,\"kind\":1,"
+                                + "\"channelName\":\"orders\",\"messageName\":\"Request\","
+                                + "\"contentType\":\"application/json\","
+                                + "\"correlationId\":\"0123456789abcdef0123456789abcdef\","
+                                + "\"deadline\":\"2030-01-02T03:04:05Z\",\"topic\":null,"
+                                + "\"errorCode\":null,\"errorMessage\":null,\"source\":null,"
+                                + "\"metadata\":{}}")
+                        .getBytes(StandardCharsets.UTF_8);
+        try (Message header = Message.from(headerBytes);
+                Message body = Message.from(new byte[] {1})) {
+            ZLinkChannelEnvelope.Header expected =
+                    ZLinkChannelEnvelope.decodeHeader(ByteBuffer.wrap(headerBytes), false);
+            ZLinkChannelEnvelope.Header actual =
+                    ZLinkChannelEnvelope.decodeDispatchHeader(List.of(header, body), false);
+            assertEquals(expected, actual);
+        }
+    }
+
+    @Test
+    void asciiFastPathKeepsDynamicHeaderGoldenBytes() {
+        ZLinkChannelEnvelope.Header header =
+                new ZLinkChannelEnvelope.Header(
+                        ZLinkChannelEnvelope.KIND_REQUEST,
+                        "orders\"\\\n",
+                        "PlaceOrder",
+                        "application/json",
+                        "0123456789abcdef0123456789abcdef",
+                        "2030-01-02T03:04:05Z",
+                        null,
+                        null,
+                        null,
+                        null,
+                        Map.of(),
+                        null,
+                        null);
+        byte[] expected =
+                ("{\"formatMarker\":242,\"flowId\":null,\"flowOrigin\":null,\"kind\":1,"
+                                + "\"channelName\":\"orders\\\"\\\\\\n\","
+                                + "\"messageName\":\"PlaceOrder\","
+                                + "\"contentType\":\"application/json\","
+                                + "\"correlationId\":\"0123456789abcdef0123456789abcdef\","
+                                + "\"deadline\":\"2030-01-02T03:04:05Z\",\"topic\":null,"
+                                + "\"errorCode\":null,\"errorMessage\":null,\"source\":null,"
+                                + "\"metadata\":{}}")
+                        .getBytes(StandardCharsets.UTF_8);
+        assertArrayEquals(expected, ZLinkChannelEnvelope.encodeHeaderBytes(header));
+    }
+
+    @Test
+    void dispatchDecodePreservesStrictMalformedHeaderErrors() {
+        byte[] malformed = "{\"formatMarker\":242,\"kind\":3}".getBytes(StandardCharsets.UTF_8);
+        try (Message header = Message.from(malformed);
+                Message body = Message.from(new byte[] {1})) {
+            ZLinkFrameworkException direct =
+                    assertThrows(
+                            ZLinkFrameworkException.class,
+                            () ->
+                                    ZLinkChannelEnvelope.decodeHeader(
+                                            ByteBuffer.wrap(malformed), false));
+            ZLinkFrameworkException dispatch =
+                    assertThrows(
+                            ZLinkFrameworkException.class,
+                            () ->
+                                    ZLinkChannelEnvelope.decodeDispatchHeader(
+                                            List.of(header, body), false));
+            assertEquals(direct.kind(), dispatch.kind());
+            assertEquals(direct.getMessage(), dispatch.getMessage());
+        }
+    }
+
+    @Test
+    void dispatchDecodeRejectsBrokenJsonEnvelopeHeader() {
+        try (Message header = Message.from("{\"kind\":".getBytes(StandardCharsets.UTF_8));
+                Message body = Message.from(new byte[] {1})) {
+            assertThrows(
+                    ZLinkFrameworkException.class,
+                    () -> ZLinkChannelEnvelope.decodeDispatchHeader(List.of(header, body), false));
+        }
+    }
+
+    @Test
+    void dispatchDecodeStillTreatsNonEnvelopeFramesAsRaw() {
+        try (Message header = Message.from(new byte[] {'n', 'o', 't', '-', 'j', 's', 'o', 'n'});
+                Message body = Message.from(new byte[] {1})) {
+            assertNull(ZLinkChannelEnvelope.decodeDispatchHeader(List.of(header, body), false));
         }
     }
 
