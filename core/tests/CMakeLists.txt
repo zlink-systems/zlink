@@ -559,13 +559,14 @@ if(TARGET test_xpub_nodrop)
   set_tests_properties(test_xpub_nodrop PROPERTIES TIMEOUT 45)
 endif()
 
-foreach(h3_contract_test
-        test_gap_h3_pubsub_contract
-        test_flow_state_c_api)
-  if(TARGET ${h3_contract_test})
-    set_tests_properties(${h3_contract_test} PROPERTIES TIMEOUT 30)
-  endif()
-endforeach()
+if(TARGET test_gap_h3_pubsub_contract)
+  set_tests_properties(test_gap_h3_pubsub_contract PROPERTIES TIMEOUT 30)
+endif()
+if(TARGET test_flow_state_c_api)
+  # Three concurrent writer cases may each use a 10-second overlap window.
+  # Leave time for the other flow cases, setup, and teardown.
+  set_tests_properties(test_flow_state_c_api PROPERTIES TIMEOUT 60)
+endif()
 if(TARGET test_monitor_socket_contract)
   set_tests_properties(
     test_monitor_socket_contract
