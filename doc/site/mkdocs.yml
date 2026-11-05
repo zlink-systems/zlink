@@ -168,7 +168,7 @@ exclude_docs: |
   guide/STYLE.en.md
   # 측정이 끝나지 않은 messaging bench다. 결과는 별도 보고서로 낸다.
   common/bench/
-  # 스펙(framework 공통·샘플 시나리오 계약·bindings·core)은 internal.zlink.systems
+  # 스펙(framework 공통·샘플 시나리오 계약·bindings·core)은 zlink-docs.zlink.systems
   # 에서 본다(#3576). 이 사이트는 가이드만 싣는다. 감추려는 것이 아니라 보는 자리를
   # 나눈 것이라 원본은 제자리에 두고, 가이드의 스펙 링크는 repo_links 훅이 GitHub
   # 원본 주소로 바꾼다. 앞에 `/`를 붙여 docs/ 바로 아래 자리만 잡는다.
