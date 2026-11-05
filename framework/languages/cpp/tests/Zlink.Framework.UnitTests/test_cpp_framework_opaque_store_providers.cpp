@@ -3,6 +3,7 @@
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/location_runtime.hpp"
 #include "../support/manual_deadlines.hpp"
+#include "../support/location_reclaim_clock.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/aggregate_page_read_fixture.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
@@ -16,6 +17,8 @@
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include <fstream>
+#include <condition_variable>
+#include <zlink/framework/contracts/configuration/app.hpp>
 
 #include <gtest/gtest.h>
 #include <zlink/framework/contracts/detail/handler_invocation.hpp>
@@ -781,6 +784,8 @@ TEST (ZLinkFrameworkOpaqueStoreProviders,
 {
     creation_terminal_failure_store_t store;
     provider_location_repository_t repository (store);
+    location_reclaim_test_access_t clock;
+    clock.bind (repository);
     const auto owner =
       std::get<owner_lease_claimed_t> (
         repository.claim_owner_lease ("release-conflict-owner", 60s).result ().value ())
@@ -839,6 +844,13 @@ TEST (ZLinkFrameworkOpaqueStoreProviders,
                              .token;
     ASSERT_NE (successor.lease_generation, owner.lease_generation);
     ASSERT_EQ (capacity_record (store, descriptor).at ("active").at ("spots"), 1);
+    const auto writes_before_wait = store.creation_writes.size ();
+    const auto waiting =
+      repository.release_ended_reservation (key, before.store_version, {}, request).result ();
+    ASSERT_FALSE (waiting);
+    EXPECT_EQ (waiting.error_kind (), framework_error_kind_t::unavailable);
+    EXPECT_EQ (store.creation_writes.size (), writes_before_wait);
+    clock.advance (15s);
     store.conflicting_capacity_key = capacity_key (descriptor);
     store.fault = creation_terminal_failure_store_t::fault_t::capacity_conflict_once;
     const auto writes_before = store.creation_writes.size ();
@@ -855,6 +867,59 @@ TEST (ZLinkFrameworkOpaqueStoreProviders,
     EXPECT_EQ (capacity_record (store, descriptor).at ("active").at ("spots"), 0);
 }
 
+class reclaim_scan_store_t final : public location_store_t
+{
+  public:
+    task_t<store_read_result_t> read (store_key_t key) override
+    {
+        if (before_read && key.value == before_read_key.value) {
+            auto callback = std::exchange (before_read, {});
+            co_await callback ();
+        }
+        co_return co_await inner.read (std::move (key));
+    }
+    task_t<store_write_result_t> write (store_write_request_t request) override
+    {
+        if (before_member_write
+            && std::any_of (request.mutations.begin (), request.mutations.end (),
+                            [] (const auto &mutation) {
+                                const auto *put = std::get_if<store_put_t> (&mutation);
+                                return put
+                                       && put->key.value.starts_with (std::string ("authority")
+                                                                      + '\0' + "actor" + '\0');
+                            })) {
+            auto callback = std::exchange (before_member_write, {});
+            co_await callback ();
+        }
+        co_return co_await inner.write (std::move (request));
+    }
+    task_t<store_scan_result_t> scan (store_scan_request_t request) override
+    {
+        if (armed) {
+            ++scans;
+            if (fail_scan)
+                throw framework_exception_t (framework_error_kind_t::unavailable,
+                                             "membership snapshot failed");
+            if (expire_next_page && request.cursor) {
+                expire_next_page = false;
+                ++expired;
+                co_return store_scan_expired_t{};
+            }
+            request.limit = 1;
+        }
+        co_return co_await inner.scan (std::move (request));
+    }
+    in_memory_location_store_t inner;
+    bool armed = false;
+    bool fail_scan = false;
+    bool expire_next_page = false;
+    store_key_t before_read_key;
+    std::function<task_t<void> ()> before_read;
+    std::function<task_t<void> ()> before_member_write;
+    unsigned scans = 0;
+    unsigned expired = 0;
+};
+
 class ActiveActorReclaimTest : public ::testing::TestWithParam<std::tuple<bool, std::string>>
 {
 };
@@ -870,12 +935,14 @@ class reclaim_registration_factory_t : public actor_factory_t<actor_t>
 
 TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
 {
-    in_memory_location_store_t opaque;
+    reclaim_scan_store_t opaque;
     provider_location_repository_t provider (opaque);
     in_memory_location_repository_t memory;
     location_repository_t &repository = std::get<0> (GetParam ())
                                           ? static_cast<location_repository_t &> (provider)
                                           : static_cast<location_repository_t &> (memory);
+    location_reclaim_test_access_t clock;
+    clock.bind (repository);
     const auto scenario = std::get<1> (GetParam ());
     const auto old_owner = std::get<owner_lease_claimed_t> (
                              repository.claim_owner_lease ("reclaim-old", 60s).result ().value ())
@@ -974,13 +1041,88 @@ TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
         request.relocation_policy = detail::factory_relocation_kind_t::recreate;
     if (scenario == "typeMismatch")
         request.intent.stable_type = "different";
+    if (scenario == "recreate" || scenario == "relocation" || scenario == "relocationRecreate"
+        || scenario == "notReady") {
+        const auto waiting = repository.reserve (request).result ();
+        ASSERT_FALSE (waiting);
+        EXPECT_EQ (waiting.error_kind (), framework_error_kind_t::unavailable);
+        clock.advance (15s);
+    }
+    if (scenario == "observerRestart") {
+        const auto before = std::get<authority_snapshot_t> (
+          repository.read_authority (actor_authority_key (request.key.global_id))
+            .result ()
+            .value ());
+        const auto waiting = repository.reserve (request).result ();
+        ASSERT_FALSE (waiting);
+        EXPECT_EQ (waiting.error_kind (), framework_error_kind_t::unavailable);
+        clock.advance (15s - 1ms);
+        // A provider repository can restart over the same Store. The in-memory fixture
+        // keeps Store data and discards only the observer's local monotonic history.
+        provider_location_repository_t restarted (opaque);
+        location_repository_t &observer =
+          std::get<0> (GetParam ()) ? static_cast<location_repository_t &> (restarted) : repository;
+        if (!std::get<0> (GetParam ()))
+            location_reclaim_test_access_t::restart_observer (observer);
+        clock.bind (observer);
+        const auto first_observation = observer.reserve (request).result ();
+        ASSERT_FALSE (first_observation);
+        EXPECT_EQ (first_observation.error_kind (), framework_error_kind_t::unavailable);
+        clock.advance (1ms);
+        const auto old_boundary = observer.reserve (request).result ();
+        ASSERT_FALSE (old_boundary);
+        EXPECT_EQ (old_boundary.error_kind (), framework_error_kind_t::unavailable);
+        const auto retained = std::get<authority_snapshot_t> (
+          observer.read_authority (actor_authority_key (request.key.global_id)).result ().value ());
+        EXPECT_EQ (retained.store_version, before.store_version);
+        EXPECT_EQ (retained.payload, before.payload);
+        clock.advance (15s - 1ms);
+        const auto reclaimed = observer.reserve (request).result ();
+        ASSERT_TRUE (reclaimed);
+        ASSERT_TRUE (std::holds_alternative<object_reserved_t> (reclaimed.value ()));
+        EXPECT_GT (std::get<object_reserved_t> (reclaimed.value ()).creating.object_generation,
+                   before.object_generation);
+        return;
+    }
+    if (scenario == "expired" || scenario == "race") {
+        const auto waiting = repository.reserve (request).result ();
+        ASSERT_FALSE (waiting);
+        EXPECT_EQ (waiting.error_kind (), framework_error_kind_t::unavailable);
+        const auto unchanged = std::get<authority_snapshot_t> (
+          repository.read_authority (actor_authority_key (request.key.global_id))
+            .result ()
+            .value ());
+        EXPECT_EQ (unchanged.object_generation, first.creating.object_generation);
+        clock.advance (15s - 1ms);
+        const auto before_boundary = repository.reserve (request).result ();
+        ASSERT_FALSE (before_boundary);
+        EXPECT_EQ (before_boundary.error_kind (), framework_error_kind_t::unavailable);
+        clock.advance (1ms);
+    }
     if (scenario == "race") {
+        task_completion_source_t<void> owner_read_held;
+        task_completion_source_t<void> release_owner_read;
+        if (std::get<0> (GetParam ())) {
+            opaque.before_read_key = {std::string ("owner-lease") + '\0' + old_owner.owner_id};
+            opaque.before_read = [&] () -> task_t<void> {
+                owner_read_held.complete (result_t<void>::success ());
+                co_await release_owner_read.task ();
+            };
+        }
         auto first_attempt =
           std::async (std::launch::async, [&] { return repository.reserve (request).result (); });
+        struct release_on_exit_t
+        {
+            task_completion_source_t<void> &release;
+            ~release_on_exit_t () { release.complete (result_t<void>::success ()); }
+        } release_on_exit{release_owner_read};
+        if (std::get<0> (GetParam ()))
+            owner_read_held.task ().result ().value ();
         auto second_attempt =
           std::async (std::launch::async, [&] { return repository.reserve (request).result (); });
-        const auto first_result = first_attempt.get ();
         const auto second_result = second_attempt.get ();
+        release_owner_read.complete (result_t<void>::success ());
+        const auto first_result = first_attempt.get ();
         ASSERT_TRUE (first_result)
           << (first_result.error () ? first_result.error ()->what () : "untyped failure");
         ASSERT_TRUE (second_result)
@@ -1028,6 +1170,7 @@ INSTANTIATE_TEST_SUITE_P (RepositoryImplementations,
                           ActiveActorReclaimTest,
                           ::testing::Combine (::testing::Bool (),
                                               ::testing::Values ("expired",
+                                                                 "observerRestart",
                                                                  "live",
                                                                  "liveDescriptorGone",
                                                                  "recreate",
@@ -1036,59 +1179,6 @@ INSTANTIATE_TEST_SUITE_P (RepositoryImplementations,
                                                                  "relocation",
                                                                  "relocationRecreate",
                                                                  "notReady")));
-
-class reclaim_scan_store_t final : public location_store_t
-{
-  public:
-    task_t<store_read_result_t> read (store_key_t key) override
-    {
-        if (before_read && key.value == before_read_key.value) {
-            auto callback = std::exchange (before_read, {});
-            co_await callback ();
-        }
-        co_return co_await inner.read (std::move (key));
-    }
-    task_t<store_write_result_t> write (store_write_request_t request) override
-    {
-        if (before_member_write
-            && std::any_of (request.mutations.begin (), request.mutations.end (),
-                            [] (const auto &mutation) {
-                                const auto *put = std::get_if<store_put_t> (&mutation);
-                                return put
-                                       && put->key.value.starts_with (std::string ("authority")
-                                                                      + '\0' + "actor" + '\0');
-                            })) {
-            auto callback = std::exchange (before_member_write, {});
-            co_await callback ();
-        }
-        co_return co_await inner.write (std::move (request));
-    }
-    task_t<store_scan_result_t> scan (store_scan_request_t request) override
-    {
-        if (armed) {
-            ++scans;
-            if (fail_scan)
-                throw framework_exception_t (framework_error_kind_t::unavailable,
-                                             "membership snapshot failed");
-            if (expire_next_page && request.cursor) {
-                expire_next_page = false;
-                ++expired;
-                co_return store_scan_expired_t{};
-            }
-            request.limit = 1;
-        }
-        co_return co_await inner.scan (std::move (request));
-    }
-    in_memory_location_store_t inner;
-    bool armed = false;
-    bool fail_scan = false;
-    bool expire_next_page = false;
-    store_key_t before_read_key;
-    std::function<task_t<void> ()> before_read;
-    std::function<task_t<void> ()> before_member_write;
-    unsigned scans = 0;
-    unsigned expired = 0;
-};
 
 class EndedSpotReclaimTest
     : public ::testing::TestWithParam<std::tuple<bool, placement_object_kind_t, std::string>>
@@ -1104,6 +1194,8 @@ TEST_P (EndedSpotReclaimTest, NewIncarnationRequiresEndedOwnerAndDisabledRegistr
                                           ? static_cast<location_repository_t &> (provider)
                                           : static_cast<location_repository_t &> (memory);
     const auto kind = std::get<1> (GetParam ());
+    location_reclaim_test_access_t clock;
+    clock.bind (repository);
     const auto scenario = std::get<2> (GetParam ());
     const auto old_owner =
       std::get<owner_lease_claimed_t> (
@@ -1330,6 +1422,12 @@ TEST_P (EndedSpotReclaimTest, NewIncarnationRequiresEndedOwnerAndDisabledRegistr
         EXPECT_EQ (after.pending_creation->reservation_id, member_fence->reservation_id);
         return;
     }
+    if (scenario != "live" && scenario != "typeMismatch" && scenario != "kindMismatch") {
+        const auto waiting = repository.reserve (request).result ();
+        ASSERT_FALSE (waiting);
+        EXPECT_EQ (waiting.error_kind (), framework_error_kind_t::unavailable);
+        clock.advance (15s);
+    }
     opaque.armed = true;
     opaque.fail_scan = scenario == "storeFailure";
     opaque.expire_next_page = scenario == "snapshotExpired";
@@ -1464,6 +1562,8 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
     location_repository_t &repository = use_provider
                                           ? static_cast<location_repository_t &> (provider)
                                           : static_cast<location_repository_t &> (memory);
+    location_reclaim_test_access_t clock;
+    clock.bind (repository);
     const auto scenario = std::get<1> (GetParam ());
     const bool member_only_race =
       scenario == "memberOnlyAggregatePrepared" || scenario == "memberOnlyAggregateReplaced";
@@ -1656,6 +1756,12 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
     };
     const auto before = versions ();
     repository.release_owner_lease (old_owner).result ().value ();
+    request.target = target;
+    const auto waiting = repository.reserve (request).result ();
+    ASSERT_FALSE (waiting);
+    EXPECT_EQ (waiting.error_kind (), framework_error_kind_t::unavailable);
+    EXPECT_EQ (before, versions ());
+    clock.advance (15s);
     std::optional<object_reserved_t> independently_recreated;
     std::optional<store_found_t> corrupted_capacity;
     if (scenario == "memberReclaimed" || scenario == "memberCapacityCorrupt") {
@@ -3281,10 +3387,17 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsLeaseAndDescript
     EXPECT_EQ (page.items.front ().owner_id, "owner-a");
 }
 
+TEST (CppFrameworkOpaqueLocationStore, DefaultOwnerLeaseTtlIsThirtySeconds)
+{
+    EXPECT_EQ (location_options_t{}.owner_lease_ttl, 30s);
+}
+
 TEST (CppFrameworkOpaqueLocationStore, MeshNewClaimUsesStoredOwnerLeaseExactRead)
 {
     in_memory_location_store_t provider;
     provider_location_repository_t repository (provider);
+    location_reclaim_test_access_t clock;
+    clock.bind (repository);
     const auto expired_claim =
       repository.claim_owner_lease ("expired-descriptor-owner", 30s).result ().value ();
     const auto *expired_owner = std::get_if<owner_lease_claimed_t> (&expired_claim);
@@ -3321,6 +3434,20 @@ TEST (CppFrameworkOpaqueLocationStore, MeshNewClaimUsesStoredOwnerLeaseExactRead
     const auto *successor = std::get_if<owner_lease_claimed_t> (&successor_claim);
     ASSERT_NE (successor, nullptr);
     ASSERT_GT (successor->token.lease_generation, expired_owner->token.lease_generation);
+    const auto waiting = repository
+                           .update_mesh_node (descriptor ("expired", successor->token),
+                                              location_write_intent_t::new_claim)
+                           .result ();
+    ASSERT_FALSE (waiting);
+    EXPECT_EQ (waiting.error_kind (), framework_error_kind_t::unavailable);
+    clock.advance (15s - 1ms);
+    const auto before_boundary = repository
+                                   .update_mesh_node (descriptor ("expired", successor->token),
+                                                      location_write_intent_t::new_claim)
+                                   .result ();
+    ASSERT_FALSE (before_boundary);
+    EXPECT_EQ (before_boundary.error_kind (), framework_error_kind_t::unavailable);
+    clock.advance (1ms);
     EXPECT_EQ (repository
                  .update_mesh_node (descriptor ("expired", successor->token),
                                     location_write_intent_t::new_claim)
@@ -5661,7 +5788,7 @@ TEST (ZLinkFrameworkOpaqueStoreProviders, RepeatedMeshWriteRejectsOtherDescripto
     }
 }
 
-TEST (ZLinkFrameworkOpaqueStoreProviders, NewClaimIgnoresPreviousOwnerLeaseGeneration)
+TEST (ZLinkFrameworkOpaqueStoreProviders, NewClaimWaitsAfterPreviousOwnerLeaseGenerationChanges)
 {
     in_memory_location_store_t provider;
     provider_location_repository_t provider_repository (provider);
@@ -5670,6 +5797,8 @@ TEST (ZLinkFrameworkOpaqueStoreProviders, NewClaimIgnoresPreviousOwnerLeaseGener
          {static_cast<location_repository_t *> (&provider_repository),
           static_cast<location_repository_t *> (&memory_repository)}) {
         SCOPED_TRACE (repository == &provider_repository ? "provider" : "in-memory");
+        location_reclaim_test_access_t clock;
+        clock.bind (*repository);
         const auto first = std::get<owner_lease_claimed_t> (
                              repository->claim_owner_lease ("reused-owner", 30s).result ().value ())
                              .token;
@@ -5696,6 +5825,11 @@ TEST (ZLinkFrameworkOpaqueStoreProviders, NewClaimIgnoresPreviousOwnerLeaseGener
         ASSERT_GT (replacement.lease_generation, first.lease_generation);
         descriptor.lease_generation = replacement.lease_generation;
         descriptor.lifecycle_generation = 2;
+        const auto waiting =
+          repository->update_mesh_node (descriptor, location_write_intent_t::new_claim).result ();
+        ASSERT_FALSE (waiting);
+        EXPECT_EQ (waiting.error_kind (), framework_error_kind_t::unavailable);
+        clock.advance (15s);
         EXPECT_EQ (location_write_status_t::stored,
                    repository->update_mesh_node (descriptor, location_write_intent_t::new_claim)
                      .result ()
@@ -6146,3 +6280,214 @@ TEST (ZLinkFrameworkOpaqueStoreProviders, Cleanup3462DescriptorReadBeforeDeadlin
 }
 
 } // namespace
+
+TEST (CppFrameworkOpaqueLocationStore, ReclaimWaitUsesExactRecordTokenAndRestartsObservation)
+{
+    in_memory_location_repository_t repository;
+    location_reclaim_test_access_t clock;
+    clock.bind (repository);
+    using access = location_reclaim_test_access_t;
+    const location_owner_token_t owner{"owner", 1};
+    const location_owner_token_t next{"owner", 2};
+    EXPECT_FALSE (access::observe (repository, "actor:a", owner));
+    clock.advance (15s - 1ms);
+    EXPECT_FALSE (access::observe (repository, "actor:a", owner));
+    EXPECT_FALSE (access::observe (repository, "actor:b", owner));
+    clock.advance (1ms);
+    EXPECT_TRUE (access::observe (repository, "actor:a", owner));
+    EXPECT_FALSE (access::observe (repository, "actor:b", owner));
+    EXPECT_FALSE (access::observe (repository, "actor:a", next));
+    clock.advance (15s - 1ms);
+    EXPECT_FALSE (access::observe (repository, "actor:a", next));
+    clock.advance (1ms);
+    EXPECT_TRUE (access::observe (repository, "actor:a", next));
+    access::restart_observer (repository);
+    EXPECT_FALSE (access::observe (repository, "actor:a", next));
+    clock.advance (15s);
+    EXPECT_TRUE (access::observe (repository, "actor:a", next));
+    EXPECT_FALSE (access::observe (repository, "actor:a", next, true));
+    EXPECT_EQ (access::observations (repository), 0u);
+    EXPECT_FALSE (access::observe (repository, "actor:a", next));
+    access::missing (repository, "actor:a");
+    EXPECT_EQ (access::observations (repository), 0u);
+    EXPECT_FALSE (access::observe (repository, "actor:a", next));
+}
+
+namespace
+{
+class reclaim_count_store_t final : public location_store_t
+{
+  public:
+    task_t<store_read_result_t> read (store_key_t key) override
+    {
+        return inner.read (std::move (key));
+    }
+    task_t<store_scan_result_t> scan (store_scan_request_t request) override
+    {
+        return inner.scan (std::move (request));
+    }
+    task_t<store_write_result_t> write (store_write_request_t request) override
+    {
+        for (const auto &mutation : request.mutations)
+            if (const auto *put = std::get_if<store_put_t> (&mutation);
+                put && put->key.value.starts_with ("mesh-node"))
+                mesh_claims.fetch_add (1);
+        return inner.write (std::move (request));
+    }
+    in_memory_location_store_t inner;
+    std::atomic<unsigned> mesh_claims{0};
+};
+
+class fixed_rid_startup_probe_t final : public hosted_service_t
+{
+  public:
+    task_t<void> start (service_provider_t &services) override
+    {
+        observation = services.get_required<zlink::framework::framework_runtime_t> ().observe (
+          1, [this] (const auto &event) {
+              const std::lock_guard lock (mutex);
+              ready = event.status.state == framework_runtime_state_t::serving;
+              changed.notify_all ();
+          });
+        const std::lock_guard lock (mutex);
+        started = true;
+        changed.notify_all ();
+        co_return;
+    }
+    void stop () noexcept override
+    {
+        if (observation)
+            observation->close ();
+    }
+    void clock_observed ()
+    {
+        const std::lock_guard lock (mutex);
+        ++reads;
+        changed.notify_all ();
+    }
+    bool wait_started ()
+    {
+        std::unique_lock lock (mutex);
+        return changed.wait_for (lock, 5s, [&] { return started; });
+    }
+    bool wait_reads (unsigned count)
+    {
+        std::unique_lock lock (mutex);
+        return changed.wait_for (lock, 5s, [&] { return reads >= count; });
+    }
+    unsigned read_count ()
+    {
+        const std::lock_guard lock (mutex);
+        return reads;
+    }
+    bool wait_ready ()
+    {
+        std::unique_lock lock (mutex);
+        return changed.wait_for (lock, 5s, [&] { return ready; });
+    }
+
+  private:
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool started = false;
+    bool ready = false;
+    unsigned reads = 0;
+    std::unique_ptr<runtime_observation_t> observation;
+};
+}
+
+TEST (CppFrameworkOpaqueLocationStore, FixedRidStartupStaysPreparingWithoutClaimUntilReleaseWait)
+{
+    for (const bool use_provider : {false, true}) {
+        SCOPED_TRACE (use_provider ? "provider" : "in-memory");
+        auto store = std::make_shared<reclaim_count_store_t> ();
+        std::shared_ptr<location_repository_t> repository =
+          use_provider ? std::static_pointer_cast<location_repository_t> (
+                           std::make_shared<provider_location_repository_t> (*store))
+                       : std::static_pointer_cast<location_repository_t> (
+                           std::make_shared<in_memory_location_repository_t> ());
+        const auto owner =
+          std::get<owner_lease_claimed_t> (
+            repository->claim_owner_lease ("old-fixed-owner", 60s).result ().value ())
+            .token;
+        mesh_node_descriptor_t descriptor;
+        descriptor.mesh_name = "fixed-restart";
+        descriptor.rid = zlink::routing_id_t::from ("fixed-restart-node");
+        descriptor.lifecycle_generation = 1;
+        descriptor.descriptor_revision = 1;
+        descriptor.endpoint = "inproc://fixed-restart-node";
+        descriptor.security_identity = "fixed-restart-node";
+        descriptor.activation_concurrency.limit = 1;
+        descriptor.owner_id = owner.owner_id;
+        descriptor.lease_generation = owner.lease_generation;
+        descriptor.object_role = object_role_t::none;
+        descriptor.state = framework_runtime_state_t::serving;
+        ASSERT_EQ (repository->update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                     .result ()
+                     .value ()
+                     .status,
+                   location_write_status_t::stored);
+        repository->release_owner_lease (owner).result ().value ();
+        const auto claims = store->mesh_claims.load ();
+        const auto stored_owner = [&] {
+            const auto page = repository->list_mesh_nodes (descriptor.mesh_name).result ().value ();
+            EXPECT_EQ (page.items.size (), 1u);
+            return page.items.empty () ? std::string{} : page.items.front ().owner_id;
+        };
+        auto app = app_t::create ();
+        auto &options = app.add_zlink_framework ();
+        options.add_location_store (store);
+        options.add_relocation_store (std::make_shared<in_memory_relocation_store_t> ());
+        auto &locations = options.configure_locations ();
+        locations.owner_lease_renew_interval = 10ms;
+        locations.owner_lease_fencing_margin = 7ms;
+        auto mesh = options.add_route_mesh ("fixed-restart");
+        mesh.channel_name ("fixed-restart-channel").server ();
+        mesh.set_object_role (object_role_t::none)
+          .set_routing_id (descriptor.rid)
+          .listen (descriptor.endpoint);
+        app.advanced ().services ().add_factory<location_repository_t> (
+          [repository] (service_provider_t &) { return repository; },
+          service_lifetime_t::singleton);
+        auto probe = std::make_unique<fixed_rid_startup_probe_t> ();
+        auto *view = probe.get ();
+        location_reclaim_test_access_t clock;
+        clock.bind (*repository, [view] { view->clock_observed (); });
+        app.add_hosted_service (std::move (probe));
+        int exit_code = -1;
+        std::jthread running ([&] {
+            char program[] = "fixed-restart";
+            char *arguments[] = {program, nullptr};
+            exit_code = app.run (1, arguments);
+        });
+        struct stop_on_exit_t
+        {
+            app_t &app;
+            ~stop_on_exit_t () { app.request_stop (); }
+        } stop_on_exit{app};
+        ASSERT_TRUE (view->wait_started ());
+        ASSERT_TRUE (view->wait_reads (1));
+        EXPECT_FALSE (app.is_ready ());
+        EXPECT_EQ (app.runtime_state (), framework_runtime_state_t::preparing);
+        EXPECT_EQ (store->mesh_claims.load (), claims);
+        EXPECT_EQ (stored_owner (), owner.owner_id);
+        clock.advance (20ms);
+        // Two observations fence a renewal already in flight before the clock advance.
+        const auto observed = view->read_count ();
+        ASSERT_TRUE (view->wait_reads (observed + 2));
+        EXPECT_FALSE (app.is_ready ());
+        EXPECT_EQ (app.runtime_state (), framework_runtime_state_t::preparing);
+        EXPECT_EQ (store->mesh_claims.load (), claims);
+        EXPECT_EQ (stored_owner (), owner.owner_id);
+        clock.advance (1ms);
+        ASSERT_TRUE (view->wait_ready ());
+        EXPECT_TRUE (app.is_ready ());
+        EXPECT_EQ (app.runtime_state (), framework_runtime_state_t::serving);
+        EXPECT_NE (stored_owner (), owner.owner_id);
+        if (use_provider)
+            EXPECT_EQ (store->mesh_claims.load (), claims + 1);
+        app.request_stop ();
+        running.join ();
+        EXPECT_EQ (exit_code, 0);
+    }
+}

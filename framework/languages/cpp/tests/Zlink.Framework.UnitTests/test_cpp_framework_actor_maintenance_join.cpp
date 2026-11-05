@@ -13,6 +13,7 @@
 #include "runtime/locations/live_location_reader.hpp"
 #include "runtime/locations/store_location_resolvers.hpp"
 #include "../support/owner_lease_time_store.hpp"
+#include "../support/location_reclaim_clock.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/actors/actor_manager_access.hpp"
@@ -1558,6 +1559,24 @@ void user_spot_authority_qualification (user_spot_authority_case_t scenario)
       source_repository.read_authority (spot_authority_key (request.key.global_id)).result ();
     ASSERT_TRUE (observed);
     ASSERT_TRUE (std::holds_alternative<fw::authority_snapshot_t> (observed.value ()));
+    fw::location_reclaim_test_access_t reclaim_clock;
+    reclaim_clock.bind (source_repository);
+    if (!creating && !retained) {
+        const auto waiting = services.get_required<fw::spot_manager_t> ()
+                               .get_or_create (request.key.global_id, room_type)
+                               .timeout (wait_budget)
+                               .async ()
+                               .result ();
+        ASSERT_FALSE (waiting);
+        EXPECT_EQ (waiting.error_kind (), fw::framework_error_kind_t::unavailable);
+        const auto unchanged =
+          source_repository.read_authority (spot_authority_key (request.key.global_id)).result ();
+        ASSERT_TRUE (unchanged);
+        ASSERT_TRUE (std::holds_alternative<fw::authority_snapshot_t> (unchanged.value ()));
+        EXPECT_EQ (std::get<fw::authority_snapshot_t> (unchanged.value ()).store_version,
+                   std::get<fw::authority_snapshot_t> (observed.value ()).store_version);
+        reclaim_clock.advance (15s);
+    }
     const auto result = services.get_required<fw::spot_manager_t> ()
                           .get_or_create (request.key.global_id, room_type)
                           .timeout (wait_budget)

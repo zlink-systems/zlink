@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include <zlink/json.hpp>
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/location_reclaim_clock.hpp"
 
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
@@ -2176,6 +2177,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, RejectsInvalidRoutingAndRelocationLi
     {
         options_fixture_t fixture;
         auto options = fixture.make_options ();
+        options.configure_locations ().owner_lease_ttl = std::chrono::seconds (15);
         options.configure_locations ().owner_lease_renew_interval = std::chrono::seconds (7);
         EXPECT_THROW (options.apply (), zlink::framework::framework_exception_t);
     }
@@ -3392,6 +3394,8 @@ class ended_user_reclaim_client_t final : public zlink::framework::hosted_servic
         namespace fw = zlink::framework;
         namespace rt = fw::runtime;
         auto &repository = services.get_required<fw::location_repository_t> ();
+        fw::location_reclaim_test_access_t clock;
+        clock.bind (repository);
         auto &manager = services.get_required<fw::spot_manager_t> ();
         const auto before = std::get<fw::authority_snapshot_t> (
           repository.read_authority (rt::spot_authority_key ("ended-user")).result ().value ());
@@ -3411,6 +3415,19 @@ class ended_user_reclaim_client_t final : public zlink::framework::hosted_servic
         EXPECT_EQ (before.store_version, retained.store_version);
         EXPECT_EQ (before.payload, retained.payload);
         EXPECT_EQ (factories->load (), 0);
+        const auto waiting = manager.get_or_create (fw::spot_id_t ("ended-user"), "room")
+                               .in_mesh ("factory-mesh")
+                               .timeout (std::chrono::seconds (3))
+                               .async ()
+                               .result ();
+        EXPECT_FALSE (waiting);
+        if (!waiting)
+            EXPECT_EQ (waiting.error_kind (), fw::framework_error_kind_t::unavailable);
+        const auto during_wait = std::get<fw::authority_snapshot_t> (
+          repository.read_authority (rt::spot_authority_key ("ended-user")).result ().value ());
+        EXPECT_EQ (before.store_version, during_wait.store_version);
+        EXPECT_EQ (factories->load (), 0);
+        clock.advance (std::chrono::seconds (15));
         const auto created = manager.get_or_create (fw::spot_id_t ("ended-user"), "room")
                                .in_mesh ("factory-mesh")
                                .timeout (std::chrono::seconds (3))

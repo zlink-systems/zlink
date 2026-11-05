@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/location_reclaim_clock.hpp"
 #include "../support/manual_deadlines.hpp"
 #include "../support/telemetry_observation.hpp"
 #include "metric_test_reader.hpp"
@@ -2207,6 +2208,8 @@ static void verify_ended_instance_intent (bool provider, bool disabled)
                    std::make_shared<rt::provider_location_repository_t> (*opaque))
                : std::static_pointer_cast<fw::location_repository_t> (
                    std::make_shared<rt::in_memory_location_repository_t> ());
+    fw::location_reclaim_test_access_t clock;
+    clock.bind (*store);
     const auto owner = std::get<fw::owner_lease_claimed_t> (
                          store->claim_owner_lease ("ended-instance-owner", 60s).result ().value ())
                          .token;
@@ -2316,6 +2319,19 @@ static void verify_ended_instance_intent (bool provider, bool disabled)
                          .result ();
     EXPECT_FALSE (wrong);
     EXPECT_EQ (fw::framework_error_kind_t::type_mismatch, wrong.error_kind ());
+    const auto waiting = client.request_to_spot ("ended-room", traced_request_t{3})
+                           .instance_spot ()
+                           .in_mesh ("ignored-on-existing-id")
+                           .timeout (3s)
+                           .async<traced_reply_t> ()
+                           .result ();
+    EXPECT_FALSE (waiting);
+    EXPECT_EQ (fw::framework_error_kind_t::unavailable, waiting.error_kind ());
+    const auto during_wait = std::get<fw::authority_snapshot_t> (
+      store->read_authority (rt::spot_authority_key ("ended-room")).result ().value ());
+    EXPECT_EQ (before.store_version, during_wait.store_version);
+    EXPECT_EQ (0, factories);
+    clock.advance (15s);
     const auto result = client.request_to_spot ("ended-room", traced_request_t{3})
                           .instance_spot ()
                           .in_mesh ("ignored-on-existing-id")

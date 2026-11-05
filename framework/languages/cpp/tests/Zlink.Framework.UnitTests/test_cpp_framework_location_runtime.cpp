@@ -1509,10 +1509,13 @@ TEST (ZLinkFrameworkLocationRuntime, AdmissionSnapshotPreservesStrictExpiryAndRe
 TEST (ZLinkFrameworkLocationRuntime, RejectsLeaseTimeoutLongerThanFencedRenewalWindow)
 {
     location_options_t options;
+    options.owner_lease_ttl = std::chrono::seconds (15);
     options.owner_lease_renew_interval = std::chrono::seconds (1);
     options.owner_lease_renew_timeout = std::chrono::seconds (8);
     EXPECT_THROW (zlink::framework::detail::validate_location_options (options),
                   zlink::framework::framework_exception_t);
+    options.owner_lease_ttl = std::chrono::seconds (30);
+    EXPECT_NO_THROW (zlink::framework::detail::validate_location_options (options));
     EXPECT_NO_THROW (zlink::framework::detail::validate_location_options (location_options_t{}));
 }
 
