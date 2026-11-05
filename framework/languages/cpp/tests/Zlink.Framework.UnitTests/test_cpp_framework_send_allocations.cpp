@@ -639,7 +639,8 @@ TEST (SendAllocations, KnownTargetForwardsTheNativeTaskWithoutAnotherResult)
     std::vector<zlink::message_t> parts;
     parts.push_back (zlink::message_t::from ("payload"));
     const auto native = [&] {
-        (void) node.native_node ().transport ().classify_node_target (target.to_bytes ());
+        (void) node.native_node ().transport ().classify_node_target (
+          {target.data (), target.size ()});
         return node.native_node ().send_to_node (target, parts).result ();
     };
     const auto forward = [&] {

@@ -45,6 +45,14 @@ std::string format_utc_deadline (std::chrono::system_clock::time_point deadline)
 
 } // namespace
 
+message_parts_t client_call_codec_t::encode_payload_parts (const envelope_header_t &header,
+                                                           encoded_payload_t payload,
+                                                           const std::string &content_type) const
+{
+    auto body = detail::encoded_payload_to_raw (std::move (payload));
+    return message_parts_t (_codec.encode_header (header, content_type), std::move (body));
+}
+
 envelope_header_t client_call_codec_t::create_envelope (message_kind_t kind,
                                                         std::string channel_name,
                                                         std::string message_name,

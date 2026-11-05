@@ -16,6 +16,7 @@
 #include <zlink/Contracts/Core/context.hpp>
 #include <zlink/Contracts/Core/routing_id.hpp>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -349,7 +350,7 @@ TEST (ServiceTopologyPreparedFacts, ReadsDoNotRequestTopologyTurns)
         EXPECT_EQ (remote, peer->descriptor);
         EXPECT_EQ (std::vector<std::uint8_t>{1}, peer->connection_id);
     });
-    EXPECT_NO_THROW (EXPECT_FALSE (topology.peer ({'c'})));
+    EXPECT_NO_THROW (EXPECT_FALSE (topology.peer (std::array<std::uint8_t, 1>{'c'})));
 }
 
 TEST (ServiceTopologyPreparedFacts, PublishesChangesBeforeNotification)

@@ -1047,6 +1047,38 @@ static void verify_request_deadline_preserves_timeout_boundary ()
     assert (settled.exception () == expired.exception ());
 }
 
+void verify_request_receive_source_borrows_target ()
+{
+    zlink::context_t context;
+    zlink::router_socket_t source (context);
+    source.options ().mandatory (true);
+    backend::raw_route_port_t port (source);
+    const backend::raw_bytes_t target (200, 'n');
+    unsigned lookups = 0;
+    port.set_request_receive_source ([&] (std::span<const std::uint8_t> observed) {
+        assert (observed.data () == target.data ());
+        assert (std::equal (observed.begin (), observed.end (), target.begin (), target.end ()));
+        ++lookups;
+        return zlink::framework::runtime::mesh::service_liveness_registry_t::connection_t{};
+    });
+    const auto verify = [&] (auto parts) {
+        bool completed = false;
+        port.request (
+          target, std::move (parts), 1s,
+          [&] (zlink::framework::result_t<backend::raw_request_completion_t> result) {
+              assert (result && result.value ().terminal == zlink::request_result_t::not_connected);
+              completed = true;
+          });
+        assert (completed);
+    };
+    verify (request_parts ());
+    std::vector<zlink::message_t> native;
+    native.push_back (zlink::message_t::from ("request"));
+    verify (std::move (native));
+    assert (lookups == 2);
+    port.close ();
+}
+
 void verify_request_materializes_only_the_binding_message_list ()
 {
     using zlink::framework::tests::count_allocations;
@@ -1084,6 +1116,7 @@ void verify_request_materializes_only_the_binding_message_list ()
 int main ()
 {
     zlink::framework::completion_owner_t completion_owner;
+    verify_request_receive_source_borrows_target ();
     verify_request_materializes_only_the_binding_message_list ();
     verify_raw_send_uses_binding_owned_message_list ();
     verify_request_deadline_preserves_timeout_boundary ();

@@ -30,6 +30,7 @@
 #include "runtime_context_hooks_environment.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <future>
@@ -1423,7 +1424,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ColdSendUsesServiceSendAdmissionBefo
     target.start ();
     source.start ();
     ASSERT_TRUE (source.connect_peer (target.endpoint ()));
-    ASSERT_FALSE (source.topology ().peer ({1}));
+    ASSERT_FALSE (source.topology ().peer (std::array<std::uint8_t, 1>{1}));
     rt::protocol::application_payload_t payload{"probe", "application/json", {1}};
     EXPECT_FALSE (source.send_to_node ({1}, payload).result ().value ());
     rt::protocol::instance_spot_activation_header_t command{
@@ -1454,7 +1455,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ColdSendUsesServiceSendAdmissionBefo
     ASSERT_TRUE (admitted);
     ASSERT_TRUE (*admitted);
     EXPECT_FALSE (admitted->value ());
-    EXPECT_FALSE (source.topology ().peer ({1}));
+    EXPECT_FALSE (source.topology ().peer (std::array<std::uint8_t, 1>{1}));
     source.close ();
     target.close ();
 }

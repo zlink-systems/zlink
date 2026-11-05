@@ -1738,8 +1738,7 @@ void route_client_t::submit_request_reply_message_erased (
   std::string router_channel_id,
   zlink::routing_id_t target_node_rid,
   std::string packet_name,
-  std::type_index request_type,
-  payload_encoder_t encode_payload,
+  node_payload_encoder_t encode_payload,
   std::chrono::milliseconds timeout,
   std::map<std::string, std::string> metadata,
   detail::request_receiver_t<encoded_payload_t> receiver)
@@ -1770,50 +1769,18 @@ void route_client_t::submit_request_reply_message_erased (
                                      "route channel or MeshNode '" + router_channel_id
                                        + "' is not registered");
     }
-    // Selected transports may borrow this stable target until physical completion.
-    auto target_owner = std::make_shared<const zlink::routing_id_t> (std::move (target_node_rid));
-    auto effective_timeout = timeout;
-    if (route) {
-        auto &runtime = **route;
-        effective_timeout = timeout > std::chrono::milliseconds::zero ()
-                              ? timeout
-                              : runtime.default_request_timeout ();
-    } else if (effective_timeout <= std::chrono::milliseconds::zero ()) {
-        effective_timeout = state->runtime->default_request_timeout;
-    }
-    const auto deadline = request_started + effective_timeout;
+    using reply_parts_t = runtime::messaging::message_parts_t;
+    using node_reply_t = result_t<reply_parts_t>;
+    struct request_decoder_t
     {
-        runtime::messaging::client_call_codec_t codec;
-        auto header = codec.create_envelope (
-          runtime::messaging::message_kind_t::request, router_channel_id, packet_name,
-          runtime::messaging::remaining_request_timeout (deadline));
-        header.metadata = std::move (metadata);
-        if (detail::message_flow_tracer_t (state->runtime->dispatch)
-              .enabled_for (message_flow_outcome_t::sent)) {
-            detail::message_flow_tracer_t (state->runtime->dispatch)
-              .trace (message_flow_outcome_t::sent, [&] {
-                  return message_flow_event_t{message_flow_outcome_t::sent,
-                                              dispatch_error_surface_t::route_mesh_channel,
-                                              dispatch_message_kind_t::request,
-                                              packet_name,
-                                              router_channel_id,
-                                              std::nullopt,
-                                              header.correlation_id,
-                                              target_owner->to_string (),
-                                              std::nullopt,
-                                              std::nullopt,
-                                              std::nullopt};
-              });
-        }
-        parts =
-          codec.encode_payload_parts (std::move (header), encode_payload (*state->serializers));
-    }
-    const auto ambient_guard = detail::enter_ambient_context (ambient_context);
-    try {
-        auto decode = [state, transport = transport.value (), packet_name = std::move (packet_name),
-                       router_channel_id = std::move (router_channel_id),
-                       target_owner] (const result_t<runtime::messaging::message_parts_t> &reply)
-          -> result_t<encoded_payload_t> {
+        std::shared_ptr<detail::route_client_state_t> state;
+        detail::node_transport_t transport;
+        zlink::routing_id_t target;
+        std::string packet_name;
+        std::string router_channel_id;
+
+        result_t<encoded_payload_t> decode (const result_t<reply_parts_t> &reply)
+        {
             // Retain the selected callable and its borrowed target until terminal.
             (void) transport;
             try {
@@ -1851,7 +1818,7 @@ void route_client_t::submit_request_reply_message_erased (
                                                       router_channel_id,
                                                       std::nullopt,
                                                       reply_header.value ().correlation_id,
-                                                      target_owner->to_string (),
+                                                      target.to_string (),
                                                       std::nullopt,
                                                       std::nullopt,
                                                       std::nullopt};
@@ -1866,21 +1833,87 @@ void route_client_t::submit_request_reply_message_erased (
                 return result_t<encoded_payload_t>::failure (
                   framework_error_kind_t::internal_failure, error.what ());
             }
-        };
+        }
+
+        result_t<encoded_payload_t> operator() (const result_t<reply_parts_t> &reply)
+        {
+            return decode (reply);
+        }
+        result_t<encoded_payload_t> operator() (const result_t<node_reply_t> &reply)
+        {
+            return decode (reply.value ());
+        }
+    };
+    request_decoder_t decode{state, transport.value (), std::move (target_node_rid),
+                             std::move (packet_name), std::move (router_channel_id)};
+
+    auto effective_timeout = timeout;
+    if (route) {
+        auto &runtime = **route;
+        effective_timeout = timeout > std::chrono::milliseconds::zero ()
+                              ? timeout
+                              : runtime.default_request_timeout ();
+    } else if (effective_timeout <= std::chrono::milliseconds::zero ()) {
+        effective_timeout = state->runtime->default_request_timeout;
+    }
+    const auto deadline = request_started + effective_timeout;
+    {
+        runtime::messaging::client_call_codec_t codec;
+        auto header = codec.create_envelope (
+          runtime::messaging::message_kind_t::request, decode.router_channel_id, decode.packet_name,
+          runtime::messaging::remaining_request_timeout (deadline), std::nullopt, std::nullopt, {});
+        header.metadata = std::move (metadata);
+        if (detail::message_flow_tracer_t (state->runtime->dispatch)
+              .enabled_for (message_flow_outcome_t::sent)) {
+            detail::message_flow_tracer_t (state->runtime->dispatch)
+              .trace (message_flow_outcome_t::sent, [&] {
+                  return message_flow_event_t{message_flow_outcome_t::sent,
+                                              dispatch_error_surface_t::route_mesh_channel,
+                                              dispatch_message_kind_t::request,
+                                              decode.packet_name,
+                                              decode.router_channel_id,
+                                              std::nullopt,
+                                              header.correlation_id,
+                                              decode.target.to_string (),
+                                              std::nullopt,
+                                              std::nullopt,
+                                              std::nullopt};
+              });
+        }
+        auto [payload, content_type] = encode_payload (*state->serializers);
+        parts =
+          codec.encode_payload_parts (std::move (header), std::move (payload), content_type.get ());
+    }
+    const auto ambient_guard = detail::enter_ambient_context (ambient_context);
+    try {
         if (mesh) {
             const auto remaining = runtime::messaging::remaining_request_timeout (deadline);
             if (remaining <= std::chrono::milliseconds::zero ())
                 throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
                                              "node request deadline elapsed before submission");
-            (*mesh)->request (*target_owner, std::move (parts), remaining,
-                              receiver.project<result_t<runtime::messaging::message_parts_t>> (
-                                [decode = std::move (decode)] (const auto &terminal) {
-                                    return decode (terminal.value ());
-                                }));
+            using projection_t =
+              detail::request_receiver_t<encoded_payload_t>::projection_t<node_reply_t,
+                                                                          request_decoder_t>;
+            auto context = std::make_shared<projection_t> (
+              projection_t{std::move (receiver.complete), std::move (decode)});
+            detail::request_receiver_t<node_reply_t> physical{
+              std::move (receiver.admitted),
+              detail::request_callback_t<const result_t<node_reply_t> &>::from_shared (context),
+              std::move (receiver.fail_public)};
+            (*mesh)->request (context->project.target, std::move (parts), remaining,
+                              std::move (physical));
         } else {
-            (*route)->request_reply_parts (
-              *target_owner, std::nullopt, std::move (parts), deadline,
-              receiver.project<runtime::messaging::message_parts_t> (std::move (decode)));
+            using projection_t =
+              detail::request_receiver_t<encoded_payload_t>::projection_t<reply_parts_t,
+                                                                          request_decoder_t>;
+            auto context = std::make_shared<projection_t> (
+              projection_t{std::move (receiver.complete), std::move (decode)});
+            detail::request_receiver_t<reply_parts_t> physical{
+              std::move (receiver.admitted),
+              detail::request_callback_t<const result_t<reply_parts_t> &>::from_shared (context),
+              std::move (receiver.fail_public)};
+            (*route)->request_reply_parts (context->project.target, std::nullopt, std::move (parts),
+                                           deadline, std::move (physical));
         }
     }
     catch (const framework_exception_t &) {

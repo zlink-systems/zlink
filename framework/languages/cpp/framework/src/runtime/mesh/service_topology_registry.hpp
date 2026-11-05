@@ -13,6 +13,7 @@
 #include <opentelemetry/metrics/async_instruments.h>
 #include <opentelemetry/metrics/sync_instruments.h>
 
+#include <algorithm>
 #include <atomic>
 #include <memory>
 #include <cstdint>
@@ -32,6 +33,17 @@ namespace zlink::framework::runtime::mesh
 inline constexpr char legacy_protocol_capability[] = "framework-service-v12";
 
 std::uint64_t sum_service_weights (std::span<const int> weights);
+
+struct raw_mesh_byte_vector_less_t
+{
+    using is_transparent = void;
+    bool operator() (std::span<const std::uint8_t> left,
+                     std::span<const std::uint8_t> right) const noexcept
+    {
+        return std::lexicographical_compare (left.begin (), left.end (), right.begin (),
+                                             right.end ());
+    }
+};
 
 enum class service_node_state_t
 {
@@ -169,7 +181,7 @@ class service_topology_registry_t
     // The admitted peer inside the current immutable topology snapshot; the
     // pointer keeps that snapshot alive and is null when the peer is absent.
     std::shared_ptr<const admitted_peer_t>
-    peer (const std::vector<std::uint8_t> &node_routing_id) const;
+    peer (std::span<const std::uint8_t> node_routing_id) const;
     result_t<std::vector<std::uint8_t>>
     select (const std::string &channel_name,
             service_liveness_registry_t::connection_t *admission = nullptr);
@@ -192,12 +204,6 @@ class service_topology_registry_t
     std::function<void ()> publish_local_on_lane (service_node_descriptor_t descriptor);
     std::vector<admitted_peer_t> peers_on_lane () const;
     std::vector<service_node_descriptor_t> not_required_peers_on_lane () const;
-    struct byte_vector_less_t
-    {
-        bool operator() (const std::vector<std::uint8_t> &left,
-                         const std::vector<std::uint8_t> &right) const noexcept;
-    };
-
     static bool selectable (const service_node_descriptor_t &descriptor,
                             const std::string &channel_name);
     peer_admission_result_t admit_impl (service_node_descriptor_t descriptor,
@@ -218,7 +224,7 @@ class service_topology_registry_t
         std::vector<zlink::connection_attempt_t> attempts;
         std::shared_ptr<task_completion_source_t<void>> changed =
           std::make_shared<task_completion_source_t<void>> ();
-        std::map<std::vector<std::uint8_t>, admitted_peer_t, byte_vector_less_t> peers;
+        std::map<std::vector<std::uint8_t>, admitted_peer_t, raw_mesh_byte_vector_less_t> peers;
     };
 
     // The registry publishes its sole descriptor/peer state at mutation turns.
@@ -226,14 +232,14 @@ class service_topology_registry_t
     metric_provider_t _metric_provider;
     std::shared_ptr<std::shared_ptr<const topology_state_t>> _topology;
     service_liveness_registry_t *const _liveness_owner;
-    std::map<std::vector<std::uint8_t>, service_node_descriptor_t, byte_vector_less_t>
+    std::map<std::vector<std::uint8_t>, service_node_descriptor_t, raw_mesh_byte_vector_less_t>
       _not_required_peers;
     struct selection_state_t
     {
         const char *unavailable_reason = "not_ready";
         std::uint64_t total_weight = 0;
-        std::map<std::vector<std::uint8_t>, std::uint64_t, byte_vector_less_t> weights;
-        std::map<std::vector<std::uint8_t>, std::int64_t, byte_vector_less_t> cumulative;
+        std::map<std::vector<std::uint8_t>, std::uint64_t, raw_mesh_byte_vector_less_t> weights;
+        std::map<std::vector<std::uint8_t>, std::int64_t, raw_mesh_byte_vector_less_t> cumulative;
         std::vector<std::pair<std::vector<std::uint8_t>, service_liveness_registry_t::connection_t>>
           ordered_node_ids;
         std::vector<std::uint64_t> ordered_weights;

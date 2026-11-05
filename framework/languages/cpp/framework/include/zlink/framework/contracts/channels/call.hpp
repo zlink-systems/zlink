@@ -276,10 +276,10 @@ class channel_request_call_t
     friend class route_client_t;
     friend class spot_request_call_t;
     using receiver_submit_fn_t =
-      std::function<void (const std::string &,
-                          std::chrono::milliseconds,
-                          const metadata_map_t &,
-                          detail::request_receiver_t<encoded_payload_t>)>;
+      detail::request_callback_t<const std::string &,
+                                 std::chrono::milliseconds,
+                                 const metadata_map_t &,
+                                 detail::request_receiver_t<encoded_payload_t>>;
 
     channel_request_call_t (detail::request_projection_t,
                             std::string packet_name,

@@ -122,6 +122,7 @@ class envelope_codec_t
     result_t<zlink::message_t> decode_body (const message_parts_t &parts) const;
 
   private:
+    friend class client_call_codec_t;
     zlink::message_t encode_header (const envelope_header_t &header,
                                     const std::string &content_type) const;
 };

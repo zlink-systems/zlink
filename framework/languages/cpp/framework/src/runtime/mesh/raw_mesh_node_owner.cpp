@@ -246,14 +246,13 @@ request_admission_completion (foundation::operation_registry_t::callback_t callb
 }
 
 template <typename Parts>
-bool start_admitted_request (
-  const std::shared_ptr<detail::backend::raw_route_port_t> &port,
-  const admitted_peer_t *peer,
-  const std::vector<std::uint8_t> &target_routing_id,
-  Parts &request_parts,
-  foundation::operation_registry_t::clock_t::time_point deadline,
-  const std::shared_ptr<task_completion_source_t<void>> &admitted,
-  std::function<void (result_t<detail::backend::raw_request_completion_t>)> completion)
+bool start_admitted_request (const std::shared_ptr<detail::backend::raw_route_port_t> &port,
+                             const admitted_peer_t *peer,
+                             std::span<const std::uint8_t> target_routing_id,
+                             Parts &request_parts,
+                             foundation::operation_registry_t::clock_t::time_point deadline,
+                             const std::shared_ptr<task_completion_source_t<void>> &admitted,
+                             detail::backend::raw_request_callback_t completion)
 {
     if (!peer || !peer->ready)
         return false;
@@ -306,7 +305,7 @@ task_t<void> run_request_admission (
   foundation::operation_registry_t::clock_t::time_point deadline,
   task_t<TTerminal> terminal,
   std::shared_ptr<task_completion_source_t<void>> admitted,
-  std::function<void (result_t<detail::backend::raw_request_completion_t>)> observe = {},
+  detail::backend::raw_request_callback_t observe = {},
   raw_mesh_node_owner_t::physical_receiver_t receiver = {})
 {
     struct wait_subscriptions_t
@@ -409,7 +408,7 @@ task_t<bool> submit_registered_request (
   foundation::operation_registry_t::clock_t::time_point deadline,
   task_t<TTerminal> terminal,
   std::shared_ptr<task_completion_source_t<void>> admitted = {},
-  std::function<void (result_t<detail::backend::raw_request_completion_t>)> observe = {},
+  detail::backend::raw_request_callback_t observe = {},
   raw_mesh_node_owner_t::physical_receiver_t receiver = {})
 {
     if (!port) {
@@ -451,12 +450,6 @@ catch (...) {
 }
 
 } // namespace
-
-bool raw_mesh_byte_vector_less_t::operator() (const std::vector<std::uint8_t> &left,
-                                              const std::vector<std::uint8_t> &right) const noexcept
-{
-    return std::lexicographical_compare (left.begin (), left.end (), right.begin (), right.end ());
-}
 
 raw_mesh_node_owner_t::raw_mesh_node_owner_t (raw_mesh_node_options_t options,
                                               std::shared_ptr<zlink::context_t> context) :
@@ -577,7 +570,7 @@ void raw_mesh_node_owner_t::start ()
                     zlink::poll_event_flag_t::pollin | zlink::poll_event_flag_t::pollroute
                       | zlink::poll_event_flag_t::pollconnect,
                     ingress_poller.get (), 1);
-                  _port->set_request_receive_source ([this] (const auto &target) {
+                  _port->set_request_receive_source ([this] (std::span<const std::uint8_t> target) {
                       const auto peer = _topology.peer (target);
                       return peer ? peer->liveness : service_liveness_registry_t::connection_t{};
                   });
@@ -1353,7 +1346,7 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_logical_multicast (
 }
 
 task_t<bool>
-raw_mesh_node_owner_t::request_to_node (const std::vector<std::uint8_t> &target_routing_id,
+raw_mesh_node_owner_t::request_to_node (std::span<const std::uint8_t> target_routing_id,
                                         const protocol::application_payload_t &application_payload,
                                         std::chrono::milliseconds timeout,
                                         foundation::operation_registry_t::callback_t callback,
@@ -1527,7 +1520,7 @@ service_topology_registry_t::peer_observer_t raw_mesh_node_owner_t::observe_requ
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_with_header (
-  const std::vector<std::uint8_t> &target_routing_id,
+  std::span<const std::uint8_t> target_routing_id,
   const std::function<zlink::message_t (std::uint64_t)> &header,
   const protocol::application_payload_t &application_payload,
   foundation::operation_registry_t::clock_t::time_point deadline,
@@ -1578,7 +1571,9 @@ try {
         value.registered = _operations->register_operation (
           value.operation, deadline,
           request_admission_completion (std::move (callback), value.admitted),
-          peer && peer->ready ? std::vector<std::uint8_t>{} : target_routing_id,
+          peer && peer->ready
+            ? std::vector<std::uint8_t>{}
+            : std::vector<std::uint8_t> (target_routing_id.begin (), target_routing_id.end ()),
           std::move (request_metric), std::move (request), wait_owner);
         if (value.registered) {
             try {
@@ -1589,10 +1584,13 @@ try {
                 };
                 if (!start_admitted_request (port, peer.get (), target_routing_id, wire, deadline,
                                              value.admitted, finish)) {
+                    std::vector<std::uint8_t> target_owner (target_routing_id.begin (),
+                                                            target_routing_id.end ());
+                    auto peer_observer = observe_request_peer_on_lane (target_owner);
                     (void) submit_registered_request (
-                      port, observe_request_peer_on_lane (target_routing_id), _operations,
-                      value.operation, value.correlation, target_routing_id, std::move (wire), {},
-                      deadline, value.admitted->task (), value.admitted, std::move (finish),
+                      port, std::move (peer_observer), _operations, value.operation,
+                      value.correlation, std::move (target_owner), std::move (wire), {}, deadline,
+                      value.admitted->task (), value.admitted, std::move (finish),
                       std::move (receiver));
                 }
             }
@@ -4339,8 +4337,8 @@ bool raw_mesh_node_owner_t::route_current_locked (const std::vector<std::uint8_t
     return route != _routes.end () && route->second.generation == route_generation;
 }
 
-raw_mesh_node_owner_t::node_target_t raw_mesh_node_owner_t::classify_node_target (
-  const std::vector<std::uint8_t> &target_routing_id) const
+raw_mesh_node_owner_t::node_target_t
+raw_mesh_node_owner_t::classify_node_target (std::span<const std::uint8_t> target_routing_id) const
 {
     // An Object Client is never a Node direct application target, even when
     // a channel connection admitted it (02-channel-messaging.ko.md section 8).
@@ -4349,7 +4347,7 @@ raw_mesh_node_owner_t::node_target_t raw_mesh_node_owner_t::classify_node_target
                  ? node_target_t::object_client
                  : node_target_t::application;
     for (const auto &descriptor : _topology.not_required_peers ()) {
-        if (descriptor.node_routing_id == target_routing_id)
+        if (std::ranges::equal (descriptor.node_routing_id, target_routing_id))
             return node_target_t::object_client;
     }
     return node_target_t::unknown;

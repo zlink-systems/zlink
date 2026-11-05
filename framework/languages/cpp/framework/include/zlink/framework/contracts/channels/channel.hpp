@@ -880,23 +880,25 @@ class route_client_t
                                             TRequest request)
     {
         auto state = _state;
-        auto request_value = std::make_shared<TRequest> (std::move (request));
         return channel_request_call_t (
           detail::request_projection_t{}, detail::message_name<TRequest> (), _serializers,
           [state, router_channel_id = std::move (router_channel_id),
-           target_node_rid = std::move (target_node_rid),
-           request_value] (const std::string &packet_name, std::chrono::milliseconds timeout,
-                           const channel_request_call_t::metadata_map_t &metadata,
-                           detail::request_receiver_t<encoded_payload_t> receiver) {
-              auto encode_payload = [request_value] (serializer_registry_t &serializers) {
-                  return serializers.template get<TRequest> ().serialize_with_content_type (
-                    *request_value);
+           target_node_rid = std::move (target_node_rid), request_value = std::move (request)] (
+            const std::string &packet_name, std::chrono::milliseconds timeout,
+            const channel_request_call_t::metadata_map_t &metadata,
+            detail::request_receiver_t<encoded_payload_t> receiver) {
+              std::optional<serializer_t<TRequest>> selected_serializer;
+              // Keep this selection alive while the erased submit consumes its media type.
+              auto encode_payload = [&request_value,
+                                     &selected_serializer] (serializer_registry_t &serializers) {
+                  selected_serializer.emplace (serializers.template get<TRequest> ());
+                  return std::pair{selected_serializer->serialize (request_value),
+                                   std::cref (selected_serializer->content_type ())};
               };
               // Erased submit consumes this encoder before its first suspension.
               submit_request_reply_message_erased (state, router_channel_id, target_node_rid,
-                                                   packet_name, std::type_index (typeid (TRequest)),
-                                                   std::ref (encode_payload), timeout, metadata,
-                                                   std::move (receiver));
+                                                   packet_name, std::ref (encode_payload), timeout,
+                                                   metadata, std::move (receiver));
           });
     }
 
@@ -989,13 +991,16 @@ class route_client_t
                              payload_encoder_t encode_payload,
                              const route_send_call_t::metadata_map_t &metadata);
 
+    using node_payload_encoder_t =
+      std::function<std::pair<encoded_payload_t, std::reference_wrapper<const std::string>> (
+        serializer_registry_t &)>;
+
     static void
     submit_request_reply_message_erased (const std::shared_ptr<detail::route_client_state_t> &state,
                                          std::string router_channel_id,
                                          zlink::routing_id_t target_node_rid,
                                          std::string packet_name,
-                                         std::type_index request_type,
-                                         payload_encoder_t encode_payload,
+                                         node_payload_encoder_t encode_payload,
                                          std::chrono::milliseconds timeout,
                                          std::map<std::string, std::string> metadata,
                                          detail::request_receiver_t<encoded_payload_t> receiver);

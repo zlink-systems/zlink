@@ -8,6 +8,10 @@
 #include "runtime/mesh/service_liveness_registry.hpp"
 
 #include <chrono>
+#include <cstddef>
+#include <new>
+#include <type_traits>
+#include <utility>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -91,6 +95,106 @@ struct raw_request_completion_t
     std::optional<raw_request_failure_t> failure;
 };
 
+// Raw request callbacks are a closed set of submit/terminal captures. Keep them
+// in the existing observer frame; oversize captures fail at compile time.
+class raw_request_callback_t
+{
+    using result_type = result_t<raw_request_completion_t>;
+    struct operations_t
+    {
+        void (*invoke) (void *, result_type);
+        void (*copy) (void *, const void *);
+        void (*move) (void *, void *) noexcept;
+        void (*destroy) (void *) noexcept;
+    };
+
+  public:
+    raw_request_callback_t () = default;
+    raw_request_callback_t (std::nullptr_t) noexcept {}
+    template <typename TCallback>
+        requires (!std::is_same_v<std::decay_t<TCallback>, raw_request_callback_t>)
+    raw_request_callback_t (TCallback &&callback)
+    {
+        using callback_t = std::decay_t<TCallback>;
+        static_assert (sizeof (callback_t) <= sizeof (_storage));
+        static_assert (alignof (callback_t) <= alignof (std::max_align_t));
+        static_assert (std::is_nothrow_move_constructible_v<callback_t>);
+        static_assert (std::is_copy_constructible_v<callback_t>);
+        static_assert (std::is_invocable_r_v<void, callback_t &, result_type>);
+        if constexpr (std::is_same_v<callback_t, std::function<void (result_type)>>
+                      || std::is_pointer_v<callback_t> || std::is_member_pointer_v<callback_t>) {
+            if (!callback)
+                return;
+        }
+        static constexpr operations_t operations{
+          [] (void *data, result_type result) {
+              std::invoke (*std::launder (reinterpret_cast<callback_t *> (data)),
+                           std::move (result));
+          },
+          [] (void *destination, const void *source) {
+              std::construct_at (reinterpret_cast<callback_t *> (destination),
+                                 *std::launder (reinterpret_cast<const callback_t *> (source)));
+          },
+          [] (void *destination, void *source) noexcept {
+              auto *original = std::launder (reinterpret_cast<callback_t *> (source));
+              std::construct_at (reinterpret_cast<callback_t *> (destination),
+                                 std::move (*original));
+              std::destroy_at (original);
+          },
+          [] (void *data) noexcept {
+              std::destroy_at (std::launder (reinterpret_cast<callback_t *> (data)));
+          }};
+        std::construct_at (reinterpret_cast<callback_t *> (_storage),
+                           std::forward<TCallback> (callback));
+        _operations = &operations;
+    }
+    raw_request_callback_t (const raw_request_callback_t &other)
+    {
+        if (other._operations) {
+            other._operations->copy (_storage, other._storage);
+            _operations = other._operations;
+        }
+    }
+    raw_request_callback_t (raw_request_callback_t &&other) noexcept { *this = std::move (other); }
+    raw_request_callback_t &operator= (const raw_request_callback_t &other)
+    {
+        if (this != &other) {
+            raw_request_callback_t copy (other);
+            *this = std::move (copy);
+        }
+        return *this;
+    }
+    raw_request_callback_t &operator= (raw_request_callback_t &&other) noexcept
+    {
+        if (this != &other) {
+            reset ();
+            if (other._operations) {
+                const auto *operations = std::exchange (other._operations, nullptr);
+                operations->move (_storage, other._storage);
+                _operations = operations;
+            }
+        }
+        return *this;
+    }
+    ~raw_request_callback_t () { reset (); }
+    explicit operator bool () const noexcept { return _operations != nullptr; }
+    void operator() (result_type result) const
+    {
+        if (!_operations)
+            throw std::bad_function_call ();
+        _operations->invoke (_storage, std::move (result));
+    }
+
+  private:
+    void reset () noexcept
+    {
+        if (const auto *operations = std::exchange (_operations, nullptr))
+            operations->destroy (_storage);
+    }
+    alignas (std::max_align_t) mutable std::byte _storage[128];
+    const operations_t *_operations = nullptr;
+};
+
 // A send that the binding accepts immediately has its terminal admission
 // result now.  Only a DONTWAIT rejection needs the binding-owned completion
 // task that retries on writable readiness.
@@ -128,21 +232,21 @@ class raw_route_port_t
                                                 raw_send_stage_trace_t trace = {});
     task_t<bool> send (const raw_bytes_t &target_routing_id, raw_message_t parts);
     void set_request_receive_source (
-      std::function<runtime::mesh::service_liveness_registry_t::connection_t (const raw_bytes_t &)>
-        source)
+      std::function<runtime::mesh::service_liveness_registry_t::connection_t (
+        std::span<const std::uint8_t>)> source)
     {
         _request_receive_source = std::move (source);
     }
-    void request (const raw_bytes_t &target_routing_id,
-                  raw_message_t parts,
+    void request (std::span<const std::uint8_t> target_routing_id,
+                  raw_message_t &&parts,
                   std::chrono::milliseconds timeout,
-                  std::function<void (result_t<raw_request_completion_t>)> completion,
+                  raw_request_callback_t completion,
                   runtime::mesh::service_liveness_registry_t::connection_t admission = {},
                   std::shared_ptr<task_completion_source_t<void>> admitted = {});
-    void request (const raw_bytes_t &target_routing_id,
-                  std::vector<zlink::message_t> parts,
+    void request (std::span<const std::uint8_t> target_routing_id,
+                  std::vector<zlink::message_t> &&parts,
                   std::chrono::milliseconds timeout,
-                  std::function<void (result_t<raw_request_completion_t>)> completion,
+                  raw_request_callback_t completion,
                   runtime::mesh::service_liveness_registry_t::connection_t admission = {},
                   std::shared_ptr<task_completion_source_t<void>> admitted = {});
     task_t<raw_request_completion_t>
@@ -166,14 +270,15 @@ class raw_route_port_t
                                             Parts parts,
                                             raw_send_stage_trace_t trace);
     template <typename Parts>
-    void request_impl (const raw_bytes_t &target_routing_id,
-                       Parts parts,
+    void request_impl (std::span<const std::uint8_t> target_routing_id,
+                       Parts &&parts,
                        std::chrono::milliseconds timeout,
-                       std::function<void (result_t<raw_request_completion_t>)> completion,
+                       raw_request_callback_t completion,
                        runtime::mesh::service_liveness_registry_t::connection_t admission,
                        std::shared_ptr<task_completion_source_t<void>> admitted);
 
-    std::function<runtime::mesh::service_liveness_registry_t::connection_t (const raw_bytes_t &)>
+    std::function<runtime::mesh::service_liveness_registry_t::connection_t (
+      std::span<const std::uint8_t>)>
       _request_receive_source;
     std::unique_ptr<zlink::poller_t> _owned_poller;
     zlink::poller_t *_poller;

@@ -638,6 +638,342 @@ static void test_native_service_headers ()
     assert (rejected);
 }
 
+static void test_native_service_wire_length_boundaries_and_goldens ()
+{
+    using protocol::command;
+    const auto assert_native_and_vector = [] (zlink::message_t native,
+                                              const std::vector<std::uint8_t> &vector,
+                                              const std::vector<std::uint8_t> &expected) {
+        assert (native.to_bytes () == expected);
+        assert (vector == expected);
+    };
+    const auto assert_rejected = [] (auto &&encode) {
+        bool rejected = false;
+        try {
+            (void) encode ();
+        }
+        catch (const protocol::service_wire_error_t &) {
+            rejected = true;
+        }
+        assert (rejected);
+    };
+    const auto prefix = [] (std::vector<std::uint8_t> &out, std::uint8_t kind,
+                            std::uint8_t flags = 0) {
+        out.insert (out.end (), {0x5a, 0x4d, 0x01, kind, flags});
+    };
+    const auto repeated = [] (std::size_t size, char value) { return std::string (size, value); };
+    const auto put_bytes8 = [] (std::vector<std::uint8_t> &out,
+                                const std::vector<std::uint8_t> &value) {
+        out.push_back (static_cast<std::uint8_t> (value.size ()));
+        out.insert (out.end (), value.begin (), value.end ());
+    };
+
+    // Channel name, source/target SpotId and source/target Actor ID are text8.
+    const auto name255 = repeated (255, 'c');
+    {
+        std::vector<std::uint8_t> request;
+        prefix (request, static_cast<std::uint8_t> (command::channelRequest));
+        put_u64 (request, 9);
+        put_text8 (request, name255);
+        assert_native_and_vector (protocol::encode_channel_request_header_message (9, name255),
+                                  protocol::encode_channel_request_header (9, name255), request);
+        std::vector<std::uint8_t> send;
+        prefix (send, static_cast<std::uint8_t> (command::channelSend));
+        put_text8 (send, name255);
+        assert_native_and_vector (protocol::encode_channel_send_header_message (name255),
+                                  protocol::encode_channel_send_header (name255), send);
+        const auto name256 = repeated (256, 'c');
+        assert_rejected (
+          [&] { return protocol::encode_channel_request_header_message (9, name256); });
+        assert_rejected ([&] { return protocol::encode_channel_send_header_message (name256); });
+    }
+
+    const protocol::wire_operation_id_t operation{1, 2};
+    const auto rid = std::vector<std::uint8_t>{'r'};
+    const auto spot_target = [&] (std::string id, std::vector<std::uint8_t> target_rid) {
+        return protocol::spot_route_fence_t{std::move (id), 3, std::move (target_rid), 4, 5, 6};
+    };
+    const auto actor_target = [&] (std::string id, std::vector<std::uint8_t> target_rid) {
+        return protocol::actor_route_fence_t{std::move (id), 3, std::move (target_rid), 4, 5, 6};
+    };
+    for (const auto kind : {command::spotSend, command::spotRequest}) {
+        const auto correlation =
+          kind == command::spotRequest ? std::optional<std::uint64_t>{7} : std::nullopt;
+        const auto assert_spot = [&] (const std::string &source, const std::string &target) {
+            auto route = spot_target (target, rid);
+            std::vector<std::uint8_t> expected;
+            prefix (expected, static_cast<std::uint8_t> (kind));
+            if (correlation)
+                put_u64 (expected, *correlation);
+            put_u64 (expected, 1);
+            put_u64 (expected, 2);
+            expected.push_back (0);
+            put_text8 (expected, source);
+            put_text8 (expected, target);
+            put_u64 (expected, 3);
+            put_bytes8 (expected, rid);
+            put_u64 (expected, 4);
+            put_u64 (expected, 5);
+            put_u64 (expected, 6);
+            assert_native_and_vector (
+              protocol::encode_spot_message_header_message (kind, source, route, operation,
+                                                            correlation),
+              protocol::encode_spot_message_header (kind, source, route, operation, correlation),
+              expected);
+        };
+        assert_spot (name255, "target");
+        assert_spot ("source", name255);
+        const auto name256 = repeated (256, 's');
+        assert_rejected ([&] {
+            return protocol::encode_spot_message_header_message (
+              kind, name256, spot_target ("target", rid), operation, correlation);
+        });
+        assert_rejected ([&] {
+            return protocol::encode_spot_message_header_message (
+              kind, "source", spot_target (name256, rid), operation, correlation);
+        });
+    }
+    for (const auto kind : {command::actorSend, command::actorRequest}) {
+        const auto correlation =
+          kind == command::actorRequest ? std::optional<std::uint64_t>{7} : std::nullopt;
+        const auto assert_actor = [&] (const std::string &source, const std::string &target) {
+            auto route = actor_target (target, rid);
+            const std::optional<std::pair<std::string, std::uint64_t>> source_actor =
+              std::pair{source, std::uint64_t{8}};
+            std::vector<std::uint8_t> expected;
+            prefix (expected, static_cast<std::uint8_t> (kind));
+            if (correlation)
+                put_u64 (expected, *correlation);
+            put_u64 (expected, 1);
+            put_u64 (expected, 2);
+            expected.push_back (0);
+            put_text8 (expected, source);
+            put_u64 (expected, 8);
+            put_text8 (expected, target);
+            put_u64 (expected, 3);
+            put_bytes8 (expected, rid);
+            put_u64 (expected, 4);
+            put_u64 (expected, 5);
+            put_u64 (expected, 6);
+            assert_native_and_vector (protocol::encode_actor_message_header_message (
+                                        kind, source_actor, route, operation, correlation),
+                                      protocol::encode_actor_message_header (
+                                        kind, source_actor, route, operation, correlation),
+                                      expected);
+        };
+        assert_actor (name255, "target");
+        assert_actor ("source", name255);
+        const auto name256 = repeated (256, 'a');
+        assert_rejected ([&] {
+            return protocol::encode_actor_message_header_message (
+              kind, std::pair<std::string, std::uint64_t>{name256, 8}, actor_target ("target", rid),
+              operation, correlation);
+        });
+        assert_rejected ([&] {
+            return protocol::encode_actor_message_header_message (
+              kind, std::pair<std::string, std::uint64_t>{"source", 8}, actor_target (name256, rid),
+              operation, correlation);
+        });
+    }
+
+    // RID fields use bytes8; bound-session source RID has the stricter ridBytes cap.
+    const std::vector<std::uint8_t> rid255 (255, 0x71);
+    for (const auto kind : {command::spotSend, command::spotRequest}) {
+        const auto correlation =
+          kind == command::spotRequest ? std::optional<std::uint64_t>{7} : std::nullopt;
+        auto route = spot_target ("target", rid255);
+        std::vector<std::uint8_t> expected;
+        prefix (expected, static_cast<std::uint8_t> (kind));
+        if (correlation)
+            put_u64 (expected, *correlation);
+        put_u64 (expected, 1);
+        put_u64 (expected, 2);
+        expected.push_back (0);
+        put_text8 (expected, "source");
+        put_text8 (expected, "target");
+        put_u64 (expected, 3);
+        put_bytes8 (expected, rid255);
+        put_u64 (expected, 4);
+        put_u64 (expected, 5);
+        put_u64 (expected, 6);
+        assert_native_and_vector (
+          protocol::encode_spot_message_header_message (kind, "source", route, operation,
+                                                        correlation),
+          protocol::encode_spot_message_header (kind, "source", route, operation, correlation),
+          expected);
+        route.target_node_routing_id.push_back (0x71);
+        assert_rejected ([&] {
+            return protocol::encode_spot_message_header_message (kind, "source", route, operation,
+                                                                 correlation);
+        });
+    }
+    for (const auto kind : {command::actorSend, command::actorRequest}) {
+        const auto correlation =
+          kind == command::actorRequest ? std::optional<std::uint64_t>{7} : std::nullopt;
+        auto route = actor_target ("target", rid255);
+        std::vector<std::uint8_t> expected;
+        prefix (expected, static_cast<std::uint8_t> (kind));
+        if (correlation)
+            put_u64 (expected, *correlation);
+        put_u64 (expected, 1);
+        put_u64 (expected, 2);
+        expected.push_back (0);
+        expected.push_back (0);
+        put_text8 (expected, "target");
+        put_u64 (expected, 3);
+        put_bytes8 (expected, rid255);
+        put_u64 (expected, 4);
+        put_u64 (expected, 5);
+        put_u64 (expected, 6);
+        assert_native_and_vector (
+          protocol::encode_actor_message_header_message (kind, std::nullopt, route, operation,
+                                                         correlation),
+          protocol::encode_actor_message_header (kind, std::nullopt, route, operation, correlation),
+          expected);
+        route.target_node_routing_id.push_back (0x71);
+        assert_rejected ([&] {
+            return protocol::encode_actor_message_header_message (kind, std::nullopt, route,
+                                                                  operation, correlation);
+        });
+    }
+    const auto session_rid_limit = std::min<std::size_t> (255, protocol::ridBytes);
+    const std::vector<std::uint8_t> session_rid (session_rid_limit, 0x72);
+    const auto bound_source =
+      protocol::actor_message_header_t::bound_session_source_t{session_rid, 9, 10};
+    const auto bound_route = actor_target ("target", rid);
+    std::vector<std::uint8_t> bound_expected;
+    prefix (bound_expected, static_cast<std::uint8_t> (command::actorSend), 0x06);
+    put_u64 (bound_expected, 1);
+    put_u64 (bound_expected, 2);
+    bound_expected.push_back (0);
+    bound_expected.push_back (0);
+    put_text8 (bound_expected, "target");
+    put_u64 (bound_expected, 3);
+    put_bytes8 (bound_expected, rid);
+    put_u64 (bound_expected, 4);
+    put_u64 (bound_expected, 5);
+    put_u64 (bound_expected, 6);
+    put_bytes8 (bound_expected, session_rid);
+    put_u64 (bound_expected, 9);
+    put_u64 (bound_expected, 10);
+    assert_native_and_vector (
+      protocol::encode_actor_message_header_message (command::actorSend, std::nullopt, bound_route,
+                                                     operation, {}, 0, bound_source),
+      protocol::encode_actor_message_header (command::actorSend, std::nullopt, bound_route,
+                                             operation, {}, 0, bound_source),
+      bound_expected);
+    auto over_session_rid = session_rid;
+    over_session_rid.push_back (0x72);
+    assert_rejected ([&] {
+        return protocol::encode_actor_message_header_message (
+          command::actorSend, std::nullopt, bound_route, operation, {}, 0,
+          protocol::actor_message_header_t::bound_session_source_t{over_session_rid, 9, 10});
+    });
+    auto owner_route = actor_target ("target", rid255);
+    std::vector<std::uint8_t> owner_expected;
+    prefix (owner_expected, static_cast<std::uint8_t> (command::boundSessionSend));
+    put_text8 (owner_expected, "target");
+    put_u64 (owner_expected, 3);
+    put_bytes8 (owner_expected, rid255);
+    put_u64 (owner_expected, 4);
+    put_u64 (owner_expected, 5);
+    put_u64 (owner_expected, 6);
+    put_u64 (owner_expected, 9);
+    assert_native_and_vector (protocol::encode_bound_session_send_message ({owner_route, 9}),
+                              protocol::encode_bound_session_send ({owner_route, 9}),
+                              owner_expected);
+    owner_route.target_node_routing_id.push_back (0x71);
+    assert_rejected (
+      [&] { return protocol::encode_bound_session_send_message ({owner_route, 9}); });
+
+    // The send helper has no unit-test seam. Mirror its header/[metadata]/application part
+    // assembly using the native part constructors and assert the exact part order and bytes.
+    const protocol::application_payload_t send_payload{"p", "c", {0x11, 0x22}};
+    const auto application_expected = from_hex ("010000000a01700163000000021122");
+    std::vector<std::uint8_t> send_header_expected;
+    prefix (send_header_expected, static_cast<std::uint8_t> (command::channelSend));
+    put_text8 (send_header_expected, "c");
+    for (const auto metadata_size :
+         {std::size_t{1}, std::size_t{255}, std::size_t{256}, std::size_t{4096}}) {
+        std::vector<std::uint8_t> metadata (metadata_size);
+        for (std::size_t index = 0; index < metadata.size (); ++index)
+            metadata[index] = static_cast<std::uint8_t> (index);
+        const auto expected_metadata = metadata;
+        const auto native_header = protocol::encode_channel_send_header_message ("c");
+        const auto vector_header = protocol::encode_channel_send_header ("c");
+        const auto native_application = protocol::encode_application_payload_message (send_payload);
+        const auto vector_application = protocol::encode_application_payload (send_payload);
+        assert (native_header.to_bytes () == send_header_expected
+                && vector_header == send_header_expected);
+        assert (native_application.to_bytes () == application_expected
+                && vector_application == application_expected);
+        std::vector<zlink::message_t> native_parts;
+        native_parts.push_back (native_header);
+        native_parts.push_back (
+          zlink::framework::detail::backend::materialize_binding_part (std::move (metadata)));
+        native_parts.push_back (native_application);
+        assert (native_parts.size () == 3);
+        assert (native_parts[0].to_bytes () == send_header_expected);
+        assert (native_parts[1].to_bytes () == expected_metadata);
+        assert (native_parts[2].to_bytes () == application_expected);
+    }
+    {
+        const auto native_header = protocol::encode_channel_send_header_message ("c");
+        const auto native_application = protocol::encode_application_payload_message (send_payload);
+        std::vector<zlink::message_t> without_metadata{native_header, native_application};
+        std::vector<zlink::message_t> with_empty_metadata{
+          native_header,
+          zlink::framework::detail::backend::materialize_binding_part (std::vector<std::uint8_t>{}),
+          native_application};
+        assert (without_metadata.size () == 2 && with_empty_metadata.size () == 3);
+        assert (without_metadata[0].to_bytes () == send_header_expected
+                && without_metadata[1].to_bytes () == application_expected);
+        assert (with_empty_metadata[0].to_bytes () == send_header_expected
+                && with_empty_metadata[1].to_bytes ().empty ()
+                && with_empty_metadata[2].to_bytes () == application_expected);
+    }
+
+    // Flow version 2 inline and multipart envelopes have test-authored golden bytes.
+    const std::string flow_id = "019fc5b9-9df3-786b-bb69-d55358f6d48b";
+    const auto traced_inline = protocol::application_payload_t{
+      "p", "c", {0xaa}, flow_id, zlink::framework::flow_origin_t::application};
+    std::vector<std::uint8_t> inline_golden{2};
+    put_u32 (inline_golden, 2 + 2 + 4 + 1 + 1 + flow_id.size () + 1);
+    put_text8 (inline_golden, "p");
+    put_text8 (inline_golden, "c");
+    put_u32 (inline_golden, 1);
+    inline_golden.push_back (0xaa);
+    put_text8 (inline_golden, flow_id);
+    inline_golden.push_back (3);
+    assert_native_and_vector (protocol::encode_application_payload_message (traced_inline),
+                              protocol::encode_application_payload (traced_inline), inline_golden);
+
+    protocol::application_payload_t::multipart_t payload_parts;
+    payload_parts.push_back (zlink::message_t::from (std::vector<std::uint8_t>{0x10, 0x20}));
+    payload_parts.push_back (zlink::message_t::from (std::vector<std::uint8_t>{0x30}));
+    const auto traced_multipart = protocol::application_payload_t::from_parts (payload_parts);
+    auto traced_multipart_with_flow = traced_multipart;
+    traced_multipart_with_flow.packet_name = "p";
+    traced_multipart_with_flow.content_type = "c";
+    traced_multipart_with_flow.flow_id = flow_id;
+    traced_multipart_with_flow.flow_origin = zlink::framework::flow_origin_t::application;
+    std::vector<std::uint8_t> multipart_golden{2};
+    put_u32 (multipart_golden, 2 + 2 + 4 + 15 + 1 + flow_id.size () + 1);
+    put_text8 (multipart_golden, "p");
+    put_text8 (multipart_golden, "c");
+    put_u32 (multipart_golden, 15);
+    put_u32 (multipart_golden, 2);
+    put_u32 (multipart_golden, 2);
+    multipart_golden.insert (multipart_golden.end (), {0x10, 0x20});
+    put_u32 (multipart_golden, 1);
+    multipart_golden.push_back (0x30);
+    put_text8 (multipart_golden, flow_id);
+    multipart_golden.push_back (3);
+    assert_native_and_vector (
+      protocol::encode_application_payload_message (traced_multipart_with_flow),
+      protocol::encode_application_payload (traced_multipart_with_flow), multipart_golden);
+}
+
 // Existing codec accessors expose both container and native payload identity.
 static void test_moved_multipart_ownership ()
 {
@@ -952,6 +1288,7 @@ int main (int argc, char **argv)
     test_retained_multipart_wire_bytes ();
     test_moved_multipart_ownership ();
     test_native_service_headers ();
+    test_native_service_wire_length_boundaries_and_goldens ();
 
     {
         zlink::framework::detail::backend::raw_message_t wire;
