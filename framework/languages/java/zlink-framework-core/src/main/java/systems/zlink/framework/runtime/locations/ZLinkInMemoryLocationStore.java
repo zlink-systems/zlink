@@ -1,5 +1,7 @@
 package systems.zlink.framework.runtime.locations;
 
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.locationprovider.ZLinkStoreKey;
 import systems.zlink.framework.locations.ZLinkCapacityUsage;
@@ -53,6 +55,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRelease
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewStale;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewed;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseWaitTracker;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 
 import java.time.Clock;
@@ -69,6 +72,7 @@ import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
@@ -77,6 +81,7 @@ public final class ZLinkInMemoryLocationStore
 
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Clock clock;
+    private final ZLinkOwnerLeaseWaitTracker ownerLeaseWait;
     final ZLinkInMemoryAuthorityStore authority;
     private final ZLinkInMemoryProviderLocationStore opaque;
     private final Map<String, LeaseRow> leases = new HashMap<>();
@@ -88,11 +93,16 @@ public final class ZLinkInMemoryLocationStore
     private final RowTable<ZLinkClientServerServerDescriptor> clientServers = new RowTable<>();
 
     public ZLinkInMemoryLocationStore() {
-        this(Clock.systemUTC());
+        this(Clock.systemUTC(), System::nanoTime, Duration.ZERO);
     }
 
     public ZLinkInMemoryLocationStore(Clock clock) {
+        this(clock, System::nanoTime, Duration.ZERO);
+    }
+
+    ZLinkInMemoryLocationStore(Clock clock, LongSupplier monotonicNanos, Duration fencingMargin) {
         this.clock = Objects.requireNonNull(clock, "clock");
+        this.ownerLeaseWait = new ZLinkOwnerLeaseWaitTracker(monotonicNanos, fencingMargin);
         this.opaque = new ZLinkInMemoryProviderLocationStore(clock);
         this.authority =
                 new ZLinkInMemoryAuthorityStore(
@@ -100,7 +110,8 @@ public final class ZLinkInMemoryLocationStore
                         clock,
                         this::isExactOwnerLeaseLive,
                         this::findMeshNodeDescriptor,
-                        this::isSpotIdentityClaimed);
+                        this::isSpotIdentityClaimed,
+                        ownerLeaseWait);
     }
 
     @Override
@@ -262,11 +273,14 @@ public final class ZLinkInMemoryLocationStore
                             meshNodeKey(
                                     new ZLinkMeshNodeDescriptorKey(
                                             descriptor.meshName(), descriptor.rid()));
+                    String waitKey = ZLinkOwnerLeaseWaitTracker.descriptorRecordKey(key);
                     ZLinkMeshNodeDescriptor current = meshNodes.rows.get(key);
+                    if (current == null) ownerLeaseWait.clear(waitKey);
                     if (current != null
                             && (intent == ZLinkLocationWriteIntent.NEW_CLAIM
                                     || intent == ZLinkLocationWriteIntent.RENEW)
                             && hasSameDescriptorFields(current, descriptor)) {
+                        ownerLeaseWait.clear(waitKey);
                         return completed(
                                 ZLinkLocationWriteResult.stored(
                                         current.lifecycleGeneration(), current.updatedAt()));
@@ -289,12 +303,18 @@ public final class ZLinkInMemoryLocationStore
                                                     entryAuthorityKey)))) {
                         return completed(ZLinkLocationWriteResult.rejectedConflict());
                     }
-                    if (intent == ZLinkLocationWriteIntent.NEW_CLAIM
-                            && current != null
-                            && isExactOwnerLeaseLive(
-                                    new ZLinkLocationOwnerToken(
-                                            current.ownerId(), current.leaseGeneration()))) {
-                        return completed(ZLinkLocationWriteResult.rejectedConflict());
+                    if (intent == ZLinkLocationWriteIntent.NEW_CLAIM && current != null) {
+                        var previousOwner =
+                                new ZLinkLocationOwnerToken(
+                                        current.ownerId(), current.leaseGeneration());
+                        if (isExactOwnerLeaseLive(previousOwner)) {
+                            ownerLeaseWait.shouldWait(waitKey, previousOwner, false);
+                            return completed(ZLinkLocationWriteResult.rejectedConflict());
+                        }
+                        if (ownerLeaseWait.shouldWait(waitKey, previousOwner, true))
+                            throw new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                    "Previous MeshNode owner lease is within its release wait");
                     }
                     if (intent == ZLinkLocationWriteIntent.TAKEOVER
                             && current != null
@@ -322,6 +342,7 @@ public final class ZLinkInMemoryLocationStore
                     }
                     Instant now = clock.instant();
                     meshNodes.rows.put(key, copyDescriptor(descriptor, now));
+                    ownerLeaseWait.clear(waitKey);
                     bumpMeshNodeStamp(descriptor.meshName());
                     if (entryAuthorityKey != null) {
                         entrySpotClaims.put(
@@ -355,6 +376,8 @@ public final class ZLinkInMemoryLocationStore
                                         }
                                     });
                     meshNodes.rows.remove(meshNodeKey(key));
+                    ownerLeaseWait.clear(
+                            ZLinkOwnerLeaseWaitTracker.descriptorRecordKey(meshNodeKey(key)));
                     bumpMeshNodeStamp(key.meshName());
                     return completed(ZLinkLocationWriteStatus.STORED);
                 });

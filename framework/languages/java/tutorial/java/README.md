@@ -221,8 +221,8 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:5280/players/p1/profile'
 - **`ZLinkConfigurationException: MeshNode descriptor publication failed
   [mesh=game, status=REJECTED_CONFLICT]`, or the profile call keeps
   returning `503 one-way route is not connected`.** After a forced stop, the
-  previous owner lease can remain valid for up to 15 seconds
-  ([default owner lease TTL](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#L670-L674)).
+  previous owner lease can remain valid for up to 30 seconds
+  ([default owner lease TTL](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#L709-L716)).
   Wait for it to expire, then start the Server again; a failed start does not
   retry. To restart immediately, stop earlier tutorial processes and clear
   only the `zlink-tutorial-java:` keys with the command below. Leave other

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -50,6 +51,8 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
 
 final class ZLinkProviderAuthorityRepositoryTest {
@@ -217,10 +220,17 @@ final class ZLinkProviderAuthorityRepositoryTest {
     })
     void endedActiveActorRecreation(String scenario, boolean inMemory) throws Exception {
         var provider = new TemporaryCommitConflictStore(new ZLinkInMemoryProviderLocationStore());
+        var monotonicNanos = new AtomicLong();
+        var releaseWait = Duration.ofNanos(1);
+        boolean testsReleaseWait =
+                scenario.equals("releaseWait") || scenario.equals("releaseWaitRestart");
         ZLinkLocationRepository repository =
                 inMemory
                         ? new systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore()
-                        : new ZLinkProviderLocationRepository(provider);
+                        : testsReleaseWait
+                                ? new ZLinkProviderLocationRepository(
+                                        provider, monotonicNanos::get, releaseWait)
+                                : new ZLinkProviderLocationRepository(provider);
         var owner =
                 ((ZLinkOwnerLeaseClaimed)
                                 repository
@@ -277,6 +287,22 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         new byte[] {1},
                         Instant.now().plusSeconds(300));
         byte[] readyPayload = new byte[] {9};
+        if (testsReleaseWait) {
+            readyPayload =
+                    new ZLinkActorAuthorityPayloadCodec()
+                            .encode(
+                                    ZLinkActorAuthorityPayloadCodec.State.READY,
+                                    "player",
+                                    "reclaim-actor",
+                                    "reclaim-entry",
+                                    1,
+                                    1,
+                                    owner.ownerId(),
+                                    owner.leaseGeneration(),
+                                    descriptor.meshName(),
+                                    descriptor.rid(),
+                                    1);
+        }
         if (scenario.equals("relocation") || scenario.equals("relocationRecreate")) {
             byte[] canonical =
                     new ZLinkActorAuthorityPayloadCodec()
@@ -362,6 +388,32 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                         .ZLinkObjectFactoryRegistration.RelocationPolicy.Recreate()
                                 : policy);
         var retainedBefore = repository.read(key, () -> false).toCompletableFuture().get();
+        if (testsReleaseWait) {
+            ZLinkLocationRepository retryRepository = repository;
+            var before = assertInstanceOf(ZLinkAuthoritySnapshot.class, retainedBefore);
+            assertUnavailableReserve(retryRepository, next);
+            assertEquals(
+                    before.storeVersion(),
+                    assertInstanceOf(
+                                    ZLinkAuthoritySnapshot.class,
+                                    repository.read(key, () -> false).toCompletableFuture().get())
+                            .storeVersion());
+            monotonicNanos.addAndGet(2);
+            assertUnavailableReserve(retryRepository, next);
+            if (scenario.equals("releaseWaitRestart")) {
+                retryRepository =
+                        new ZLinkProviderLocationRepository(
+                                provider, monotonicNanos::get, releaseWait);
+                assertUnavailableReserve(retryRepository, next);
+                monotonicNanos.addAndGet(3);
+            } else {
+                monotonicNanos.incrementAndGet();
+            }
+            assertInstanceOf(
+                    ZLinkObjectReserved.class,
+                    retryRepository.reserve(next, () -> false).toCompletableFuture().get());
+            return;
+        }
         if (scenario.equals("recreate")
                 || scenario.equals("relocation")
                 || scenario.equals("relocationRecreate")) {
@@ -431,6 +483,30 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 .payload());
             }
         }
+    }
+
+    @RepeatedTest(100)
+    void endedActiveActorReleaseWaitUsesFirstObservationAndRestartsFresh() throws Exception {
+        endedActiveActorRecreation("releaseWait", false);
+        endedActiveActorRecreation("releaseWaitRestart", false);
+    }
+
+    private static void assertUnavailableReserve(
+            ZLinkLocationRepository repository, ZLinkObjectReservationRequest request)
+            throws Exception {
+        var failure =
+                assertThrows(
+                        ExecutionException.class,
+                        () -> repository.reserve(request, () -> false).toCompletableFuture().get());
+        Throwable cause = failure.getCause();
+        while (cause instanceof java.util.concurrent.CompletionException
+                && cause.getCause() != null) cause = cause.getCause();
+        var frameworkFailure =
+                assertInstanceOf(
+                        systems.zlink.framework.errors.ZLinkFrameworkException.class, cause);
+        assertEquals(
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                frameworkFailure.kind());
     }
 
     private static ZLinkMeshNodeDescriptor actorReclaimDescriptor(

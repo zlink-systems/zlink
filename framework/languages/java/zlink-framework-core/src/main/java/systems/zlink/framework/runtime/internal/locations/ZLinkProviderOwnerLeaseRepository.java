@@ -48,6 +48,16 @@ final class ZLinkProviderOwnerLeaseRepository {
                         });
     }
 
+    static boolean isLive(ZLinkStoreReadResult lease, String ownerId, long leaseGeneration) {
+        if (!(lease instanceof ZLinkStoreReadFound found)) return false;
+        ZLinkOwnerLeaseRecordCodec.Record owner =
+                ZLinkOwnerLeaseRecordCodec.decode(found.value().bytes());
+        if (!owner.ownerId().equals(ownerId) || found.value().expiresAt() == null)
+            throw new IllegalStateException("Location Store owner lease record is invalid");
+        return owner.leaseGeneration() == leaseGeneration
+                && found.value().expiresAt().isAfter(found.value().storeNow());
+    }
+
     CompletionStage<ZLinkOwnerLeaseRenewResult> renew(
             ZLinkLocationOwnerToken token, Duration leaseTtl) {
         Objects.requireNonNull(token, "token");

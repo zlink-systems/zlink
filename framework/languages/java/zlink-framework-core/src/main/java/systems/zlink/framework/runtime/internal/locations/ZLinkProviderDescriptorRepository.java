@@ -7,6 +7,8 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
 import systems.zlink.framework.locationprovider.ZLinkStoreCondition;
@@ -41,6 +43,7 @@ import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -127,9 +130,16 @@ final class ZLinkProviderDescriptorRepository {
     private static final int MAXIMUM_PAGE_SIZE = 1000;
     private static final int MAXIMUM_CONTINUATION_CHARACTERS = 5600;
     private final ZLinkLocationStore provider;
+    private final ZLinkOwnerLeaseWaitTracker ownerLeaseWait;
 
     ZLinkProviderDescriptorRepository(ZLinkLocationStore provider) {
+        this(provider, new ZLinkOwnerLeaseWaitTracker(System::nanoTime, Duration.ZERO));
+    }
+
+    ZLinkProviderDescriptorRepository(
+            ZLinkLocationStore provider, ZLinkOwnerLeaseWaitTracker ownerLeaseWait) {
         this.provider = Objects.requireNonNull(provider, "provider");
+        this.ownerLeaseWait = Objects.requireNonNull(ownerLeaseWait, "ownerLeaseWait");
     }
 
     CompletionStage<ZLinkLocationWriteResult> updateMeshNode(
@@ -280,6 +290,10 @@ final class ZLinkProviderDescriptorRepository {
             Function<byte[], StoredDescriptor<T>> decode,
             BiPredicate<T, T> immutableFieldsEqual) {
         Objects.requireNonNull(intent, "intent");
+        String waitKey = ZLinkOwnerLeaseWaitTracker.descriptorRecordKey(rowKey.value());
+        boolean fixedRidClaim =
+                descriptor instanceof ZLinkMeshNodeDescriptor
+                        && intent == ZLinkLocationWriteIntent.NEW_CLAIM;
         ZLinkStoreKey leaseKey = ownerKey(ownerId);
         return provider.read(leaseKey, active())
                 .thenCompose(
@@ -333,6 +347,7 @@ final class ZLinkProviderDescriptorRepository {
                                                                                         record
                                                                                                 .generation(),
                                                                                         descriptor)))) {
+                                                            ownerLeaseWait.clear(waitKey);
                                                             return completed(
                                                                     ZLinkLocationWriteResult.stored(
                                                                             record.generation(),
@@ -345,9 +360,28 @@ final class ZLinkProviderDescriptorRepository {
                                                                         active())
                                                                 .thenCompose(
                                                                         previousOwner -> {
-                                                                            if (previousOwner
-                                                                                    instanceof
-                                                                                    ZLinkStoreReadFound) {
+                                                                            var previousOwnerToken =
+                                                                                    new ZLinkLocationOwnerToken(
+                                                                                            identity
+                                                                                                    .ownerId(),
+                                                                                            identity
+                                                                                                    .leaseGeneration());
+                                                                            boolean
+                                                                                    previousOwnerLive =
+                                                                                            ZLinkProviderOwnerLeaseRepository
+                                                                                                    .isLive(
+                                                                                                            previousOwner,
+                                                                                                            identity
+                                                                                                                    .ownerId(),
+                                                                                                            identity
+                                                                                                                    .leaseGeneration());
+                                                                            if (previousOwnerLive) {
+                                                                                if (fixedRidClaim)
+                                                                                    ownerLeaseWait
+                                                                                            .shouldWait(
+                                                                                                    waitKey,
+                                                                                                    previousOwnerToken,
+                                                                                                    false);
                                                                                 if (intent
                                                                                         != ZLinkLocationWriteIntent
                                                                                                 .NEW_CLAIM) {
@@ -359,26 +393,55 @@ final class ZLinkProviderDescriptorRepository {
                                                                                         ZLinkLocationWriteResult
                                                                                                 .rejectedConflict());
                                                                             }
+                                                                            if (intent
+                                                                                    == ZLinkLocationWriteIntent
+                                                                                            .RENEW)
+                                                                                return completed(
+                                                                                        ZLinkLocationWriteResult
+                                                                                                .ignoredStale());
+                                                                            if (fixedRidClaim
+                                                                                    && ownerLeaseWait
+                                                                                            .shouldWait(
+                                                                                                    waitKey,
+                                                                                                    previousOwnerToken,
+                                                                                                    true))
+                                                                                throw new ZLinkFrameworkException(
+                                                                                        ZLinkFrameworkErrorKind
+                                                                                                .UNAVAILABLE,
+                                                                                        "Previous MeshNode owner lease is within its release wait");
                                                                             return writeDescriptor(
-                                                                                    rowKey,
-                                                                                    ownerId,
-                                                                                    leaseGeneration,
-                                                                                    new ZLinkStoreVersionCondition(
                                                                                             rowKey,
-                                                                                            found.value()
-                                                                                                    .version()),
-                                                                                    encode.apply(
-                                                                                            new StoredDescriptor<>(
-                                                                                                    Math
-                                                                                                            .addExact(
-                                                                                                                    record
-                                                                                                                            .generation(),
-                                                                                                                    1),
-                                                                                                    descriptor)),
-                                                                                    Math.addExact(
-                                                                                            record
-                                                                                                    .generation(),
-                                                                                            1));
+                                                                                            ownerId,
+                                                                                            leaseGeneration,
+                                                                                            new ZLinkStoreVersionCondition(
+                                                                                                    rowKey,
+                                                                                                    found.value()
+                                                                                                            .version()),
+                                                                                            encode
+                                                                                                    .apply(
+                                                                                                            new StoredDescriptor<>(
+                                                                                                                    Math
+                                                                                                                            .addExact(
+                                                                                                                                    record
+                                                                                                                                            .generation(),
+                                                                                                                                    1),
+                                                                                                                    descriptor)),
+                                                                                            Math
+                                                                                                    .addExact(
+                                                                                                            record
+                                                                                                                    .generation(),
+                                                                                                            1))
+                                                                                    .thenApply(
+                                                                                            result -> {
+                                                                                                if (result
+                                                                                                                .status()
+                                                                                                        == ZLinkLocationWriteStatus
+                                                                                                                .STORED)
+                                                                                                    ownerLeaseWait
+                                                                                                            .clear(
+                                                                                                                    waitKey);
+                                                                                                return result;
+                                                                                            });
                                                                         });
                                                     }
                                                     rowCondition =
@@ -386,6 +449,7 @@ final class ZLinkProviderDescriptorRepository {
                                                                     rowKey,
                                                                     found.value().version());
                                                 } else {
+                                                    ownerLeaseWait.clear(waitKey);
                                                     if (intent == ZLinkLocationWriteIntent.RENEW) {
                                                         return completed(
                                                                 ZLinkLocationWriteResult
@@ -399,12 +463,21 @@ final class ZLinkProviderDescriptorRepository {
                                                                 new StoredDescriptor<>(
                                                                         generation, descriptor));
                                                 return writeDescriptor(
-                                                        rowKey,
-                                                        ownerId,
-                                                        leaseGeneration,
-                                                        rowCondition,
-                                                        encoded,
-                                                        generation);
+                                                                rowKey,
+                                                                ownerId,
+                                                                leaseGeneration,
+                                                                rowCondition,
+                                                                encoded,
+                                                                generation)
+                                                        .thenApply(
+                                                                result -> {
+                                                                    if (result.status()
+                                                                            == ZLinkLocationWriteStatus
+                                                                                    .STORED)
+                                                                        ownerLeaseWait.clear(
+                                                                                waitKey);
+                                                                    return result;
+                                                                });
                                             });
                         });
     }
@@ -467,9 +540,12 @@ final class ZLinkProviderDescriptorRepository {
             Function<byte[], Long> leaseGeneration,
             ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(owner, "owner");
+        String waitKey = ZLinkOwnerLeaseWaitTracker.descriptorRecordKey(rowKey.value());
         return provider.read(rowKey, cancellation)
                 .thenCompose(
                         current -> {
+                            if (!(current instanceof ZLinkStoreReadFound))
+                                ownerLeaseWait.clear(waitKey);
                             if (!(current instanceof ZLinkStoreReadFound found)
                                     || !owner.ownerId().equals(ownerId.apply(found.value().bytes()))
                                     || owner.leaseGeneration()
@@ -485,11 +561,12 @@ final class ZLinkProviderDescriptorRepository {
                                                     List.of(new ZLinkStoreDelete(rowKey))),
                                             cancellation)
                                     .thenApply(
-                                            result ->
-                                                    result instanceof ZLinkStoreWriteApplied
-                                                            ? ZLinkLocationWriteStatus.STORED
-                                                            : ZLinkLocationWriteStatus
-                                                                    .IGNORED_STALE);
+                                            result -> {
+                                                if (!(result instanceof ZLinkStoreWriteApplied))
+                                                    return ZLinkLocationWriteStatus.IGNORED_STALE;
+                                                ownerLeaseWait.clear(waitKey);
+                                                return ZLinkLocationWriteStatus.STORED;
+                                            });
                         });
     }
 

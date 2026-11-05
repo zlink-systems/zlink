@@ -14,6 +14,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
+import java.util.function.LongSupplier;
 
 /** Keeps the public opaque provider boundary separate from Framework-owned location records. */
 public final class ZLinkProviderLocationRepository implements ZLinkLocationRepository {
@@ -21,12 +22,27 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
     private final ZLinkProviderOwnerLeaseRepository owners;
     private final ZLinkProviderDescriptorRepository descriptors;
     private final ZLinkProviderAuthorityRepository authority;
+    private final ZLinkOwnerLeaseWaitTracker ownerLeaseWait;
 
     public ZLinkProviderLocationRepository(ZLinkLocationStore provider) {
+        this(provider, System::nanoTime, Duration.ZERO);
+    }
+
+    public ZLinkProviderLocationRepository(
+            ZLinkLocationStore provider, LongSupplier monotonicNanos, Duration fencingMargin) {
+        this(provider, new ZLinkOwnerLeaseWaitTracker(monotonicNanos, fencingMargin));
+    }
+
+    private ZLinkProviderLocationRepository(
+            ZLinkLocationStore provider, ZLinkOwnerLeaseWaitTracker ownerLeaseWait) {
         this.provider = new ProviderBoundary(Objects.requireNonNull(provider, "provider"));
+        this.ownerLeaseWait = Objects.requireNonNull(ownerLeaseWait, "ownerLeaseWait");
         this.owners = new ZLinkProviderOwnerLeaseRepository(this.provider);
-        this.descriptors = new ZLinkProviderDescriptorRepository(this.provider);
-        this.authority = new ZLinkProviderAuthorityRepository(this.provider, this.descriptors);
+        this.descriptors =
+                new ZLinkProviderDescriptorRepository(this.provider, this.ownerLeaseWait);
+        this.authority =
+                new ZLinkProviderAuthorityRepository(
+                        this.provider, this.descriptors, this.ownerLeaseWait);
     }
 
     public systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Registration

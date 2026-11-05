@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -38,8 +39,10 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationR
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -285,6 +288,65 @@ final class ZLinkStartupDescriptorPublicationTest {
         }
     }
 
+    @RepeatedTest(100)
+    void expiredFixedRidLeaseLeavesStartupPreparingWithoutClaimingDescriptor() throws Exception {
+        var clock = new MutableClock(Instant.parse("2026-11-06T00:00:00Z"));
+        var inner = new ZLinkInMemoryProviderLocationStore(clock);
+        var seed = new ZLinkProviderLocationRepository(inner);
+        var previousOwner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                seed.claimOwnerLease("fixed-rid-previous", Duration.ofMillis(1))
+                                        .toCompletableFuture()
+                                        .get(WAIT_SECONDS, TimeUnit.SECONDS))
+                        .token();
+        var previousDescriptor =
+                new ZLinkMeshNodeDescriptor(
+                        "game",
+                        RoutingId.from("fixed-rid-restart"),
+                        1,
+                        1,
+                        "tcp://127.0.0.1:7000",
+                        Map.of(),
+                        1,
+                        List.of(),
+                        ZLinkMeshNodeObjectRole.NONE,
+                        Optional.empty(),
+                        0,
+                        new ZLinkPlacementCapacity(
+                                new ZLinkCapacityUsage(0, 0, 100),
+                                new ZLinkCapacityUsage(0, 0, 100),
+                                List.of()),
+                        new ZLinkActivationConcurrency(0, 64),
+                        Optional.empty(),
+                        ZLinkFrameworkRuntimeState.SERVING,
+                        "previous-security",
+                        previousOwner.ownerId(),
+                        previousOwner.leaseGeneration(),
+                        clock.instant());
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                seed.updateMeshNode(previousDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get(WAIT_SECONDS, TimeUnit.SECONDS)
+                        .status());
+        clock.advance(Duration.ofMillis(1));
+
+        var store = new FixedRidWaitStore(inner);
+        try (var runtime = start(options(store, "fixed-rid-restart", Duration.ofSeconds(2)))) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+
+            assertEquals(ZLinkFrameworkRuntimeState.PREPARING, runtime.state());
+            assertFalse(runtime.isReady());
+            assertEquals(0, store.descriptorWrites.get());
+            var retained = descriptors(inner).getFirst();
+            assertEquals(previousOwner.ownerId(), retained.ownerId());
+            assertEquals(1, retained.lifecycleGeneration());
+        }
+    }
+
     private static boolean renew(ZLinkFrameworkRuntime runtime) throws Exception {
         return ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
                 .toCompletableFuture()
@@ -507,6 +569,67 @@ final class ZLinkStartupDescriptorPublicationTest {
         private static <T> CompletionStage<T> unavailable() {
             return CompletableFuture.failedFuture(
                     new IllegalStateException("location store transport unavailable"));
+        }
+    }
+
+    private static final class FixedRidWaitStore implements ZLinkLocationStore {
+        private final ZLinkInMemoryProviderLocationStore inner;
+        private final AtomicInteger descriptorWrites = new AtomicInteger();
+
+        FixedRidWaitStore(ZLinkInMemoryProviderLocationStore inner) {
+            this.inner = inner;
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreReadResult> read(
+                ZLinkStoreKey key, ZLinkStoreCancellation cancellation) {
+            return inner.read(key, cancellation);
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreWriteResult> write(
+                ZLinkStoreWriteRequest request, ZLinkStoreCancellation cancellation) {
+            if (request.mutations().stream()
+                    .anyMatch(
+                            mutation ->
+                                    mutation instanceof ZLinkStorePut put
+                                            && new String(put.bytes(), StandardCharsets.UTF_8)
+                                                    .contains("\"meshName\":\"game\"")))
+                descriptorWrites.incrementAndGet();
+            return inner.write(request, cancellation);
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreScanResult> scan(
+                ZLinkStoreScanRequest request, ZLinkStoreCancellation cancellation) {
+            return inner.scan(request, cancellation);
+        }
+    }
+
+    private static final class MutableClock extends Clock {
+        private final AtomicReference<Instant> now;
+
+        MutableClock(Instant now) {
+            this.now = new AtomicReference<>(now);
+        }
+
+        void advance(Duration duration) {
+            now.updateAndGet(value -> value.plus(duration));
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneId.of("UTC");
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return now.get();
         }
     }
 }

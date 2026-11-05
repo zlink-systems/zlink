@@ -18,6 +18,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.locations.ZLinkLocationRuntime;
+import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
 import systems.zlink.framework.runtime.locations.ZLinkStatefulAuthorityRouteRuntime;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 
@@ -40,6 +41,7 @@ public final class ZLinkFrameworkRuntimeTestAccess {
         private ExecutorService channelInfrastructureExecutor;
         private SpotTransportAddressResolver channelSpotAddressResolver;
         private ZLinkLocationRuntime locationRuntime;
+        private ZLinkRegisteredLocationStores locationStores;
         private ScheduledExecutorService spotTimerExecutor;
         private ThreadPoolExecutor spotMulticastExecutor;
         private Executor spotHandlerExecutor;
@@ -71,6 +73,11 @@ public final class ZLinkFrameworkRuntimeTestAccess {
 
         public Construction locationRuntime(ZLinkLocationRuntime value) {
             locationRuntime = value;
+            return this;
+        }
+
+        public Construction locationStores(ZLinkRegisteredLocationStores value) {
+            locationStores = value;
             return this;
         }
 
@@ -143,6 +150,7 @@ public final class ZLinkFrameworkRuntimeTestAccess {
                     channelInfrastructureExecutor,
                     channelSpotAddressResolver,
                     locationRuntime,
+                    locationStores,
                     spotTimerExecutor,
                     spotMulticastExecutor,
                     spotHandlerExecutor,

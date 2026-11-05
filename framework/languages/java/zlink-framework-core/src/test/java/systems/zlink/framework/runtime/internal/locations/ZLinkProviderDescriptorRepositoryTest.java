@@ -2,7 +2,9 @@ package systems.zlink.framework.runtime.internal.locations;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -27,6 +29,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicLong;
 
 class ZLinkProviderDescriptorRepositoryTest {
     @Test
@@ -138,6 +142,121 @@ class ZLinkProviderDescriptorRepositoryTest {
                         .toCompletableFuture()
                         .get()
                         .status());
+    }
+
+    @RepeatedTest(100)
+    void fixedRidClaimWaitsThreeMarginsAfterFirstInvalidLeaseRead() throws Exception {
+        var wallClock = new MutableClock(Instant.parse("2026-09-20T00:00:00Z"));
+        var monotonicNanos = new AtomicLong();
+        var provider = new ZLinkInMemoryProviderLocationStore(wallClock);
+        var owners = new ZLinkProviderOwnerLeaseRepository(provider);
+        var wait = new ZLinkOwnerLeaseWaitTracker(monotonicNanos::get, Duration.ofNanos(1));
+        var descriptors = new ZLinkProviderDescriptorRepository(provider, wait);
+        var expiredOwner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                owners.claim("fixed-rid-expired-owner", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                descriptors
+                        .updateMeshNode(
+                                descriptor(expiredOwner, 1), ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+        wallClock.advance(Duration.ofMinutes(1));
+        var successor =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                owners.claim("fixed-rid-successor", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var replacement = descriptor(successor, 1);
+
+        var waiting =
+                assertThrows(
+                        ExecutionException.class,
+                        () ->
+                                descriptors
+                                        .updateMeshNode(
+                                                replacement, ZLinkLocationWriteIntent.NEW_CLAIM)
+                                        .toCompletableFuture()
+                                        .get());
+        assertEquals(
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                assertInstanceOf(
+                                systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                                waiting.getCause())
+                        .kind());
+        var retained =
+                descriptors
+                        .listMeshNodes("game", ZLinkPageRequest.firstPage())
+                        .toCompletableFuture()
+                        .get()
+                        .items()
+                        .getFirst();
+        assertEquals(expiredOwner.ownerId(), retained.ownerId());
+
+        monotonicNanos.addAndGet(3);
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                descriptors
+                        .updateMeshNode(replacement, ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+    }
+
+    @Test
+    void takeoverReplacesDescriptorWhoseOwnerLeaseExpired() throws Exception {
+        var wallClock = new MutableClock(Instant.parse("2026-09-20T00:00:00Z"));
+        var provider = new ZLinkInMemoryProviderLocationStore(wallClock);
+        var owners = new ZLinkProviderOwnerLeaseRepository(provider);
+        var descriptors = new ZLinkProviderDescriptorRepository(provider);
+        var expiredOwner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                owners.claim("takeover-expired-owner", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                descriptors
+                        .updateMeshNode(
+                                descriptor(expiredOwner, 1), ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+        wallClock.advance(Duration.ofMinutes(1));
+        var successor =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                owners.claim("takeover-successor", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                descriptors
+                        .updateMeshNode(descriptor(successor, 1), ZLinkLocationWriteIntent.TAKEOVER)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+        assertEquals(
+                successor.ownerId(),
+                descriptors
+                        .listMeshNodes("game", ZLinkPageRequest.firstPage())
+                        .toCompletableFuture()
+                        .get()
+                        .items()
+                        .getFirst()
+                        .ownerId());
     }
 
     @Test

@@ -167,8 +167,8 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:5380/players/p1/profile'
 
 - **`ZLinkConfigurationException: MeshNode descriptor publication failed [mesh=game,
   status=REJECTED_CONFLICT]`, 또는 프로필 호출이 계속 `503 one-way route is not
-  connected`를 낸다.** 강제 종료 후 이전 owner lease는 최대 15초 동안 유효할 수 있다
-  ([owner lease TTL 기본값](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#L670-L674)).
+  connected`를 낸다.** 강제 종료 후 이전 owner lease는 최대 30초 동안 유효할 수 있다
+  ([owner lease TTL 기본값](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#L709-L716)).
   만료될 때까지 기다린 뒤 Server를 다시 실행한다. 시작에 실패한 process는 자동으로
   재시도하지 않는다. 즉시 다시 시작하려면 이전 tutorial process를 종료하고 아래 명령으로
   `zlink-tutorial-kotlin:` 키만 삭제한다. 다른 언어의 tutorial 키는 지우지 않는다.

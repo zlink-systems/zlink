@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.locations;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
@@ -30,6 +31,8 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 final class ZLinkEndedInstanceIntentTest {
     private static final RoutingId TARGET_RID = RoutingId.from("new-instance");
@@ -44,11 +47,27 @@ final class ZLinkEndedInstanceIntentTest {
         recreateEndedSpot(backend, ZLinkPlacementObjectKind.INSTANCE_SPOT, fromClientNode, null);
     }
 
+    @RepeatedTest(100)
+    void endedSteadyReadyInstanceIntentWaitsBeforeRecreatingAcrossBackends() throws Exception {
+        for (String backend : List.of("provider", "memory"))
+            for (boolean fromClientNode : List.of(false, true))
+                recreateEndedSpot(
+                        backend, ZLinkPlacementObjectKind.INSTANCE_SPOT, fromClientNode, null);
+    }
+
     @ParameterizedTest
     @CsvSource({"provider, false", "provider, true", "memory, false", "memory, true"})
     void endedEmptyUserGetOrCreateUsesRequestingNodePolicy(String backend, boolean fromClientNode)
             throws Exception {
         recreateEndedSpot(backend, ZLinkPlacementObjectKind.USER_SPOT, fromClientNode, null);
+    }
+
+    @RepeatedTest(100)
+    void endedEmptyUserGetOrCreateWaitsBeforeApplyingRequestingNodePolicy() throws Exception {
+        for (String backend : List.of("provider", "memory"))
+            for (boolean fromClientNode : List.of(false, true))
+                recreateEndedSpot(
+                        backend, ZLinkPlacementObjectKind.USER_SPOT, fromClientNode, null);
     }
 
     @ParameterizedTest
@@ -58,11 +77,27 @@ final class ZLinkEndedInstanceIntentTest {
         recreateEndedSpot(backend, ZLinkPlacementObjectKind.USER_SPOT, true, requestDisabled);
     }
 
+    @RepeatedTest(100)
+    void userReclamationPolicyRemainsRequestOwnedAfterReleaseWait() throws Exception {
+        for (String backend : List.of("provider", "memory"))
+            for (boolean requestDisabled : List.of(false, true))
+                recreateEndedSpot(
+                        backend, ZLinkPlacementObjectKind.USER_SPOT, true, requestDisabled);
+    }
+
     @ParameterizedTest
     @CsvSource({"provider, false", "provider, true", "memory, false", "memory, true"})
     void instanceReclamationPolicyComesFromTargetRatherThanRequestNode(
             String backend, boolean requestDisabled) throws Exception {
         recreateEndedSpot(backend, ZLinkPlacementObjectKind.INSTANCE_SPOT, true, requestDisabled);
+    }
+
+    @RepeatedTest(100)
+    void instanceReclamationPolicyRemainsTargetOwnedAfterReleaseWait() throws Exception {
+        for (String backend : List.of("provider", "memory"))
+            for (boolean requestDisabled : List.of(false, true))
+                recreateEndedSpot(
+                        backend, ZLinkPlacementObjectKind.INSTANCE_SPOT, true, requestDisabled);
     }
 
     private static void awaitTargetPeer(ZLinkFrameworkRuntime source) throws Exception {
@@ -122,9 +157,12 @@ final class ZLinkEndedInstanceIntentTest {
                 backend.equals("memory")
                         ? new ZLinkInMemoryLocationStore()
                         : new ZLinkInMemoryProviderLocationStore();
+        var monotonicNanos = new AtomicLong();
+        var fencingMargin = Duration.ofNanos(1);
         // Runtime resolves public LocationStore providers through the provider repository.
         // The internal in-memory repository is exercised separately by EndedSpotRecreationTest.
-        ZLinkLocationRepository repository = new ZLinkProviderLocationRepository(provider);
+        ZLinkLocationRepository repository =
+                new ZLinkProviderLocationRepository(provider, monotonicNanos::get, fencingMargin);
         var owner =
                 ((ZLinkOwnerLeaseClaimed)
                                 repository
@@ -226,6 +264,11 @@ final class ZLinkEndedInstanceIntentTest {
         var options = new DefaultZLinkFrameworkOptions();
         var runtimeStore = observed;
         options.addLocationStore(runtimeStore);
+        options.configureLocations().setOwnerLeaseFencingMargin(fencingMargin);
+        var runtimeStores =
+                ZLinkRegisteredLocationStores.fromUnified(
+                        new ZLinkProviderLocationRepository(
+                                runtimeStore, monotonicNanos::get, fencingMargin));
         options.addRelocationStore(new InMemoryRelocationStore());
         options.configureDispatch()
                 .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
@@ -255,7 +298,7 @@ final class ZLinkEndedInstanceIntentTest {
                         else factory.disableRelocation();
                     });
         factories.set(0);
-        try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(options)) {
+        try (var runtime = startWithLocationStores(options, runtimeStores)) {
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
                     .toCompletableFuture()
                     .get(10, TimeUnit.SECONDS);
@@ -266,6 +309,11 @@ final class ZLinkEndedInstanceIntentTest {
                             systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
             sourceOptions.addLocationStore(runtimeStore);
             sourceOptions.addRelocationStore(new InMemoryRelocationStore());
+            sourceOptions.configureLocations().setOwnerLeaseFencingMargin(fencingMargin);
+            var sourceStores =
+                    ZLinkRegisteredLocationStores.fromUnified(
+                            new ZLinkProviderLocationRepository(
+                                    runtimeStore, monotonicNanos::get, fencingMargin));
             var sourceMesh =
                     sourceOptions
                             .addRouteMesh(MESH_NAME)
@@ -293,13 +341,22 @@ final class ZLinkEndedInstanceIntentTest {
                             });
             }
             try (var client =
-                    fromClientNode ? ZLinkFrameworkRuntimeTestAccess.start(sourceOptions) : null) {
+                    fromClientNode ? startWithLocationStores(sourceOptions, sourceStores) : null) {
                 if (client != null)
                     ZLinkFrameworkRuntimeTestAccess.startupCompletion(client)
                             .toCompletableFuture()
                             .get(10, TimeUnit.SECONDS);
                 if (client != null) awaitTargetPeer(client);
                 if (kind == ZLinkPlacementObjectKind.USER_SPOT) {
+                    observeReleaseWait(
+                            monotonicNanos,
+                            fencingMargin,
+                            () ->
+                                    (client == null ? runtime : client)
+                                            .spotManager()
+                                            .getOrCreate("ended-instance-spot", "room")
+                                            .submit()
+                                            .toCompletableFuture());
                     var creation =
                             (client == null ? runtime : client)
                                     .spotManager()
@@ -333,6 +390,18 @@ final class ZLinkEndedInstanceIntentTest {
                     }
                     return;
                 }
+                observeReleaseWait(
+                        monotonicNanos,
+                        fencingMargin,
+                        () ->
+                                (client == null ? runtime : client)
+                                        .route()
+                                        .requestToSpot("ended-instance-spot", new Probe("wait"))
+                                        .instanceSpot("room")
+                                        .inMesh(MESH_NAME)
+                                        .timeout(Duration.ofSeconds(10))
+                                        .submit(Reply.class)
+                                        .toCompletableFuture());
                 var replyOperation =
                         (client == null ? runtime : client)
                                 .route()
@@ -378,6 +447,35 @@ final class ZLinkEndedInstanceIntentTest {
                                 .isEmpty());
             }
         }
+    }
+
+    private static void observeReleaseWait(
+            AtomicLong monotonicNanos,
+            Duration fencingMargin,
+            Supplier<? extends CompletableFuture<?>> operation)
+            throws Exception {
+        var failure =
+                assertThrows(
+                        java.util.concurrent.ExecutionException.class,
+                        () -> operation.get().get(10, TimeUnit.SECONDS));
+        assertEquals(
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                assertInstanceOf(
+                                systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                                failure.getCause())
+                        .kind());
+        monotonicNanos.addAndGet(fencingMargin.multipliedBy(3).toNanos());
+    }
+
+    private static ZLinkFrameworkRuntime startWithLocationStores(
+            DefaultZLinkFrameworkOptions options, ZLinkRegisteredLocationStores stores) {
+        return ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                options,
+                new systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory(),
+                systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
+                        .reflection(),
+                null,
+                new ZLinkFrameworkRuntimeTestAccess.Construction().locationStores(stores));
     }
 
     public record Probe(String value) {}

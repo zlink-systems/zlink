@@ -7,7 +7,7 @@ import java.time.Duration;
 public final class ZLinkLocationOptions {
     private static final Duration ROUTE_CACHE_FORWARDING_SAFETY_MARGIN = Duration.ofSeconds(5);
     private Duration ownerLeaseRenewInterval = Duration.ofSeconds(5);
-    private Duration ownerLeaseTtl = Duration.ofSeconds(15);
+    private Duration ownerLeaseTtl = Duration.ofSeconds(30);
     private Duration pollingInterval = Duration.ofSeconds(1);
     private Duration storeFailureGrace = Duration.ofSeconds(30);
     private Duration ownerLeaseFencingMargin = Duration.ofSeconds(5);
