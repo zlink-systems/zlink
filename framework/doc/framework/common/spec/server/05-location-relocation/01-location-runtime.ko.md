@@ -858,7 +858,8 @@ Downgrade나 이전 버전 host 추가 전에는 보존을 끄고 기존 `T` 보
   - 다른 owner·incarnation으로 바뀌었거나 authority가 `Missing`이면 그 객체의 정리를 끝낸다.
 - 폐기한 User Spot은 폐기한 local member Actor의 정리 완료를 모두 확인한 뒤 정리한다. Spot 자신도 위
   세 경우를 따른다. Spot 정리는 그 Spot이 폐기 전에 수락한 incoming target Join attempt가 모두
-  Relocation flow §9·§10으로 settle된 것을 확인한 뒤 시작한다. 이 확인은 기존 attempt의 continuation으로
+  [Relocation flow §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 pre-cutover 종료 규칙(폐기
+  기록 포함), Relocation flow §9와 이 문서 §10으로 settle된 것을 확인한 뒤 시작한다. 이 확인은 기존 attempt의 continuation으로
   받으며 handler turn에서 기다리거나 새 gate·queue를 만들지 않는다. Target commit이 확인된 Actor는 그
   Spot의 local member가 된 것이므로 위 폐기·정리 규칙을 적용하고 row 제거를 확인한다. Source가 owner로
   확정되면 그 attempt는 더 이상 row를 추가하지 않는다. 그 뒤 §6.1 해제와 같은 방식으로 그
@@ -1760,7 +1761,9 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   유효한 동안 그 `GetOrCreate`는 `Unavailable`이어야 한다(모든 member owner가 끝난 경우는 §6.1 생성 검증을
   따른다). 폐기 전에 수락한 incoming Join의 target CAS가 폐기 뒤 commit되는 순서에서는 그 Actor를
   local member로 정리한 뒤에만 Spot을 정리하고, source가 owner로 확정된 attempt는 row를 추가하지 않아야
-  한다. 같은 token으로 정상 종료하면 §11이 그 record를 회수하고, 새 token claim
+  한다. Cutover 전에 source process가 끝나 cutover가 오지 않는 attempt는 폐기 기록으로 staging이 끝나고,
+  빈 snapshot 뒤 Spot `Delete`와 새 incarnation 생성까지 진행할 수 있어야 한다. 폐기 뒤 도착한 옛
+  cutover는 row를 만들지 않는다. Cutover 검증이 폐기보다 먼저면 CAS 결과는 §10 settlement를 끝까지 따른다. 같은 token으로 정상 종료하면 §11이 그 record를 회수하고, 새 token claim
   뒤 종료하면 옛 token record는 남아야 한다. 다른 host member 1개가 남은
   Spot을 폐기하면 local member 정리 뒤 Spot 정리는 row가 남아 있는 동안 변경 없이 기다리고, 그
   member가 leave하면 다음 renew interval에 끝나야 한다. 각 batch에

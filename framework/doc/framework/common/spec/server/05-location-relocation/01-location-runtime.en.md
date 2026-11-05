@@ -969,8 +969,9 @@ retention does not shorten §6.1's release wait.
     object ends.
 - Clean a discarded User Spot only after confirming cleanup of every discarded local member
   Actor. The Spot itself follows the three cases above. Spot cleanup starts only after every
-  incoming target Join attempt the Spot accepted before discard has settled under Relocation flow
-  §9 and §10. That confirmation arrives through the existing attempt continuation, without waiting in
+  incoming target Join attempt the Spot accepted before discard has settled under the pre-cutover
+  termination rule of [Relocation flow §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover)
+  (including the discard record), Relocation flow §9, and §10 of this document. That confirmation arrives through the existing attempt continuation, without waiting in
   a handler turn or adding a gate or queue. An Actor whose target commit is confirmed has become a
   local member of that Spot, so apply the discard and cleanup rules above to it and confirm its row
   removal. Once the source is confirmed as owner, that attempt adds no row. Then, like §6.1 release,
@@ -1983,7 +1984,11 @@ store record golden fixture. Each item maps to one test.
   valid its `GetOrCreate` must be `Unavailable` (when every member owner has ended, the §6.1
   creation checks apply). When an incoming Join accepted before discard commits its target CAS
   after discard, the Spot must be cleaned only after that Actor is cleaned as a local member, and an
-  attempt whose source is confirmed as owner must add no row.
+  attempt whose source is confirmed as owner must add no row. For an attempt whose source process
+  ended before sending cutover, the discard record must end the staging, and cleanup must proceed to
+  the empty snapshot, Spot `Delete`, and creation of a new incarnation. An old cutover arriving after
+  discard creates no row. When cutover verification precedes discard, the CAS result follows §10
+  settlement to the end.
   A normal shutdown with the same token lets §11 reclaim the record; after claiming a new token,
   a shutdown must leave the old-token record. When a discarded Spot still has one member
   on another host, Spot cleanup must wait without change while the row remains after local member
