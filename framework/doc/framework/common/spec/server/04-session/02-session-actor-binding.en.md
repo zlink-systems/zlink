@@ -172,6 +172,18 @@ smaller than the previous value.
 
 ## 5. Bind and Relay
 
+**Lease replacement and fence copies within the same lifecycle.** After Store recovery, a new
+claim, and successful per-object token replacement CAS, do not recreate bindings. The existing
+binding managers at Session and Actor owners refresh both sides' lease-fence copies at their
+execution gates. Validate against the current Store owner lease and descriptor for the same
+RID/lifecycle; the Actor side also confirms successful token replacement CAS for the same
+incarnation. Before Store validation, do not submit new controls with the old fence. Submit and
+accept relay and commands 42/51/54 only after refresh. A different token in a received control
+alone does not authorize changing a copy. Keep binding generation/token, Actor incarnation, and
+Session sequence; reject late controls with an old lease token through existing exact-match
+checks. Existing binding-fence management owns this refresh, with no separate binding identity
+or retry path.
+
 A STREAM packet is first dispatched to the session's typed handler
 registry. The framework resolves the packet's `actor_slot`
 ([Stream Connector common spec §4.2](../../stream-connector/32-stream-connector.en.md#42-header))
@@ -387,10 +399,10 @@ valid, it either delivers exactly once via the active Message Follow route,
 or ends with `Unavailable`. The resubmission boundary for the same message is defined by
 [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 
-The stored route is only valid within the current owner lease and local
-admission deadline. Even if the Location Store is temporarily unavailable,
-this lease or deadline isn't extended. So even after a Store failure, the
-framework doesn't guess a new route or indefinitely use a previous binding.
+The stored route's ordinary lifetime is within the current owner lease and local admission
+deadline. Outage retention of an already established bound route follows
+[Routing §3.2](../03-spot-actor/08-routing.en.md#32-sending-a-message-using-the-stored-route).
+This does not extend Store leases or ordinary cache lifetime, or guess a new route.
 
 If the specified Actor doesn't exist on the target and there's an active
 committed Message Follow route, the original bind control request and reply

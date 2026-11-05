@@ -89,12 +89,20 @@ fixed RID can be used in manual topology and in
 object role. Setting a fixed RID and an automatic RID prefix together is a startup configuration
 error.
 
-When a node using a fixed RID restarts and collides with the previous lifecycle's active owner
-claim, the same rule as an automatic RID applies: it does not retry with a new value but fails
-startup immediately with a conflict. Even a lifecycle started after the previous owner lease expires
-must satisfy the mesh liveness check and release conditions of
-[Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas)
-before reclaiming the same RID. Lease expiry alone does not imply termination of the previous owner.
+Before reclaiming the previous lifecycle of the same RID, a restarting Fixed RID node applies
+the ordinary release rules of
+[Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas).
+It requires expiry observation and the margin followed by majority `NoConnection`, or the same
+expiry observation and margin followed by a currently directly confirmed `NotHeld`. Lease expiry
+alone does not imply termination of the previous owner. Only an `Alive` response establishing that
+another process actually uses the same RID ends startup with `Conflict`. Insufficient evidence does
+not end startup with an error: remain in `Preparing` and retry at each renew interval. Do not issue
+a new RID.
+
+The new lifecycle may read the Store's host list before publishing its own descriptor. Existing
+mesh connections in `Preparing` may send and receive owner liveness messages 55/56; application
+messages remain prohibited. Admitted peer identity validation still applies. Section 6.1 owns the
+reclaim list and vote count; absent peers or silence do not create disconnection votes.
 
 ## 4. Object Role and the Features That Can Be Registered
 
@@ -264,7 +272,8 @@ The framework starts a MeshNode in the following order.
    automatic RID's MeshNode descriptor owner CAS. If it's an Object Server
    role, issues the Entry Spot ID and initializes the instance at this step.
    The Entry Spot isn't published to the descriptor and resolver before
-   initialization finishes.
+   initialization finishes. Store list reads and liveness checks over existing mesh
+   connections needed for Fixed RID reclaim at this step follow [§3.3](#33-fixed-rid).
 3. Binds the ROUTER, then fixes the actual endpoint to publish to other
    peers.
 4. Publishes the MeshNode descriptor containing all necessary information

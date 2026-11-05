@@ -740,39 +740,68 @@ interval마다 claim을 계속하고, 확보한 뒤에는 첫 갱신과 같이 d
 조건을 따른다. Lease를 확보한 뒤 timeout이나 provider error로 게시 결과를 받지 못하면 §10대로 다시 확인하고,
 그래도 확인하지 못하면 host는 `Preparing`으로 startup을 마치고 renew interval마다 게시를 다시 시도한다.
 다른 owner의 점유로 인한 확정 거절은 startup error다.
-Claim 결과 `Conflict`와 `GenerationExhausted`는 startup error다. Caller가 startup을
+Fixed RID 재claim의 증거 부족과 `Alive`에 대한 처리는
+[MeshNode §3.3](../03-spot-actor/03-mesh-node.ko.md#33-fixed-rid)을 따른다.
+그 밖의 claim 결과 `Conflict`와 `GenerationExhausted`는 startup 오류다. Caller가 startup을
 cancellation하면 startup은 취소로 끝나며 이 규칙으로 성공이 되지 않는다. 이미 시작한 claim은
 §10대로 같은 key를 다시 읽어 확인하고, 확인된 lease는 정상 해제하며 heartbeat를 시작하지 않는다.
 
 ### 5.1 짧은 장애의 보존과 재참여
 
-보존 한도 `T`는 마지막 lease 갱신 성공 뒤 60초다. 첫 갱신 전에는 최초 claim 성공을 기준으로
-한다. 경과 시간은 그 성공 요청을 시작한 local monotonic 시각을 기준으로 계산하여 응답 지연만큼
-보존 시간이 늘어나지 않게 한다. 새 claim 성공만으로 이전 장애의 보존 시간을 다시 시작하지 않는다.
+보존 한도 `T`는 마지막 lease 갱신 성공의 기준 시각부터 60초다. 첫 갱신 전에는 최초 claim
+성공을 기준으로 한다. 기준 시각은 성공한 요청의 시작 local monotonic 시각이다. 응답 지연이나
+새 claim만으로 이전 장애의 보존 시간이 늘어나지 않는다. Store 시각은 lease 만료 판정에만
+사용하고, 보존·정지·해제 대기는 각 node의 local monotonic으로 잰다.
 
-- Store와의 통신만 실패하고 기존 admitted mesh peer가 하나 이상 유효하면, 장애 전에 steady
-  `Ready`였던 객체의 bound Actor·Spot 메시징과 Spot timer를 `T` 안에서 cache로 계속 처리한다.
-  새 객체 생성, factory·restore 확정, relocation과 수용 공간 변경은 보존 실행 대상이 아니다.
-- Store와 모든 mesh peer가 함께 단절되면 위 차단 대상 표의 새 작업 수용을 중단한다.
-  Peer 유효성은 기존 mesh liveness 판정을 사용한다. `T` 안에서 peer만 복구되면 보존 실행만
-  재개한다. 일반 새 작업은 Store 복구 뒤 자격을 확인한 다음 재개한다.
-- `T`를 넘으면 mesh 연결 유무와 관계없이 보존한 메모리 상태를 버린다. 기존 gate에서 이전
-  객체의 새 실행을 막고 queue·timer·binding·지연 completion을 정리한 뒤 빈 상태로 재참여한다.
-  정지됐다 재개한 process는 실행 전에 local monotonic 경과 시간을 확인하고, `T`를 넘었으면
-  먼저 같은 정리를 수행한다. Store 후퇴를 감지하면 `T`와 관계없이 같은 정리를 수행한다.
-  다른 owner의 Store record를 삭제하거나 namespace를 flush한다는 뜻은 아니다.
-- 다른 owner·incarnation으로의 변경이나 local 실행권의 상실이 확정되면 mesh 연결과 `T`에
-  관계없이 해당 객체의 새 실행을 중단한다. Store에서 유효하지 않은 token으로 변경하지 않는다.
-- Store 복구 뒤에는 연속성과 각 보존 단위의 authority·generation·owner token·node lifecycle을
-  다시 확인한다. 만료 token 갱신은 계속 거절하며 새 자격에는 새 `LeaseGeneration`을 발급한다.
-  객체별로 Store record에 같은 incarnation의 자기 옛 owner token이 남아 있고 authority
-  `StoreVersion`·`ObjectGeneration`·`AuthorityOwnerGeneration`이 보존 시점 값과 같은 경우에만,
-  그 token을 현재 유효한 새 `LeaseGeneration` token으로 바꾸는 CAS를 허용한다. Owner identity와
-  node lifecycle은 유지한다. 이 전이는 §6.1의 `Preserve`에 해당하며 다른 generation과 수용 공간은
-  바꾸지 않는다. CAS가 성공한 객체만 기존 gate를 다시 열고, 실패한 객체는 버린다.
-  `Missing` 또는 다른 incarnation·owner의 record를 local memory로 복원하지 않는다.
-  보존 중에도 메시징·timer가 계속 실행됐으므로 복구에서는 token만 교체한다. 성공한 객체의
-  pending message·timer·binding·지연 completion은 그대로 유지하며 재생성하거나 재전송하지 않는다.
+여기서 domain은 같은 Location Store namespace와 MeshName을 사용하는 host 집합이다.
+Owner의 `N`은 마지막으로 Store에서 본 domain의 live host descriptor 목록에 있는 서로 다른
+node 수이며 자기를 포함한다. 연결 node 수는 그 목록 중 `Serving` 상태로 응답하는 peer로서,
+owner가 보낸 probe에 대한 응답을 최근 `F`초 안에 받은 유효한 admitted peer 수에 자기 하나를 더한 값이다.
+정지·해제된 peer는 세지 않는다. `F`는 기존 연결 확인 주기 5초의 2배인 10초이며 각 node의
+local monotonic으로 잰다. 단방향 수신이나 일반 traffic만으로 왕복 확인을 대신하지 않는다.
+**연결 node 수가 `N/2`를 초과할 때만 과반 연결이다.** 해제자의 목록은 §6.1이 정한다.
+Store 통신 실패는 renew/read의 timeout 또는 provider error다. `Conflict`·`Missing` 등 Store의
+확정 응답은 통신 실패가 아니며 보존 실행을 열지 않는다. TTL·margin·admission 기한·`T`는
+같은 domain에서 동일하게 설정한다. 기본값은 각각 30·5·25·60초이며 renew interval/timeout은 5/3초다.
+
+- Admission 기한 전에는 기존 실행권 규칙을 따른다. 기한이 지난 뒤 Store 통신 실패 상태에서
+  과반 연결을 유지하는 node만 장애 전에 steady `Ready`였던 객체의 bound Actor·Spot 메시징과
+  Spot timer를 `T` 미만에서 cache로 계속 처리한다. 보존 객체끼리의 같은 node 내 메시징도
+  포함한다. 새 route 조회, 객체 생성, factory·restore 확정, relocation과 수용 공간 변경은 제외한다.
+- 매 turn 시작의 기존 execution gate에서 자기 monotonic과 기존 mesh liveness를 확인한다.
+  Admission 기한(기본 25초)이 지났고 Store에 닿지 않으며 과반 연결도 없으면 새 작업 수용과
+  보존 실행을 즉시 정지한다. 한 번 정지한 node는 peer만 복구되어도 다시 열지 않는다.
+  보존 메모리는 `T`까지 둘 수 있지만 실행 재개에는 Store 복구 뒤 새 claim과 아래 객체별 CAS가 필요하다.
+- `T`(60초)에 도달하면 과반 연결 여부와 관계없이 보존 메모리 상태를 무조건 버린다. 기존 gate에서
+  이전 객체의 새 실행을 막고 queue·timer·binding·지연 completion을 정리한 뒤 빈 상태로 재참여한다.
+  폐기한 상태는 peer 복구나 새 claim으로 복원하지 않는다. Store 후퇴를 감지하면 `T`와 관계없이
+  같은 정리를 수행한다. 다른 owner의 Store record 삭제나 namespace flush를 허용하는 뜻은 아니다.
+- 다른 owner·incarnation으로의 변경이나 local 실행권 상실이 확정되면 mesh 연결과 `T`에 관계없이
+  해당 객체의 새 실행을 중단한다. Store에서 유효하지 않은 token으로 변경하지 않는다.
+- Store 복구 뒤 연속성과 각 보존 단위의 authority·generation·owner token·node lifecycle을 다시
+  확인한다. 만료 token 갱신은 거절하며 새 claim에는 새 `LeaseGeneration`을 발급한다. 객체별로
+  같은 incarnation의 자기 옛 token과 보존 시점의 `StoreVersion`·`ObjectGeneration`·
+  `AuthorityOwnerGeneration`이 Store에 그대로 있을 때만 현재 유효한 새 token으로 교체하는 CAS를
+  허용한다. Owner identity와 node lifecycle은 유지한다. 이 전이는 §6.1의 `Preserve`이며 다른
+  generation과 수용 공간을 바꾸지 않는다. CAS 성공 객체만 기존 gate를 다시 열고 실패 객체는
+  버린다. `Missing`이나 다른 incarnation·owner record를 local memory로 복원하지 않는다.
+  성공 객체의 pending message·timer·binding·지연 completion은 재생성하거나 재전송하지 않는다.
+  Binding identity와 Session sequence는 유지하되 lease fence 사본은
+  [Session binding §5](../04-session/02-session-actor-binding.ko.md#5-bind와-relay)의 갱신 규칙을 따른다.
+
+`N=1`이면 자기 하나가 과반이므로 Store 장애 중에도 `T`까지 보존할 수 있다. `N=2`이면 둘 다
+연결돼야 과반이다. 둘 사이가 끊기면 Store에 닿지 않는 owner는 25초부터 정지하며 peer 복구만으로
+재개하지 않는다. 다른 node는 만료 관찰 뒤 5초를 기다리고 다시 질의하여 자기의 `NoConnection`
+한 표로 `⌈2/2⌉=1`을 충족할 수 있다. Store만 끊기고 두 node가 연결돼 있으면 owner는 60초까지
+보존하고, 해제자는 `Alive` 때문에 보류하다 owner가 폐기 후 `NotHeld`를 답하면 해제할 수 있다.
+
+Process 재개 때도 새 turn gate에서 같은 검사를 수행한다. 다만 host suspend 중 monotonic이
+정지하면 실제 경과를 이 clock으로 알 수 없다. Callback 도중 장기 정지한 process가 같은 callback의
+다음 instruction부터 재개하는 것도 gate로 막지 못한다. 새 turn 차단은 이미 시작한 callback의
+종료를 보장하지 않는다. 이는 Orleans·Akka의 lease/fencing에서도 남는 정지·재개 한계이며,
+최종 방어는 Store CAS의 token·generation·version 검증이다. Store 밖 application 부작용의
+배타성까지 보장하지 않는다. Clock과 suspend의 운영 한계는
+[Location Store §1](02-location-store-redis.ko.md#1-범위와-독자)이 소유한다.
 
 Store에 닿지 않는 동안 host는 local admission deadline 전이라도 새 relocation을 시작하지 않는다.
 진행 중인 relocation은 [Relocation flow §9](04-relocation-flow.ko.md#9-timeout-failure와-cancellation)의
@@ -815,22 +844,46 @@ MeshNode lifecycle 재시작에서 바뀌지 않을 수 있기 때문이다. Rec
 `Conflict`이며 아무것도 변경하지 않는다. Target 정보 조합 자체가 잘못됐으면 Store를
 호출하기 전에 Framework 내부 오류로 끝낸다.
 
-**다른 node의 owner 해제·재생성·재claim에는 mesh 생존 확인을 먼저 수행한다.** 질의 대상은
-질의 시작 시점에 해제자와 같은 domain에서 연결된 admitted peer 전체와 해제 후보 authority의
-owner token·node lifecycle에 해당하는 owner 본인이다. 질의 중 membership이 바뀌어도 시작 시점의
-목록을 사용하며, 응답 대기는 renew timeout(기본 3초) 안에서 끝낸다. User Spot member 해제에도
-각 owner에 같은 검사를 적용한다. 어느 응답이든 `Alive`이면 해제를 보류하고 `Unavailable`을 반환한다.
-과거 연결 정보는 생존 응답을 대신하지 않는다.
+**다른 node의 owner 해제·재생성·재claim에는 mesh 생존 확인을 먼저 수행한다.** Domain은
+§5.1의 Location Store namespace·MeshName 집합이다. 해제자는 후보 authority의 owner token과
+node lifecycle을 대상으로 다음 합집합에 있는 서로 다른 node 수 `N`을 사용한다.
 
-Store에서 후보 owner lease가 만료됐고 질의한 peer 전부가 해당 owner와 연결이 없다는
-`NoConnection`으로 답했으면 lease 만료 즉시 해제할 수 있다. 응답하지 않은 peer가 있거나
-`Unconfirmed`이면, 또는 물어볼 peer가 없으면 owner의 마지막 갱신 기준 시각에 `T`(60초)와
-fencing margin(5초)을 더한 시각이 지난 뒤에만 해제할 수 있다. 해제자는 Store의 해당 lease
-`ExpiresAt − TTL`로 마지막 갱신 기준 시각을 계산하고 `StoreNow`와 비교한다. 첫 갱신 전에는
-같은 식이 최초 claim 기준 시각이다. 기준 시각을 확인할 수 없으면 `Unavailable`을 반환한다.
-이 시각에는 옛 owner가 살아 있더라도 §5.1에 따라 보존 상태를 이미 버려야 한다. 무응답 자체는
-정지 증거가 아니며 `Alive`의 보류를 무효로 만들지 않는다. 최종 방어는 아래 Store CAS의
-세대·version 비교다. 메시지 형식은 [wire §5.1](../02-channel-transport/06-wire-protocol.ko.md#51-owner-생존-확인)이 소유한다.
+- 질의 시작에 Store에서 읽은 domain의 현재 live host descriptor 전체 목록.
+- 해제자가 마지막으로 본 목록에서 빠진 지 `T + margin`(기본 65초)이 지나지 않은 최근 제거 host 목록.
+  빠진 것을 관찰한 시점부터 해제자의 local monotonic으로 잰다.
+
+목록이 줄었다는 사실만으로 과반 문턱을 낮추지 않는다. 연결된 peer만으로 목록을 줄이지 않으며,
+목록의 각 node에 질의하고 owner 본인에게도 직접 확인한다. 해제자가 이 합집합에 있으면 자기의
+연결 판정을 한 표로 센다. Descriptor 게시 전 lifecycle이라는 이유로 합집합에 가짜 항목이나 표를
+추가하지 않는다. 질의 중 membership이 바뀌어도 시작 목록을 사용한다.
+응답 대기는 요청 제출부터 자기 monotonic의 renew timeout(기본 3초) 안에서 끝낸다. User Spot member 해제에도 각 owner에 같은 검사를 적용한다.
+
+해제 CAS에는 다음 조건이 필요하다.
+
+1. Store exact read에서 후보 owner lease의 만료(`Missing` 또는 다른 token)를 관찰한다.
+   처음 관찰한 순간부터 해제자 자신의 local monotonic으로 margin(기본 5초)을 기다린다.
+   해제자 재시작으로 관찰을 잃으면 다시 관찰하여 기다린다. 만료 lease의 `ExpiresAt`이나 owner의
+   TTL·마지막 갱신 시각을 복원할 필요가 없다.
+2. Margin이 지난 뒤 CAS 직전에 새로 질의한다. 시작 목록 `N` 중
+   **`⌈N/2⌉`개 이상**이 owner와 연결 없음(`NoConnection`)으로 답하면 해제할 수 있다.
+   Peer는 최근 `F`초 동안 그 owner tuple의 probe를 하나도 받지 못했을 때만 `NoConnection`이라고
+   답한다. `F`와 owner의 왕복 연결 기준은 §5.1을 따른다. 해제자 자신의 표에도 같은 기준을 적용한다.
+   따라서 peer C가 owner A에 대해 `NoConnection`이라고 답할 때 A의 probe는 C에 도달하지
+   않았으므로 A는 C를 과반 연결에 셀 수 없다. 최근 제거 host를 포함한 목록과 이 왕복 기준으로
+   과반의 교집합을 유지한다. 해제 대기 margin은 5초로 유지한다. 연결 부재 증거는 `F`와 왕복
+   기준으로 확보하므로 margin을 peer deadline 15초까지 늘릴 필요가 없다. 어떤 owner·peer 응답이든
+   `Alive`(그 token으로 보존 실행 중)이면 이 조건에 앞서 보류한다.
+3. 위 표 수를 채우지 못하면 보류한다. Owner가 §5.1에 따라 60초에 상태를 버린 뒤 해당
+   token의 `NotHeld`를 직접 답하거나 peer가 현재 직접 확인으로 중계하면 해제할 수 있다.
+   이 경로도 1의 만료 관찰·margin과 직전 질의가 필요하며, 어느 `Alive`든 보류한다.
+   무응답·timeout·확인 불가는 표나 `NotHeld`가 아니며 시간 경과만으로 해제를 허용하지 않는다.
+
+보류는 `Unavailable`이다. 같은 owner tuple의 진행 중 질의는 반복 생성 호출이 공유하며 호출마다
+새 fanout을 만들지 않는다. 완료된 응답을 다음 해제의 허가증으로 cache하지 않는다. 기본값에서
+서버 다운 뒤 재생성은 마지막 성공 갱신 기준으로 대략 만료 30초 + margin 5초 + 질의 최대 3초
+뒤부터 가능하다. 이는 필요한 응답을 얻는 경우의 예시이며 무응답에 대한 완료 상한이 아니다.
+최종 해제는 아래 CAS의 authority version·lease 무효·descriptor·수용 공간 조건을 모두 검사한다.
+메시지 형식은 [wire §5.1](../02-channel-transport/06-wire-protocol.ko.md#51-owner-생존-확인)이 소유한다.
 
 **Target lifecycle이 끝난 reservation은 해제한다.** `Reserved` record의 target owner lease가 없거나,
 다른 `LeaseGeneration`이거나, 만료됐으면, 또는 target MeshNode descriptor record가 없거나 다른
@@ -1594,15 +1647,23 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   `AuthorityOwnerGeneration`, `OwnerLeaseGeneration`)은 서로 바뀌지 않는다.
 - `2^63-1` 다음 세대 발급은 항상 `GenerationExhausted`이며 Store를 변경하지 않는다.
 - 모든 Location host가 startup에서 §5의 시간 관계를 검사하며, 위반하면 startup error다.
-- 새 작업을 받을 수 있는 마지막 시각을 넘으면 descriptor 게시, object message·timer 시작과
-  relocation 변경이 함께 막힌다.
+- Admission 기한 뒤 descriptor 게시·새 객체·relocation 변경은 막힌다. Store 통신 실패와 과반
+  연결을 만족하는 보존 message·timer만 `T` 미만에서 허용한다. 과반 상실로 정지한 뒤 peer만
+  복구되어도 재개하지 않으며, `T`에는 무조건 폐기한다.
+- 해제는 lease 무효 첫 관찰 뒤 local monotonic margin과 직전 재질의를 요구한다. `⌈N/2⌉`의
+  `NoConnection` 또는 현재 owner의 `NotHeld`로만 허용하고 어떤 `Alive`든 보류한다.
+- 정상 record의 과거 generation과 병렬 발급 응답 역전은 후퇴가 아니다. 이전 counter 현재값
+  관측 뒤에 수행한 더 작은 현재값 관측만 후퇴로 판정한다.
+- Lease 교체 뒤 binding fence 갱신은 identity·sequence를 유지하고 relay·seal·replacement·close를
+  허용하며, 옛 token의 지연 control은 거부한다. 반복 생성 호출은 진행 중 질의를 공유한다.
 - 최초 owner lease claim이 renew timeout까지 lease를 확인하지 못하면 startup은 성공하고 위
   네 대상이 막힌다.
 - Lease 없이 startup을 마친 host는 renew interval마다 claim하며, 확보한 뒤에야 descriptor를
   게시한다.
 - Lease를 확보한 뒤 descriptor 게시 결과를 확인하지 못한 host는 startup에 성공하고 `Preparing`으로
   남으며 renew interval마다 게시를 다시 시도한다. 다른 owner의 점유로 인한 확정 거절은 startup error다.
-- Claim 결과 `Conflict`·`GenerationExhausted`는 startup error다.
+- Claim 오류 분류와 Fixed RID 재claim 보류는 §5와
+  [MeshNode §3.3](../03-spot-actor/03-mesh-node.ko.md#33-fixed-rid)을 따른다.
 - Startup을 cancellation하면 결과는 취소이며, 이미 commit된 claim은 해제되고 heartbeat가
   시작되지 않는다.
 

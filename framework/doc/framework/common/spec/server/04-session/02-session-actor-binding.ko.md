@@ -154,6 +154,16 @@ session owner lifecycle 안에서만 유효하다. 다른 MeshNode가 bind하거
 
 ## 5. Bind와 relay
 
+**같은 lifecycle의 lease 교체와 fence 사본.** Store 복구 뒤 새 claim과 객체별 token 교체 CAS가
+성공하면 binding을 재생성하지 않는다. Session owner와 Actor owner의 기존 binding 관리자가
+자기 execution gate에서 양쪽 lease fence 사본을 갱신한다. 갱신 근거는 현재 Store owner lease와
+같은 RID·lifecycle의 descriptor이며, Actor 쪽은 같은 incarnation의 token 교체 CAS 성공도 확인한다.
+Store 확인 전에는 이전 fence로 새 control을 제출하지 않는다. 갱신 후에만 relay와 command
+42·51·54를 제출·수락한다. 수신 control의 token이 다르다는 사실만으로 사본을 바꾸지 않는다.
+Binding generation·token, Actor incarnation과 Session sequence는 유지하고 이전 lease token의
+늦은 control은 기존 정확 일치 검사로 거부한다. 이 갱신은 기존 binding fence 관리가 소유하며
+별도 binding identity나 재시도 경로를 만들지 않는다.
+
 STREAM packet은 먼저 session의 typed handler registry로 dispatch된다. Framework는 packet의
 `actor_slot`([Stream Connector 공통 스펙 §4.2](../../stream-connector/32-stream-connector.ko.md#42-header))을
 현재 binding으로 해석해 dispatch context의 Actor로 넣는다 — slot이 없으면 Actor 없음이다. 이 해석은
@@ -319,10 +329,9 @@ message를 보낼 때마다 Location Store를 다시 조회하지 않는다. 저
 유효하지 않으면 active Message Follow route로 정확히 한 번 전달하거나 `Unavailable`로
 끝낸다. 같은 message의 재제출 경계는 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정의한다.
 
-저장한 route는 current owner lease와 local admission deadline 안에서만 유효하다.
-Location Store가 일시적으로 사용할 수 없더라도 이 lease나 deadline을 연장하지 않는다.
-Store 장애가 난 뒤에도 Framework가 새 route를 추측하거나 이전 binding을 무기한 사용하는
-동작은 하지 않는다.
+저장한 route의 일반 수명은 current owner lease와 local admission deadline 안이다.
+이미 확정된 bound route의 장애 중 수명은 [Routing §3.2](../03-spot-actor/08-routing.ko.md#32-저장한-route로-message를-보낸다)를 따른다.
+이 보존은 Store lease나 일반 cache 수명을 연장하지 않으며 새 route를 추측하지 않는다.
 
 Target에 지정한 Actor가 없고 active committed Message Follow route가 있으면 original
 bind control request와 reply route를 해당 route의 target으로 relay한다. Message

@@ -86,9 +86,10 @@ checks execution rights from [Location runtime §5](../05-location-relocation/01
 at the existing execution gate. Timers of eligible steady `Ready` Spots continue under that
 section's conditions during a short Store-only outage.
 
-No new callback starts when admission is blocked by loss of both the Store and all mesh
-peers, or when retention bound `T` is exceeded. The same decision applies after a suspended
-process resumes. Pending ticks of an object/owner authority that lost execution rights or was
+After the admission deadline, no new callback starts without Store communication failure and
+majority connectivity permitting retention, or at `T`. Peer recovery alone never resumes stopped
+execution. The next turn gate applies the same checks after process resume; Location runtime
+§5.1 defines limits for resumption inside a callback and monotonic clocks stopping during suspend. Pending ticks of an object/owner authority that lost execution rights or was
 discarded are not executed. Keep timers and pending ticks unchanged for objects whose
 same-incarnation token replacement CAS succeeds under
 [Location runtime §5.1](../05-location-relocation/01-location-runtime.en.md#51-retention-and-rejoining-after-a-short-outage).
@@ -196,9 +197,11 @@ maps to one contract test.
 
 **Owner lease**
 
-- Callbacks continue under retained-execution conditions during a Store-only outage. No new
-  callback starts after loss of both the Store and all mesh peers, or beyond `T`. Resuming a
-  process or obtaining a new lease alone does not execute discarded pending ticks.
+- Callbacks continue under Store communication failure with majority connectivity permitting
+  retention. Block after the admission deadline without that majority, or at `T`; peer recovery
+  alone does not resume execution. After the deadline without Store communication failure,
+  do not retain or start callbacks. Resuming a process or obtaining a new lease alone does not
+  execute discarded pending ticks.
 
 ---
 

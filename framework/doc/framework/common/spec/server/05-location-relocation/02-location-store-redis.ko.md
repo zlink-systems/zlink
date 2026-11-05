@@ -28,12 +28,20 @@ relocation phase의 의미를 알아야 하는 것은 아니다. Framework가 �
 설정 이름만으로 이 보장을 충족한다고 간주하지 않는다. 운영자는 복구·승격 뒤 성공한 쓰기를
 잃지 않고 이전 primary의 쓰기가 차단되는 구성을 사용해야 한다. 후퇴를 감지하면 Framework는
 보존 없이 local 객체를 모두 정리하고 빈 상태로 재참여한다([Location runtime §5.1](01-location-runtime.ko.md#51-짧은-장애의-보존과-재참여)).
-Node는 같은 발급 counter에서 관측한 가장 큰 세대 값(`LeaseGeneration` 등 INCR 발급값)을
-기준으로 더 작은 값을 새로 받으면 후퇴로 판정한다. 이 비교는 일부 후퇴만 감지하며, 관측 최대값보다
+Node는 같은 발급 counter 자체의 현재값을 관측하고, 그 이전 관측 뒤에 수행했음이 확인되는
+현재값 관측이 더 작을 때만 후퇴로 판정한다. 기존 object record의 과거 generation read나
+병렬 발급 요청의 응답 순서 역전은 이 비교에 포함하지 않는다. 이 비교는 일부 후퇴만 감지하며, 관측 최대값보다
 작아지지 않은 후퇴나 아직 관측하지 않은 counter의 후퇴는 감지하지 못한다. 후퇴 뒤 빈 상태로
 재참여하기 전에 Store 연속성이 복구됐는지 확인하는 책임은 운영자에게 있다.
 정상 TTL 만료로 인한 lease `Missing`은 그 자체로 후퇴 증거가 아니다. Opaque `StoreVersion`을
 수치 비교하거나, 후퇴를 관측하지 못했다는 사실을 연속성 증명으로 사용하지 않는다.
+
+**시계·suspend 운영 한계.** Store 시각은 lease 만료 판정에만 사용한다. Store 시계는
+fencing margin(기본 5초)을 넘게 앞으로 튀지 않아야 한다. 보존·정지·해제 대기는 각자 local
+monotonic으로 재며 Store 시각 차이로 계산하지 않는다. Host suspend 중 monotonic이 정지하면
+새 turn gate도 실제 경과를 판별할 수 없다. 그런 suspend와 callback 도중 장기 정지 뒤 재개까지
+실행 배타성으로 보장하지 않으며, 운영자는 이 한계를 배치·중단 절차에 반영해야 한다.
+Store 밖 부작용의 배타성이 필요하면 application 자원에도 fencing이 필요하다.
 
 Application은 이 SPI의 operation을 직접 호출하지 않는다. Provider package만 SPI를 구현하며
 Framework가 등록된 instance를 사용한다.
