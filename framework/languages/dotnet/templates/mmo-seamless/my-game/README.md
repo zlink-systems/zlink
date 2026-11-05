@@ -21,7 +21,7 @@ The initial `zlink.structure.json` uses the landing page's `mmo-seamless` compos
 - Bash for Linux, WSL, or macOS; PowerShell 7 for Windows.
 - Linux native assets supported by the published `Zlink` package. Local process debugging additionally requires the .NET 8 SDK and ASP.NET Core 8 runtime.
 
-Packages come from public NuGet only. `Directory.Packages.props` pins the Framework package family to `0.31.0`. This project has no dependency on a ZLink source checkout or local package feed.
+Packages come from public NuGet only. `Directory.Packages.props` pins the Framework package family to `0.32.0`. This project has no dependency on a ZLink source checkout or local package feed.
 
 ## Build
 
@@ -108,7 +108,7 @@ Every e2e run validates the composition before starting nodes. `--check-structur
 
 ## Known issues
 
-Validated against the published Framework 0.31.0 packages.
+Validated against the published Framework 0.32.0 packages.
 
 ## Deployment sequence
 
