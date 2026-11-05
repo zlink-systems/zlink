@@ -836,8 +836,11 @@ Downgrade나 이전 버전 host 추가 전에는 보존을 끄고 기존 `T` 보
   Binding identity와 Session sequence는 유지하되 lease fence 사본은
   [Session binding §5](../04-session/02-session-actor-binding.ko.md#5-bind와-relay)의 갱신 규칙을 따른다.
 - 폐기한 각 객체는 Store 복구 뒤 authority 정리까지 수행한다. 정리는 Location repository가 객체
-  하나씩 수행한다. Actor 하나의 정리 batch에는 그 Actor의 authority·수용 공간과, member Actor면 그
-  Actor의 membership row 하나만 넣는다. 객체마다 Store exact read 결과로 다음 중 하나를 적용한다.
+  하나씩 수행한다. Actor 하나의 정리 batch는 그 Actor 하나만 다루며, 다른 Actor의 authority·수용
+  공간·membership row를 같은 batch에 묶지 않는다. 그 batch에는 §6.1이 요구하는 condition(authority
+  `StoreVersion`, owner lease, descriptor, 수용 공간)과 그 Actor의 조회용 index 변경, member Actor면 그
+  Actor의 membership row 제거를 기존 계약대로 포함한다. 정리 자격은 §6.1에 따라 Location repository
+  한 곳이 판정한다. 객체마다 Store exact read 결과로 다음 중 하나를 적용한다.
   - Authority가 같은 자기 owner·node lifecycle·`ObjectGeneration`·`AuthorityOwnerGeneration`이고
     현재 자기의 유효 lease token을 가리키면, token 유지·교체와 관계없이 현재 읽은 `StoreVersion`을
     조건으로 §6.1의 `Delete`를 수행한다. 확인하지 못한 renew가 나중에 확인된 경우도 포함한다.
@@ -1722,7 +1725,8 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   조합과, Spot과 일부 member만 새 token으로 교체되고 나머지 member는 무효가 된 옛 token에 남으며
   local member 수가 2,048-key를 넘고 heartbeat가 계속되며 Actor 생성 호출이 없는 조합도 검사한다.
   어떤 gate도 먼저 열리지 않고 단위 전체를 폐기하며, 유효 token member는 `Delete`, 옛 token member는
-  무효 첫 관찰 뒤 `3·margin`의 해제로 각자의 row와 함께 정리된 뒤 Spot 정리가 끝나야 한다. 모든
+  무효 첫 관찰 뒤 `3·margin`의 해제로 각자의 row와 함께 정리된 뒤 Spot 정리가 끝나야 한다. 각 batch에
+  §6.1의 필수 condition과 index 변경이 포함되며, condition이 달라진 batch는 변경 없이 `Conflict`여야 한다. 모든
   교체가 적용된 경우도 같은 순서로 정리가 끝나야 한다. 다른 host member에는 기존
   membership·해제 조건을 유지한다. `T` 전 동일 token 복구는 기존 객체를 유지하며, 폐기 객체는 복원하지 않는다.
 - 해제는 해당 authority owner token의 무효 첫 관찰 뒤 local monotonic `3·margin`(기본값 예시 15초)을 요구한다.

@@ -941,8 +941,11 @@ retention does not shorten §6.1's release wait.
   Refresh lease-fence copies under
   [Session binding §5](../04-session/02-session-actor-binding.en.md#5-bind-and-relay).
 - For every discarded object, complete authority cleanup after Store recovery. The Location
-  repository cleans objects one at a time. An Actor's cleanup batch contains only that Actor's
-  authority and capacity and, for a member Actor, its one membership row. For each object, apply
+  repository cleans objects one at a time. An Actor's cleanup batch handles that one Actor only and
+  never combines another Actor's authority, capacity, or membership row. The batch includes, per the
+  existing contract, the conditions §6.1 requires (authority `StoreVersion`, owner lease, descriptor,
+  capacity), that Actor's lookup-index changes, and, for a member Actor, removal of its membership
+  row. The Location repository alone decides cleanup eligibility under §6.1. For each object, apply
   one of the following based on a Store exact read.
   - If authority still has the same self-owned owner, node lifecycle, `ObjectGeneration`, and
     `AuthorityOwnerGeneration` and references the owner's currently valid lease token, perform
@@ -1938,7 +1941,9 @@ store record golden fixture. Each item maps to one test.
   members exceed 2,048 keys, heartbeats continue, and no Actor create call arrives. Discard the
   entire unit; valid-token members are cleaned by `Delete` and old-token members by release
   `3·margin` after first invalidity observation, each with its own row, and then the Spot cleanup
-  must finish. The same order must also finish when every replacement was applied. Keep existing membership and release
+  must finish. Each batch includes §6.1's required conditions and index changes, and a batch whose
+  conditions changed must end in `Conflict` with no change. The same order must also finish when
+  every replacement was applied. Keep existing membership and release
   conditions for members on other hosts. Same-token recovery before `T` keeps the existing
   object; never restore a discarded object.
 - Release requires `3·margin` of local monotonic time (default example: 15 seconds) after first observing invalidity of the
