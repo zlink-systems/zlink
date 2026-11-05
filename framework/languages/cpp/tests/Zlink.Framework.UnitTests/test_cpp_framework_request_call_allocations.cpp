@@ -210,7 +210,7 @@ allocation_sample_t node_receiver_allocations (fw::serializer_registry_t &regist
     node_transport_t transport;
     std::string packet_name = payload_t::packet_name;
     std::string router_channel_id = "m";
-    std::shared_ptr<const zlink::routing_id_t> target_owner;
+    const auto target_owner = zlink::routing_id_t::from ("n");
     return sample_allocations ([&] {
         pending.emplace (
           fw::detail::request_task_access_t::receive_public<payload_t, zlink::message_t> (
@@ -374,12 +374,26 @@ TEST (RequestCallAllocations, NodeRequestUsesOnlyItsPreparedReceiverAboveTheTran
         fw::detail::observe_task_terminal (reply, std::move (receiver.complete));
     });
     auto client = builder.route_client (serializers);
-    const auto first_encode = encode_allocations (serializers, "m").total;
-    const auto encode = encode_allocations (serializers, "m");
+    const auto encode_node = [&] {
+        return sample_allocations ([&] {
+            fw::runtime::messaging::client_call_codec_t codec;
+            auto header = codec.create_envelope (
+              fw::runtime::messaging::message_kind_t::request, "m", payload_t::packet_name,
+              fw::runtime::configuration::default_request_timeout, std::nullopt, std::nullopt, {});
+            const auto serializer = serializers.get<payload_t> ();
+            (void) codec.encode_payload_parts (
+              std::move (header), serializer.serialize (payload_t{}), serializer.content_type ());
+        });
+    };
+    const auto first_encode = encode_node ().total;
+    const auto encode = encode_node ();
     std::printf ("encode calibration: first=%zu steady=%zu\n", first_encode, encode.total);
-    // A transport may borrow its target until the physical terminal.
-    const auto target_owner = sample_allocations (
-      [] { (void) std::make_shared<const zlink::routing_id_t> (zlink::routing_id_t::from ("n")); });
+    // The receiver's projection owns the fixed target through the physical terminal.
+    const auto target_owner = sample_allocations ([] {
+        const auto target = zlink::routing_id_t::from ("n");
+        const auto copy = target;
+        (void) copy;
+    });
     const auto receiver = node_receiver_allocations (serializers);
     print_allocation_sizes ("node encode reference", encode);
     print_allocation_sizes ("node target reference", target_owner);
@@ -917,8 +931,9 @@ TEST (RequestCallAllocations, RawNodeRequestKeepsInvalidTimeoutInTheReturnedTask
       fw::test::runtime_failure_options (std::move (options)));
     fw::runtime::protocol::application_payload_t payload;
     std::optional<fw::task_t<bool>> pending;
+    const std::array<std::uint8_t, 1> target{'b'};
     EXPECT_NO_THROW (pending.emplace (
-      node.request_to_node ({'b'}, payload, std::chrono::milliseconds::zero (), {})));
+      node.request_to_node (target, payload, std::chrono::milliseconds::zero (), {})));
     ASSERT_TRUE (pending.has_value ());
     ASSERT_TRUE (pending->await_ready ());
     const auto &result = pending->result ();
@@ -958,7 +973,10 @@ TEST (RequestCallAllocations, HostNodeRequestAddsNoCoroutineAboveTheRawTask)
         raw.emplace (
           host->transport ().request_to_node (target_bytes, payload, std::chrono::seconds (1), {}));
     });
-    const auto target_count = fw::tests::count_allocations ([&] { (void) target.to_bytes (); });
+    const auto target_count = fw::tests::count_allocations ([&] {
+        const std::span<const std::uint8_t> bytes (target.data (), target.size ());
+        (void) bytes;
+    });
     const auto callback_count = fw::tests::count_allocations ([&] {
         fw::runtime::foundation::operation_registry_t::callback_t callback =
           [host, operation] (fw::runtime::foundation::operation_terminal_t,
@@ -1026,7 +1044,7 @@ struct allocation_host_capture_t final : fw::hosted_service_t
 // The real app transport must not allocate an operation or a coroutine when
 // topology has already classified an Object Client as an invalid Node target.
 // Compare the same route layer over an immediate transport, plus the real
-// topology classifier's routing-id byte vector. No allocation size identifies
+// topology classifier's borrowed routing-id bytes. No allocation size identifies
 // a reply state or an admission source.
 TEST (RequestCallAllocations, AppClassifiedNodeFailureAddsNoTransportReplyState)
 {
@@ -1110,7 +1128,10 @@ TEST (RequestCallAllocations, AppClassifiedNodeFailureAddsNoTransportReplyState)
         receiver.complete (fw::result_t<transport_reply_t>::success (std::move (failure)));
     });
     auto reference = builder.route_client (serializers);
-    const auto target_bytes = sample_allocations ([&] { (void) target.to_bytes (); });
+    const auto target_bytes = sample_allocations ([&] {
+        const std::span<const std::uint8_t> bytes (target.data (), target.size ());
+        (void) bytes;
+    });
     std::optional<fw::request_task_t<payload_t>> pending;
     auto measure = [&] (fw::route_client_t &client) {
         auto call = client.request_to_node ("m", target, payload_t{});

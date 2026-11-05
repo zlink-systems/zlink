@@ -24,7 +24,6 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
-#include <vector>
 
 namespace zlink::framework
 {
@@ -561,7 +560,30 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
 {
     struct callback_t
     {
-        std::function<void (const result_t<T> &)> invoke;
+        virtual ~callback_t ()
+        {
+            while (next) {
+                auto removed = std::move (next);
+                next = std::move (removed->next);
+            }
+        }
+        virtual void invoke (const result_t<T> &) = 0;
+        std::unique_ptr<callback_t> next;
+    };
+    template <typename TCallback> struct terminal_callback_t final : callback_t
+    {
+        terminal_callback_t (TCallback callback, ambient_context_snapshot_t snapshot) :
+            callback (std::move (callback)),
+            ambient (std::move (snapshot)),
+            owner (capture_current_serial_turn ())
+        {
+        }
+        void invoke (const result_t<T> &result) override
+        {
+            const auto ambient_guard = enter_ambient_context (ambient);
+            callback (result);
+        }
+        TCallback callback;
         ambient_context_snapshot_t ambient;
         std::shared_ptr<serial_turn_t> owner;
     };
@@ -587,7 +609,7 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     bool complete (result_t<T> result)
     {
         std::shared_ptr<task_wait_registration_t> continuations;
-        std::vector<callback_t> terminal_callbacks;
+        std::unique_ptr<callback_t> terminal_callbacks;
         task_wait_registration_t::delivery_t delivery;
         auto self = this->shared_from_this ();
         {
@@ -601,13 +623,14 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
             if (continuations)
                 delivery = continuations->take_delivery ();
             terminal_callbacks = std::move (_terminal_callbacks);
+            _terminal_callbacks_tail = nullptr;
         }
         _ready.notify_all ();
         // Internal delivery defects terminate; the first result is already fixed.
         [&] () noexcept {
-            for (auto &callback : terminal_callbacks) {
-                const auto ambient_guard = enter_ambient_context (callback.ambient);
-                callback.invoke (*_result);
+            for (auto *callback = terminal_callbacks.get (); callback;
+                 callback = callback->next.get ()) {
+                callback->invoke (*_result);
             }
             while (continuations) {
                 auto continuation = std::move (continuations);
@@ -680,8 +703,8 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
         return *_result;
     }
 
-    void on_completed (std::function<void (const result_t<T> &)> callback,
-                       task_scheduler_t scheduler = {})
+    template <typename TCallback>
+    void on_completed (TCallback callback, task_scheduler_t scheduler = {})
     {
         const auto self = this->shared_from_this ();
         std::shared_ptr<task_wait_registration_t> registration;
@@ -690,19 +713,42 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
             std::lock_guard lock (_mutex);
             if (!_result) {
                 owner_state = this->weak_from_this ();
-                registration = std::make_shared<task_wait_registration_t> (
-                  [weak = owner_state, callback = std::move (callback)] (
-                    bool cancelled, const ambient_context_snapshot_t &ambient) {
-                      const auto ambient_guard = enter_ambient_context (ambient);
-                      if (cancelled) {
-                          const auto failure = result_t<T>::failure (
-                            framework_error_kind_t::shutting_down,
-                            registered_execution_context_shutting_down_message);
-                          callback (failure);
-                      } else if (auto self = weak.lock ())
-                          callback (*self->_result);
-                  },
-                  std::move (scheduler));
+                struct observer_t
+                {
+                    observer_t (std::weak_ptr<task_shared_state_t<T>> owner,
+                                TCallback callback,
+                                task_scheduler_t scheduler) :
+                        owner (std::move (owner)),
+                        callback (std::move (callback)),
+                        registration (
+                          [this] (bool cancelled, const ambient_context_snapshot_t &ambient) {
+                              auto owner = std::move (this->owner);
+                              auto reset_callback = [] (std::optional<TCallback> *callback) {
+                                  callback->reset ();
+                              };
+                              std::unique_ptr<std::optional<TCallback>, decltype (reset_callback)>
+                                callback_lifetime (&this->callback, reset_callback);
+                              const auto ambient_guard = enter_ambient_context (ambient);
+                              if (cancelled) {
+                                  const auto failure = result_t<T>::failure (
+                                    framework_error_kind_t::shutting_down,
+                                    registered_execution_context_shutting_down_message);
+                                  (*this->callback) (failure);
+                              } else if (auto self = owner.lock ())
+                                  (*this->callback) (*self->_result);
+                          },
+                          std::move (scheduler))
+                    {
+                    }
+                    std::weak_ptr<task_shared_state_t<T>> owner;
+                    std::optional<TCallback> callback;
+                    // Destroy the stop registration before its callable captures.
+                    task_wait_registration_t registration;
+                };
+                auto observer = std::make_shared<observer_t> (owner_state, std::move (callback),
+                                                              std::move (scheduler));
+                registration =
+                  std::shared_ptr<task_wait_registration_t> (observer, &observer->registration);
                 append_continuation_unlocked (registration);
             }
         }
@@ -711,7 +757,7 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
             return;
         }
         auto invoke = [self, callback = std::move (callback),
-                       ambient = capture_ambient_context ()] () noexcept {
+                       ambient = capture_ambient_context ()] () mutable noexcept {
             const auto ambient_guard = enter_ambient_context (ambient);
             callback (*self->_result);
         };
@@ -723,14 +769,20 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
         }();
     }
 
-    void on_terminal (std::function<void (const result_t<T> &)> callback)
+    template <typename TCallback> void on_terminal (TCallback callback)
     {
         auto snapshot = capture_ambient_context ();
         {
             std::lock_guard lock (_mutex);
             if (!_result) {
-                _terminal_callbacks.push_back (callback_t{
-                  std::move (callback), std::move (snapshot), capture_current_serial_turn ()});
+                auto terminal = std::make_unique<terminal_callback_t<TCallback>> (
+                  std::move (callback), std::move (snapshot));
+                auto *tail = terminal.get ();
+                if (_terminal_callbacks_tail)
+                    _terminal_callbacks_tail->next = std::move (terminal);
+                else
+                    _terminal_callbacks = std::move (terminal);
+                _terminal_callbacks_tail = tail;
                 return;
             }
         }
@@ -801,10 +853,11 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     std::optional<result_t<T>> _result;
     std::shared_ptr<task_wait_registration_t> _continuations_head;
     task_wait_registration_t *_continuations_tail = nullptr;
-    std::vector<callback_t> _terminal_callbacks;
+    std::unique_ptr<callback_t> _terminal_callbacks;
+    callback_t *_terminal_callbacks_tail = nullptr;
 };
 
-template <typename T> class application_task_shared_state_t final : public task_shared_state_t<T>
+template <typename T> class application_task_shared_state_t : public task_shared_state_t<T>
 {
   private:
     void bind_wait_owner (const std::shared_ptr<task_wait_registration_t> &registration,
@@ -958,6 +1011,8 @@ template <typename T> class task_state_t
     mutable std::atomic<referenced_state_t *> _reference{nullptr};
 };
 
+template <typename T> std::shared_ptr<task_completion_source_t<T>> make_task_completion_source ();
+
 } // namespace detail
 
 template <typename T> class task_completion_source_t
@@ -978,11 +1033,33 @@ template <typename T> class task_completion_source_t
     bool complete (result_t<T> result) { return _state->complete (std::move (result)); }
 
   private:
+    template <typename U>
+    friend std::shared_ptr<task_completion_source_t<U>> detail::make_task_completion_source ();
+
+    // The shared-source allocation owns this wrapper and state. An empty-owner
+    // alias avoids an ownership cycle; task() acquires the state's strong owner.
+    explicit task_completion_source_t (detail::task_shared_state_t<T> *state) :
+        _state (std::shared_ptr<detail::task_shared_state_t<T>>{}, state)
+    {
+    }
     std::shared_ptr<detail::task_shared_state_t<T>> _state;
 };
 
 namespace detail
 {
+// The source wrapper has no independent lifetime data. Its task handles own
+// this same state through shared_from_this, including after the source is gone.
+template <typename T> std::shared_ptr<task_completion_source_t<T>> make_task_completion_source ()
+{
+    struct shared_source_t final : application_task_shared_state_t<T>
+    {
+        shared_source_t () : source (this) {}
+        task_completion_source_t<T> source;
+    };
+    auto storage = std::make_shared<shared_source_t> ();
+    return std::shared_ptr<task_completion_source_t<T>> (storage, &storage->source);
+}
+
 
 struct task_result_access_t;
 
@@ -1279,7 +1356,7 @@ template <> class task_t<void>
 
 template <typename T> task_t<T> task_completion_source_t<T>::task () const
 {
-    return task_t<T> (_state);
+    return task_t<T> (_state->shared_from_this ());
 }
 
 namespace detail
@@ -1298,9 +1375,9 @@ struct task_result_access_t
 template <typename T, typename TCallback>
 void observe_task_completion (task_t<T> &task, TCallback &&callback)
 {
-    task.shared_state ()->on_completed (
-      std::function<void (const result_t<T> &)> (std::forward<TCallback> (callback)),
-      task._resume_scheduler ? *task._resume_scheduler : task_scheduler_t{});
+    task.shared_state ()->on_completed (std::forward<TCallback> (callback),
+                                        task._resume_scheduler ? *task._resume_scheduler
+                                                               : task_scheduler_t{});
 }
 
 template <typename T, typename TCallback>
@@ -1314,8 +1391,7 @@ void observe_task_terminal (task_t<T> &task, TCallback &&callback)
             invoke (*ready);
         }();
     } else {
-        task._state.shared_state ()->on_terminal (
-          std::function<void (const result_t<T> &)> (std::forward<TCallback> (callback)));
+        task._state.shared_state ()->on_terminal (std::forward<TCallback> (callback));
     }
 }
 

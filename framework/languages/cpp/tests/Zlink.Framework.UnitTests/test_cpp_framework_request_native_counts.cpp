@@ -199,6 +199,103 @@ TEST (RequestNativeCounts, TypedChannelReplyBorrowsItsNativeBody)
     EXPECT_EQ (calls[3], 0u);
     EXPECT_EQ (calls[4], 0u);
 }
+TEST (RequestNativeCounts, TemporaryNodeTargetSurvivesPublicFailureUntilPhysicalDecode)
+{
+    using parts_t = fw::runtime::messaging::message_parts_t;
+    using transport_t = fw::result_t<parts_t>;
+    fw::serializer_registry_t serializers;
+    int decoded = 0;
+    serializers.add<count_payload_t> (
+      [] (const count_payload_t &value) {
+          return fw::encoded_payload_t::from_string (std::to_string (value.value));
+      },
+      [&] (const fw::encoded_payload_t &value) {
+          ++decoded;
+          return count_payload_t{std::stoi (value.to_string ())};
+      },
+      "x/count");
+    auto builder = fw::test::runtime_failure_builder ();
+    auto runtime = fw::detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_serializers (serializers);
+    const zlink::routing_id_t *borrowed_target = nullptr;
+    std::optional<fw::detail::request_receiver_t<transport_t>> selected;
+    runtime.bind_mesh_node_transport ("m", {}, [&] (const auto &target, auto, auto, auto receiver) {
+        borrowed_target = &target;
+        selected.emplace (std::move (receiver));
+    });
+    auto client = builder.route_client (serializers);
+    auto pending =
+      client.request_to_node ("m", zlink::routing_id_t::from ("temporary-peer"), count_payload_t{})
+        .async<count_payload_t> ();
+    ASSERT_NE (borrowed_target, nullptr);
+    EXPECT_EQ (borrowed_target->to_string (), "temporary-peer");
+    const auto failure = fw::result_t<void>::failure (fw::framework_error_kind_t::unavailable,
+                                                      "admission failed before native reply");
+    selected->admitted->complete (failure);
+    ASSERT_TRUE (pending.await_ready ());
+    EXPECT_EQ (pending.result ().exception (), failure.exception ());
+    EXPECT_EQ (borrowed_target->to_string (), "temporary-peer");
+    auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+    EXPECT_FALSE (physical.await_ready ());
+    fw::runtime::messaging::client_call_codec_t codec;
+    auto header =
+      codec.create_envelope (fw::runtime::messaging::message_kind_t::response, "m", "CountPayload");
+    auto parts = codec.encode_payload_parts (
+      std::move (header),
+      serializers.get<count_payload_t> ().serialize_with_content_type (count_payload_t{42}));
+    selected->complete (
+      fw::result_t<transport_t>::success (transport_t::success (std::move (parts))));
+    EXPECT_EQ (physical.result ().value ().value, 42);
+    EXPECT_EQ (pending.result ().exception (), failure.exception ());
+    EXPECT_EQ (decoded, 1);
+    EXPECT_EQ (borrowed_target->to_string (), "temporary-peer");
+    selected.reset ();
+}
+
+TEST (RequestNativeCounts, NodeEncoderKeepsSelectedMediaTypeAcrossReentrantRegistration)
+{
+    using parts_t = fw::runtime::messaging::message_parts_t;
+    using transport_t = fw::result_t<parts_t>;
+    fw::serializer_registry_t serializers;
+    int original_calls = 0;
+    int replacement_calls = 0;
+    serializers.add<count_payload_t> (
+      [&] (const count_payload_t &value) {
+          ++original_calls;
+          serializers.add<count_payload_t> (
+            [&] (const count_payload_t &) {
+                ++replacement_calls;
+                return fw::encoded_payload_t::from_string ("replacement");
+            },
+            [] (const fw::encoded_payload_t &) { return count_payload_t{}; },
+            "application/x-replacement");
+          return fw::encoded_payload_t::from_string (std::to_string (value.value));
+      },
+      [] (const fw::encoded_payload_t &) { return count_payload_t{}; }, "application/x-original");
+    auto builder = fw::test::runtime_failure_builder ();
+    auto runtime = fw::detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_serializers (serializers);
+    std::string observed_type;
+    runtime.bind_mesh_node_transport ("m", {}, [&] (const auto &, auto parts, auto, auto receiver) {
+        fw::runtime::messaging::envelope_codec_t codec;
+        observed_type = codec.decode_header (parts, false).value ().content_type;
+        const auto failure = fw::result_t<void>::failure (fw::framework_error_kind_t::unavailable,
+                                                          "finish media type test");
+        receiver.admitted->complete (failure);
+        receiver.complete (
+          fw::detail::result_access_t::failure<transport_t> (failure.exception ()));
+    });
+    auto client = builder.route_client (serializers);
+    auto pending =
+      client.request_to_node ("m", zlink::routing_id_t::from ("peer"), count_payload_t{})
+        .async<count_payload_t> ();
+    EXPECT_EQ (pending.result ().error_kind (), fw::framework_error_kind_t::unavailable);
+    EXPECT_EQ (observed_type, "application/x-original");
+    EXPECT_EQ (serializers.get<count_payload_t> ().content_type (), "application/x-replacement");
+    EXPECT_EQ (original_calls, 1);
+    EXPECT_EQ (replacement_calls, 0);
+}
+
 TEST (RequestNativeCounts, TypedEnvelopeReplyBorrowsItsBody)
 {
     fw::serializer_registry_t serializers;

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <cstdlib>
@@ -103,7 +104,7 @@ void verify_restart (bool sealed, bool draining)
         source.publish_draining ().result ().value ();
         until (
           [&] {
-              return target->topology ().peer ({'a'})->descriptor.state
+              return target->topology ().peer (std::array<std::uint8_t, 1>{'a'})->descriptor.state
                      == mesh::service_node_state_t::draining;
           },
           [&] { pump (*target); });
@@ -146,7 +147,8 @@ void verify_restart (bool sealed, bool draining)
               pump (source);
               pump (*target);
           });
-        assert (target->topology ().peer ({'a'})->descriptor.state == expected_state);
+        assert (target->topology ().peer (std::array<std::uint8_t, 1>{'a'})->descriptor.state
+                == expected_state);
         assert (source.topology ().local_descriptor ().state == expected_state);
     }
     const auto close_started = std::chrono::steady_clock::now ();
@@ -167,7 +169,7 @@ void verify_inbound_hello (bool sealed)
     std::vector<bool> target_readiness;
     target.topology ().set_change_handler ([&] {
         ++target_changes;
-        const auto peer = target.topology ().peer ({'g'});
+        const auto peer = target.topology ().peer (std::array<std::uint8_t, 1>{'g'});
         assert (peer);
         target_readiness.push_back (peer->ready);
         // HELLO records admission before its ADMIT is submitted; remote ADMIT
@@ -178,8 +180,8 @@ void verify_inbound_hello (bool sealed)
         connect (source, target);
         assert (target_changes == 2);
         assert ((target_readiness == std::vector<bool>{false, true}));
-        assert (target.topology ().peer ({'g'}));
-        assert (source.topology ().peer ({'h'}));
+        assert (target.topology ().peer (std::array<std::uint8_t, 1>{'g'}));
+        assert (source.topology ().peer (std::array<std::uint8_t, 1>{'h'}));
     } else {
         assert (source.connect_peer (target.endpoint (), target.topology ().local_descriptor ()));
         bool hello_received = false;
@@ -220,26 +222,26 @@ void verify_admitted_peer_update_after_seal ()
     source.start ();
     target.start ();
     connect (source, target);
-    const auto admitted = source.topology ().peer ({'j'});
+    const auto admitted = source.topology ().peer (std::array<std::uint8_t, 1>{'j'});
     seal->store (true, std::memory_order_release);
     source.publish_draining ().result ().value ();
     until (
       [&] {
-          return target.topology ().peer ({'i'})->descriptor
+          return target.topology ().peer (std::array<std::uint8_t, 1>{'i'})->descriptor
                  == source.topology ().local_descriptor ();
       },
       [&] { pump (target); });
-    assert (target.topology ().peer ({'i'})->descriptor.state
+    assert (target.topology ().peer (std::array<std::uint8_t, 1>{'i'})->descriptor.state
             == mesh::service_node_state_t::draining);
 
     target.publish_draining ().result ().value ();
     until (
       [&] {
-          return source.topology ().peer ({'j'})->descriptor
+          return source.topology ().peer (std::array<std::uint8_t, 1>{'j'})->descriptor
                  == target.topology ().local_descriptor ();
       },
       [&] { pump (source); });
-    const auto updated = source.topology ().peer ({'j'});
+    const auto updated = source.topology ().peer (std::array<std::uint8_t, 1>{'j'});
     assert (updated->descriptor.state == mesh::service_node_state_t::draining);
     assert (updated->descriptor.descriptor_revision > admitted->descriptor.descriptor_revision);
     assert (updated->connection_id == admitted->connection_id);
@@ -285,14 +287,14 @@ void verify_crossed_admission_diagnostics ()
     std::vector<bool> target_readiness;
     source.topology ().set_change_handler ([&] {
         ++source_changes;
-        const auto peer = source.topology ().peer ({'f'});
+        const auto peer = source.topology ().peer (std::array<std::uint8_t, 1>{'f'});
         assert (peer);
         source_readiness.push_back (peer->ready);
         assert (source_changes == (peer->ready ? 2 : 1));
     });
     target.topology ().set_change_handler ([&] {
         ++target_changes;
-        const auto peer = target.topology ().peer ({'e'});
+        const auto peer = target.topology ().peer (std::array<std::uint8_t, 1>{'e'});
         assert (peer);
         target_readiness.push_back (peer->ready);
         assert (target_changes == (peer->ready ? 2 : 1));
@@ -324,10 +326,11 @@ void verify_crossed_admission_diagnostics ()
         }
         assert (found);
     }
-    const auto before = source.topology ().peer ({'f'});
+    const auto before = source.topology ().peer (std::array<std::uint8_t, 1>{'f'});
     assert (source.topology ().admit (before->descriptor, before->connection_id)
             == mesh::peer_admission_result_t::duplicate_connection);
-    assert (source.topology ().peer ({'f'})->admission_epoch == before->admission_epoch);
+    assert (source.topology ().peer (std::array<std::uint8_t, 1>{'f'})->admission_epoch
+            == before->admission_epoch);
 }
 } // namespace
 

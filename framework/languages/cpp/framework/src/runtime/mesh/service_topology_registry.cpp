@@ -130,12 +130,6 @@ service_topology_registry_t::service_topology_registry_t (
           "zlink.mesh_node.channel.selection_failures", "", "{failure}");
 }
 
-bool service_topology_registry_t::byte_vector_less_t::operator() (
-  const std::vector<std::uint8_t> &left, const std::vector<std::uint8_t> &right) const noexcept
-{
-    return std::lexicographical_compare (left.begin (), left.end (), right.begin (), right.end ());
-}
-
 bool service_topology_registry_t::valid_descriptor (const service_node_descriptor_t &descriptor)
 {
     return !descriptor.mesh_name.empty () && !descriptor.node_routing_id.empty ()
@@ -518,7 +512,7 @@ service_topology_registry_t::not_required_peers_on_lane () const
 }
 
 std::shared_ptr<const admitted_peer_t>
-service_topology_registry_t::peer (const std::vector<std::uint8_t> &node_routing_id) const
+service_topology_registry_t::peer (std::span<const std::uint8_t> node_routing_id) const
 {
     auto topology = std::atomic_load_explicit (_topology.get (), std::memory_order_acquire);
     const auto found = topology->peers.find (node_routing_id);
