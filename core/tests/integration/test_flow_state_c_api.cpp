@@ -10,6 +10,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <sstream>
 #include <thread>
 
 SETUP_TEARDOWN_TESTCONTEXT
@@ -660,6 +661,7 @@ enum concurrent_control_t
 };
 
 const int k_concurrent_control_ms = 1500;
+const int k_concurrent_control_max_ms = 10000;
 
 //  Runs on a worker thread, so it reports instead of asserting.
 bool apply_concurrent_control (void *socket_,
@@ -686,12 +688,17 @@ void run_concurrent_send_and_control (void *sender_,
                                       concurrent_control_t control_)
 {
     std::atomic<bool> stop (false);
+    std::atomic<unsigned> writers_ready (0);
     std::atomic<uint64_t> sent (0);
     std::atomic<uint64_t> controls (0);
     std::atomic<uint64_t> received (0);
     std::atomic<uint64_t> control_failures (0);
+    uint64_t submit_counts[ZLINK_SUBMIT_NOT_ADMITTED + 1] = {};
 
     std::thread send_thread ([&] {
+        writers_ready.fetch_add (1, std::memory_order_release);
+        while (writers_ready.load (std::memory_order_acquire) != 2)
+            std::this_thread::yield ();
         while (!stop.load (std::memory_order_acquire)) {
             zlink_msg_t part;
             if (zlink_msg_init_size (&part, 1024) != 0)
@@ -703,13 +710,28 @@ void run_concurrent_send_and_control (void *sender_,
                                   ZLINK_SEND_FLAGS_DONTWAIT, NULL, NULL)
                 : zlink_send (sender_, &part, 1, ZLINK_SEND_FLAGS_DONTWAIT,
                               NULL, NULL);
+            ++submit_counts[result];
             if (result == ZLINK_SUBMIT_OK)
                 sent.fetch_add (1, std::memory_order_relaxed);
         }
     });
     std::thread control_thread ([&] {
+        writers_ready.fetch_add (1, std::memory_order_release);
+        while (writers_ready.load (std::memory_order_acquire) != 2)
+            std::this_thread::yield ();
         bool toggle = false;
+        uint64_t last_controlled_sent = UINT64_MAX;
         while (!stop.load (std::memory_order_acquire)) {
+            //  Keep control traffic bounded by accepted DATA. The next send
+            //  may overlap this control call.
+            //  Unbounded controls bypass HWM and can keep DATA backpressured
+            //  for the entire window by filling their shared byte ledger.
+            const uint64_t current_sent = sent.load (std::memory_order_relaxed);
+            if (current_sent == last_controlled_sent) {
+                std::this_thread::yield ();
+                continue;
+            }
+            last_controlled_sent = current_sent;
             toggle = !toggle;
             if (!apply_concurrent_control (sender_, control_, toggle))
                 control_failures.fetch_add (1, std::memory_order_relaxed);
@@ -737,19 +759,45 @@ void run_concurrent_send_and_control (void *sender_,
         }
     });
 
+    //  Measure the overlap only after both writers have reached their loops.
+    while (writers_ready.load (std::memory_order_acquire) != 2)
+        std::this_thread::yield ();
+    const std::chrono::steady_clock::time_point deadline =
+      deadline_in_ms (k_concurrent_control_max_ms);
     std::this_thread::sleep_for (
       std::chrono::milliseconds (k_concurrent_control_ms));
+    //  Controls share the socket turn and outbound byte ledger with DATA.
+    //  A fixed elapsed window need not contain a successful DONTWAIT send.
+    //  Keep both writers running until progress is observed, within 10 s.
+    while (!deadline_expired (deadline)
+           && (sent.load () == 0 || controls.load () == 0 || received.load () == 0))
+        std::this_thread::yield ();
+    const uint64_t window_sent = sent.load ();
+    const uint64_t window_controls = controls.load ();
+    const uint64_t window_received = received.load ();
     stop.store (true, std::memory_order_release);
     send_thread.join ();
     control_thread.join ();
     drain_thread.join ();
 
+    uint64_t attempts = 0;
+    for (size_t i = 0; i <= ZLINK_SUBMIT_NOT_ADMITTED; ++i)
+        attempts += submit_counts[i];
+    std::ostringstream diagnostics;
+    diagnostics << "attempts=" << attempts << " window_sent=" << window_sent
+                << " window_controls=" << window_controls << " window_received=" << window_received
+                << " control_failures=" << control_failures.load ()
+                << "; submit_counts (OK=0, BACKPRESSURED=1):";
+    for (size_t i = 0; i <= ZLINK_SUBMIT_NOT_ADMITTED; ++i)
+        diagnostics << ' ' << i << '=' << submit_counts[i];
+    const std::string failure_message = diagnostics.str ();
+
     //  The race needs both writers active; a run that never overlapped them
     //  proves nothing.
-    TEST_ASSERT_EQUAL_UINT64 (0, control_failures.load ());
-    TEST_ASSERT_TRUE (sent.load () > 0);
-    TEST_ASSERT_TRUE (controls.load () > 0);
-    TEST_ASSERT_TRUE (received.load () > 0);
+    TEST_ASSERT_EQUAL_UINT64_MESSAGE (0, control_failures.load (), failure_message.c_str ());
+    TEST_ASSERT_TRUE_MESSAGE (window_sent > 0, failure_message.c_str ());
+    TEST_ASSERT_TRUE_MESSAGE (window_controls > 0, failure_message.c_str ());
+    TEST_ASSERT_TRUE_MESSAGE (window_received > 0, failure_message.c_str ());
 }
 
 struct tcp_dealer_router_t

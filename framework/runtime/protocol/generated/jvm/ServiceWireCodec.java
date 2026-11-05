@@ -202,7 +202,7 @@ final class ServiceWireCodec {
   record RequestSpecificTailActorLookupOk(ActorRef actor, Text8 spotId, NonzeroU64 spotGeneration, NonzeroU64 membershipEpoch, NonzeroU64 authorityOwnerGeneration) implements RequestSpecificTail {}
   record RequestSpecificTailActorJoinOk(ActorJoinReplyTail join) implements RequestSpecificTail {}
   record RequestSpecificTailStreamBindOk(NonzeroU64 bindingGeneration, NonzeroU64 authorityOwnerGeneration) implements RequestSpecificTail {}
-  record RequestSpecificTailStreamBindRejected(Text16 rejectionMessage) implements RequestSpecificTail {}
+  record RequestSpecificTailStreamBindRejected(NonemptyText16 rejectionMessage) implements RequestSpecificTail {}
   record RequestSpecificTailUserSpotCreateOk(UserSpotCreateResult createResult, SpotRef spot) implements RequestSpecificTail {}
   record RequestSpecificTailUserSpotCloseOk(Bool8 closed) implements RequestSpecificTail {}
   record RequestSpecificTailActorCreateOk(ActorCreateTerminal creation) implements RequestSpecificTail {}
@@ -1891,7 +1891,7 @@ final class ServiceWireCodec {
        return new RequestSpecificTailStreamBindOk(bindingGeneration, authorityOwnerGeneration);
     }
     else if(originalOperationKind==MeshOperationKind.STREAM_BIND && terminalResult==RequestTerminalResult.REJECTED) {
-      Text16 rejectionMessage = decodeText16(selected, c, flags);
+      NonemptyText16 rejectionMessage = decodeNonemptyText16(selected, c, flags);
        return new RequestSpecificTailStreamBindRejected(rejectionMessage);
     }
     else if(originalOperationKind==MeshOperationKind.USER_SPOT_CREATE && terminalResult==RequestTerminalResult.OK) {
@@ -1940,7 +1940,7 @@ final class ServiceWireCodec {
     if(value instanceof RequestSpecificTailStreamBindRejected item){
       require(external0==MeshOperationKind.STREAM_BIND,"request-specific-tail discriminator agreement");
       require(external1==RequestTerminalResult.REJECTED,"request-specific-tail discriminator agreement");
-      encodeText16(item.rejectionMessage(), w, c, flags);
+      encodeNonemptyText16(item.rejectionMessage(), w, c, flags);
       return;
     }
     if(value instanceof RequestSpecificTailUserSpotCreateOk item){
