@@ -15,6 +15,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   if(UNIX AND NOT APPLE AND NOT ZLINK_FRAMEWORK_CPP_SHARED
       AND EXISTS "${CMAKE_CURRENT_LIST_DIR}/cmake/hide-executable-symbols.map")
     add_link_options(
+      $<$<LINK_LANGUAGE:CXX>:-Wl,--export-dynamic>
       $<$<LINK_LANGUAGE:CXX>:-Wl,--version-script=${CMAKE_CURRENT_LIST_DIR}/cmake/hide-executable-symbols.map>)
   endif()
 endif()
@@ -1008,6 +1009,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS OR ZLINK_FRAMEWORK_CPP_BUILD_TESTS
 endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
+  add_executable(test_cpp_framework_allocation_counter
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_allocation_counter.cpp
+    tests/support/allocation_counter.cpp)
+  target_compile_features(test_cpp_framework_allocation_counter PRIVATE cxx_std_20)
+  zlink_framework_cpp_add_test(NAME test_cpp_framework_allocation_counter
+    COMMAND test_cpp_framework_allocation_counter
+    LABELS "framework-unit;framework-foundation" TIMEOUT 30)
+
   get_target_property(_typed_json_include nlohmann_json::nlohmann_json INTERFACE_INCLUDE_DIRECTORIES)
   foreach(_case RANGE 0 11)
     add_test(NAME test_cpp_framework_typed_json_compile_fail_${_case}
