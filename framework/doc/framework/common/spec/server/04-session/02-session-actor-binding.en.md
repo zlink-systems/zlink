@@ -549,7 +549,8 @@ source fence together with the previous session owner's Session owner
 identity (§4), session RID, and retired binding generation. The sending node must match the record's Actor-authority
 target. The receiving node runs the session's duplicate-Actor-connection
 callback only when every previous session-owner value matches the current
-replacement target exactly. The Actor-authority source fence isn't used by
+replacement target exactly (including the acceptance in §5 of the immediately previous lease
+generation within the same lifecycle). The Actor-authority source fence isn't used by
 the receiving node to look up a local Actor.
 
 - **A connection relationship is identified not by a single value but by a
@@ -851,7 +852,8 @@ that Session owner owns.
    narrow first by SessionRid or binding generation.
    - If there is no current binding, it is **exact binding absent**.
    - If a current binding exists and its Session identity/SessionRid, binding generation, and
-     `ObjectGeneration` all equal command 42's, it is **seal installed**. If that binding already
+     `ObjectGeneration` all equal command 42's (including the acceptance in §5 of the immediately
+     previous lease generation within the same lifecycle), it is **seal installed**. If that binding already
      holds a seal of a different relocation identity, it is a mismatch.
    - If a current binding exists but any of those values differs, it is a **mismatch**. If command
      42's `expectedOwnerLeaseGeneration` is lower than the `OwnerLeaseGeneration` kept in the current
