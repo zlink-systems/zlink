@@ -143,7 +143,8 @@ lease generation은 Session owner host의 `(OwnerId, LeaseGeneration)`([Location
 RID·lifecycle generation이 일치하고 [Location runtime §4.1](../05-location-relocation/01-location-runtime.ko.md#41-대상-descriptor의-owner-lease-검증)의
 owner lease 검증을 통과한 descriptor를, 같은 node이면 자기 descriptor를 사용한다. 그런 descriptor가 없으면 그 operation을
 `Unavailable`로 거부한다. 이 identity를 담는 command 42·51·54는
-저장한 값을 그대로 보내고, 받는 Session owner는 자기 현재 값과 정확히 비교한다. 아래 binding identity는 이 중 Node RID와
+저장한 값을 그대로 보내고, 받는 Session owner는 자기 현재 값과 정확히 비교한다
+(같은 lifecycle의 바로 이전 generation 수락은 [§5](#5-bind와-relay)를 따른다). 아래 binding identity는 이 중 Node RID와
 lifecycle generation만 사용하며, owner ID와 owner lease generation은 command 42·51·54의 fence 값이다.
 
 Binding identity는 session owner Node RID, 그 node의 lifecycle generation과
@@ -173,14 +174,16 @@ Session owner 자신의 token이 바뀐 경우 Actor owner가 보관한 Session 
 owner lease exact read 경로로 갱신한다. 이쪽은 Session owner의 같은 RID·lifecycle을 검증한다.
 
 변경된 token을 관찰한 뒤 Store 확인 전에는 이전 fence로 새 control을 제출하지 않는다.
-갱신 후 relay와 command 42·51·54를 제출·수락하며, 수신 control의 token 차이만으로 사본을
-바꾸지 않는다. Session owner는 command 42·51·54에서 사본과 다른 Actor owner lease generation을
-받으면 거부하기 전에 위 exact read 확인을 같은 조건으로 한 번 수행한다. 조건을 만족하고 수신
-command의 token이 확인한 현재 token과 일치하면 사본을 갱신하고 그 command를 처리한다.
-만족하지 않으면 기존 거부 결과로 끝낸다. 수신 control은 확인의 계기이며 사본 변경의 근거는
-Store read다. Binding generation·token, Actor incarnation과 Session sequence는 유지한다.
-이전 lease token의 늦은 control은 기존 정확 일치 검사와 결과 분류로 거부하며 재전송하지 않는다.
-이 갱신은 기존 binding fence 관리가 소유한다.
+갱신 후 relay와 command 42·51·54를 제출·수락한다. 이 command의 Session fence는
+Session owner 자신의 owner ID·lease generation을 담는다. Session owner는 자기 현재 lease가
+유효하고 같은 RID·node lifecycle·owner ID·SessionRid·binding generation·ActorRef이면,
+fence의 lease generation이 같은 lifecycle에서 자기 바로 이전 `LeaseGeneration`이어도 같은
+binding으로 수락하고 처리하며 사본을 현재 generation으로 갱신한다. 이 판정은 자기 lifecycle
+안의 값 비교이며 Store를 읽지 않는다. 다른 lifecycle·owner·binding 또는 그 밖의 lease generation은
+기존 정확 일치 검사와 결과 분류로 거부한다. Command 42·51에 담긴 Actor owner 값의 판정은
+[§8.3](#83-이미-정리된-binding에-대한-seal)을 그대로 따른다.
+Binding generation·token, Actor incarnation과 Session sequence는 유지한다. 새 wire field나
+재전송은 추가하지 않는다. 이 갱신은 기존 binding fence 관리가 소유한다.
 
 STREAM packet은 먼저 session의 typed handler registry로 dispatch된다. Framework는 packet의
 `actor_slot`([Stream Connector 공통 스펙 §4.2](../../stream-connector/32-stream-connector.ko.md#42-header))을
@@ -371,7 +374,8 @@ binding을 해제하지만 Actor를 destroy하거나 Spot membership을 바꾸�
 binding이 가리키는 Session owner identity, SessionRid, binding generation과
 ActorId·ObjectGeneration을 보존해 `boundSessionClose(54)`에 담아 Session owner에 보낸다. Session owner가 같은
 process에 있어도 같은 판정을 거친다. Session owner의 binding aggregate는 §2의 binding 검증을 한 번 수행하고, 요청의
-전체 identity가 current binding과 일치할 때만 그 session의 physical connection close를 시작한다. 불일치는 `Unavailable`로
+전체 identity가 §5의 같은 lifecycle 내 바로 이전 lease generation 수락 규칙을 포함해 current binding과
+일치할 때만 그 session의 physical connection close를 시작한다. 불일치는 `Unavailable`로
 끝내며 다른 binding이나 connection으로 대상을 바꾸지 않는다. Actor route의 발신 권한은 기존 transport·authority 경계가
 검증하며, Session owner는 Actor authority를 다시 조회하지 않는다. Relocation seal과 route 적용은 유효한 current binding의
 close를 지연시키지 않는다.

@@ -807,27 +807,35 @@ Downgrade나 이전 버전 host 추가 전에는 보존을 끄고 기존 `T` 보
   `ObjectGeneration`·`AuthorityOwnerGeneration`·owner token·node lifecycle 및 미폐기 상태를 확인한다.
   기존 token이 아직 유효하면 같은 token의 renew로 admission 기한을 갱신하고 token 교체 CAS 없이
   기존 gate를 다시 연다. 정상 만료된 경우에만 새 claim으로 새 `LeaseGeneration`을 발급하고
-  객체별 token 교체 CAS를 수행한다. 새 claim이 성공하면 객체별 교체 CAS 제출과 gate 재개 전에
-  새 `LeaseGeneration`을 기록한 descriptor를 §5의 게시 규칙(`Renew` intent)으로 다시 게시한다.
-  게시 결과가 불확정이면 §10으로 재확인하되 교체 CAS와 gate 재개는 게시 확인을 기다리지 않는다.
+  객체별 token 교체 CAS를 수행한다. 새 claim이 성공하면 §5의 첫 갱신과 같이 admission 기한을
+  다시 계산하고, 객체별 교체 CAS 제출 전에 새 `LeaseGeneration`을 기록한 descriptor를 §5의
+  게시 규칙(`Renew` intent)으로 다시 게시한다. 게시가 Store에 반영됐다는 확인은 기존 비동기
+  continuation으로 받는다. 게시 결과가 불확정이면 §10으로 재확인한다. 교체 CAS는 게시 확인을
+  기다리지 않지만 gate 재개에는 그 확인이 필요하다. 재게시가 확정 거절되면 실행권 상실로
+  판정하고 복구하지 않으며 기존 폐기·정리 규칙을 적용한다.
   만료 token 갱신은 거절한다.
   폐기되지 않은 객체에 한하여 같은 incarnation의 자기 옛 token과 보존 시점의 `StoreVersion`·
   `ObjectGeneration`·`AuthorityOwnerGeneration`이 Store에 그대로 있을 때만 현재 유효한 새 token으로
   교체한다. Owner identity와 node lifecycle은 유지한다. 이 전이는 §6.1의 `Preserve`이며 다른
   generation과 수용 공간을 바꾸지 않는다. 교체 CAS는 그 요청 시작 시각에 renew timeout을 더한
-  시각이 원래 보존 기한 `T` 이하일 때만 제출한다. `T` 전에 성공을 확인한 객체만 기존 gate를
-  다시 연다. `T`에 도달할 때까지 성공을 확인하지 못했거나 이미 폐기한 객체는 버린다.
+  시각이 원래 보존 기한 `T` 이하일 때만 제출한다. `T` 전에 교체 CAS 성공과 새 descriptor의
+  Store 반영을 모두 확인한 객체만 기존 gate를 다시 연다. 원래 `T` 안에 두 확인을 모두 받지
+  못했거나 이미 폐기한 객체는 버리고 아래 폐기 후 authority 정리 규칙을 따른다.
   `T` 이상 시각의 성공 응답이나 §10 재확인으로 교체 성공을 알게 되면 아래 폐기 후 authority
   정리 규칙을 따른다.
   `Missing`이나 다른 incarnation·owner record를 local memory로 복원하지 않는다. 성공 객체의
   pending message·timer·binding·지연 completion은 재생성하거나 재전송하지 않는다.
-  늦은 복구에서는 새 claim과 객체별 CAS를 원래 `T` 안에 끝낼 수 있는 객체만 보존된다.
+  늦은 복구에서는 새 claim·descriptor 게시 확인·객체별 CAS를 원래 `T` 안에 끝낼 수 있는 객체만 보존된다.
   Binding identity와 Session sequence는 유지하되 lease fence 사본은
   [Session binding §5](../04-session/02-session-actor-binding.ko.md#5-bind와-relay)의 갱신 규칙을 따른다.
-- `T`에 폐기한 각 객체는 Store 복구 뒤 authority 정리까지 수행한다. Authority가 같은 자기
+- 폐기한 각 객체는 Store 복구 뒤 authority 정리까지 수행한다. Authority가 같은 자기
   owner·node lifecycle·`ObjectGeneration`·`AuthorityOwnerGeneration`이고 현재 자기의 유효 lease
   token을 가리키면, token 유지·교체와 관계없이 현재 읽은 `StoreVersion`을 조건으로 §6.1의
-  `Delete`를 수행한다. 확인하지 못한 renew가 나중에 확인된 경우도 포함한다. Delete 응답이
+  `Delete`를 수행한다. User Spot authority의 Delete는 §6.1의 해제와 같이 그 incarnation의
+  membership을 같은 batch에서 지우며, member Actor authority의 Delete는 자기 membership row도
+  함께 제거한다. Provider의 batch 상한을 넘으면 일부만 지우지 않고 아무것도 바꾸지 않은 채
+  기존 renew interval의 다음 정리에서 다시 시도한다. 확인하지 못한 renew가 나중에 확인된 경우도
+  포함한다. Delete 응답이
   불확정이면 §10으로 재확인하며, 자기 유효 token의 해당 record가 남아 있는 동안 기존 renew
   interval마다 재확인 후 필요한 Delete를 다시 시도한다. 삭제 확인 또는 다른 owner·incarnation으로의
   변경 확인으로 정리를 끝낸다. 해당 record의 token이 만료·교체되어 무효가 되면 §6.1의 일반
@@ -1686,7 +1694,10 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   기본 `false`이며 `T`는 독립 설정이 아니다. Domain 전체의 동일 margin은 운영 요구로서
   Framework 검증 항목이 아니다. 동일 margin에서 host별 TTL이 달라도 해제는 옛 owner의 `T`보다 이르지 않다.
 - 만료 전 복구는 검증·renew 뒤 같은 token으로 gate를 다시 열고, 정상 만료 뒤에만 교체 CAS를 한다.
-  교체 CAS의 요청 시작 + renew timeout은 원래 `T` 이하여야 한다. `T` 이상 시각에 성공을 확인하면
+  교체 CAS의 요청 시작 + renew timeout은 원래 `T` 이하여야 한다. 새 claim은 admission 기한을
+  다시 계산하고, gate 재개는 교체 CAS 성공과 새 descriptor의 Store 반영을 원래 `T` 전에 모두
+  확인해야 한다. 게시 지연·불확정·확정 거절에서도 기존 폐기·정리 규칙을 검사한다.
+  `T` 이상 시각에 성공을 확인하면
   §5.1의 폐기 후 authority 정리 규칙을 따른다. 동일 token renew 적용 뒤 응답·재확인이 실패하고
   `T`에 폐기한 다음 lease 만료 전에 복구하여 정상 heartbeat를 계속하는 경우도, 해당 authority를
   정리하여 새 incarnation을 만들 수 있어야 한다. Delete 응답 불확정 시 §10의 재확인과 정리 종료
@@ -1698,10 +1709,12 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
 - 정상 record의 과거 generation과 병렬 발급 응답 역전은 후퇴가 아니다. 이전 counter 현재값
   관측 뒤에 수행한 더 작은 현재값 관측만 후퇴로 판정한다.
 - Lease 교체 뒤 binding fence 갱신은 identity·sequence를 유지하고 relay·seal·replacement·close를
-  허용하며, 옛 token의 지연 control은 거부한다. 기존 descriptor polling과 Store exact read가
-  Session owner의 fence 갱신을 진행하며 새 wire나 재전송을 추가하지 않는다. 새 claim 뒤
-  descriptor 재게시는 객체별 교체 CAS 제출보다 앞선다. Polling으로 사본을 갱신하기 전에 도착한
-  command 42·51·54도 같은 Store 확인 조건을 만족하면 사본을 갱신하여 처리한다.
+  허용한다. 기존 descriptor polling과 Store exact read가 fence 사본 갱신을 진행하며 새 wire나
+  재전송을 추가하지 않는다. 새 claim 뒤 descriptor 재게시는 객체별 교체 CAS 제출보다 앞선다.
+  Session owner 자신의 lease 교체 직후 바로 이전 generation을 실은 command 42·51·54는
+  Session binding §5의 같은 binding 조건에서 Store read 없이 수락하고 사본을 갱신한다.
+  다른 lifecycle·binding·그 밖의 generation은 거부한다. Command 42·51의 Actor owner 값은
+  Session binding §8.3의 기존 판정을 따른다.
   반복 생성 호출은 같은 token의 최초 무효 관찰 시각을 유지한다.
 - 최초 owner lease claim이 renew timeout까지 lease를 확인하지 못하면 startup은 성공하고 위
   네 대상이 막힌다.

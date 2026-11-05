@@ -906,30 +906,40 @@ retention does not shorten §6.1's release wait.
   that the object has not been discarded. If the existing token is still valid, renew that
   same token to refresh the admission deadline and reopen the existing gate without a
   token-replacement CAS. Only normal expiry requires a new claim issuing a new `LeaseGeneration`
-  and per-object token-replacement CAS. After a successful new claim, republish the descriptor
-  with the new `LeaseGeneration` under §5's publication rules (`Renew` intent) before submitting
-  per-object replacement CAS or reopening gates. Recheck an uncertain publication result under
-  §10, but do not wait for publication confirmation before replacement CAS or gate reopening.
+  and per-object token-replacement CAS. After a successful new claim, recompute the admission
+  deadline as for the first renewal under §5, then republish the descriptor with the new
+  `LeaseGeneration` under §5's publication rules (`Renew` intent) before submitting per-object
+  replacement CAS. Receive confirmation that publication has taken effect in the Store through
+  the existing asynchronous continuation. Recheck an uncertain publication result under §10.
+  Replacement CAS does not wait for publication confirmation, but gate reopening requires it.
+  A definite republication rejection means loss of execution rights: do not recover, and apply
+  the existing discard and cleanup rules.
   Reject renewal of expired tokens.
   Only for objects not discarded, replace with the currently valid new token when the same
   incarnation's old self-owned token and retained `StoreVersion`, `ObjectGeneration`, and
   `AuthorityOwnerGeneration` remain unchanged in the Store. Keep owner identity and node lifecycle.
   This is §6.1's `Preserve`, without changing other generations or capacity. Submit replacement
   CAS only if its request-start time plus renew timeout is at or before the original retention
-  deadline `T`. Reopen the existing gate only for objects whose success is confirmed before `T`.
-  Discard objects whose success is not confirmed before `T`, or which were already discarded. If
+  deadline `T`. Reopen the existing gate only for objects whose replacement CAS success and
+  new descriptor publication in the Store are both confirmed before `T`. Discard objects lacking
+  either confirmation within the original `T`, or already discarded, and apply the post-discard
+  authority cleanup rule below. If
   a response at or after `T` or §10's recheck reveals replacement success, follow the post-discard
   authority cleanup rule below. Never reconstruct `Missing`
   or another incarnation's or owner's records from local memory. Do not recreate or retransmit
   successful objects' pending messages, timers, bindings, or delayed completions. Keep binding
-  identity and Session sequence. Late recovery retains only objects whose new claim and
-  per-object CAS can finish within the original `T`. Refresh lease-fence copies under
+  identity and Session sequence. Late recovery retains only objects whose new claim, descriptor
+  publication confirmation, and per-object CAS can finish within the original `T`. Refresh lease-fence copies under
   [Session binding §5](../04-session/02-session-actor-binding.en.md#5-bind-and-relay).
-- For every object discarded at `T`, complete authority cleanup after Store recovery. If authority
+- For every discarded object, complete authority cleanup after Store recovery. If authority
   still has the same self-owned owner, node lifecycle, `ObjectGeneration`, and
   `AuthorityOwnerGeneration` and references the owner's currently valid lease token, perform
   §6.1's `Delete` conditional on the freshly read `StoreVersion`, whether the token was retained
-  or replaced. This includes previously unconfirmed renewals confirmed later. Recheck uncertain
+  or replaced. As with §6.1 release, deleting a User Spot authority removes that incarnation's
+  membership in the same batch; deleting a member Actor authority also removes its membership
+  row. If the provider's batch limit is exceeded, change nothing rather than deleting partially,
+  and retry at the next existing renew-interval cleanup. This includes previously unconfirmed
+  renewals confirmed later. Recheck uncertain
   Delete responses under §10. While that record remains with the owner's valid token, recheck
   at each existing renew interval and retry Delete when needed. Finish cleanup on confirmed
   deletion or a confirmed change to another owner/incarnation. If the record's token becomes
@@ -1891,7 +1901,10 @@ store record golden fixture. Each item maps to one test.
   margin, different host TTLs must not permit release before the old owner's `T`.
 - Recovery before expiry reopens the gate with the same token after validation and renewal;
   replacement CAS is only for normal expiry. Its request start plus renew timeout must not
-  exceed the original `T`. Success confirmed at or after `T` requires `Delete` of the record
+  exceed the original `T`. A new claim recomputes the admission deadline. Gate reopening requires
+  both replacement CAS success and new descriptor publication in the Store confirmed before the
+  original `T`. Check existing discard and cleanup rules for delayed, uncertain, and definitely
+  rejected publication. Success confirmed at or after `T` requires `Delete` of the record
   under §5.1's post-discard authority cleanup rule. Also cover same-token renew applied but
   response and recheck failed, discard at `T`, recovery before lease expiry, and continuing normal
   heartbeats: authority must be cleaned so a new incarnation can be created. Check §10 rechecks
@@ -1905,11 +1918,13 @@ store record golden fixture. Each item maps to one test.
 - Historical record generations and reordered concurrent issuance responses are not rollback.
   Only a smaller counter-current-value observation performed after the prior observation counts.
 - Binding-fence refresh after lease replacement preserves identity/sequence and permits relay,
-  seal, replacement, and close; reject delayed old-token controls. Existing descriptor polling
-  and Store exact reads progress Session-owner fence refresh without new wire or retransmission.
-  Descriptor republication after a new claim precedes per-object replacement CAS submission.
-  Commands 42/51/54 arriving before polling refreshes the copy also refresh it and are processed
-  if the same Store validation conditions hold. Repeated creation calls keep
+  seal, replacement, and close. Existing descriptor polling and Store exact reads progress fence
+  copy refresh without new wire or retransmission. Descriptor republication after a new claim
+  precedes per-object replacement CAS submission. Immediately after its own lease replacement,
+  the Session owner accepts commands 42/51/54 carrying its immediately previous generation and
+  refreshes the copy without a Store read under Session binding §5's same-binding conditions.
+  Reject other lifecycles, bindings, and other generations. Actor owner values in commands 42/51
+  follow Session binding §8.3's existing decisions. Repeated creation calls keep
   the first invalidity-observation time for the same token.
 - If the initial owner-lease claim has not confirmed a lease by the renew timeout,
   startup succeeds and the four targets above are blocked.
