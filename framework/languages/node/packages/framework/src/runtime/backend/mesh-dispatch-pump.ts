@@ -427,9 +427,6 @@ export class ZLinkMeshDispatchPump {
               claimDrain
             );
             if (pending !== undefined) await pending;
-            // Returning a claim remains an asynchronous worker boundary without
-            // allocating a separate async drain task for a synchronous claim.
-            await this.yieldIfNeeded();
             // Empty ready claims count toward the shared pump budget too.
             this.recordsSinceYield += 1;
             const nextTurn = this.yieldIfNeeded();
