@@ -165,16 +165,17 @@ void verify_node_send_forwarding_allocations ()
                 ::operator delete (allocation);
             })
             == 1);
-    std::vector<std::uint8_t> copied_target, encoded_header;
+    std::vector<std::uint8_t> copied_target;
+    std::optional<zlink::message_t> encoded_header;
     const auto target_copy_allocations = count_allocations ([&] { copied_target = target; });
     std::vector<std::uint8_t> ().swap (copied_target);
     std::shared_ptr<const mesh::admitted_peer_t> peer;
     const auto argument_allocations = count_allocations ([&] {
         copied_target = target;
-        encoded_header = protocol::encode_node_send_header ();
+        encoded_header.emplace (protocol::encode_node_send_header_message ());
         peer = source.topology ().peer (target);
     });
-    assert (copied_target == target && !encoded_header.empty () && !peer);
+    assert (copied_target == target && encoded_header && encoded_header->size () != 0 && !peer);
     std::optional<fw::task_t<zlink::submit_result_t>> ready;
     const auto result_allocations = count_allocations ([&] {
         ready.emplace (
@@ -249,10 +250,10 @@ void verify_node_request_submit_cost ()
               target.size ());
             assert (submission->await_ready ());
             assert (submission->result () && !submission->result ().value ());
-            std::vector<std::uint8_t> encoded;
-            const auto encode_allocations =
-              count_allocations ([&] { encoded = protocol::encode_application_payload (payload); });
-            assert (!encoded.empty ());
+            std::optional<zlink::message_t> encoded;
+            const auto encode_allocations = count_allocations (
+              [&] { encoded.emplace (protocol::encode_application_payload_message (payload)); });
+            assert (encoded && encoded->size () != 0);
             const auto full_allocations = count_allocations ([&] {
                 submission.emplace (source.request_to_node (
                   target, payload, 1s, [&] (auto, auto) { callback_called = true; }));

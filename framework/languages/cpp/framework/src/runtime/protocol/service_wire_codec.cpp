@@ -44,7 +44,8 @@ enum class descriptor_tlv_t : std::uint8_t
 constexpr std::uint8_t application_payload_version = 1;
 constexpr std::uint8_t application_payload_flow_version = 2;
 
-void append_nonzero_u64 (std::vector<std::uint8_t> &bytes, std::uint64_t value, const char *field);
+template <typename Buffer>
+void append_nonzero_u64 (Buffer &bytes, std::uint64_t value, const char *field);
 std::uint64_t
 read_nonzero_u64 (std::span<const std::uint8_t> bytes, std::size_t &offset, const char *field);
 
@@ -54,7 +55,67 @@ bool valid_flow_origin (std::uint8_t value) noexcept
            && value <= static_cast<std::uint8_t> (flow_origin_t::lifecycle);
 }
 
-void append_u32 (std::vector<std::uint8_t> &bytes, std::uint32_t value)
+// Sized by the codec before the first write; the binding message owns the bytes.
+class native_wire_writer_t
+{
+  public:
+    explicit native_wire_writer_t (std::size_t size) :
+        _message (zlink::message_t::allocate (size)),
+        _data (reinterpret_cast<std::uint8_t *> (_message.data ()))
+    {
+        if (!_message.valid ())
+            throw std::bad_alloc ();
+    }
+    native_wire_writer_t (native_wire_writer_t &&other) noexcept :
+        _message (std::move (other._message)),
+        _data (reinterpret_cast<std::uint8_t *> (_message.data ())),
+        _size (other._size)
+    {
+    }
+    void push_back (std::uint8_t value)
+    {
+        if (_size >= _message.size ())
+            throw service_wire_error_t ("native wire writer exceeded allocated size");
+        _data[_size++] = value;
+    }
+    std::uint8_t *end () { return _data + _size; }
+    template <typename Iterator> void insert (std::uint8_t *, Iterator first, Iterator last)
+    {
+        const auto count = static_cast<std::size_t> (std::distance (first, last));
+        if (count > _message.size () - _size)
+            throw service_wire_error_t ("native wire writer exceeded allocated size");
+        std::copy (first, last, end ());
+        _size += count;
+    }
+    void insert (std::uint8_t *position, std::initializer_list<std::uint8_t> bytes)
+    {
+        insert (position, bytes.begin (), bytes.end ());
+    }
+    zlink::message_t take () &&
+    {
+        if (_size != _message.size ())
+            throw service_wire_error_t ("native wire writer size mismatch");
+        return std::move (_message);
+    }
+
+  private:
+    zlink::message_t _message;
+    std::uint8_t *_data = nullptr;
+    std::size_t _size = 0;
+};
+
+template <typename Buffer> Buffer allocate_wire_buffer (std::size_t size)
+{
+    if constexpr (std::is_same_v<Buffer, native_wire_writer_t>) {
+        return Buffer (size);
+    } else {
+        Buffer result;
+        result.reserve (size);
+        return result;
+    }
+}
+
+template <typename Buffer> void append_u32 (Buffer &bytes, std::uint32_t value)
 {
     bytes.push_back (static_cast<std::uint8_t> ((value >> 24u) & 0xffu));
     bytes.push_back (static_cast<std::uint8_t> ((value >> 16u) & 0xffu));
@@ -62,13 +123,13 @@ void append_u32 (std::vector<std::uint8_t> &bytes, std::uint32_t value)
     bytes.push_back (static_cast<std::uint8_t> (value & 0xffu));
 }
 
-void append_u16 (std::vector<std::uint8_t> &bytes, std::uint16_t value)
+template <typename Buffer> void append_u16 (Buffer &bytes, std::uint16_t value)
 {
     bytes.push_back (static_cast<std::uint8_t> ((value >> 8u) & 0xffu));
     bytes.push_back (static_cast<std::uint8_t> (value & 0xffu));
 }
 
-void append_u64 (std::vector<std::uint8_t> &bytes, std::uint64_t value)
+template <typename Buffer> void append_u64 (Buffer &bytes, std::uint64_t value)
 {
     for (std::size_t index = 0; index < 8; ++index) {
         bytes.push_back (static_cast<std::uint8_t> ((value >> ((7 - index) * 8)) & 0xffu));
@@ -110,7 +171,8 @@ std::uint64_t read_u64 (std::span<const std::uint8_t> bytes, std::size_t &offset
     return value;
 }
 
-void append_text8 (std::vector<std::uint8_t> &bytes, const std::string &value, const char *field)
+template <typename Buffer>
+void append_text8 (Buffer &bytes, const std::string &value, const char *field)
 {
     if (value.empty () || value.size () > std::numeric_limits<std::uint8_t>::max ()
         || !zlink::framework::detail::is_valid_non_nul_utf8 (value)) {
@@ -146,9 +208,8 @@ std::string read_text8 (std::span<const std::uint8_t> bytes, std::size_t &offset
     return std::string (read_text8_view (bytes, offset, field));
 }
 
-void append_bytes8 (std::vector<std::uint8_t> &bytes,
-                    const std::vector<std::uint8_t> &value,
-                    const char *field)
+template <typename Buffer>
+void append_bytes8 (Buffer &bytes, const std::vector<std::uint8_t> &value, const char *field)
 {
     if (value.empty () || value.size () > std::numeric_limits<std::uint8_t>::max ()) {
         throw service_wire_error_t (std::string (field) + " must contain 1..255 bytes");
@@ -264,9 +325,8 @@ void validate_kind (command kind)
     }
 }
 
-void append_actor_route_fence (std::vector<std::uint8_t> &bytes,
-                               const actor_route_fence_t &actor,
-                               const char *context)
+template <typename Buffer>
+void append_actor_route_fence (Buffer &bytes, const actor_route_fence_t &actor, const char *context)
 {
     append_text8 (bytes, actor.actor_id, context);
     append_nonzero_u64 (bytes, actor.object_generation, "Actor generation");
@@ -293,6 +353,39 @@ actor_route_fence_t read_actor_route_fence (std::span<const std::uint8_t> bytes,
 }
 
 } // namespace
+
+bool native_wire_writer_bounds_test_access ()
+{
+    const auto rejects = [] (auto &&operation, std::string_view expected) {
+        try {
+            operation ();
+        }
+        catch (const service_wire_error_t &error) {
+            return std::string_view (error.what ()) == expected;
+        }
+        return false;
+    };
+
+    const bool push_back_rejected = rejects (
+      [] {
+          native_wire_writer_t writer (0);
+          writer.push_back (0);
+      },
+      "native wire writer exceeded allocated size");
+    const bool insert_rejected = rejects (
+      [] {
+          native_wire_writer_t writer (1);
+          writer.insert (writer.end (), {0, 1});
+      },
+      "native wire writer exceeded allocated size");
+    const bool take_rejected = rejects (
+      [] {
+          native_wire_writer_t writer (1);
+          (void) std::move (writer).take ();
+      },
+      "native wire writer size mismatch");
+    return push_back_rejected && insert_rejected && take_rejected;
+}
 
 std::vector<std::uint8_t>
 encode_session_disconnected (const session_disconnected_identity_t &identity)
@@ -366,20 +459,44 @@ unpack_infrastructure_reply (std::span<const std::uint8_t> packed)
 }
 
 
-std::vector<std::uint8_t> encode_node_send_header ()
+template <typename Buffer> Buffer encode_node_send_header_into ()
 {
-    return {magic[0], magic[1], wire_major, static_cast<std::uint8_t> (command::nodeSend), 0};
+    auto result = allocate_wire_buffer<Buffer> (prefix_size);
+    result.insert (result.end (), {magic[0], magic[1], wire_major,
+                                   static_cast<std::uint8_t> (command::nodeSend), 0});
+    return result;
 }
 
-std::vector<std::uint8_t> encode_node_request_header (std::uint64_t correlation)
+std::vector<std::uint8_t> encode_node_send_header ()
+{
+    return encode_node_send_header_into<std::vector<std::uint8_t>> ();
+}
+
+zlink::message_t encode_node_send_header_message ()
+{
+    return encode_node_send_header_into<native_wire_writer_t> ().take ();
+}
+
+template <typename Buffer> Buffer encode_node_request_header_into (std::uint64_t correlation)
 {
     if (correlation == 0) {
         throw service_wire_error_t ("request correlation must be nonzero");
     }
-    std::vector<std::uint8_t> result{magic[0], magic[1], wire_major,
-                                     static_cast<std::uint8_t> (command::nodeRequest), 0};
+    auto result = allocate_wire_buffer<Buffer> (prefix_size + 8);
+    result.insert (result.end (), {magic[0], magic[1], wire_major,
+                                   static_cast<std::uint8_t> (command::nodeRequest), 0});
     append_u64 (result, correlation);
     return result;
+}
+
+std::vector<std::uint8_t> encode_node_request_header (std::uint64_t correlation)
+{
+    return encode_node_request_header_into<std::vector<std::uint8_t>> (correlation);
+}
+
+zlink::message_t encode_node_request_header_message (std::uint64_t correlation)
+{
+    return encode_node_request_header_into<native_wire_writer_t> (correlation).take ();
 }
 
 std::uint64_t decode_node_request_header (std::span<const std::uint8_t> bytes)
@@ -397,17 +514,33 @@ std::uint64_t decode_node_request_header (std::span<const std::uint8_t> bytes)
     return correlation;
 }
 
-std::vector<std::uint8_t> encode_channel_request_header (std::uint64_t correlation,
-                                                         const std::string &channel_name)
+template <typename Buffer>
+Buffer encode_channel_request_header_into (std::uint64_t correlation,
+                                           const std::string &channel_name)
 {
     if (correlation == 0) {
         throw service_wire_error_t ("request correlation must be nonzero");
     }
-    std::vector<std::uint8_t> result{magic[0], magic[1], wire_major,
-                                     static_cast<std::uint8_t> (command::channelRequest), 0};
+    auto result = allocate_wire_buffer<Buffer> (prefix_size + 8 + 1 + channel_name.size ());
+    result.insert (result.end (), {magic[0], magic[1], wire_major,
+                                   static_cast<std::uint8_t> (command::channelRequest), 0});
     append_u64 (result, correlation);
     append_text8 (result, channel_name, "channel name");
     return result;
+}
+
+std::vector<std::uint8_t> encode_channel_request_header (std::uint64_t correlation,
+                                                         const std::string &channel_name)
+{
+    return encode_channel_request_header_into<std::vector<std::uint8_t>> (correlation,
+                                                                          channel_name);
+}
+
+zlink::message_t encode_channel_request_header_message (std::uint64_t correlation,
+                                                        const std::string &channel_name)
+{
+    return encode_channel_request_header_into<native_wire_writer_t> (correlation, channel_name)
+      .take ();
 }
 
 channel_request_header_t decode_channel_request_header (std::span<const std::uint8_t> bytes)
@@ -428,20 +561,32 @@ channel_request_header_t decode_channel_request_header (std::span<const std::uin
     return {correlation, std::move (channel_name)};
 }
 
-std::vector<std::uint8_t> encode_channel_send_header (const std::string &channel_name)
+template <typename Buffer> Buffer encode_channel_send_header_into (const std::string &channel_name)
 {
-    std::vector<std::uint8_t> result{magic[0], magic[1], wire_major,
-                                     static_cast<std::uint8_t> (command::channelSend), 0};
+    auto result = allocate_wire_buffer<Buffer> (prefix_size + 1 + channel_name.size ());
+    result.insert (result.end (), {magic[0], magic[1], wire_major,
+                                   static_cast<std::uint8_t> (command::channelSend), 0});
     append_text8 (result, channel_name, "channel name");
     return result;
 }
 
-std::vector<std::uint8_t> encode_spot_message_header (command kind,
-                                                      const std::string &source_spot_id,
-                                                      const spot_route_fence_t &target,
-                                                      wire_operation_id_t operation,
-                                                      std::optional<std::uint64_t> correlation,
-                                                      std::uint8_t message_follow_hop_count)
+std::vector<std::uint8_t> encode_channel_send_header (const std::string &channel_name)
+{
+    return encode_channel_send_header_into<std::vector<std::uint8_t>> (channel_name);
+}
+
+zlink::message_t encode_channel_send_header_message (const std::string &channel_name)
+{
+    return encode_channel_send_header_into<native_wire_writer_t> (channel_name).take ();
+}
+
+template <typename Buffer>
+Buffer encode_spot_message_header_into (command kind,
+                                        const std::string &source_spot_id,
+                                        const spot_route_fence_t &target,
+                                        wire_operation_id_t operation,
+                                        std::optional<std::uint64_t> correlation,
+                                        std::uint8_t message_follow_hop_count)
 {
     if (kind != command::spotSend && kind != command::spotRequest) {
         throw service_wire_error_t ("command is not a Spot message");
@@ -453,8 +598,11 @@ std::vector<std::uint8_t> encode_spot_message_header (command kind,
         || target.authority_owner_generation == 0 || target.owner_lease_generation == 0) {
         throw service_wire_error_t ("invalid Spot route fence");
     }
-    std::vector<std::uint8_t> result{magic[0], magic[1], wire_major,
-                                     static_cast<std::uint8_t> (kind), 0};
+    auto result = allocate_wire_buffer<Buffer> (
+      prefix_size + (correlation ? 8 : 0) + 16 + 1 + 1 + source_spot_id.size () + 1
+      + target.spot_id.size () + 8 + 1 + target.target_node_routing_id.size () + 24);
+    result.insert (result.end (),
+                   {magic[0], magic[1], wire_major, static_cast<std::uint8_t> (kind), 0});
     if (correlation)
         append_u64 (result, *correlation);
     append_u64 (result, operation.high);
@@ -468,6 +616,29 @@ std::vector<std::uint8_t> encode_spot_message_header (command kind,
     append_u64 (result, target.authority_owner_generation);
     append_u64 (result, target.owner_lease_generation);
     return result;
+}
+
+std::vector<std::uint8_t> encode_spot_message_header (command kind,
+                                                      const std::string &source_spot_id,
+                                                      const spot_route_fence_t &target,
+                                                      wire_operation_id_t operation,
+                                                      std::optional<std::uint64_t> correlation,
+                                                      std::uint8_t message_follow_hop_count)
+{
+    return encode_spot_message_header_into<std::vector<std::uint8_t>> (
+      kind, source_spot_id, target, operation, correlation, message_follow_hop_count);
+}
+
+zlink::message_t encode_spot_message_header_message (command kind,
+                                                     const std::string &source_spot_id,
+                                                     const spot_route_fence_t &target,
+                                                     wire_operation_id_t operation,
+                                                     std::optional<std::uint64_t> correlation,
+                                                     std::uint8_t message_follow_hop_count)
+{
+    return encode_spot_message_header_into<native_wire_writer_t> (
+             kind, source_spot_id, target, operation, correlation, message_follow_hop_count)
+      .take ();
 }
 
 spot_message_header_t decode_spot_message_header (std::span<const std::uint8_t> bytes,
@@ -511,7 +682,8 @@ spot_message_header_t decode_spot_message_header (std::span<const std::uint8_t> 
     return result;
 }
 
-std::vector<std::uint8_t> encode_actor_message_header (
+template <typename Buffer>
+Buffer encode_actor_message_header_into (
   command kind,
   const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
   const actor_route_fence_t &target,
@@ -539,8 +711,13 @@ std::vector<std::uint8_t> encode_actor_message_header (
       bound_session_source ? static_cast<std::uint8_t> (flag::boundSession)
                                | static_cast<std::uint8_t> (flag::sourceSpotId)
                            : 0);
-    std::vector<std::uint8_t> result{magic[0], magic[1], wire_major,
-                                     static_cast<std::uint8_t> (kind), flags};
+    auto result = allocate_wire_buffer<Buffer> (
+      prefix_size + (correlation ? 8 : 0) + 16 + 1 + 1
+      + (source_actor ? source_actor->first.size () + 8 : 0) + 1 + target.actor_id.size () + 8 + 1
+      + target.target_node_routing_id.size () + 24
+      + (bound_session_source ? 1 + bound_session_source->session_routing_id.size () + 16 : 0));
+    result.insert (result.end (),
+                   {magic[0], magic[1], wire_major, static_cast<std::uint8_t> (kind), flags});
     if (correlation)
         append_u64 (result, *correlation);
     append_u64 (result, operation.high);
@@ -567,6 +744,35 @@ std::vector<std::uint8_t> encode_actor_message_header (
         append_u64 (result, bound_session_source->session_sequence);
     }
     return result;
+}
+
+std::vector<std::uint8_t> encode_actor_message_header (
+  command kind,
+  const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
+  const actor_route_fence_t &target,
+  wire_operation_id_t operation,
+  std::optional<std::uint64_t> correlation,
+  std::uint8_t message_follow_hop_count,
+  std::optional<actor_message_header_t::bound_session_source_t> bound_session_source)
+{
+    return encode_actor_message_header_into<std::vector<std::uint8_t>> (
+      kind, source_actor, target, operation, correlation, message_follow_hop_count,
+      bound_session_source);
+}
+
+zlink::message_t encode_actor_message_header_message (
+  command kind,
+  const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
+  const actor_route_fence_t &target,
+  wire_operation_id_t operation,
+  std::optional<std::uint64_t> correlation,
+  std::uint8_t message_follow_hop_count,
+  std::optional<actor_message_header_t::bound_session_source_t> bound_session_source)
+{
+    return encode_actor_message_header_into<native_wire_writer_t> (
+             kind, source_actor, target, operation, correlation, message_follow_hop_count,
+             bound_session_source)
+      .take ();
 }
 
 actor_message_header_t decode_actor_message_header (std::span<const std::uint8_t> bytes,
@@ -636,13 +842,27 @@ actor_message_header_t decode_actor_message_header (std::span<const std::uint8_t
     return result;
 }
 
-std::vector<std::uint8_t> encode_bound_session_send (const bound_session_send_t &record)
+template <typename Buffer>
+Buffer encode_bound_session_send_into (const bound_session_send_t &record)
 {
-    std::vector<std::uint8_t> result{magic[0], magic[1], wire_major,
-                                     static_cast<std::uint8_t> (command::boundSessionSend), 0};
+    auto result =
+      allocate_wire_buffer<Buffer> (prefix_size + 1 + record.actor.actor_id.size () + 8 + 1
+                                    + record.actor.target_node_routing_id.size () + 24 + 8);
+    result.insert (result.end (), {magic[0], magic[1], wire_major,
+                                   static_cast<std::uint8_t> (command::boundSessionSend), 0});
     append_actor_route_fence (result, record.actor, "bound session Actor ID");
     append_nonzero_u64 (result, record.expected_binding_generation, "expected binding generation");
     return result;
+}
+
+std::vector<std::uint8_t> encode_bound_session_send (const bound_session_send_t &record)
+{
+    return encode_bound_session_send_into<std::vector<std::uint8_t>> (record);
+}
+
+zlink::message_t encode_bound_session_send_message (const bound_session_send_t &record)
+{
+    return encode_bound_session_send_into<native_wire_writer_t> (record).take ();
 }
 
 bound_session_send_t decode_bound_session_send (std::span<const std::uint8_t> bytes)
@@ -1084,7 +1304,8 @@ session_relocation_route_t decode_session_relocation_route (std::span<const std:
 
 namespace
 {
-void append_nonzero_u64 (std::vector<std::uint8_t> &bytes, std::uint64_t value, const char *field)
+template <typename Buffer>
+void append_nonzero_u64 (Buffer &bytes, std::uint64_t value, const char *field)
 {
     if (value == 0)
         throw service_wire_error_t (std::string (field) + " must be nonzero");
@@ -2170,10 +2391,10 @@ frozen_record_t decode_frozen_record_prefix (std::span<const std::uint8_t> bytes
     if (requires_reply)
         result.reply_route_id = read_nonzero_u64 (reply, reply_offset, "reply route ID");
     require_end (reply, reply_offset, "frozen reply route");
-    const auto body = read_frozen_body (bytes, offset, result.kind, capture_flow);
+    auto body = read_frozen_body (bytes, offset, result.kind, capture_flow);
     validate_operation_matrix (result, body);
     result.target = body.target;
-    result.application = body.application;
+    result.application = std::move (body.application);
     result.canonical_bytes.assign (bytes.begin (),
                                    bytes.begin () + static_cast<std::ptrdiff_t> (offset));
     consumed = offset;
@@ -2200,7 +2421,7 @@ std::vector<std::uint8_t> encode_frozen_record (const frozen_record_t &record)
     return record.canonical_bytes;
 }
 
-frozen_record_t build_frozen_application_record (const frozen_application_record_t &record,
+frozen_record_t build_frozen_application_record (frozen_application_record_t record,
                                                  bool include_canonical)
 {
     const auto kind = static_cast<std::uint8_t> (record.kind);
@@ -2268,37 +2489,36 @@ frozen_record_t build_frozen_application_record (const frozen_application_record
     result.operation_kind = record.operation_kind;
     result.reply_route_id = record.reply_route_id;
     if (spot) {
-        const auto &body = std::get<frozen_spot_application_body_t> (record.body);
+        auto &body = std::get<frozen_spot_application_body_t> (record.body);
         result.target = frozen_target_identity_t{
           relocation_object_kind_t::user_spot, body.target.spot_id,
           body.target.object_generation,       body.target.target_node_routing_id,
           body.target.target_node_generation,  body.target.authority_owner_generation,
           body.expected_owner_lease_generation};
-        result.application = body.application;
+        result.application = std::move (body.application);
     } else {
-        const auto &body = std::get<frozen_actor_application_body_t> (record.body);
+        auto &body = std::get<frozen_actor_application_body_t> (record.body);
         result.target = frozen_target_identity_t{
           relocation_object_kind_t::actor,    body.target.actor_id,
           body.target.object_generation,      body.target.target_node_routing_id,
           body.target.target_node_generation, body.target.authority_owner_generation,
           body.target.owner_lease_generation};
-        result.application = body.application;
+        result.application = std::move (body.application);
     }
-    const frozen_body_validation_t body{std::nullopt, result.target, result.application};
-    validate_operation_matrix (result, body);
+    validate_operation_matrix (result, {});
     if (include_canonical)
         result.canonical_bytes = std::move (bytes);
     return result;
 }
 
-frozen_record_t encode_frozen_application_record (const frozen_application_record_t &record)
+frozen_record_t encode_frozen_application_record (frozen_application_record_t record)
 {
-    return build_frozen_application_record (record, true);
+    return build_frozen_application_record (std::move (record), true);
 }
 
-frozen_record_t summarize_frozen_application_record (const frozen_application_record_t &record)
+frozen_record_t summarize_frozen_application_record (frozen_application_record_t record)
 {
-    return build_frozen_application_record (record, false);
+    return build_frozen_application_record (std::move (record), false);
 }
 
 std::vector<std::uint8_t>
@@ -2685,14 +2905,44 @@ std::string decode_channel_send_header (std::span<const std::uint8_t> bytes)
     return channel_name;
 }
 
+namespace
+{
+application_payload_t::multipart_t
+retain_application_messages (std::span<const zlink::message_t> parts)
+{
+    application_payload_t::multipart_t retained;
+    retained.reserve (parts.size ());
+    for (const auto &part : parts)
+        retained.push_back (part.copy ());
+    return retained;
+}
+} // namespace
+
+application_payload_t::application_payload_t (const application_payload_t &other) :
+    packet_name (other.packet_name),
+    content_type (other.content_type),
+    flow_id (other.flow_id),
+    flow_origin (other.flow_origin)
+{
+    if (const auto *parts = other.parts ()) {
+        _body = retain_application_messages (*parts);
+    } else {
+        _body = other.payload_bytes ();
+    }
+}
+
+application_payload_t &application_payload_t::operator= (const application_payload_t &other)
+{
+    if (this != &other)
+        *this = application_payload_t (other);
+    return *this;
+}
+
 application_payload_t application_payload_t::from_parts (const multipart_t &parts)
 {
     if (parts.empty ())
         throw std::invalid_argument ("framework multipart requires at least one part");
-    auto retained = std::make_shared<multipart_t> ();
-    retained->reserve (parts.size ());
-    for (const auto &part : parts)
-        retained->push_back (part.copy ());
+    auto retained = retain_application_messages (parts);
     application_payload_t result;
     result.packet_name = framework_multipart_packet_name;
     result.content_type = framework_multipart_content_type;
@@ -2707,7 +2957,7 @@ application_payload_t application_payload_t::from_parts (multipart_t &&parts)
     application_payload_t result;
     result.packet_name = framework_multipart_packet_name;
     result.content_type = framework_multipart_content_type;
-    result._body = std::make_shared<multipart_t> (std::move (parts));
+    result._body = std::move (parts);
     return result;
 }
 
@@ -2748,12 +2998,9 @@ application_payload_t::multipart_t retained_application_parts (const application
         || payload.content_type != framework_multipart_content_type)
         throw service_wire_error_t ("framework application payload profile is unsupported");
     if (const auto *parts = payload.parts ()) {
-        application_payload_t::multipart_t result;
         const auto count = header_only ? std::min (parts->size (), std::size_t{1}) : parts->size ();
-        result.reserve (count);
-        for (std::size_t index = 0; index < count; ++index)
-            result.push_back ((*parts)[index].copy ());
-        return result;
+        return retain_application_messages (
+          std::span<const zlink::message_t> (*parts).first (count));
     }
     std::size_t index = 0;
     return decode_application_parts_bytes (payload.payload_bytes (), [&] (auto bytes) {
@@ -2818,7 +3065,8 @@ bool operator== (const application_payload_t &left, const application_payload_t 
     return offset == bytes.size ();
 }
 
-std::vector<std::uint8_t> encode_application_payload (const application_payload_t &payload)
+template <typename Buffer>
+Buffer encode_application_payload_into (const application_payload_t &payload)
 {
     if (payload.flow_id.has_value () != payload.flow_origin.has_value ()) {
         throw service_wire_error_t (
@@ -2849,8 +3097,7 @@ std::vector<std::uint8_t> encode_application_payload (const application_payload_
     if (body_size > std::numeric_limits<std::uint32_t>::max ()) {
         throw service_wire_error_t ("application payload envelope exceeds u32");
     }
-    std::vector<std::uint8_t> result;
-    result.reserve (5 + body_size);
+    auto result = allocate_wire_buffer<Buffer> (5 + body_size);
     result.push_back (payload.flow_id ? application_payload_flow_version
                                       : application_payload_version);
     append_u32 (result, static_cast<std::uint32_t> (body_size));
@@ -2876,6 +3123,16 @@ std::vector<std::uint8_t> encode_application_payload (const application_payload_
         result.push_back (static_cast<std::uint8_t> (*payload.flow_origin));
     }
     return result;
+}
+
+std::vector<std::uint8_t> encode_application_payload (const application_payload_t &payload)
+{
+    return encode_application_payload_into<std::vector<std::uint8_t>> (payload);
+}
+
+zlink::message_t encode_application_payload_message (const application_payload_t &payload)
+{
+    return encode_application_payload_into<native_wire_writer_t> (payload).take ();
 }
 
 namespace
@@ -3478,9 +3735,10 @@ std::uint32_t decode_reject (std::span<const std::uint8_t> bytes)
     return reason;
 }
 
-std::vector<std::uint8_t> encode_reply_header (std::uint64_t correlation,
-                                               std::uint32_t terminal_result,
-                                               std::uint32_t failure_code)
+template <typename Buffer>
+Buffer encode_reply_header_into (std::uint64_t correlation,
+                                 std::uint32_t terminal_result,
+                                 std::uint32_t failure_code)
 {
     if (correlation == 0) {
         throw service_wire_error_t ("reply correlation must be nonzero");
@@ -3491,14 +3749,30 @@ std::vector<std::uint8_t> encode_reply_header (std::uint64_t correlation,
                                     + std::to_string (terminal_result)
                                     + ", failure=" + std::to_string (failure_code));
     }
-    std::vector<std::uint8_t> result;
-    result.reserve (reply_header_t::encoded_size);
+    auto result = allocate_wire_buffer<Buffer> (reply_header_t::encoded_size);
     result.insert (result.end (),
                    {magic[0], magic[1], wire_major, static_cast<std::uint8_t> (command::reply), 0});
     append_u64 (result, correlation);
     append_u32 (result, terminal_result);
     append_u32 (result, failure_code);
     return result;
+}
+
+std::vector<std::uint8_t> encode_reply_header (std::uint64_t correlation,
+                                               std::uint32_t terminal_result,
+                                               std::uint32_t failure_code)
+{
+    return encode_reply_header_into<std::vector<std::uint8_t>> (correlation, terminal_result,
+                                                                failure_code);
+}
+
+zlink::message_t encode_reply_header_message (std::uint64_t correlation,
+                                              std::uint32_t terminal_result,
+                                              std::uint32_t failure_code)
+{
+    return encode_reply_header_into<native_wire_writer_t> (correlation, terminal_result,
+                                                           failure_code)
+      .take ();
 }
 
 reply_header_t decode_reply_header (std::span<const std::uint8_t> bytes)
