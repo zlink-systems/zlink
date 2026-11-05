@@ -105,17 +105,3 @@ When extending, follow the public API boundaries and state ownership rules in [A
 The runner starts child processes with `windowsHide: true`. Run it in PowerShell 7; no Unix shell is required. The project includes a native addon, so check the Node support range and the CPU architecture. The project does not use an npm install at the repository root or a local package feed.
 
 The e2e runner sets each node's optional `tableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry declarations describe the application Entry on Table nodes only; there are no fixed User Spots in this template.
-
-## 한국어 실행 안내
-
-기본 빌드와 e2e는 Docker에서 runner와 node를 실행한다. Bash는 `./run-e2e.sh`, PowerShell 7은 `pwsh -NoProfile -File ./run-e2e.ps1`을 사용한다. 로컬 프로세스 디버깅은 Node.js와 npm을 설치한 뒤 `--local` 또는 `-Local`로 실행한다. `--build-only`는 일곱 도메인 검사를 실행하고 `Domain checks: 7/7`을 출력한 뒤 종료한다. Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다.
-
-이 프로젝트는 Session node 하나, Table node 두 개, Redis Location Store를 실행한다. 실행기는 `table`·`reconnect`·`update` 시나리오를 순서대로 확인하고 자신이 시작한 process와 Compose project를 정리한다.
-
-`table`은 client가 보낸 내부 `HandResult` 패킷을 `packet-not-allowed`로 거부한다. 차례 위반·`integer-out-of-range`·칩 부족 베팅도 거부하고, 각 거부 뒤 상태가 바뀌지 않았는지 확인한다. 모든 거부 응답은 `ActionRejected(reason, retryAfterMs)`이며 현재 `retryAfterMs`는 0이다. 정산 응답에서 모든 좌석의 `cardCount`가 0인지 확인하고, 정산 뒤 개인 패 조회가 빈 목록을 반환하는지도 검사한다. `reconnect`와 `update`는 상태를 유지한 채 정산하고 같은 빈 패 결과를 확인한다.
-
-Node 계약의 `handNumber`, 베팅 `amount`, `chips`, `pot`은 `bigint`로 표현한다. 기본 Framework JSON serializer는 해당 `int64` 값을 10진 문자열로 전달한다. `ActionRejected.retryAfterMs`는 JSON `int32` 정수다.
-
-도메인 시험의 일곱 검사가 모두 통과하면 `Domain checks: 7/7`을 출력한다.
-
-전체 시나리오 또는 `--scenario table,reconnect`로 선택하여 실행한다. 실패하면 종료 코드 1을 반환하고 첫 실패의 node stderr와 client JSONL을 `.logs/run-<id>/` 아래에 남긴다. 공개 Framework 0.30.3 패키지로 검증했다. 게임 규칙을 추가할 위치와 공개 API 사용 규칙은 `AGENTS.md`를 따른다.

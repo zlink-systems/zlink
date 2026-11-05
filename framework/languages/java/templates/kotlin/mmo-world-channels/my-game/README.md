@@ -78,9 +78,3 @@ A new Player joins it and earns gold; the test checks channelA1 in both response
 `ZoneTransfer` saves connected player IDs in the Zone relocation snapshot and restores them on the target host. Existing Players remain in their relocated Zones. A channel move keeps the client Session bound while the Player Actor changes Zones, so the list follows Zone membership callbacks.
 Message Follow is explicitly 30 seconds; the safe shutdown observation budget is
 derived from that duration and the existing operation budget.
-
-## 한국어 실행 안내
-
-기본 e2e는 Docker에서 실행합니다. 로컬 process 디버깅은 JDK 25를 준비하고 `--local` 또는 `-Local`로 실행합니다. Docker Compose v2를 준비한 뒤 위 Build 명령을 실행합니다. Docker e2e 명령은 실행마다 Redis 두 개와 node process를 생성하며, 결과와 message-flow 로그를 `.logs/run-<id>/`에 보관합니다.
-
-월드별 Redis와 mesh를 분리합니다. `GoldBalance`가 gold와 earn 시간을 판정하고 Zone이 접속한 player ID를 소유합니다. 채널 이동 때 client Session은 유지되고 Player Actor의 Zone이 바뀌므로 목록은 Zone membership callback에서 갱신합니다. `EarnRequest`에는 보상량을 넣지 않고 `GoldBalance`가 수락마다 10 gold를 지급합니다. 단조 시계 기준 1000 ms 안의 요청은 `earn-too-soon`과 서버가 계산한 `RetryAfterMs`로 거부하며 gold와 cooldown을 바꾸지 않습니다. 상한 `9,007,199,254,740,991`에서 상한−10 수락과 상한−9 거부를 도메인 검사로 확인합니다. 상한을 넘는 채널 요청은 `integer-out-of-range`로 거부하고 membership을 바꾸지 않습니다. Session은 허용 목록의 client packet만 전달하고 내부 packet은 `packet-not-allowed`로 거부합니다. 시나리오는 같은 Zone의 목록 공유, 다른 Zone 격리, channel 이동·연결 종료 뒤 제거, 보상 제한을 검사합니다. relocation snapshot에는 Zone의 player ID 목록을 저장합니다.

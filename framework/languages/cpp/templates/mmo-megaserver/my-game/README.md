@@ -112,9 +112,3 @@ Send `drain` to the Region process being replaced. Require `RELOCATION_REQUESTED
 The e2e fixture limits each Region node to two Region Spots and keeps forest-1 and forest-2 occupied before drain. After relocation the survivor is full. Once the replacement reports `READY`, a new desert Region must be served by that replacement. Existing Region state and Session identity checks remain required. Only Region nodes register the application Entry and its first admission handler, so only those nodes declare an Entry in `zlink.structure.json`.
 
 Message Follow is explicitly set to 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is the follow duration plus the existing relocation budget; the relocation operation deadline is unchanged.
-
-## 한국어 실행 안내
-
-Docker Compose v2와 Linux 컨테이너 데몬을 준비한다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 이미지 빌드부터 runner·node 컨테이너 기동과 정리까지 수행한다. `region`은 복제본 수용량 고갈과 알 수 없는 지역, Session 내부 패킷 거부 및 연결 유지를 확인한다. `movement`는 서버가 delta·순번·이동 예산을 판정하고 거부 뒤 상태가 유지되는지, 서버가 보낸 `RetryAfterMs` 뒤 요청을 수락하는지 확인한다. 도메인 경계 검사는 Linux의 `./run-e2e.sh --check-domain`, Windows의 `pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain`으로 실행한다. Framework 버전은 `bootstrap.cmake` 한 곳에서 정하며, 빌드는 그 버전의 GitHub Release prebuilt를 받아 함께 게시된 SHA-256 체크섬으로 확인한다.
-
-로컬 디버깅은 C++20 컴파일러, CMake, Ninja를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행한다. node 로그와 설정은 `.logs/run-<id>/`, Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다. 공개 패키지에서 확인된 차단 사항은 Known issues를 따른다.

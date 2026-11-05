@@ -110,9 +110,3 @@ Wait for the bootstrap owner to report `READY` before starting another match hos
 4. Start its replacement with the same node settings and `BootstrapMatchmaking` disabled. Require `READY` before accepting new work. Framework owns Actor placement, membership, binding and relocation; application adapters preserve only queue and combat state.
 
 The map spans x=[0,100] and y=[0,100]. Players spawn at (40,10) and (60,10). A move carries a delta with length at most 2; accepted movement is limited to 10 units per second, with a full 2-unit budget on the first move. The closed vertical wall at x=50, y=[20,60] blocks movement and intersecting shots, including endpoint contact. Shots have range 80, deal 25 damage against 100 initial HP, and require 250 ms between accepted shots. A player's sequence is shared by movement and shooting; rejected actions do not consume it. The maximum accepted sequence is 9007199254740991. Room snapshots store remaining movement and fire times in milliseconds, then restore them against the destination node's monotonic clock. A disconnected player's Room state remains until application lifecycle policy removes it.
-
-## 한국어 실행 안내
-
-Docker Compose v2와 Linux 컨테이너 데몬을 준비한다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 이미지 빌드부터 runner·node 컨테이너 기동과 정리까지 수행한다. Framework 버전은 `bootstrap.cmake` 한 곳에서 정하며, 빌드는 그 버전의 GitHub Release prebuilt를 받아 함께 게시된 SHA-256 체크섬으로 확인한다.
-
-로컬 디버깅은 C++20 컴파일러, CMake, Ninja를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행한다. node 로그와 설정은 `.logs/run-<id>/`, Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다. 공개 패키지에서 확인된 차단 사항은 Known issues를 따른다.

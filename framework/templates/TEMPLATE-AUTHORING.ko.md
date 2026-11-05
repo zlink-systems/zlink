@@ -12,10 +12,9 @@
   프로젝트 참조는 생성되는 프로젝트 자체의 모듈 사이에서만 사용한다.
 - Initializr가 치환하는 `my-game`·`MyGame` 토큰을 유지한다.
 - node 역할별 진입점을 분리하고 공통 hosting·설정·제어 protocol은 한 곳에 둔다.
-- AGENTS는 영어 `AGENTS.md`와 한국어 `AGENTS.ko.md`를 같은 구성으로 작성한다.
-  다운로드 zip에는 사이트 언어에 맞는 판 하나가 `AGENTS.md`로 들어간다.
-  README는 영어로 작성하고 마지막에 짧은 한국어 실행 안내를 둔다.
-  AGENTS 두 판은 [문서 작성 원칙](../../doc/principal/documentation/documentation-principles.ko.md)을 따른다.
+- 템플릿 문서(README.md, AGENTS.md)는 영어로만 작성한다. 한국어판(`AGENTS.ko.md`, README의 한국어 안내)은 두지 않는다.
+  AI 가이드는 `AGENTS.md` 하나다. `CLAUDE.md`는 두지 않는다(Claude Code는 `CLAUDE.md`가 없으면 `AGENTS.md`를 읽는다).
+  AGENTS는 [문서 작성 원칙](../../doc/principal/documentation/documentation-principles.ko.md)을 따른다.
   코드 주석은 영어로 작성한다. 제작 job의 보고서는 격식 있는 기술 문체 한국어로 쓴다.
 - 로그, 빌드 결과, package cache, 검증용 사본, 자격 증명과 license 파일을 커밋하지 않는다.
 - 포매터·lint·설치 명령은 대상 템플릿 디렉터리 안에서 실행한다. 파일 목록에서 로그와
