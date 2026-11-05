@@ -44,6 +44,39 @@ Lua script splitting or connection management — is called out explicitly at
 the end of §9, and that part is updated in the document, not the code, if the
 implementation changes.
 
+**Operational requirement: the Location Store must not roll back.** AOF, synchronous replication,
+or equivalent measures must preserve successful mutations and generation-counter continuity
+across failover, pricing-plan changes, and Store node replacement. Configuration names alone
+do not establish this guarantee. Operators must ensure that recovery or promotion loses no
+successful writes and fences writes from the previous primary. On detected rollback, the
+Framework discards all local objects without retention and rejoins empty
+([Location runtime §5.1](01-location-runtime.en.md#51-retention-and-rejoining-after-a-short-outage)).
+A node detects rollback only when an observation of an issuing counter's current value,
+known to have been performed after a previous observation of that same counter, is smaller.
+Historical generations read from object records and reordered responses to concurrent issuance
+requests are excluded. This detects only some rollbacks: it cannot detect rollback that stays at or above
+the observed maximum, or rollback of an unobserved counter. Operators are responsible for
+confirming restored Store continuity before the node rejoins empty after rollback.
+A lease `Missing` caused by normal TTL expiry is not itself evidence of rollback. Do not compare
+opaque `StoreVersion` values numerically or treat absence of observed rollback as proof of continuity.
+
+**Clock and suspend operational limits.** Store time is used only to determine lease expiry.
+The combined error from Store clock advance (including jumps during failover or promotion) and
+each node's local-monotonic clock-rate differences must fit within the fencing margin
+(default example: 5 seconds).
+Each node measures retention, stopping, and release waits with its own local monotonic clock,
+not Store-time differences. If monotonic time stops during host suspend, even the next turn gate
+cannot determine actual elapsed time. Execution exclusivity does not cover such suspend or
+resumption after a long pause inside a callback. Operators must account for these limits in
+deployment and shutdown procedures. Exclusivity of side effects outside the Store requires
+fencing at the application resource as well.
+
+[Location runtime §5.1](01-location-runtime.en.md#51-retention-and-rejoining-after-a-short-outage)
+owns domain-wide support verification and rolling-upgrade operational requirements for the
+`StoreOutageRetention` option. Operators must not enable retained execution alongside
+unsupported hosts.
+
+
 ## 2. Responsibilities of the Public SPI
 
 The Location Store SPI only provides the following three operation groups.

@@ -78,6 +78,20 @@ drop은 호출한 쪽에 reply가 없다는 뜻이지 관측 흔적이 없다는
 logger·telemetry provider에는 dispatch 실패가 `no_handler`·`reply_error`·`drop` structured
 record로 남는다([모니터링](26-monitoring.ko.md)).
 
+### 1.4 Node·ChannelName handler는 동시에, 임의 순서로 시작될 수 있다
+
+Node handler와 ChannelName handler에는 실행 순서를 지키는 gate가 없다. 같은 MeshNode나 같은
+channel로 온 요청도 여러 worker가 나눠 처리하므로, 앞 요청의 handler가 끝나기 전에 뒤 요청의
+handler가 시작될 수 있고, 시작 순서와 끝나는 순서도 받은 순서와 다를 수 있다. handler 안에
+`await`가 없어도 마찬가지다. 응답은 요청마다 짝지어지므로 호출한 쪽이 다른 요청의 응답을 받지는 않는다.
+
+- handler 사이에서 공유하는 상태는 application이 동기화한다.
+- 같은 대상에 온 요청을 받은 순서대로 하나씩 처리해야 하면 그 상태를 [Spot](21-spot.ko.md)이나 Actor에
+  두고 그쪽 handler로 보낸다. Spot·Actor handler는 한 번에 하나씩 순서대로 실행된다.
+
+0.33.0부터의 동작이다. 그 전 버전은 await 없는 handler를 받은 순서대로 시작했다
+([Handler turn §2](../../../common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md#execution-gate)).
+
 ## 2. Filter — 공통 처리를 한곳에 모은다
 
 웹 framework의 HTTP middleware는 HTTP 파이프라인 전용이라 handler에는 적용되지 않는다.

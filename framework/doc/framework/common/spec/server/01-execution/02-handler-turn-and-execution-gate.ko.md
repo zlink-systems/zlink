@@ -96,11 +96,13 @@ completion까지다.
   record가 현재 handler의 상태 접근과 겹치지 않는다.
 - **Node handler와 [ChannelName](../00-foundation/02-glossary.ko.md#channelname) handler에는
   execution gate가 없다.** Handler turn은 record마다 독립이다. 이 handler는 상태를 갖지
-  않으며, 유지할 상태는 Spot·Actor가 소유한다. Record는 받은 순서대로 handler를 시작하고,
-  다음 record는 앞 handler의 완료를 기다리지 않는다. 여기서 시작은 그 record의 filter·handler
-  pipeline 진입이다. 앞 record의 filter가 비동기로 기다리는 동안에도 다음 record의 pipeline은
-  진입할 수 있으므로, filter 뒤 handler 본문의 진입 순서는 정하지 않는다. 같은 handler가 여러 record에서 동시에 진행되므로, handler 사이에서
-  공유하는 application 상태의 동기화는 application이 소유한다.
+  않으며, 유지할 상태는 Spot·Actor가 소유한다. Worker는 owner queue에서 record를 FIFO
+  순서로 꺼내지만, record별 filter·handler pipeline과 handler 본문에 진입하는 순서는
+  정하지 않는다. Queue에서 꺼내는 동작은 handler turn의 시작이 아니며, handler turn은
+  해당 record의 filter·handler pipeline에 실제로 진입할 때 시작한다. 다음 record의
+  pipeline은 앞 handler가 suspend하거나 완료하기 전에도 다른 application worker에서
+  실행될 수 있다. Handler 사이에서 공유하는 application 상태의 동기화는 application이
+  소유한다.
 - **같은 gate의 application turn 두 개를 동시에 실행하지 않는다.** `Yield`의 권한
   이전은 [§3](#yield-gate-and-claim)을 따르며, 실행 mode와 call별 제공 범위는
   [§16](#yield-call-eligibility)에서 확인한다.
@@ -403,6 +405,16 @@ Application FIFO에 일이 아무리 쌓여 있어도 lifecycle 작업은 자기
 
 이 시간 예산은 [§7](#execution-lanes)의 점유 상한(기본 10 ms)과 같은 값이며, `PerActor`처럼
 실행 단위가 분리된 gate를 가진 경우에도 실행 객체마다 같은 값을 적용한다.
+
+Gate가 없는 Node·ChannelName owner에서는 같은 예산을 worker별 연속 drain 구간에
+적용한다. 구간은 그 worker가 해당 owner의 record를 처음 고를 때 시작하며, 같은 owner를
+다시 고르거나 다른 worker가 record를 꺼낸다고 초기화하지 않는다. Worker가 다른 owner의
+작업을 처리하거나 실제로 idle 상태가 되면 그 구간은 끝난다. W3가 동기로 완료되거나
+suspend하여 worker가 W5로 돌아오는 경계에서 예산을 확인한다. Suspend한 handler의
+terminal completion을 기다리면서 worker나 예산을 점유하지 않는다. 여러 worker의 시간을
+owner별 합계로 더하지 않는다. 예산을 소진한 worker의 다음 owner 선택은
+[Framework API §11](../00-foundation/06-framework-api.ko.md#11-handler-실행-객체와-dependency-수명)의
+scheduler 공정성 규칙을 따른다.
 
 ## 10. 실행 자원은 Spot 수에 비례하지 않는다 (구현)
 

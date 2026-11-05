@@ -571,9 +571,11 @@ test('public encoded payload keeps defensive input and output copies', () => {
   source.fill(0);
 
   const exposed = payload.data();
+  const secondCopy = payload.data();
   exposed.fill(0);
 
   assert.equal(payload.getString(), 'stable');
+  assert.equal(Buffer.from(secondCopy).toString(), 'stable');
   assert.equal(Buffer.from(payload.toBytes()).toString(), 'stable');
 });
 

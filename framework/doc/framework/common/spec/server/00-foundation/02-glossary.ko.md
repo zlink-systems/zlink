@@ -2090,7 +2090,7 @@ Actor·Spot authority와 maintenance role을 fence한다.
 | 형태 | Owner token과 expiry의 복합 lease record |
 | .NET 표기 | `ZLinkLocationOwnerToken`, `ZLinkOwnerLeaseReadResult.Found` |
 | 생성·관리 | Location Store provider가 claim 시 generation을 발급하고 host가 정해진 주기로 renew한다. |
-| 수명 | `LeaseExpiresAt`까지 유효하다. 저장된 owner token과 다르거나 store 기준 expiry를 지나면 stale이다. |
+| 수명 | `LeaseExpiresAt`까지 유효하다. 기본 TTL은 30초다. 저장된 owner token과 다르거나 Store 기준 expiry를 지나면 stale이다. Store 장애 중 local 실행권은 [Location runtime §5](../05-location-relocation/01-location-runtime.ko.md#5-store-연결이-끊기면-이전-owner의-새-작업을-막는다)가 소유하며 Store lease를 연장하지 않는다. |
 
 Owner identity는 다음 `ZLinkLocationOwnerToken`으로 묶는다.
 
@@ -2120,8 +2120,8 @@ public abstract record ZLinkOwnerLeaseReadResult
 <a id="fencing-deadline"></a>
 ### Fencing deadline
 
-Owner lease 갱신에 실패한 Server가 새로운 업무 message 수락을 중단해야 하는
-마지막 시점이다.
+Owner lease에서 계산하는 일반 새 작업 수용의 마지막 시점이다. Store 장애 중 보존 실행의
+허용 범위는 [Location runtime §5](../05-location-relocation/01-location-runtime.ko.md#5-store-연결이-끊기면-이전-owner의-새-작업을-막는다)가 정한다.
 
 | 항목 | 내용 |
 |---|---|
@@ -2129,7 +2129,7 @@ Owner lease 갱신에 실패한 Server가 새로운 업무 message 수락을 중
 | .NET 표기 | Public standalone type 없음. 계산 결과는 `DateTimeOffset` 시점이다. |
 | 공개 구성 | 마지막 valid owner lease deadline에서 fencing margin을 반영한 시점 하나다. |
 | 생성·관리 | Framework가 마지막으로 확인한 valid lease와 location option으로 계산한다. |
-| 수명 | 새 valid lease를 확인하면 갱신된다. Deadline에 도달하면 Store failure grace와 관계없이 새 업무 admission을 닫는다. |
+| 수명 | 새 valid lease를 확인하면 갱신된다. 기본 TTL 30초·margin 5초에서 Location runtime §5의 요청 시작 기준 산식으로 25초 이하다. Deadline 뒤 일반 새 작업 차단과 보존 실행은 Location runtime §5를 따른다. |
 
 ## 9. Network listener
 

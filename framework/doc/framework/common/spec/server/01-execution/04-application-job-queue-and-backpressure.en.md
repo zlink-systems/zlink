@@ -131,10 +131,12 @@ Ordinary ingress follows this order.
    serial queue.
 4. Return the permit after finite internal handling of a control or malformed
    ordinary record.
-5. Each job leaves the queue and returns its permit right before the callback handler that
-   runs it starts. Whether that handler is a Node handler or a Spot/Actor handler differs per
-   job, but the return point is one — right before that handler's first instruction. No kind
-   of ingress gets a different point.
+5. Each job retains its Application job queue permit and remains counted as a queued job until
+   immediately before its callback handler's actual first instruction. A worker's earlier take from
+   the owner queue changes neither this accounting nor permit ownership. A pre-callback terminal
+   returns the permit exactly once during cleanup; otherwise it is returned immediately before the
+   callback handler's actual first instruction. Node, Spot, and Actor handlers and different ingress
+   kinds do not use different release points.
 
 ```mermaid
 sequenceDiagram
@@ -207,18 +209,41 @@ The following are not allowed:
 
 ### The Set of Ready Owners (Implementation)
 
-For a record that has acquired a permit to enter an owner queue, the execution resource
-must know that this owner currently has work to do.
+The set of ready owners represents the runnability of records admitted to owner queues with a
+permit. The same owner is present at most once.
 
-- **Maintain as state the set of owners that currently have work to do.** This state represents
-  "this is the current state," not a one-time "something changed" notification, and the
-  same owner never enters it twice. Because an owner with remaining work must
-  eventually be processed even if a notification is lost, a woken execution resource
-  always rechecks this state.
+A Node or ChannelName owner without a gate remains in the set while runnable records not yet taken
+by a worker remain. It is not excluded because another worker is already executing one of its
+handlers. A take transfers one record at the queue head to exactly one worker and updates membership
+according to the remaining records. The same scheduling state owner orders enqueue, removal on the
+last take, and registration on a subsequent enqueue. Selecting the queue-head record does not grant
+exclusive ownership of the owner. Runnability of owners with a gate follows the existing gate and
+claim rules.
 
-Internal confirmation condition — that a woken execution resource always rechecks the
-set of ready owners, so that no wakeup is missed even when a notification is lost, is a
-white-box invariant of this state management.
+Before actually waiting, a worker registers so it can receive a notification and then rechecks the
+ready set; it waits only if no work is available to it. Publication of ready state and transition to
+waiting are coordinated so that either the publisher observes the waiting worker or the worker
+observes the published work. A woken worker also rechecks the set. Loss of a transient notification,
+or a race between publication and waiting, must not leave runnable work indefinitely unprocessed
+with all available workers waiting.
+
+Initial scheduling of ready work may wake a waiting worker even for a single record. Assigning an
+additional worker to an owner without a gate requires records not yet taken and an idle resource
+available for application execution with no wake or execution already scheduled for it. Check this
+condition at work publication and at transitions to worker idleness. Do not repeat the same wake
+for a worker already scheduled or running. Coalesce notifications according to the published batch
+and worker availability, rather than notifying unconditionally on every record enqueue or take.
+Resources holding or reserved for the receive role do not count as idle application workers.
+
+Make these decisions within the existing scheduler state management and deliver notifications after
+leaving its state-change span. Do not invoke handlers or filters within that span. Create no separate
+per-record notification queue or dispatch task.
+
+Internal confirmation conditions — each record has exactly one execution owner; registration of an
+owner without a gate has no omission or duplicate while runnable records remain; races between
+enqueue and the last take, and between ready publication and transition to waiting, lose no work.
+Notifications for additional workers satisfy the availability conditions above and do not duplicate
+an already scheduled wake. These are white-box invariants of scheduling state management.
 
 ### Do Not Separate the Admission Decision from Enqueueing (Implementation)
 
@@ -238,8 +263,8 @@ Handle the following as one commit inside that span.
 3. Is it not sealed for a move, not waiting for creation, and not waiting for a session
    connection
 4. Commit the accepted-order sequence and append the message to the owner queue
-5. If the queue was empty, put that owner into the set of ready owners and notify the
-   execution resource immediately
+5. If the queue was empty, publish the owner's ready state and immediately request scheduling under
+   this section's ready-owner rules. Deliver the actual notification after leaving the commit span.
 
 - **A message that fails a check does not appear in the queue.** It is not implemented as
   enqueue-then-remove — enqueuing and then removing lets it possibly execute in

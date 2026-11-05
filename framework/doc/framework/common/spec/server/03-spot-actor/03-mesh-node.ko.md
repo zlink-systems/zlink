@@ -81,9 +81,16 @@ Fixed RID는 application이 MeshNode RID를 직접 정하는 설정이다. 구�
 [automatic discovery](../00-foundation/02-glossary.ko.md#automatic-discovery) 모두에서, Object role과 관계없이 사용할 수
 있다. Fixed RID와 automatic RID prefix를 함께 설정하면 startup configuration error다.
 
-Fixed RID를 쓰는 node가 재시작해 이전 lifecycle의 active owner claim과 충돌하면 automatic RID와 같은
-규칙으로 처리한다. 새 값을 만들어 다시 시도하지 않고 즉시 conflict로 startup이 실패하며, 이전
-owner lease가 만료된 뒤 시작한 lifecycle은 같은 RID를 claim한다.
+Fixed RID를 쓰는 node가 재시작하면 이전 lifecycle의 lease가 Store exact read에서 무효
+(`Missing`, 다른 token 또는 `ExpiresAt ≤ StoreNow`인 만료 record)임을 처음 관찰한 순간을
+자기 local monotonic의 `t0`로 기록한다. 대기는
+[Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의
+`3·margin`(기본값 예시 15초)을 따른다. Host 시작 호출은 Location runtime §5의 lease 없는 startup과
+같이 끝나며 host는 `Preparing`에 머문다. `t0 + 3·margin` 이후 첫 claim 시점(renew interval 주기)에
+같은 RID를 재claim하며 그 전에는 claim을 제출하지 않는다. 정상 종료 뒤 재시작도 같은 대기를 거친다.
+Lease가 아직 유효하면 기존 `Conflict` 규칙을 따른다. 재시작으로 관찰 시각을 잃으면 다시 관찰하고
+전체 대기를 처음부터 잰다. Mesh 질의나 기존 연결을 요구하지 않으며 새 RID를 발급하지 않는다.
+재claim 뒤의 descriptor 게시·bind·admission 순서는 §6을 따른다.
 
 ## 4. Object role과 등록할 수 있는 기능
 
@@ -243,7 +250,8 @@ Framework는 MeshNode를 다음 순서로 시작한다.
 2. Location Store가 필요한 role이면 host [owner lease](../00-foundation/02-glossary.ko.md#owner-lease)를 확보하고 automatic RID의
    MeshNode descriptor owner CAS를 완료한다. Object Server role이면 이 단계에서 Entry Spot
    ID를 발급하고 instance를 초기화한다. Initialization이 끝나기 전에는 descriptor와
-   resolver에 Entry Spot을 공개하지 않는다.
+   resolver에 Entry Spot을 공개하지 않는다. 이 단계의 Fixed RID 재claim 대기는
+   [§3.3](#33-fixed-rid)을 따른다.
 3. ROUTER를 bind한 뒤 다른 peer에 알릴 실제 endpoint를 확정한다.
 4. 필요한 정보를 모두 포함한 MeshNode descriptor를 공개하고 어떤 peer와 연결해야
    하는지 계산한다.

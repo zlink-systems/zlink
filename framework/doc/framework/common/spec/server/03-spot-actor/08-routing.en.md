@@ -140,7 +140,7 @@ Redis) on every call; this cache reduces that cost.
 | Reason it's kept | Caching only the route and dropping the fence would mean sending to a stale owner without knowing it — this is why the owner route and the fence values needed for the acceptance judgment are kept together. |
 | Default setting | `RouteCacheMaxAge` defaults to 15 seconds. `0` means the route cache isn't used. |
 | Results not stored | `Missing`, `Creating`, and Store failure aren't cached. A previous failure alone doesn't end the next call. Caching this state would turn a brief failure into an outage lasting as long as the cache lifetime. |
-| Conditions for immediate invalidation | An entry is removed on confirming a larger `StoreVersion`, a stale-route result, a Store recovery event, owner-lease invalidation, or a **relay notification**. |
+| Conditions for immediate invalidation (ordinary cache; bound routes follow §3.2) | An entry is removed on confirming a larger `StoreVersion`, a stale-route result, a Store recovery event, owner-lease invalidation, or a **relay notification**. |
 | Relay notification | [Message Follow](../00-foundation/02-glossary.en.md#message-follow) forwards a message that still arrives at the previous owner after an Actor or Spot has moved to a different MeshNode to the new owner, then notifies the original sending runtime. The notified runtime removes that entry and re-queries the owner on the next call. |
 | Runtime setting change | The `RouteCacheMaxAge` runtime-change rule is defined by [Location runtime §7.3](../05-location-relocation/01-location-runtime.en.md#73-delivering-a-message-arriving-at-a-previous-owner-to-the-new-owner). |
 
@@ -433,10 +433,17 @@ Once bind finishes, the following work uses the stored route.
 - Physical disconnect and application logical-disconnect notification
 - A push from Actor to the bound Session
 
-Actor location isn't queried from the Location Store each time this work
-starts. The stored route is only valid within the current owner lease's
-local admission deadline. Even if the Store is temporarily unavailable, the
-lease or deadline isn't extended.
+Actor location isn't queried from the Location Store each time this work starts.
+The stored route's ordinary validity ends at the current owner lease's local admission
+deadline. Bound messaging during a short Store communication outage follows retained execution in
+[Location runtime §5](../05-location-relocation/01-location-runtime.en.md#5-blocking-a-previous-owners-new-work-when-the-store-connection-drops).
+Do not remove an established binding route solely because the Actor owner lease or ordinary
+cache expires. The Session owner continues sending on that bound route; the receiving owner's
+existing gate decides retained execution. Invalidate immediately on a stale binding,
+another incarnation, or a Location runtime §6.1 release commit. Do not resend the same operation to a new
+owner. Fence refresh after recovery follows
+[Session binding §5](../04-session/02-session-actor-binding.en.md#5-bind-and-relay).
+This does not extend the Store lease or ordinary route-cache lifetime.
 
 If the stored route is no longer valid, the original operation is either
 delivered exactly once via an active Message Follow route, or ends with
@@ -536,6 +543,10 @@ A request completes with exactly one terminal result: the first confirmed reply,
 cancellation, or shutdown.
 
 ## 5. Implementation and Contract-Test Verification Requirements
+
+- Remove ordinary cache entries on lease expiry, while established bound routes keep delivering
+  to an owner eligible for retained execution. A stale binding, another incarnation, or Location runtime §6.1 release
+  commit invalidates the bound route without resending the same operation to a new owner.
 
 Confirm the following using only the public surface — the Spot/Actor direct
 starter method, the bind/relay method, reply completion, and the result tag

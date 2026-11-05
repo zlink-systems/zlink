@@ -123,7 +123,7 @@ Location Store를 왕복하면 대부분 다른 process(Redis 등)를 오가는 
 | 보관하는 이유 | 경로만 캐시하고 fence를 빼면 낡은 owner로 보내 놓고도 그 사실을 알지 못한다. Owner 경로와 수락 판단에 필요한 fence 값을 함께 보관하는 이유다. |
 | 기본 설정 | `RouteCacheMaxAge` 기본값은 15초다. 0이면 route cache를 사용하지 않는다. |
 | 저장하지 않는 결과 | `Missing`, `Creating`과 Store failure는 캐시에 두지 않는다. 이전 실패만으로 다음 call을 끝내지 않는다. 이 상태를 캐시하면 잠깐의 실패가 캐시 수명만큼 지속되는 장애가 된다. |
-| 즉시 무효화하는 조건 | 더 큰 `StoreVersion`, stale route 결과, Store recovery event, owner lease invalidation 또는 **relay 통지**를 확인하면 entry를 제거한다. |
+| 즉시 무효화하는 조건(일반 cache; bound route는 §3.2) | 더 큰 `StoreVersion`, stale route 결과, Store recovery event, owner lease invalidation 또는 **relay 통지**를 확인하면 entry를 제거한다. |
 | Relay 통지 | Actor나 Spot이 다른 MeshNode로 옮겨진 뒤에도 이전 owner에 도착한 message를 새 owner에게 대신 전달하는 [Message Follow](../00-foundation/02-glossary.ko.md#message-follow) relay가 message를 새 owner로 넘기면 원 송신 runtime에 통지한다. 통지를 받은 runtime은 해당 entry를 제거하고 다음 call에서 owner를 다시 조회한다. |
 | 실행 중 설정 변경 | `RouteCacheMaxAge`의 실행 중 변경 규칙은 [Location runtime §7.3](../05-location-relocation/01-location-runtime.ko.md#73-이전-owner로-도착한-message를-새-owner에게-전달한다)이 정한다. |
 
@@ -378,9 +378,15 @@ Bind가 끝난 뒤에는 다음 작업이 저장한 route를 사용한다.
 - Physical disconnect와 application의 logical disconnect 통지
 - Actor에서 bound Session으로 보내는 push
 
-이 작업을 시작할 때마다 Location Store에서 Actor 위치를 조회하지 않는다. 저장
-route는 current owner lease와 local admission deadline 안에서만 유효하다. Store를
-일시적으로 사용할 수 없어도 lease나 deadline을 연장하지 않는다.
+이 작업을 시작할 때마다 Location Store에서 Actor 위치를 조회하지 않는다. 저장 route의
+일반 유효 기간은 current owner lease의 local admission deadline까지다. Store 통신 실패 중
+짧은 장애의 bound 메시징은 [Location runtime §5](../05-location-relocation/01-location-runtime.ko.md#5-store-연결이-끊기면-이전-owner의-새-작업을-막는다)의
+보존 실행 조건을 따른다. 이미 확정된 binding route는 Actor owner lease의 만료나 일반 cache
+만료만으로 제거하지 않는다. Session owner는 그 bound route로 계속 보내고, 수신 owner의 기존
+gate가 보존 실행 여부를 판정한다. stale binding·다른 incarnation 또는 Location runtime §6.1 해제
+commit을 확인하면 즉시 route를 무효화한다. 이때 새 owner로 같은 operation을 다시 보내지 않는다.
+복구 후 fence 갱신은 [Session binding §5](../04-session/02-session-actor-binding.ko.md#5-bind와-relay)를 따른다.
+이 조건은 Store lease나 일반 route cache 수명을 연장하지 않는다.
 
 저장 route가 더 이상 유효하지 않으면 active Message Follow route로 original
 operation을 정확히 한 번 전달하거나 `Unavailable`로 끝낸다. Location Store에서
@@ -467,6 +473,10 @@ Route 오류·timeout·cancellation 뒤 request 재제출 경계는
 Request는 reply, error, timeout, cancellation 또는 shutdown 가운데 먼저 확정된 terminal 결과 하나로 완료한다.
 
 ## 5. 구현 및 contract test 검증 요구
+
+- 일반 cache는 lease 만료에 제거하지만 이미 확정된 bound route는 보존 실행 대상 owner로
+  계속 전달한다. stale binding·다른 incarnation·Location runtime §6.1 해제 commit을 확인하면 그 route를 무효화하며
+  같은 operation을 새 owner로 재전송하지 않는다.
 
 공개 표면(Spot·Actor direct 시작 method, bind·relay method, reply 완료, Location Store가
 아니라 route resolver가 돌려주는 결과 tag) 만으로 다음을 확인한다.

@@ -184,7 +184,7 @@ sequenceDiagram
 | I1 permit | ordinary record를 claim하기 전에 이 회전의 permit 예산을 host-shared permit에서 확보한다([Application job queue 「3」](04-application-job-queue-and-backpressure.ko.md#3-ordinary-ingress-permit-순서)의 순서 그대로). 예산은 회전 상한 64건과 남은 permit 중 작은 값이다. permit이 없으면 ordinary receive를 멈추되, pre-receive에 terminal completion으로 식별된 supply의 처리, 관리 deadline, permit 반환과 종료 알림은 계속 진행한다. | permit 없이 receive하지 않으며, permit 0에서도 이미 시작한 operation의 완료와 관리 작업이 멈추지 않는다. |
 | I2 claim | 예산 안에서 Core·binding에서 record를 연속으로 claim한다. permit·건수(최대 64)·byte·경과 시간 한도 중 먼저 닿는 것을 적용하고 cursor를 유지한다([Application job queue 「4」](04-application-job-queue-and-backpressure.ko.md#4-소켓에서-여러-건-읽기-구현)). 한 건 claim 뒤 회전을 끝내지 않는다. | 쌓인 record 수만큼 깨우기·읽기가 반복되지 않는다. |
 | I3 classify | record마다 header만 해석한다. control record — liveness probe와 ACK, topology — 는 이 자리에서 내부적으로 처리하고 permit을 반환하며 application handler queue에 넣지 않는다. application record는 payload를 해석하지 않고 owner만 정한다. | claim된 control record는 application worker의 backlog 뒤에서 기다리지 않는다(§4.2). |
-| I4 commit | application record를 owner queue에 넣는다 — 확인과 넣기가 한 원자 구간인 [「넣을지 판단하는 것과 넣는 것을 쪼개지 않는다」](04-application-job-queue-and-backpressure.ko.md#넣을지-판단하는-것과-넣는-것을-쪼개지-않는다-구현)의 절차다. record는 이동하며 복사하지 않는다. 비어 있던 queue가 채워진 owner를 준비된 owner 집합에 넣는다. 그 owner의 turn을 실행할 자원은 §4.4가 정한다. | Framework가 만드는 실행 자원 전환은 owner마다 최대 하나다(§4.4). |
+| I4 commit | application record를 owner queue에 넣는다 — 확인과 넣기가 한 원자 구간인 [「넣을지 판단하는 것과 넣는 것을 쪼개지 않는다」](04-application-job-queue-and-backpressure.ko.md#넣을지-판단하는-것과-넣는-것을-쪼개지-않는다-구현)의 절차다. record는 이동하며 복사하지 않는다. 비어 있던 queue가 채워진 owner를 준비된 owner 집합에 넣는다. 그 owner의 turn을 실행할 자원은 §4.4가 정한다. | Framework가 만드는 실행 자원 전환은 각 record의 claim부터 해당 handler의 첫 instruction까지 최대 하나다(§4.4). |
 
 **수신 회전에서 Framework가 만드는 실행 자원 전환은 I4 뒤 §4.4의 배치에서 생기는 최대 하나다** — record 하나가 "receive
 loop → 별도 mailbox → dispatch pump → record마다 새 task"처럼 세 번 queue를 옮겨 다니는 모양은 위반이다.
@@ -217,15 +217,28 @@ Owner queue에 들어온 record는 application worker가 꺼내 실행한다.
 
 | 단계 | worker가 하는 일 | 그래서 |
 |---|---|---|
-| W1 acquire | 준비된 owner 집합에서 owner를 얻고, execution gate가 있는 owner면 그 [execution gate](../00-foundation/02-glossary.ko.md#execution-gate)를 잡는다([Handler turn 「6」](02-handler-turn-and-execution-gate.ko.md#6-처리-권한-획득의-함정-구현), [「11」](02-handler-turn-and-execution-gate.ko.md#11-두-동기화-지점을-싸게-만든다-구현)). | 무경합이면 원자 연산 하나로 gate를 얻는다. |
+| W1 acquire | 준비된 owner 집합에서 owner를 고른다. Execution gate가 있는 owner면 그 [execution gate](../00-foundation/02-glossary.ko.md#execution-gate)를 잡는다([Handler turn 「6」](02-handler-turn-and-execution-gate.ko.md#6-처리-권한-획득의-함정-구현), [「11」](02-handler-turn-and-execution-gate.ko.md#11-두-동기화-지점을-싸게-만든다-구현)). Gate가 없는 Node·ChannelName owner면 §4.3 아래의 규칙에 따라 record 하나의 실행 소유권을 얻는다. | Gate가 있는 owner의 무경합 gate 획득은 원자 연산 하나다. Gate가 없는 owner는 record별 실행 소유권을 사용한다. |
 | W2 decode | typed payload를 한 번 역직렬화한다([Payload ownership 「6」](05-payload-ownership-and-codec.ko.md#6-역직렬화를-언제-하는가)). | 실행 권한을 얻기 전에는 역직렬화하지 않는다. |
 | W3 run | handler를 호출한다. permit은 handler의 첫 instruction 직전에 반환한다. 일반 비동기 대기 뒤 재개는 [Handler turn §2](02-handler-turn-and-execution-gate.ko.md#execution-gate)의 turn 유지 규칙을 따르고, 허용된 `Yield` 뒤 재개만 [Handler turn 「3」](02-handler-turn-and-execution-gate.ko.md#3-yield-시-gate와-claim)을 따른다. | handler 안의 `await`는 permit을 다시 얻지 않는다. |
 | W4 reply | handler가 완료된 뒤 그 turn 문맥에서 reply payload를 encode해 binding의 reply operation을 그 자리에서 시작한다. 다른 실행 자원에 넘기지 않는다. | reply 경로에 Framework의 실행 자원 전환이 없다. |
 | W5 next | 시간 예산([Handler turn 「9」](02-handler-turn-and-execution-gate.ko.md#9-시간-예산과-batch-처리-구현)) 안이면 같은 owner의 다음 record를 처리하고, 아니면 보유한 gate가 있을 때 반납하고 다음 owner로 간다. | 한 owner가 worker를 독점하지 않는다. |
 
-Gate가 없는 Node·ChannelName owner는 owner queue의 FIFO 순서로 handler를 시작하며, 다음 record는 앞
-handler의 terminal completion을 기다리지 않는다. W3의 handler가 suspend하면 worker는 W5로 가고, W4 reply는
-그 handler가 완료된 뒤 그 handler의 turn 문맥에서 한다.
+Gate가 없는 Node·ChannelName owner의 record 선택 순서와 handler 실행 순서는
+[Handler turn §2](02-handler-turn-and-execution-gate.ko.md#execution-gate)를 따른다.
+
+**Gate가 없는 Node·ChannelName owner는 여러 application worker가 처리할 수 있다.**
+Worker는 W1에서 owner queue head의 record 하나에 대한 실행 소유권만 얻으며, owner
+전체를 독점하지 않는다. 다른 worker가 다음 record를 얻는 데 앞 handler의 suspension이나
+terminal completion을 요구하지 않는다. Queue에서 record를 꺼내고 ready 상태를 갱신하는
+절차와 worker를 깨우는 조건은
+[Application job queue §3의 준비된 owner 집합](04-application-job-queue-and-backpressure.ko.md#준비된-owner-집합-구현)이
+소유한다. Record를 꺼낸 worker는 W2~W4와 그 record의 terminal 정리를 책임진다.
+Handler가 suspend한 뒤에는 기존 continuation 경로가 그 책임을 이어받는다. Queue가
+비었거나 owner가 ready 집합에 없다는 사실만으로 진행 중인 dispatch가 끝난 것은 아니다.
+
+Gate가 없는 handler가 W3에서 suspend하면 worker는 W5로 간다. 그 handler의 W4 reply는
+handler가 완료된 뒤 해당 handler의 turn 문맥에서 실행한다. Gate가 있는 owner의 gate·claim
+범위와 일반 비동기 대기 및 `Yield`의 권한 유지·이전은 Handler turn §2·§3을 따른다.
 
 **Framework는 record마다 별도 dispatch task나 supervisor wrapper를 만들지 않고 공유 worker의 drain을
 재사용한다.** 요청마다 task·future·virtual thread를 만들어 supervisor에 등록하는 모양은 위반이다.
@@ -278,6 +291,11 @@ DI 통합은 core runtime에 둘 수도 있고 별도 package·확장에 둘 수
 내부 확인 조건 — 준비된 owner 등록에 누락·중복이 없고 §4.4가 배치한 자원이 그 turn을 실행하는지, W1~W4
 사이에 record별 dispatch task·supervisor 등록이 없는지는 trace로 확인하는 white-box 불변 조건이다.
 Application 실행 자원의 깨우기와 수신 인계 자원의 깨우기는 따로 기록한다.
+Gate가 없는 owner의 record take 순서와 ready membership 및 worker 대기 전환의 원자적
+관계는 Application job queue §3의 내부 확인 조건으로 검증한다. 같은 owner를 여러 worker가
+처리할 때도 그 조건을 적용한다. Worker별 drain 시간 예산이 같은 owner의 재선택으로
+초기화되지 않고, I4부터 W3까지 record별 실행 자원 전환이 최대 한 번인지 확인한다.
+
 
 ### 4.4 실행 자원 배치 — 수신 역할 인계
 
@@ -387,6 +405,16 @@ claim, §4.4의 배치, W1~W5의 묶음 처리라는 관찰 결과는 같으며,
   시점까지의 시간 D가 active 길이 T의 10% 이하다(`D / T ≤ 0.10`). 이 판정은 전량 수신·오류 0·abandoned 0을
   먼저 확인한 뒤 적용한다. bench runner가 기록하는 `drain_ms`는 settle 확인을 포함한 진단값이므로, D는
   target 수신 event로 따로 측정한다.
+
+- (f) **Gate가 없는 owner의 dispatch와 수명**: 여러 application 실행 자원을 제공하는
+  runtime에서는 같은 Node·ChannelName owner에 보낸 독립 record들이 앞 handler의
+  suspension이나 terminal completion을 기다리지 않고 실행될 수 있다. 실행 자원이 하나인
+  runtime에서는 기존 비동기 suspension을 사이에 둔 독립 진행으로 확인한다. 두 경우 모두
+  record가 중복 실행되지 않고, record별 handler·filter scope가 분리되며, 각 dispatch의
+  terminal과 정리가 정확히 한 번 발생한다. 같은 gate를 사용하는 두 handler에는 기존
+  직렬 실행 규칙을 확인한다. Gate가 없는 owner의 지속적인 부하 속에서도 다른 ready
+  owner가 worker별 시간 예산 규칙에 따라 실행 기회를 얻는다. Shutdown은 이미 worker가
+  꺼냈거나 실행 중인 record도 accepted work로 처리한다. 검증 방법은 언어별 문서가 연결한다.
 
 (c)에 미달하면 그 언어의 runtime이 이 문서를 위반한 것이며, 벤치 조건이나 timeout·HWM 값을 조정해
 맞추지 않는다.

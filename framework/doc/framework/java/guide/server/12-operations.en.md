@@ -431,9 +431,18 @@ port as readiness.
 
 Deployment should confirm the previous server's normal termination result before starting its
 replacement. After forced termination, start a new process once the previous owner lease has expired.
-The default owner lease TTL is 15 seconds and can be configured. Framework does not retry the conflict
-or select another RoutingId within the same startup operation. Also check that two processes are not
-using the same fixed RoutingId concurrently.
+The default owner lease TTL is 30 seconds and can be configured. After first observing the previous
+lease invalid, the restarted node waits Location runtime §6.1's `3·margin` (default example: 15 seconds)
+and reclaims the same RID. The host start call finishes while runtime remains `Preparing` during the
+wait. Restart after normal shutdown uses the same wait
+([MeshNode §3.3](../../../common/spec/server/03-spot-actor/03-mesh-node.en.md#33-fixed-rid)).
+Starting while the previous lease remains valid after forced termination ends with a startup
+error; supervisor restarts can succeed only after lease expiry. That lifecycle then waits another
+`3·margin` (default example: 15 seconds). With defaults and normal clocks, termination to `Serving`
+usually takes 40–45 seconds; observation delays or restarts can postpone it
+([Location runtime §6.1](../../../common/spec/server/05-location-relocation/01-location-runtime.en.md#61-read-and-cas)).
+Framework does not retry a valid-lease conflict or select another RoutingId within the same startup
+operation. Also check that two processes are not using the same fixed RoutingId concurrently.
 
 Normal shutdown cleans up the host's descriptors and owner lease. Forced termination may prevent
 that cleanup, leaving the active claim until lease renewal stops and the lease expires. Check the

@@ -544,10 +544,20 @@ application 실행 문맥에서 호출한다.
 ([Application job queue와 backpressure §1](../01-execution/04-application-job-queue-and-backpressure.ko.md#1-두-독립된-capacity-authority)).
 Mailbox마다 건수나 byte를 따로 세면 같은 것을 두 번 세게 된다.
 
-한 owner가 scheduler를 연속으로 점유하는 시간에는 상한이 있다. 상한에 도달하면 남은 작업을 ready
-상태로 되돌리고 다른 ready owner에게 실행을 넘긴다. 이 상한은 같은 node의 다른 owner가 겪는 최대
-대기 시간을 정한다. 실행 중인 handler 하나가 상한을 넘겨 실행되는 경우는 이 계약이 다루지 않는다 —
-handler 경계에서만 확인한다.
+Gate가 있는 owner가 scheduler를 연속으로 점유하는 시간에는 상한이 있다. 상한에 도달하면
+남은 작업을 ready 상태로 되돌리고 다른 ready owner에게 실행을 넘긴다. 이 상한은 같은
+node의 다른 owner가 겪는 최대 대기 시간을 정한다. 실행 중인 handler 하나가 상한을 넘겨
+실행되는 경우는 이 계약이 다루지 않으며, handler 경계에서만 확인한다.
+
+Gate가 없는 Node·ChannelName owner에서는 한 worker가 같은 owner의 작업을 연속
+drain하는 시간에
+[Handler turn §9](../01-execution/02-handler-turn-and-execution-gate.ko.md#9-시간-예산과-batch-처리-구현)의
+시간 예산을 적용한다. 예산을 소진하면 아직 꺼내지 않은 작업은 ready 상태로 유지하고,
+그 worker는 대기 중인 다른 ready owner에게 실행 기회를 준 뒤 해당 owner의 drain을
+계속할 수 있다. 다른 ready owner가 없으면 같은 owner를 계속 처리할 수 있다. 이미
+대기 중인 owner를 반복해서 건너뛰어 실행 기회를 무기한 미루지 않는다. 이 규칙은 여러
+worker가 같은 gate 없는 owner를 처리할 때도 worker마다 적용하며, 이미 실행 중인 handler를
+중단하지 않는다. 같은 node의 다른 owner에 대한 고정 최대 대기 시간을 보장하지는 않는다.
 
 Scheduler는 작업 도착을 기다릴 때 도착 기반으로 깨어난다. 언어 runtime이 blocking 대기나 callback
 wakeup을 제공하지 못해 주기적 확인을 사용하는 경우에는 그 주기를 언어별 문서에 공표한다. 그 주기가

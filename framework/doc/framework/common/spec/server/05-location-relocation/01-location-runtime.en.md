@@ -683,8 +683,17 @@ An owner lease is live only when all three conditions below hold.
 3. The expiration time returned by the read is later than the `StoreNow` from the same
    read.
 
+A live host descriptor list contains only descriptors whose owner leases satisfy these three
+conditions. A leftover descriptor record alone does not belong to the live list.
+
 Store time is used because hosts' local clocks can differ. Comparing local clocks causes
 different hosts to judge the same lease differently.
+
+This validation applies to new target selection and connect/reconnect candidates. While an
+already admitted physical connection serves an established bound route, lease expiry alone
+does not remove its intent. This use is limited by §5.1's retained execution and §6.1's release
+boundary; ordinary physical-connection liveness still applies. It does not authorize a new route
+lookup or admitting a new connection from an expired descriptor.
 
 **If any of the three conditions doesn't hold, the Framework excludes that descriptor
 from the candidates.** It also excludes the descriptor when the owner-lease read returns
@@ -756,12 +765,19 @@ channels and fanout channels is checked via
 [Runtime Status Query And Operational Diagnostics "5. Topology State — RouteMesh, ClientServer, Automatic Fanout"](../06-observability/01-runtime-monitoring.en.md#5-topology-state--routemesh-clientserver-automatic-fanout)
 (quoted again in §7.4).
 
-## 5. Blocking a Previous Owner's New Work When the Store Connection Drops
+<a id="5-blocking-a-previous-owners-new-work-when-the-store-connection-drops"></a>
+## 5. Execution Rights and Admission During a Store Outage
 
-If a host that fails to renew its owner lease keeps accepting new work, it can process
-concurrently with the new owner. To prevent this, each host computes "the last time it
-can accept new work" from the timestamp returned by the Store. This time is called the
+**Within §5.1's clock-progress and process-pause limits, the same object must not execute at two
+owners concurrently.** During a short Store communication outage, bound Actor/Spot messaging and
+Spot timers for objects already in steady `Ready` continue using their last confirmed state and routes. Location runtime owns the execution-right
+decision, applied by the existing execution gate. Other modules must not add a separate
+admission decision or transport connection state.
+
+The ordinary new-work cutoff computed from Store response times is the
 [local admission deadline](../00-foundation/02-glossary.en.md#deadline).
+With the defaults below, it is at most 25 seconds after starting the last successful
+renewal request. Retained execution during an outage and checks before release follow §5.1 and §6.1 together.
 
 **Every host using a Location Store validates the following relationship at startup**,
 regardless of the routing ID allocation method.
@@ -773,22 +789,32 @@ max(renew interval, renew timeout) + renew timeout < owner lease TTL - owner lea
 | Setting (per host) | Default |
 |---|---:|
 | Renew interval | 5 seconds |
-| Owner lease TTL | 15 seconds |
+| Owner lease TTL | 30 seconds |
 | Renew timeout | 3 seconds |
 | Owner lease fencing margin | 5 seconds |
+
+The defaults satisfy the startup constraint: `max(5, 3) + 3 = 8 < 30 - 5 = 25`.
+They are chosen to tolerate the observed 5–9 seconds during Store node replacements such as
+failover and pricing-plan changes.
 
 Every value must be positive. Violating the relationship above is a startup error. The next renewal starts renew interval after the previous renewal started; if the previous renewal hasn't finished yet, it starts after that renewal finishes.
 Automatic RID descriptor registration also uses the same host-run combination and
 deadline.
 
 The Framework computes remaining time from the `StoreNow` and `ExpiresAt` of a
-successful register/read/renew result. It uses the local monotonic time before and after
-the Store request together to account for network delay. **A single owner-lease renewal
+successful register/read/renew result. Compute the deadline as
+`request-start local monotonic + (ExpiresAt − StoreNow) − margin`. Use local monotonic times
+before and after the Store request so response delay cannot extend the deadline. **A single owner-lease renewal
 refreshes the host-wide local admission deadline. A per-object deadline can't extend this
 time.**
 
-Once the deadline passes, or the current host-run combination differs from the Store
-value, the following new work isn't accepted.
+Once the deadline passes or a mismatch between the current host-run combination and the Store
+value is confirmed, ordinary new work in the following table is blocked. A confirmed mismatch
+blocks even before the deadline. Bound
+Actor/Spot messages and Spot timers continue only under §5.1's retained-execution conditions;
+a confirmed mismatch stops them under §5.1's loss-of-execution-rights rule.
+A mismatch between the current host-run combination and the Store value is distinct from
+a new claim after normal expiry and does not itself grant retained objects execution rights.
 
 | Blocked target |
 |---|
@@ -814,11 +840,191 @@ the publication, and its move to `Serving` follows the readiness conditions in t
 after the lease is held, a timeout or provider error leaves the publication result unknown, the
 host confirms it again as in §10; if it still can't confirm it, the host finishes startup as
 `Preparing` and retries the publication at each renew interval. A definite rejection because
-another owner holds the row is a startup error. The
-claim results `Conflict` and `GenerationExhausted` are startup errors. If the caller
+another owner holds the row is a startup error. Waiting after an invalid-lease observation and `Conflict` for a valid lease
+during Fixed RID reclaim follow
+[MeshNode §3.3](../03-spot-actor/03-mesh-node.en.md#33-fixed-rid).
+Other claim results `Conflict` and `GenerationExhausted` are startup errors. If the caller
 cancels startup, startup ends as cancelled; this rule does not turn it into a success.
 A claim that already started is confirmed by re-reading the same key as in §10; a
 confirmed lease is released normally and no heartbeat starts.
+
+### 5.1 Retention and Rejoining After a Short Outage
+
+The retention bound **`T = TTL + 2·margin`** is derived, not an independent setting. The default
+example is `30 + 2·5 = 40 seconds`. Measure it by the owner's local monotonic clock from
+starting the last successful lease-renewal request. Before the first renewal, use the start of
+the successful initial claim request. Response delay or a new claim alone never extends the
+previous outage's retention period. Store time determines lease expiry; each node measures
+retention, discard, and release waits using its own local monotonic clock.
+
+A domain includes every host that can read, release, or recreate global authority in the same
+Location Store namespace, including hosts with different MeshNames, object clients, and hosts
+that may restart or scale out. Store communication failure means a renew/read timeout or provider
+error. Definitive Store responses such as `Conflict` or `Missing` are not communication failures
+and do not enable retained execution. All hosts in the domain must use the same fencing margin.
+A smaller releaser margin than the old owner's can make release precede the retention deadline,
+breaking exclusivity. Domain-wide margin equality is an operational requirement; the Framework
+does not validate it by exchanging settings through Store, descriptors, or wire. Different TTLs
+across hosts do not affect release-wait safety, but identical TTLs are recommended for operational
+simplicity. Derive the admission deadline under §5 and `T` from the formula above. Default examples
+for TTL, margin, admission, and `T` are 30, 5, 25, and 40 seconds, with renew interval/timeout 5/3 seconds.
+
+**Enable retention beyond the admission deadline only when every host in the domain supports
+this section and §6.1's time-based release.** Use the startup-only Location option
+`StoreOutageRetention` (bool, default `false`). Each host reads its own setting; do not propagate
+it through Store, descriptors, or wire. When `false`, treat actual execution-retention `T` as the
+admission deadline. Descriptor `objectCapabilities` describe placement by object kind/type,
+not host protocol versions, and cannot establish support. Operators must verify support for the
+0.33.0-or-later rules on every domain host before deploying identical retention configuration.
+If any host lacks support or support is unverified, keep the option `false`. Hosts on 0.32 or
+earlier release immediately on lease invalidity and cannot coexist with execution beyond the
+admission deadline. Before a downgrade or adding an older host, disable retention and let all
+existing `T` retention periods (default example: 40 seconds) end. Apply this decision only in
+Location runtime's existing execution-right policy, without caller-side decisions. Disabling
+retention does not shorten §6.1's release wait.
+
+- Before the outage means before the host first observes a Store communication failure. Only
+  objects confirmed steady `Ready` by successful Store CAS before that observation qualify.
+  Before the admission deadline, use ordinary execution-right rules. After it, during Store
+  communication failure, continue cached bound Actor/Spot messaging and Spot timers for objects
+  that were steady `Ready` before the outage while below `T`. Mesh peer counts and connectivity
+  are not execution-right conditions. This includes messaging between retained objects on the
+  same node. Exclude new route lookups, object creation, factory/restore commits, new relocation,
+  and capacity changes. Keep existing queues, timers, bindings, and delayed completions.
+- At `T`, immediately record (latch) discard regardless of mesh state or whether any turn starts.
+  Do not defer the decision until the next turn. The existing execution gate reads that record
+  to block new execution of previous objects. Clean queues, timers, bindings, and delayed
+  completions, discard retained memory, and rejoin empty. Peer recovery or a successful new
+  claim never reopens or restores discarded state. Detected Store rollback triggers the same
+  cleanup regardless of `T`. This does not authorize deleting other owners' Store records or
+  flushing the namespace. When a User Spot is discarded, the incoming Join attempts it accepted as
+  target that are still before verified cutover end with this discard record under
+  [Relocation flow §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). The order of
+  the discard record and cutover verification is settled once at the execution boundary owning that
+  attempt, and this ending waits for neither cutover arrival nor a handler turn.
+- A confirmed change to another owner/incarnation or loss of local execution rights stops new
+  execution of the affected object regardless of mesh connectivity or `T`. Do not mutate the
+  Store with an invalid token.
+- Bind a User Spot incarnation and its local member Actors on that host only in the discard
+  direction. When the Spot is discarded, discard its local members too. A discarded local member
+  does not discard the Spot or other members; each follows its own retention and recovery
+  confirmation. Reopen a local member's execution (its own gate for PerActor, its records under the
+  shared Spot gate for SpotWide) only after its Spot's gate has reopened; the shared gate also blocks
+  a discarded member's records through the discard record. Objects in relocation when the outage
+  starts (both source and target) are outside this binding and outside §5.1 retention, and follow
+  the failure table in Relocation flow §9 and §10 of this document. If the source remains owner
+  after settlement, reopen its gate under the recovery rules below, and for a local member only after
+  its Spot's gate reopens; if the Spot was discarded meanwhile, discard that member then and apply the
+  cleanup rules. Even when settlement ends by source lease expiry, if the record still points at this
+  host as owner, apply the same cleanup rules (release in the second case for an old invalid token). `Creating` and `Closing` objects follow §7 and their own lifecycle procedures.
+  Member Actors on other hosts are outside this binding. Their respective owners
+  own their authority and execution rights, so they follow the existing membership contract in
+  [Spot/Actor membership §1 and §3](../03-spot-actor/05-spot-actor-membership.en.md#1-identity-and-authority)
+  and §6.1's release conditions.
+- On confirmed Store recovery, close each object's existing gate and validate continuity,
+  authority, `ObjectGeneration`, `AuthorityOwnerGeneration`, owner token, node lifecycle, and
+  that the object has not been discarded. If the existing token is still valid, renew that
+  same token to refresh the admission deadline and reopen the existing gate without a
+  token-replacement CAS. Only normal expiry requires a new claim issuing a new `LeaseGeneration`
+  and per-object token-replacement CAS. After a successful new claim, recompute the admission
+  deadline as for the first renewal under §5, then republish the descriptor with the new
+  `LeaseGeneration` under §5's publication rules (`Renew` intent) before submitting per-object
+  replacement CAS. Receive confirmation that publication has taken effect in the Store through
+  the existing asynchronous continuation. Recheck an uncertain publication result under §10.
+  Replacement CAS does not wait for publication confirmation, but gate reopening requires it.
+  A definite republication rejection means loss of execution rights: do not recover, and apply
+  the existing discard and cleanup rules.
+  Reject renewal of expired tokens.
+  Only for objects not discarded, replace with the currently valid new token when the same
+  incarnation's old self-owned token and retained `StoreVersion`, `ObjectGeneration`, and
+  `AuthorityOwnerGeneration` remain unchanged in the Store. Keep owner identity and node lifecycle.
+  This is §6.1's `Preserve`, without changing other generations or capacity. Submit replacement
+  CAS only if its request-start time plus renew timeout is at or before the original retention
+  deadline `T`. Reopen each object's existing gate only when its own replacement CAS success and
+  new descriptor publication in the Store are both confirmed before `T` (a local member also follows
+  the binding rule above). Discard an object that lacks either confirmation within the original `T`
+  or is already discarded; for a User Spot also discard its local members; then apply the
+  post-discard authority cleanup rule below. If
+  a response at or after `T` or §10's recheck reveals replacement success, follow the post-discard
+  authority cleanup rule below. Never reconstruct `Missing`
+  or another incarnation's or owner's records from local memory. Do not recreate or retransmit
+  successful objects' pending messages, timers, bindings, or delayed completions. Keep binding
+  identity and Session sequence. Late recovery also retains only objects whose new claim,
+  descriptor publication confirmation, and own CAS finish within the original `T`.
+  Refresh lease-fence copies under
+  [Session binding §5](../04-session/02-session-actor-binding.en.md#5-bind-and-relay).
+- For every discarded object, complete authority cleanup after Store recovery. The Location
+  repository cleans objects one at a time. An Actor's cleanup batch handles that one Actor only and
+  never combines another Actor's authority, capacity, or membership row. The batch includes, per the
+  existing contract, the conditions §6.1 requires (authority `StoreVersion`, owner lease, descriptor,
+  capacity), that Actor's lookup-index changes, and, for a member Actor, removal of its membership
+  row. The Location repository alone decides cleanup eligibility under §6.1. For each object, apply
+  one of the following based on a Store exact read.
+  - If authority still has the same self-owned owner, node lifecycle, `ObjectGeneration`, and
+    `AuthorityOwnerGeneration` and references the owner's currently valid lease token, perform
+    §6.1's `Delete` conditional on the freshly read `StoreVersion`, whether the token was retained
+    or replaced. This includes previously unconfirmed renewals confirmed later.
+  - If authority is the same incarnation but references the owner's own old token that has become
+    invalid, this cleanup starts §6.1's release without any application create call. It waits
+    `3·margin` after first observing that token invalid, then checks authority `StoreVersion`,
+    owner-lease invalidity, descriptor, and capacity as conditions of one batch and releases the
+    authority and capacity. No new incarnation is created, so the create path's type relocation
+    policy condition does not apply. Never `Delete` with an invalid token.
+  - If authority changed to another owner or incarnation, or is `Missing`, cleanup for that
+    object ends.
+- Clean a discarded User Spot only after confirming cleanup of every discarded local member
+  Actor. The Spot itself follows the three cases above. Spot cleanup starts only after every
+  membership-adding operation the Spot accepted before discard (both incoming target Join attempts
+  from other nodes and same-node Joins) has settled. Target Join attempts settle under the
+  pre-cutover termination rule of
+  [Relocation flow §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover) (including the
+  discard record), Relocation flow §9, and §10 of this document. A same-node Join does not resubmit its
+  transaction after the discard record and settles its result only through the §10 recheck. That
+  confirmation arrives through the existing operation continuation, without waiting in a handler turn
+  or adding a gate or queue. On either path, an Actor whose commit is confirmed has become a local
+  member of that Spot, so apply the discard and cleanup rules above to it and confirm its row removal. Once the source is confirmed as owner, that attempt adds no row. Then, like §6.1 release,
+  Spot cleanup reads the membership snapshot of that SpotId and `ObjectGeneration` to the end and
+  submits the `Delete` or release batch only after confirming that no row remains. The batch conditions are those §6.1
+  requires (authority `StoreVersion`, owner lease, descriptor, capacity). The discarded
+  incarnation's gate is closed to new joins and accepted membership-adding operations settle before
+  the snapshot, so no
+  new row commits after the snapshot. A Store failure or an unfinished scan is never treated as empty membership.
+  This keeps a live owner's Actor from pointing at a `Missing` Spot. While rows of members on other
+  hosts remain, do not change the Spot authority and recheck at each existing renew interval. Those
+  rows decrease only through that owner's leave/destroy, a §6.1 Actor release started by a create
+  operation for that ActorId, or a §6.1 Spot release started by a create operation after this
+  Spot's lease is also invalid. If a remote member whose owner ended remains and no create call
+  arrives, this Spot record stays. The owner cleanup of §11 reclaims only records matching the
+  shutting-down token, so a discarded record pointing at an old token can remain even after a normal
+  shutdown; its release then follows a create operation meeting the conditions of §6.1. Discarding
+  locally never deletes another owner's Actor or its row. This wait applies only to §5.1 cleanup and
+  does not change §11. Meanwhile the Spot authority record stays,
+  pointing at the discarded incarnation. The discarded incarnation's gate never reopens, and the
+  discarded Spot's token is never replaced. A `GetOrCreate` that reads this record follows the
+  `Ready` result of §7 when its owner lease is valid, and the invalid-lease results of §6.1 and §7
+  when it is not. Each Actor batch has
+  already removed its local member's row, so the local member count does not enter the Spot batch
+  size.
+- Recheck uncertain cleanup responses under §10. While the target record remains, recheck at each
+  existing renew interval and resubmit the needed request. Finish cleanup on confirmed deletion
+  or release, or a confirmed change to another owner or incarnation. Never reopen the discarded
+  incarnation's gate or delete another owner's or incarnation's record.
+
+A resumed process performs the same checks at the next turn gate. However, a monotonic clock that
+stops during host suspend cannot reveal actual elapsed time. Nor can the gate prevent a process
+paused for a long time inside a callback from resuming at the next instruction of that callback.
+Blocking new turns does not guarantee completion of an already started callback. A normal callback
+that runs longer than the margin and crosses `T` has the same limitation. This pause/resume
+limitation also remains with lease/fencing in Orleans and Akka; the final defense is the Store CAS
+check of token, generation, and version. Exclusivity of application side effects outside the Store
+is not guaranteed. [Location Store §1](02-location-store-redis.en.md#1-scope-and-audience) owns clock
+and suspend operational limits.
+
+While the Store is unreachable, a host must not start a new relocation even before its local
+admission deadline. In-flight relocations follow the failure table in
+[Relocation flow §9](04-relocation-flow.en.md#9-timeout-failure-and-cancellation).
+[Location Store §1](02-location-store-redis.en.md#1-scope-and-audience) owns the operational
+continuity requirement; §6.1 owns release authorization.
 
 ## 6. Reading and Changing the Current Location Record
 
@@ -838,7 +1044,7 @@ CAS to confirm the first-read `StoreVersion` is unchanged.
 | `Reserve` | `Missing → Reserved`. Issues ObjectGeneration, the first AuthorityOwnerGeneration, and capacity. |
 | `Commit` | That reservation's `Reserved → Active`. |
 | `Abort` | That reservation's `Reserved → Missing`. |
-| `Preserve` | Keeps the Active owner, generation, and capacity in use; changes only `StoreVersion` and Framework-internal data. Ordinary use requires no target information; relocation settlement may clear target information for the same `RelocationId`. |
+| `Preserve` | Keeps the Active owner, ObjectGeneration, AuthorityOwnerGeneration, and capacity in use; changes only `StoreVersion` and Framework-internal data. During §5.1 retention recovery, only the lease token of the same owner and incarnation may change to the new token. Ordinary use requires no target information; relocation settlement may clear target information for the same `RelocationId`. |
 | `NewOwner` | Changes an Active record to the target owner. Keeps ObjectGeneration and increments AuthorityOwnerGeneration. Uses the pre-secured target capacity. |
 | `Delete` | Removes the Active record and lookup index, and decreases capacity in use in the same request. |
 | `Reincarnate` | Changes an Active record under explicit Close into a new incarnation of the same owner. Issues a new ObjectGeneration and the first AuthorityOwnerGeneration, and keeps the owner, lease, and capacity in use. Used only in step 3 of [Spot address messaging §7](../03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary). |
@@ -848,7 +1054,8 @@ changes nothing. An Active owner change is only done via `NewOwner` or the final
 a whole User Spot move. There's no separate create operation name.
 
 The Framework puts the expected version, counter, record, and lookup-index changes into
-one Store request. `Preserve`, `Reincarnate`, and `Delete` verify the current owner lease. `NewOwner`
+one Store request. `Preserve`, `Reincarnate`, and `Delete` verify the current owner lease.
+For §5.1 token replacement, verify the validity of the new owner lease being installed. `NewOwner`
 verifies the target lease and the capacity that relocation pre-secured. The creation transitions
 (`Reserve`, `Commit`, `Abort`) verify both the target owner lease (owner ID and lease generation)
 and the `StoreVersion` of the target MeshNode descriptor record as first read. The descriptor
@@ -857,6 +1064,42 @@ a MeshNode lifecycle restarts within the same process. If the record
 doesn't exist or the lease is stale, it's `Conflict` and nothing changes. If the target
 information combination itself is invalid, it ends as a Framework-internal error before
 calling the Store.
+
+**Release and re-creation of another node's steady `Ready` record, and Fixed RID reclaim, use
+elapsed time alone for the release wait.** Release of a reservation whose target lifecycle has
+ended, described below, does not use this wait; check only its existing conditions. The releaser
+records `t0` on its own local monotonic clock at the first Store exact-read observation that the
+owner token recorded in authority is invalid: that token's owner lease record is `Missing`, has
+a different `LeaseGeneration`, or is expired with `ExpiresAt ≤ StoreNow`. Apply the same rule to
+each owner token when releasing User Spot members. Do not reuse an observation for a different
+authority token. If the authority record itself is `Missing`, there is no record to release;
+apply §7's ordinary creation procedure without this wait.
+
+Allow release CAS only after **`t0 + 3·margin`**. Derive the wait as
+`T − TTL + margin = 3·margin` from the retention-enabled bound `T = TTL + 2·margin`. Disabling
+retention and limiting execution `T` to the admission deadline does not shorten the release wait.
+The default example is `3·5 = 15 seconds`. While waiting, return `Unavailable`. If the releaser
+restarts and loses `t0`, observe invalidity again and restart the entire wait. Delaying release
+is safe. Mesh queries, responses, and connectivity are not release conditions. Neither an
+expired lease's `ExpiresAt` nor the owner's last-renewal time needs reconstruction.
+
+On a common elapsed-time axis, Store application delay postpones release. Let `ε ≤ margin`
+be the combined error from local-monotonic clock-rate differences and Store clock advance.
+Release time is at least last successful renewal request start + old owner's TTL + 3·margin − ε,
+which is no earlier than the old owner's discard bound: last successful renewal request start +
+`T = TTL + 2·margin`. The default margin example is 5 seconds. This is not a comparison of
+absolute values from different clocks; it applies within
+[Location Store §1](02-location-store-redis.en.md#1-scope-and-audience)'s clock-progress and suspend
+limits. Observing a different token also assumes the old token's normal TTL lifetime and Store
+continuity; operations must not advance release by forcibly replacing or deleting tokens.
+
+After server termination, recreation can become possible at last successful renewal request
+start + TTL + 3·margin. The default example is 30 + 15 = 45 seconds; if termination occurs 0–5
+seconds after that renewal, this is roughly 40–45 seconds after termination. Delayed observation
+or a releaser restart can postpone it. Elapsed waiting time alone does not imply success: the
+final CAS checks all authority-version, lease-invalidity, descriptor, and capacity conditions
+below. The same authority token's lease must still be invalid at CAS. The recovering owner's
+token-replacement CAS and the release CAS compete on the same `StoreVersion`.
 
 **A reservation whose target lifecycle has ended is released.** If the target owner lease of a
 `Reserved` record is missing, has a different `LeaseGeneration`, or has expired, or if the target
@@ -913,7 +1156,10 @@ the release decision (a different type keeps the existing `TypeMismatch`). If th
 valid, the existing result for the type and operation is returned. If the owner lease is invalid
 and the release conditions aren't met, `Unavailable` is returned. Ordinary messages and `Find`
 don't start this release. This release is a conditional repository batch, distinct from `Delete`,
-which requires a valid owner lease.
+which requires a valid owner lease. Besides create operations, only the post-discard cleanup of
+§5.1 starts this release, when the owner's own same-incarnation record points at its own old
+invalid token. The conditions are the same, but no new incarnation is created, so the type's
+relocation policy condition does not apply.
 
 **An operation that receives `Conflict` continues after re-checking its eligibility.** A provider
 `Conflict` changed nothing but doesn't say which condition failed. The Framework re-reads the
@@ -1161,12 +1407,18 @@ generation, and route. `RouteCacheMaxAge` defaults to 15 seconds and can't excee
 last time the owner can accept new work. `Missing`, `Creating`, and Store errors aren't
 cached. It's removed immediately on confirming a higher `StoreVersion` or owner lease
 expiry. A runtime change to `RouteCacheMaxAge` applies only to new cache entries and does not extend an existing entry’s lifetime.
+With the default 30-second lease TTL and 25-second ordinary admission cutoff, the cache bound
+remains 15 seconds. Retained execution under §5.1 uses already confirmed bindings and local
+authority; it neither refreshes expired cache entries nor replaces them with new routes.
+A cache miss during a Store outage is not interpreted as `Missing`.
 
 A message arriving at the previous owner right after a move can be delivered to the new
 owner. This feature is called Message Follow, and its period, `MessageFollowDuration`,
 defaults to 30 seconds. A value of 0 disables caching or delivery, respectively. Using both
 features, the cache retention time must be at least 5 seconds shorter than the delivery
-period. An invalid configuration is a configuration error. The Message Follow duration starts
+period. The defaults satisfy `15 <= 30 - 5`. The default examples of a 30-second Message Follow
+duration and 40-second retention bound `T` govern relocation forwarding and outage memory retention,
+respectively; neither extends the other. An invalid configuration is a configuration error. The Message Follow duration starts
 at relocation commit. The previous owner keeps the new owner's `ActorRef` or Spot location
 and the expiration time, and removes the route after expiration.
 
@@ -1615,10 +1867,12 @@ intents for the targets in that list (including targets not yet connected) are k
 connection-status judgment for existing connections continues, but no connect is made to a
 new target outside that list. Even after grace ends, that list isn't changed until the
 whole descriptor set is re-read as a same-point-in-time list.
+Grace expiry does not change retained execution or admitted connections; grace only determines
+the scope of connections to new targets.
 
-This grace period doesn't extend the owner lease or relocation deadline. Once the §5
-time passes, it blocks state-changing messages and timer starts, factory-completion
-recording, relocation changes, and capacity reservation. Once the Store connection
+This grace period doesn't extend the owner lease or relocation deadline. Section 5 alone
+owns ordinary new-work blocking and retained execution of steady `Ready` objects. Objects
+in relocation do not qualify for retained execution under §5.1. Once the Store connection
 recovers, it re-checks owner information and the full descriptor list, then applies only
 the needed connection changes.
 
@@ -1703,8 +1957,73 @@ store record golden fixture. Each item maps to one test.
   change the Store.
 - Every Location host checks §5's time relationship at startup; a violation is a startup
   error.
-- Once the last time it can accept new work passes, descriptor publishing, starting
-  object messages/timers, and relocation changes are all blocked together.
+- After the admission deadline, block descriptor publication, new objects, and relocation changes.
+  Permit only retained messages/timers during Store communication failure below `T`. Latch discard
+  at `T` even without a turn; peer recovery never reopens execution. Limit retention to the
+  admission deadline in domains with unsupported hosts.
+- A domain includes every host accessing global authority in the same namespace.
+  `StoreOutageRetention` defaults to `false`; `T` is not an independent setting. Domain-wide
+  margin equality is an operational prerequisite, not a Framework validation item. With the same
+  margin, different host TTLs must not permit release before the old owner's `T`.
+- Recovery before expiry reopens the gate with the same token after validation and renewal;
+  replacement CAS is only for normal expiry. Its request start plus renew timeout must not
+  exceed the original `T`. A new claim recomputes the admission deadline. Gate reopening requires
+  both replacement CAS success and new descriptor publication in the Store confirmed before the
+  original `T`. Check existing discard and cleanup rules for delayed, uncertain, and definitely
+  rejected publication. Success confirmed at or after `T` requires `Delete` of the record
+  under §5.1's post-discard authority cleanup rule. Also cover same-token renew applied but
+  response and recheck failed, discard at `T`, recovery before lease expiry, and continuing normal
+  heartbeats: authority must be cleaned so a new incarnation can be created. Check §10 rechecks
+  and cleanup termination for uncertain Delete responses. Also cover the combination where
+  local member replacement CAS success is confirmed before `T`, Spot success is confirmed only
+  after `T`, the batch including membership exceeds 2,048 keys, and heartbeats continue. No gate
+  may reopen early because the Spot is unconfirmed; discard the Spot and its local members. When a
+  Spot with a local member in relocation is discarded at `T`, that member is not cleaned until §9/§10
+  settlement; after a confirmed target commit its cleanup ends, and after a source `Preserve` win it
+  is discarded and cleaned. Also
+  cover the combination where the Spot and only some members were replaced with the new token, the
+  remaining members stay on the old token that became invalid, local members exceed 2,048 keys,
+  heartbeats continue, and no Actor create call arrives; keep the confirmed Spot and members and
+  discard only the unconfirmed members. In either case, among discarded members, valid-token
+  members are cleaned by `Delete` and old-token members by release `3·margin` after first invalidity
+  observation, each with its own row, and a discarded Spot's cleanup must then finish. In the second
+  combination the retained Spot's and members' authority, rows, and bindings must stay. If another
+  outage expires the owner lease while remote rows are pending and a new lease is claimed, the
+  discarded Spot must not be restored, and while at least one remote member's owner lease stays
+  valid its `GetOrCreate` must be `Unavailable` (when every member owner has ended, the §6.1
+  creation checks apply). When an incoming Join accepted before discard commits its target CAS
+  after discard, the Spot must be cleaned only after that Actor is cleaned as a local member, and an
+  attempt whose source is confirmed as owner must add no row. For an attempt whose source process
+  ended before sending cutover, the discard record must end the staging, and cleanup must proceed to
+  the empty snapshot, Spot `Delete`, and creation of a new incarnation. When a same-node Join
+  transaction was applied but its response was lost and the Spot is then discarded, the commit must be
+  confirmed by the §10 recheck, that Actor cleaned as a local member, and then the Spot cleaned. An old cutover arriving after
+  discard creates no row. When cutover verification precedes discard, the CAS result follows §10
+  settlement to the end.
+  A normal shutdown with the same token lets §11 reclaim the record; after claiming a new token,
+  a shutdown must leave the old-token record. When a discarded Spot still has one member
+  on another host, Spot cleanup must wait without change while the row remains after local member
+  cleanup, and finish at the next renew interval after that member leaves. Each batch includes §6.1's required conditions and index changes, and a batch whose
+  conditions changed must end in `Conflict` with no change. The same order must also finish when
+  every replacement was applied. Keep existing membership and release
+  conditions for members on other hosts. Same-token recovery before `T` keeps the existing
+  object; never restore a discarded object.
+- Release requires `3·margin` of local monotonic time (default example: 15 seconds) after first observing invalidity of the
+  authority's owner token. Treat lease `Missing`, a different token, and expired records as invalid.
+  Initial creation with authority itself `Missing` and release of reservations whose target
+  lifecycle ended do not use this wait. Check final CAS conditions without mesh queries.
+  A restarted releaser observes invalidity and waits again.
+- Historical record generations and reordered concurrent issuance responses are not rollback.
+  Only a smaller counter-current-value observation performed after the prior observation counts.
+- Binding-fence refresh after lease replacement preserves identity/sequence and permits relay,
+  seal, replacement, and close. Existing descriptor polling and Store exact reads progress fence
+  copy refresh without new wire or retransmission. Descriptor republication after a new claim
+  precedes per-object replacement CAS submission. Immediately after its own lease replacement,
+  the Session owner accepts commands 42/51/54 carrying its immediately previous generation and
+  refreshes the copy without a Store read under Session binding §5's same-binding conditions.
+  Reject other lifecycles, bindings, and other generations. Actor owner values in command 42
+  follow Session binding §8.3; command 51's source fence follows that document's existing §6
+  decisions. Repeated creation calls keep the first invalidity-observation time for the same token.
 - If the initial owner-lease claim has not confirmed a lease by the renew timeout,
   startup succeeds and the four targets above are blocked.
 - A host that finished startup without a lease claims at each renew interval and
@@ -1712,7 +2031,8 @@ store record golden fixture. Each item maps to one test.
 - A host that holds the lease but can't confirm its descriptor publication succeeds in
   startup, stays `Preparing`, and retries the publication at each renew interval. A definite
   rejection because another owner holds the row is a startup error.
-- The claim results `Conflict` and `GenerationExhausted` are startup errors.
+- Claim error classification and Fixed RID reclaim deferral follow §5 and
+  [MeshNode §3.3](../03-spot-actor/03-mesh-node.en.md#33-fixed-rid).
 - Cancelling startup ends it as cancelled; an already committed claim is released and
   no heartbeat starts.
 

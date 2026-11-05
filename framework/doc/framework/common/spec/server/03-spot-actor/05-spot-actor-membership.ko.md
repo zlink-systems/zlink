@@ -336,6 +336,7 @@ Session owner에 target route 적용과 seal 해제를 one-way로 알린다.
 | Actor generation이 현재 값과 다르다. | `InvalidOperation` |
 | Owner 또는 membership fence가 다르거나 Actor가 이동 중이다. [Location runtime §8.1](../05-location-relocation/01-location-runtime.ko.md#81-같은-이동과-target-요청을-구분하는-값)의 `SpotWide` aggregate 제약으로 대상 User Spot의 membership 변경이 거부된 경우도 포함한다. | `Unavailable` |
 | Runtime shutdown이 먼저 시작되어 relay-ready accepted 전에 중단한다. | `ShuttingDown` |
+| Target User Spot이 [Location runtime §5.1](../05-location-relocation/01-location-runtime.ko.md#51-짧은-장애의-보존과-재참여)로 폐기되어 relay-ready accepted 전에 중단한다([Relocation flow §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)). | `Unavailable` |
 
 `Accepted`는 위치와 membership 변경이 commit되었다는 뜻이다. Completion callback 실행까지
 끝났다는 뜻은 아니다. Framework는 lifecycle callback과 source membership cleanup을 처리한
