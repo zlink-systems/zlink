@@ -683,8 +683,17 @@ An owner lease is live only when all three conditions below hold.
 3. The expiration time returned by the read is later than the `StoreNow` from the same
    read.
 
+A live host descriptor list contains only descriptors whose owner leases satisfy these three
+conditions. A leftover descriptor record alone does not belong to the live list.
+
 Store time is used because hosts' local clocks can differ. Comparing local clocks causes
 different hosts to judge the same lease differently.
+
+This validation applies to new target selection and connect/reconnect candidates. While an
+already admitted physical connection serves an established bound route, lease expiry alone
+does not remove its intent. This use is limited by §5.1's retained execution and §6.1's release
+boundary; ordinary physical-connection liveness still applies. It does not authorize a new route
+lookup or admitting a new connection from an expired descriptor.
 
 **If any of the three conditions doesn't hold, the Framework excludes that descriptor
 from the candidates.** It also excludes the descriptor when the owner-lease read returns
@@ -759,9 +768,9 @@ channels and fanout channels is checked via
 <a id="5-blocking-a-previous-owners-new-work-when-the-store-connection-drops"></a>
 ## 5. Execution Rights and Admission During a Store Outage
 
-**The same object must not execute at two owners concurrently.** During a short Store-only
-outage, bound Actor/Spot messaging and Spot timers for objects already in steady `Ready`
-continue using their last confirmed state and routes. Location runtime owns the execution-right
+**Within §5.1's clock-progress and process-pause limits, the same object must not execute at two
+owners concurrently.** During a short Store communication outage, bound Actor/Spot messaging and
+Spot timers for objects already in steady `Ready` continue using their last confirmed state and routes. Location runtime owns the execution-right
 decision, applied by the existing execution gate. Other modules must not add a separate
 admission decision or transport connection state.
 
@@ -798,7 +807,9 @@ the Store request together to account for network delay. **A single owner-lease 
 refreshes the host-wide local admission deadline. A per-object deadline can't extend this
 time.**
 
-Once the deadline passes, ordinary new work in the following table is blocked. Bound
+Once the deadline passes or a mismatch between the current host-run combination and the Store
+value is confirmed, ordinary new work in the following table is blocked. A confirmed mismatch
+blocks even before the deadline. Bound
 Actor/Spot messages and Spot timers continue only under §5.1's retained-execution conditions.
 A mismatch between the current host-run combination and the Store value is distinct from
 a new claim after normal expiry and does not itself grant retained objects execution rights.
@@ -827,8 +838,8 @@ the publication, and its move to `Serving` follows the readiness conditions in t
 after the lease is held, a timeout or provider error leaves the publication result unknown, the
 host confirms it again as in §10; if it still can't confirm it, the host finishes startup as
 `Preparing` and retries the publication at each renew interval. A definite rejection because
-another owner holds the row is a startup error. The handling of insufficient evidence and `Alive`
-during Fixed RID reclaim follows
+another owner holds the row is a startup error. Waiting after an invalid-lease observation and `Conflict` for a valid lease
+during Fixed RID reclaim follow
 [MeshNode §3.3](../03-spot-actor/03-mesh-node.en.md#33-fixed-rid).
 Other claim results `Conflict` and `GenerationExhausted` are startup errors. If the caller
 cancels startup, startup ends as cancelled; this rule does not turn it into a success.
@@ -837,61 +848,59 @@ confirmed lease is released normally and no heartbeat starts.
 
 ### 5.1 Retention and Rejoining After a Short Outage
 
-The retention bound `T` is 60 seconds from the last successful lease renewal's reference time.
-Before the first renewal, use the initial successful claim. The reference is the local monotonic
-start time of the successful request. Neither response delay nor a new claim alone extends the
-previous outage's retention. Store time is used only to determine lease expiry; each node measures
-retention, stopping, and release waits with its own local monotonic clock.
+The retention bound **`T = 40 seconds`** is measured by the owner's local monotonic clock from
+starting the last successful lease-renewal request. Before the first renewal, use the start of
+the successful initial claim request. Response delay or a new claim alone never extends the
+previous outage's retention period. Store time determines lease expiry; each node measures
+retention, discard, and release waits using its own local monotonic clock.
 
-A domain is the set of hosts using the same Location Store namespace and MeshName.
-The owner's `N` counts distinct nodes, including self, in the domain's live host descriptor list
-last observed in the Store. The connected count is self plus valid admitted peers in that list
-that respond in `Serving` state and from which the owner has received a response to its own probe
-within the last `F` seconds. Stopped or released peers do not count. `F` is 10 seconds, twice the existing
-5-second connection check interval, measured by each node's local monotonic clock. One-way receipt
-or ordinary traffic does not replace round-trip confirmation.
-**A majority connection requires a connected count greater than `N/2`.** Section 6.1 defines the releaser's list.
-Store communication failure means a renew/read timeout or provider error. Definite Store replies
-such as `Conflict` or `Missing` are not communication failures and do not open retained execution.
-TTL, margin, admission deadline, and `T` must be configured identically within a domain. Defaults
-are 30, 5, 25, and 60 seconds respectively, with renew interval/timeout of 5/3 seconds.
+A domain is the set of hosts sharing a Location Store namespace and MeshName. Store communication
+failure means a renew/read timeout or provider error. Definitive Store responses such as `Conflict`
+or `Missing` are not communication failures and do not enable retained execution. Configure
+TTL, margin, admission deadline, and `T` identically within the domain. Defaults are 30, 5, 25,
+and 40 seconds respectively, with renew interval/timeout of 5/3 seconds.
 
-- Before the admission deadline, ordinary execution-right rules apply. After it, only a node
-  with Store communication failure and a majority connection may continue cached bound Actor/Spot
-  messaging and Spot timers for objects already in steady `Ready`, while elapsed time is less
-  than `T`. Messaging between retained objects on the same node is included. New route lookups,
-  object creation, factory/restore confirmation, relocation, and capacity changes are excluded.
-- At every turn start, the existing execution gate checks local monotonic time and existing mesh
-  liveness. Once the admission deadline (25 seconds by default) has passed, a node unable to reach
-  the Store and without a majority connection immediately stops new admission and retained execution.
-  A stopped node never reopens merely because peers recover. It may keep memory until `T`, but
-  resuming requires Store recovery, a new claim, and the per-object CAS below.
-- At `T` (60 seconds), discard retained memory unconditionally, regardless of majority connectivity.
-  Block new execution of old objects at the existing gate, clean up queues, timers, bindings, and
-  delayed completions, then rejoin empty. Neither peer recovery nor a new claim restores discarded
-  state. Detected Store rollback requires the same cleanup regardless of `T`. This does not
-  authorize deleting another owner's Store records or flushing the namespace.
-- A confirmed change to another owner or incarnation, or confirmed loss of local execution rights,
-  stops new execution of that object regardless of connectivity or `T`. Do not mutate the Store
-  with an invalid token.
-- After Store recovery, revalidate continuity and each retained unit's authority, generations,
-  owner token, and node lifecycle. Reject renewal of expired tokens and issue a new `LeaseGeneration`
-  for a new claim. Allow a per-object CAS replacing the old token with the currently valid new
-  token only if the Store still holds its own old token for the same incarnation and the retained
-  `StoreVersion`, `ObjectGeneration`, and `AuthorityOwnerGeneration`. Keep owner identity and node
-  lifecycle. This is §6.1's `Preserve`; other generations and capacity do not change. Reopen the
-  existing gate only for successful objects and discard failed ones. Do not restore `Missing` or
-  another incarnation's or owner's records from local memory. Do not recreate or retransmit
+**Enable retention beyond 25 seconds only when every host in the domain supports this section
+and §6.1's time-based release.** Manage this decision through existing deployment operational
+configuration at domain scope, disabled by default. Descriptor `objectCapabilities` describe
+placement by object kind/type, not host protocol versions, and cannot establish support. Add no
+descriptor field or wire capability. Operators must verify support for the 0.33.0-or-later rules
+on running hosts and on hosts that may restart or scale out before deploying identical retention
+configuration. If any host lacks support, or support is unverified, treat `T` as the admission
+deadline (25 seconds by default). Hosts on 0.32 or earlier release immediately on lease invalidity
+and therefore cannot coexist with execution beyond 25 seconds. Before a downgrade or adding an
+older host, disable retention and let all existing 40-second retention periods end. Apply this
+decision only in Location runtime's existing execution-right policy, without caller-side decisions.
+
+- Before the admission deadline, use ordinary execution-right rules. After it, during Store
+  communication failure, continue cached bound Actor/Spot messaging and Spot timers for objects
+  that were steady `Ready` before the outage while below `T`. Mesh peer counts and connectivity
+  are not execution-right conditions. This includes messaging between retained objects on the
+  same node. Exclude new route lookups, object creation, factory/restore commits, new relocation,
+  and capacity changes. Keep existing queues, timers, bindings, and delayed completions.
+- At `T`, immediately record (latch) discard regardless of mesh state or whether any turn starts.
+  Do not defer the decision until the next turn. The existing execution gate reads that record
+  to block new execution of previous objects. Clean queues, timers, bindings, and delayed
+  completions, discard retained memory, and rejoin empty. Peer recovery or a successful new
+  claim never reopens or restores discarded state. Detected Store rollback triggers the same
+  cleanup regardless of `T`. This does not authorize deleting other owners' Store records or
+  flushing the namespace.
+- A confirmed change to another owner/incarnation or loss of local execution rights stops new
+  execution of the affected object regardless of mesh connectivity or `T`. Do not mutate the
+  Store with an invalid token.
+- Close each object's existing gate from confirmed Store recovery until its token-replacement
+  CAS result. Recheck continuity and every retained unit's authority, generations, owner token,
+  and node lifecycle. Reject renewal of an expired token; issue a new `LeaseGeneration` on a
+  new claim. Only for objects not discarded, allow replacement with the currently valid new
+  token when the same incarnation's old self-owned token and retained `StoreVersion`,
+  `ObjectGeneration`, and `AuthorityOwnerGeneration` remain unchanged in the Store. Keep owner
+  identity and node lifecycle. This is §6.1's `Preserve`, without changing other generations or
+  capacity. Reopen the existing gate only for objects whose CAS succeeds before the original
+  retention deadline `T`; discard failed or already discarded objects. Never reconstruct `Missing`
+  or another incarnation's or owner's records from local memory. Do not recreate or retransmit
   successful objects' pending messages, timers, bindings, or delayed completions. Keep binding
-  identity and Session sequence, but refresh lease-fence copies under
+  identity and Session sequence; refresh lease-fence copies under
   [Session binding §5](../04-session/02-session-actor-binding.en.md#5-bind-and-relay).
-
-For `N=1`, self is a majority and retention may continue until `T` during a Store outage. For `N=2`,
-both nodes must be connected. If they disconnect, an owner unable to reach the Store stops from
-25 seconds and cannot resume through peer recovery alone. After observing expiry, the other node
-waits 5 seconds and queries again; its own `NoConnection` vote meets `⌈2/2⌉=1`. If only the Store
-is disconnected and both nodes remain connected, the owner retains until 60 seconds; the releaser
-defers on `Alive` and may release when the owner discards state and returns `NotHeld`.
 
 A resumed process performs the same checks at the next turn gate. However, a monotonic clock that
 stops during host suspend cannot reveal actual elapsed time. Nor can the gate prevent a process
@@ -947,53 +956,36 @@ doesn't exist or the lease is stale, it's `Conflict` and nothing changes. If the
 information combination itself is invalid, it ends as a Framework-internal error before
 calling the Store.
 
-**Before releasing, re-creating, or reclaiming another node's ownership, check its liveness over mesh.**
-The domain is §5.1's Location Store namespace/MeshName set. For the candidate authority's owner token
-and node lifecycle, the releaser uses `N` distinct nodes in the following union:
+**Release, re-creation, and reclaim of another node's ownership use elapsed time alone for the
+release wait.** The releaser records `t0` on its own local monotonic clock at the first Store
+exact-read observation that the authority record's owner token is invalid (`Missing` or a
+different token). Apply the same rule to each owner token when releasing User Spot members.
+Do not reuse an observation for a different authority token.
 
-- The domain's complete current live host descriptor list read from the Store at query start.
-- Recently removed hosts absent from the releaser's last observed list for less than `T + margin`
-  (65 seconds by default), measured by the releaser's local monotonic clock from observing removal.
+Allow release CAS only after **`t0 + (T − TTL + margin) = t0 + 15 seconds`**. In this wait formula,
+`T` is the supported-version domain's 40-second retention bound, TTL is 30 seconds, and margin
+is 5 seconds. Limiting execution retention to 25 seconds during rolling upgrades does not shorten
+a supported host's 15-second release wait. While waiting, return `Unavailable`. If the releaser
+restarts and loses `t0`, observe invalidity again and restart the full 15-second wait. Delaying
+release is safe. Mesh queries, responses, and connectivity are not release conditions. Neither
+an expired lease's `ExpiresAt` nor the owner's last-renewal time needs reconstruction.
 
-A shrinking list alone does not lower the majority threshold. Do not reduce the list to connected
-peers. Query each listed node and directly check the owner as well. If the releaser belongs to this
-union, count its own connection decision as one vote. A lifecycle that has not published its
-descriptor does not add a fictitious member or vote to the union. Use the initial list despite
-membership changes during the query.
-Finish waiting within renew timeout (3 seconds by default), measured from request submission by
-local monotonic time. Apply the same check to each owner of User Spot members being released.
+The rationale on a common elapsed-time axis is `t0 ≥ last successful renewal + 30 seconds
+(Store time)`, hence `release time ≥ last successful renewal + 30 + 15 = last successful renewal
++ 45 seconds`. The old owner has already latched discard at 40 seconds on its local monotonic
+clock from starting that successful renewal request. The 5-second margin between these bounds
+covers clock-rate differences and the Store clock's allowed forward advance (an operational
+bound of 5 seconds). This is not a comparison of absolute values from different clocks; it applies
+within [Location Store §1](02-location-store-redis.en.md#1-scope-and-audience)'s clock-progress
+and suspend limits. Observing a different token also assumes the old token's normal TTL lifetime
+and Store continuity; operations must not advance release by forcibly replacing or deleting tokens.
 
-Release CAS requires the following conditions.
-
-1. Observe candidate owner-lease expiry (`Missing` or another token) through a Store exact read.
-   From the first observation, wait the margin (5 seconds by default) on the releaser's own local
-   monotonic clock. If a restart loses that observation, observe and wait again. No expired lease
-   `ExpiresAt`, owner TTL, or last-renewal reference needs to be reconstructed.
-2. After the margin, query afresh immediately before CAS. Release is allowed when at least
-   **`⌈N/2⌉` nodes** in the initial list report no connection to the owner (`NoConnection`). A peer
-   returns `NoConnection` only after receiving no probe from that owner tuple during the last `F`
-   seconds. Section 5.1 defines `F` and the owner's round-trip criterion. Apply the same criterion
-   to the releaser's own vote. Thus, when peer C reports `NoConnection` for owner A, A's probes have
-   not reached C and A cannot count C toward its majority connection. The list including recently
-   removed hosts and this round-trip criterion preserve majority intersection. Keep the release
-   margin at 5 seconds: `F` and round-trip confirmation establish disconnection evidence, so the
-   margin need not increase to the 15-second peer deadline. Any owner or peer `Alive` (retained
-   execution under that token) vetoes this
-   condition and defers release.
-3. If that vote count is not reached, defer. Release is allowed when, after discarding state at
-   60 seconds under §5.1, the owner directly returns `NotHeld` for that token or a peer relays its
-   current direct confirmation. This path also requires step 1's expiry observation and margin,
-   and a fresh query immediately before CAS; any `Alive` defers release. Silence, timeout, and
-   inability to confirm are neither votes nor `NotHeld`; elapsed time alone does not allow release.
-
-Deferral returns `Unavailable`. Repeated creation calls for the same owner tuple share the query
-already in progress instead of creating a new fanout per call. Do not cache completed responses as
-permission for a later release. With defaults, recreation after server termination can become
-possible roughly 30 seconds to expiry + 5 seconds margin + at most 3 seconds for the query after
-the last successful renewal reference. This example assumes the required responses are obtained;
-it is not a completion bound for silence. The final release checks all authority-version,
-lease-invalidity, descriptor, and capacity conditions in the CAS below.
-[Wire §5.1](../02-channel-transport/06-wire-protocol.en.md#51-owner-liveness-check) owns the message format.
+After server termination, recreation can become possible at last successful renewal + 30 + 15
+seconds. If termination occurs 0–5 seconds after that renewal, this is roughly 40–45 seconds after
+termination. Delayed observation or a releaser restart can postpone it. Elapsed 15 seconds alone
+does not imply success: the final CAS checks all authority-version, lease-invalidity, descriptor,
+and capacity conditions below. The same authority token's lease must still be invalid at CAS.
+The recovering owner's token-replacement CAS and the release CAS compete on the same `StoreVersion`.
 
 **A reservation whose target lifecycle has ended is released.** If the target owner lease of a
 `Reserved` record is missing, has a different `LeaseGeneration`, or has expired, or if the target
@@ -1308,7 +1300,7 @@ owner. This feature is called Message Follow, and its period, `MessageFollowDura
 defaults to 30 seconds. A value of 0 disables caching or delivery, respectively. Using both
 features, the cache retention time must be at least 5 seconds shorter than the delivery
 period. The defaults satisfy `15 <= 30 - 5`. The 30-second Message Follow duration and
-60-second retention bound `T` govern relocation forwarding and outage memory retention,
+40-second retention bound `T` govern relocation forwarding and outage memory retention,
 respectively; neither extends the other. An invalid configuration is a configuration error. The Message Follow duration starts
 at relocation commit. The previous owner keeps the new owner's `ActorRef` or Spot location
 and the expiration time, and removes the route after expiration.
@@ -1846,18 +1838,18 @@ store record golden fixture. Each item maps to one test.
   change the Store.
 - Every Location host checks §5's time relationship at startup; a violation is a startup
   error.
-- After the admission deadline, block descriptor publication, new objects, and relocation
-  changes. Permit only retained messages/timers with Store communication failure and majority
-  connectivity while below `T`. Peer recovery never resumes execution stopped by majority loss;
-  discard unconditionally at `T`.
-- Release requires local monotonic margin after first lease-invalidity observation and a fresh
-  query immediately before CAS. Allow only with `⌈N/2⌉` `NoConnection` votes or the current owner's
-  `NotHeld`; any `Alive` defers release.
+- After the admission deadline, block descriptor publication, new objects, and relocation changes.
+  Permit only retained messages/timers during Store communication failure below `T`. Latch discard
+  at `T` even without a turn; peer recovery never reopens execution. Limit retention to 25 seconds
+  in domains with unsupported hosts.
+- Release requires 15 seconds of local monotonic time after first observing invalidity of the
+  authority's owner token. Check final CAS conditions without mesh queries. A restarted releaser
+  observes invalidity and waits again.
 - Historical record generations and reordered concurrent issuance responses are not rollback.
   Only a smaller counter-current-value observation performed after the prior observation counts.
 - Binding-fence refresh after lease replacement preserves identity/sequence and permits relay,
-  seal, replacement, and close; reject delayed old-token controls. Repeated creation calls share
-  a query already in progress.
+  seal, replacement, and close; reject delayed old-token controls. Repeated creation calls keep
+  the first invalidity-observation time for the same token.
 - If the initial owner-lease claim has not confirmed a lease by the renew timeout,
   startup succeeds and the four targets above are blocked.
 - A host that finished startup without a lease claims at each renew interval and

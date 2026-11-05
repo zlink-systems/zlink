@@ -62,12 +62,19 @@ opaque `StoreVersion` values numerically or treat absence of observed rollback a
 
 **Clock and suspend operational limits.** Store time is used only to determine lease expiry.
 The Store clock must not jump forward by more than the fencing margin (5 seconds by default).
+During normal operation, the combined error from local-monotonic clock-rate differences and
+Store clock advance must also fit within that 5-second margin.
 Each node measures retention, stopping, and release waits with its own local monotonic clock,
 not Store-time differences. If monotonic time stops during host suspend, even the next turn gate
 cannot determine actual elapsed time. Execution exclusivity does not cover such suspend or
 resumption after a long pause inside a callback. Operators must account for these limits in
 deployment and shutdown procedures. Exclusivity of side effects outside the Store requires
 fencing at the application resource as well.
+
+[Location runtime §5.1](01-location-runtime.en.md#51-retention-and-rejoining-after-a-short-outage)
+owns domain-wide support verification and operational configuration for retention beyond 25
+seconds during rolling upgrades. Operators must not enable retained execution alongside
+unsupported hosts.
 
 
 ## 2. Responsibilities of the Public SPI

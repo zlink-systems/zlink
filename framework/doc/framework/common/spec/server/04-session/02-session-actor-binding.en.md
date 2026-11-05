@@ -172,7 +172,11 @@ smaller than the previous value.
 
 ## 5. Bind and Relay
 
-**Lease replacement and fence copies within the same lifecycle.** After Store recovery, a new
+**Lease replacement and fence copies within the same lifecycle.** During retained execution
+under [Location runtime §5.1](../05-location-relocation/01-location-runtime.en.md#51-retention-and-rejoining-after-a-short-outage)
+in a Store communication outage, keep both existing binding-fence copies and exact-match checks.
+The Store validation and fence refresh below apply to lease replacement after recovery.
+After Store recovery, a new
 claim, and successful per-object token replacement CAS, do not recreate bindings. The existing
 binding managers at Session and Actor owners refresh both sides' lease-fence copies at their
 execution gates. Validate against the current Store owner lease and descriptor for the same

@@ -28,7 +28,7 @@ title: "Service Wire Protocol"
 |---|---|
 | [1. Schema And Generation Boundary](#1-schema-and-generation-boundary) | Normative generated-codec authority, format ownership by layer, schema conventions, validator, and Location Store authority keys |
 | [2. Record Framing And Decode](#2-record-framing-and-decode) | Multipart frame layout, decode validation, payload size limits |
-| [3. Command Space](#3-command-space) | Command list and roles, Message Follow and session-replacement notifications |
+| [3. Command Space](#3-command-space) | The list of 53 commands and their roles, Message Follow and session-replacement notifications |
 | [4. Admission And Connection Fence](#4-admission-and-connection-fence) | The hello/admit/reject procedure, DescriptorRevision ordering, ClientServer direction |
 | [5. Service Liveness](#5-service-liveness) | The livenessProbe/Ack cycle, the Classic fanout beacon, subscriber-ready determination |
 | [6. Typed Application Message JSON](#6-typed-application-message-json) | The `framework-json-v1` profile rules |
@@ -265,7 +265,7 @@ an Actor use the same header, so an Actor receives one header format whatever th
 
 ## 3. Command Space
 
-Wire v1 uses the following IDs. `7..15`, `32`, `35`, `41`, `45`, and `57..255` are
+Wire v1 uses the following IDs. `7..15`, `32`, `35`, `41`, `45`, and `55..255` are
 reserved and never reused for another meaning. A previous command name in parentheses
 is diagnostic compatibility text, not a command that is decoded or sent.
 
@@ -316,11 +316,9 @@ is diagnostic compatibility text, not a command that is decoded or sent.
 | 52 | `relocationState` | infrastructure | none | — | Direct source-memory-to-target payload chunk transfer (base/final stage) |
 | 53 | `relocationFailed` | infrastructure | none | — | Explicit reply to a matching `relocationPrepare` reporting assembly or preparation failure |
 | 54 | `boundSessionClose` | infrastructure | none | — | Requests the Session owner to close the current binding's physical connection |
-| 55 | `ownerLivenessQuery` | infrastructure | none | — | 0.33.0 target: owner liveness Core request |
-| 56 | `ownerLivenessResult` | infrastructure | none | — | 0.33.0 target: corresponding Core request reply leg |
 
-Except for the target definitions of 55/56, the table's Layer, Application payload, and
-Permitted flags columns reproduce the schema declarations. **Only application-layer commands enter an
+The table's Layer, Application payload, and Permitted flags columns reproduce
+the schema declarations. **Only application-layer commands enter an
 application handler.** Infrastructure commands are exchanged by runtime
 components and never enter the application queue. An unknown command, an
 infrastructure command going the wrong direction, or a command the current
@@ -407,70 +405,6 @@ owns physical pipe selection and replacement.
 Probe timing and ACK judgment are defined by [Transport liveness §3](05-transport-liveness.en.md#3-routemesh-and-clientserver).
 The probe, ACK, and timer are handled by the infrastructure reserve and are not delivered to the application queue or a handler.
 - **Probe and ACK ride the admitted physical connection's current epoch, and that epoch is stable for the connection's lifetime.** A `livenessProbe` and its `livenessAck` are addressed to the peer identity and connection generation that admission established (`scope: admitted-physical-connection-lifetime`). A redundant re-dial or a repeated `hello`/`admit` for a peer that is already admitted on a live physical connection is idempotent: it neither supersedes the admitted connection nor rotates its connection generation. Emitting a probe or ACK stamped with a superseded or not-yet-delivered generation — one the peer's live pipe does not recognize — is a defect; the peer silently discards it without recognizing it as a record of the current admitted connection. [Transport liveness §3](05-transport-liveness.en.md#3-routemesh-and-clientserver) defines its effect on the peer deadline. A new connection generation is minted only when Core's selected route changes to a new route generation ([Transport liveness §5](05-transport-liveness.en.md#5-ready-and-failure-determination)), not on every inbound admission record for an already-admitted, unchanged descriptor.
-
-### 5.1 Owner Liveness Check
-
-The IDs and bodies below are the target format of the 0.33.0 specification draft. The schema
-continues to own the current implementation's wire contract under §1; 55 and 56 are reserved
-in the current schema. This draft does not change what current decoders accept. Apply this
-format only after updating the schema, generated codecs, and golden fixtures together during
-0.33.0 implementation. Section 3's rows 55/56 and reserved range `57..255` are also that target.
-Do not reinterpret existing `livenessProbe` and `livenessAck` as release authorization.
-
-| ID | Name | Domain | Application payload | Flags | Direction |
-|---|---|---|---|---|---|
-| 55 | `ownerLivenessQuery` | infrastructure | forbidden | none | `[request]` to an admitted RouteMesh peer |
-| 56 | `ownerLivenessResult` | infrastructure | forbidden | none | `[reply]` to the corresponding request |
-
-Existing mesh connections in `Preparing` may also send and receive 55/56. Pre-publication Store
-list reads and Fixed RID startup follow [MeshNode §3.3](../03-spot-actor/03-mesh-node.en.md#33-fixed-rid).
-This does not admit application messages or authorize a transition to `Serving`.
-
-The service header follows §2 with flags `0`. Multi-byte integers are big-endian.
-Both bodies use the following field order, with no optional tail, metadata, or payload.
-
-| Field (wire order) | Format | Meaning |
-|---|---|---|
-| `checkId` | `nonzero-u64` | Check ID not reused within the requesting node lifecycle; no numeric ordering |
-| `ownerId` | `text8` | Host OwnerId being checked; `1..255` UTF-8 bytes |
-| `leaseGeneration` | `u64` | Bounded generation of the owner token being checked, `1..2^63-1` |
-| `ownerNodeRid` | `rid` | MeshNode RID being checked; `1..255` bytes |
-| `ownerNodeGeneration` | `nonzero-u64` | Node lifecycle being checked; opaque equality comparison only |
-| `mode` (55 only) | `u8` | `0`: direct owner check; `1`: owner check through the receiving peer |
-| `result` (56 only) | `u8` | `1`: `Alive`; `2`: `NoConnection`; `3`: `NotHeld`; `0` reserved |
-
-`text8` and `rid` use a `u8` length prefix excluded from the byte count.
-`nonzero-u64` covers the entire 64-bit range except zero. Unknown enum values and invalid
-lengths or generations are protocol errors. Reply identity fields must match the request byte for byte.
-
-Send 55 as a Core request and return 56 on that request's reply leg. The requester measures
-renew timeout (3 seconds by default) by local monotonic time from initial submission. Relaying
-must also finish within this overall deadline.
-
-- A directly queried owner returns `Alive` only while retaining execution under the requested
-  token, RID, and lifecycle. Return `NotHeld` after stopping or discarding, or when that execution
-  right is not held. A different current owner token or lifecycle also returns `NotHeld`, echoing
-  the requested tuple in the reply. A transport connection or historical record alone does not
-  establish `Alive`. Apply the existing turn gate's stop/discard check before responding.
-- A peer returns `NoConnection` only when the absence of received probes satisfies
-  [Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas).
-  Otherwise, send mode `0` directly to the owner with the same owner tuple.
-  **Issue a fresh `checkId` from the relay node's lifecycle for every outbound leg, linking it to
-  the upstream request through ordinary pending-request management.** Relay only the owner's
-  current `Alive` or `NotHeld`, restoring the upstream ID. Inability to confirm and timeout mean
-  no response. Do not relay to another peer. `NoConnection` describes only that peer's lack of a
-  connection, not proof that the owner has stopped everywhere.
-- Bind responses to the current request leg and admitted peer identity. Responses with another
-  check ID, owner token, or node lifecycle, and late responses, do not inform the current release.
-  Do not cache completed responses as permission for a later release or create connection state
-  separate from ordinary transport liveness.
-- Any `Alive` defers release. Silence, timeout, and inability to confirm are neither `NoConnection`
-  nor `NotHeld`. [Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas)
-  owns query scope, margin, vote counts, release, and reclaim decisions.
-
-Rejection or silence from older peers that do not recognize these messages counts as no vote.
-Elapsed time does not replace confirmation: defer without §6.1's majority-disconnection evidence
-or the owner's `NotHeld`. Do not interpret existing capabilities as guaranteeing support.
 
 ### Classic Fanout Beacon
 
@@ -955,17 +889,6 @@ record or its schema value.
 A wire command does not grant bypass; ordinary control and malformed records also use shared permits. [Receive and Dispatch Loop](../01-execution/04-application-job-queue-and-backpressure.en.md) owns pre-classification permits; [Payload Ownership](../01-execution/05-payload-ownership-and-codec.en.md) owns ordinary record-storage lifetime.
 
 ## 12. Verification Requirements
-
-For the 0.33.0 implementation of 55/56, update schema, generated codecs, and golden fixtures
-together and verify the following.
-
-- Distinguish `Alive`, `NotHeld`, and `NoConnection`; a token mismatch or stopped/discarded owner
-  returns `NotHeld`.
-- Reject reserved result `0`, invalid mode/result/length/generation, and extra frames or payload.
-- Equal upstream `checkId` values from different origins use distinct IDs on relay legs. A delayed
-  reply from a prior leg or a different admitted identity cannot complete the current query.
-- Silence from an older peer is not a vote; elapsed time alone does not release without the
-  owner's `NotHeld` or the required vote count.
 
 The schema self-test, the golden-fixture decode results of the generated codecs, and the
 checked-in codec tables alone confirm the following.

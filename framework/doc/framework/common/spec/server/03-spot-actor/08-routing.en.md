@@ -435,12 +435,12 @@ Once bind finishes, the following work uses the stored route.
 
 Actor location isn't queried from the Location Store each time this work starts.
 The stored route's ordinary validity ends at the current owner lease's local admission
-deadline. Bound messaging during a short Store-only outage follows retained execution in
+deadline. Bound messaging during a short Store communication outage follows retained execution in
 [Location runtime §5](../05-location-relocation/01-location-runtime.en.md#5-blocking-a-previous-owners-new-work-when-the-store-connection-drops).
 Do not remove an established binding route solely because the Actor owner lease or ordinary
 cache expires. The Session owner continues sending on that bound route; the receiving owner's
-existing gate decides retained execution. Invalidate immediately on confirmed `NotHeld`, stale
-binding, another incarnation, or a §6.1 release commit. Do not resend the same operation to a new
+existing gate decides retained execution. Invalidate immediately on a stale binding,
+another incarnation, or a Location runtime §6.1 release commit. Do not resend the same operation to a new
 owner. Fence refresh after recovery follows
 [Session binding §5](../04-session/02-session-actor-binding.en.md#5-bind-and-relay).
 This does not extend the Store lease or ordinary route-cache lifetime.
@@ -545,7 +545,7 @@ cancellation, or shutdown.
 ## 5. Implementation and Contract-Test Verification Requirements
 
 - Remove ordinary cache entries on lease expiry, while established bound routes keep delivering
-  to an owner eligible for retained execution. Confirmed `NotHeld`, stale binding, or release
+  to an owner eligible for retained execution. A stale binding, another incarnation, or Location runtime §6.1 release
   commit invalidates the bound route without resending the same operation to a new owner.
 
 Confirm the following using only the public surface — the Spot/Actor direct

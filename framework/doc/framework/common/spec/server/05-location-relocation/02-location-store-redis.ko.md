@@ -37,11 +37,16 @@ Node는 같은 발급 counter 자체의 현재값을 관측하고, 그 이전 �
 수치 비교하거나, 후퇴를 관측하지 못했다는 사실을 연속성 증명으로 사용하지 않는다.
 
 **시계·suspend 운영 한계.** Store 시각은 lease 만료 판정에만 사용한다. Store 시계는
-fencing margin(기본 5초)을 넘게 앞으로 튀지 않아야 한다. 보존·정지·해제 대기는 각자 local
-monotonic으로 재며 Store 시각 차이로 계산하지 않는다. Host suspend 중 monotonic이 정지하면
+fencing margin(기본 5초)을 넘게 앞으로 튀지 않아야 한다. 정상 동작 중 local monotonic의
+진행 차이와 Store 시계 전진에 따른 오차의 합도 이 5초 margin 안에 있어야 한다.
+보존·정지·해제 대기는 각자 local monotonic으로 재며 Store 시각 차이로 계산하지 않는다. Host suspend 중 monotonic이 정지하면
 새 turn gate도 실제 경과를 판별할 수 없다. 그런 suspend와 callback 도중 장기 정지 뒤 재개까지
 실행 배타성으로 보장하지 않으며, 운영자는 이 한계를 배치·중단 절차에 반영해야 한다.
 Store 밖 부작용의 배타성이 필요하면 application 자원에도 fencing이 필요하다.
+
+25초 이후 보존의 domain 전체 지원 확인과 롤링 업그레이드 운영 설정은
+[Location runtime §5.1](01-location-runtime.ko.md#51-짧은-장애의-보존과-재참여)이 소유한다.
+운영자는 미지원 host와 보존 실행을 함께 켜지 않는다.
 
 Application은 이 SPI의 operation을 직접 호출하지 않는다. Provider package만 SPI를 구현하며
 Framework가 등록된 instance를 사용한다.

@@ -154,7 +154,10 @@ session owner lifecycle 안에서만 유효하다. 다른 MeshNode가 bind하거
 
 ## 5. Bind와 relay
 
-**같은 lifecycle의 lease 교체와 fence 사본.** Store 복구 뒤 새 claim과 객체별 token 교체 CAS가
+**같은 lifecycle의 lease 교체와 fence 사본.** Store 통신 실패 중
+[Location runtime §5.1](../05-location-relocation/01-location-runtime.ko.md#51-짧은-장애의-보존과-재참여)의
+보존 실행에서는 기존 binding의 양쪽 fence 사본과 정확 일치 검사를 그대로 사용한다.
+아래의 Store 확인·fence 갱신은 복구 뒤 lease 교체에 적용한다. Store 복구 뒤 새 claim과 객체별 token 교체 CAS가
 성공하면 binding을 재생성하지 않는다. Session owner와 Actor owner의 기존 binding 관리자가
 자기 execution gate에서 양쪽 lease fence 사본을 갱신한다. 갱신 근거는 현재 Store owner lease와
 같은 RID·lifecycle의 descriptor이며, Actor 쪽은 같은 incarnation의 token 교체 CAS 성공도 확인한다.

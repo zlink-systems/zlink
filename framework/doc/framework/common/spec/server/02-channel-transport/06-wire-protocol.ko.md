@@ -26,7 +26,7 @@ title: "Service wire protocol"
 |---|---|
 | [1. Schema와 생성 경계](#1-schema와-생성-경계) | 규범 generated-codec 기준, 계층별 형식 소유, schema 관례, validator, Location Store authority key 형식 |
 | [2. Record framing과 decode](#2-record-framing과-decode) | multipart frame 구성, decode 검증, payload 크기 상한 |
-| [3. Command space](#3-command-space) | command 목록과 역할, Message Follow와 session 교체 notification |
+| [3. Command space](#3-command-space) | 53개 command 목록과 역할, Message Follow와 session 교체 notification |
 | [4. Admission과 connection fence](#4-admission과-connection-fence) | hello/admit/reject 절차, DescriptorRevision ordering, ClientServer 방향 |
 | [5. Service liveness](#5-service-liveness) | livenessProbe/Ack 주기, Classic fanout beacon, subscriber ready 판정 |
 | [6. Typed application message JSON](#6-typed-application-message-json) | `framework-json-v1` profile 규칙 |
@@ -234,7 +234,7 @@ Actor에게 보내는 typed message인 `actorSend`(24)와 `actorRequest`(25)는 
 
 ## 3. Command space
 
-Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `57..255`는 reserved이며
+Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `55..255`는 reserved이며
 다른 의미로 재사용하지 않는다. 괄호 안의 이전 command 이름은 호환 진단용 이름일 뿐 decode하거나
 전송하는 command가 아니다.
 
@@ -285,10 +285,8 @@ Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `57..25
 | 52 | `relocationState` | infrastructure | 없음 | — | source memory에서 target으로 직접 전달하는 payload chunk 전송(base·final stage) |
 | 53 | `relocationFailed` | infrastructure | 없음 | — | 대응하는 `relocationPrepare`에 대한 assembly·준비 실패 명시 reply |
 | 54 | `boundSessionClose` | infrastructure | 없음 | — | current binding의 physical connection close를 Session owner에 요청한다 |
-| 55 | `ownerLivenessQuery` | infrastructure | 없음 | — | 0.33.0 목표: owner 생존 확인 Core request |
-| 56 | `ownerLivenessResult` | infrastructure | 없음 | — | 0.33.0 목표: 대응 Core request의 reply leg |
 
-55·56의 목표 정의를 제외한 표의 "계층"·"application payload"·"사용할 수 있는 flag" 열은 schema 선언을 그대로 옮긴 것이다.
+표의 "계층"·"application payload"·"사용할 수 있는 flag" 열은 schema 선언을 그대로 옮긴 것이다.
 **application 계층 command만 application handler로 들어간다.** infrastructure command는 runtime이
 자기들끼리 주고받으며 application queue에 넣지 않는다. 알 수 없는 command, 반대 direction의
 infrastructure command와 topology에서 허용하지 않은 command도 마찬가지로 넣지 않는다.
@@ -367,65 +365,6 @@ physical pipe 선택·교체는 [Core ROUTER §10.1](../../../../../../../core/d
 Probe 주기와 ACK 판정은 [Transport liveness §3](05-transport-liveness.ko.md#3-routemesh와-clientserver)이 정한다.
 Probe, ACK와 timer는 infrastructure reserve에서 처리하며 application queue나 handler에 전달하지 않는다.
 - **probe와 ACK는 admitted 물리 connection의 현재 epoch를 타며, 그 epoch는 connection lifetime 동안 안정적이다.** `livenessProbe`와 그 `livenessAck`은 admission이 확립한 peer identity와 connection generation으로 보낸다(`scope: admitted-physical-connection-lifetime`). 이미 live 물리 connection에서 admitted된 peer에 대한 중복 re-dial이나 반복 `hello`/`admit`은 idempotent다 — admitted connection을 무효화하지도, connection generation을 회전시키지도 않는다. superseded되었거나 아직 전달되지 않은 generation(상대의 live pipe가 인식하지 못하는 값)으로 stamp된 probe·ACK를 보내는 것은 결함이며, 상대는 이를 현재 admitted connection의 record로 인정하지 않고 조용히 버린다. Peer deadline에 미치는 영향은 [Transport liveness §3](05-transport-liveness.ko.md#3-routemesh와-clientserver)이 정한다. 새 connection generation은 Core의 선택 route가 새 route generation으로 바뀔 때만([Transport liveness §5](05-transport-liveness.ko.md#5-ready와-장애-판정)) 발급하며, 변경 없는 descriptor로 이미 admitted된 peer의 매 inbound admission record마다 발급하지 않는다.
-
-### 5.1 Owner 생존 확인
-
-아래 ID·body는 0.33.0 스펙 초안의 목표 형식이다. §1의 현재 구현 wire 규범은 schema가
-소유하며, 현재 schema에서 55·56은 reserved다. 이 초안은 현행 decoder의 수락 범위를 바꾸지
-않는다. 0.33.0 구현 때 schema·generated codec·golden fixture를 함께 반영한 뒤 이 형식을
-적용한다. §3의 55·56 행과 `57..255` reserved 범위도 그 목표다. 기존
-`livenessProbe`·`livenessAck`를 owner 해제 승인으로 재해석하지 않는다.
-
-| ID | 이름 | 계층 | Application payload | Flag | 방향 |
-|---|---|---|---|---|---|
-| 55 | `ownerLivenessQuery` | infrastructure | 금지 | 없음 | admitted RouteMesh peer에 `[request]` |
-| 56 | `ownerLivenessResult` | infrastructure | 금지 | 없음 | 대응하는 request의 `[reply]` |
-
-`Preparing`의 기존 mesh 연결에서도 55·56을 송수신할 수 있다. Descriptor 게시 전 Store 목록 조회와
-Fixed RID startup 처리는 [MeshNode §3.3](../03-spot-actor/03-mesh-node.ko.md#33-fixed-rid)을 따른다.
-Application message 수락이나 `Serving` 전환을 허용하는 뜻은 아니다.
-
-Service header는 §2와 같고 flags는 `0`이다. 모든 다중 byte 정수는 big-endian이다.
-두 body는 아래 field 순서를 사용하며 optional tail·metadata·payload는 없다.
-
-| Field(전송 순서) | 형식 | 의미 |
-|---|---|---|
-| `checkId` | `nonzero-u64` | 요청 node lifecycle 안에서 재사용하지 않는 확인 ID; 크기 비교 금지 |
-| `ownerId` | `text8` | 확인할 host OwnerId; UTF-8 byte 수 `1..255` |
-| `leaseGeneration` | `u64` | 확인할 owner token의 bounded generation `1..2^63-1` |
-| `ownerNodeRid` | `rid` | 확인할 MeshNode RID; byte 수 `1..255` |
-| `ownerNodeGeneration` | `nonzero-u64` | 확인할 node lifecycle; opaque equality 비교만 허용 |
-| `mode`(55만) | `u8` | `0`: owner 직접 확인, `1`: 수신 peer를 통한 owner 확인 |
-| `result`(56만) | `u8` | `1`: `Alive`, `2`: `NoConnection`, `3`: `NotHeld`; `0`은 reserved |
-
-`text8`·`rid`의 길이는 `u8` prefix이며 prefix는 byte 수에 포함하지 않는다.
-`nonzero-u64`는 0 이외의 64-bit 전체 범위다. 위 enum 이외의 값과 잘못된 길이·generation은
-protocol error다. Reply의 identity field는 request와 byte 단위로 같아야 한다.
-
-55는 Core request로 보내고 56은 그 request의 reply leg로 반환한다. 요청자는 최초 제출
-시각부터 local monotonic으로 renew timeout(기본 3초)을 잰다. 중계도 이 전체 기한 안에서 끝낸다.
-
-- 직접 확인을 받은 owner는 요청 token·RID·lifecycle로 보존 실행 중일 때만 `Alive`다.
-  정지·폐기했거나 그 실행권을 갖고 있지 않으면 `NotHeld`다. 현재 owner token 또는 lifecycle이
-  요청과 다를 때도 `NotHeld`를 반환하고 reply에는 요청 tuple을 그대로 넣는다. Transport 연결이나
-  과거 기록만으로 `Alive`를 만들지 않는다. 응답 직전 기존 turn gate의 정지·폐기 검사를 적용한다.
-- Peer 수신자는 [Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의
-  probe 수신 부재 기준을 만족할 때만 `NoConnection`을 반환한다. 그 밖에는 같은 owner tuple로
-  mode `0` 직접 확인을 보낸다.
-  **각 outbound leg마다 중계 node lifecycle에서 새 `checkId`를 발급하고 일반 pending-request
-  관리에서 upstream request와 연결한다.** Owner의 현재 `Alive` 또는 `NotHeld`만 upstream ID로
-  복원하여 중계한다. 확인 불가·timeout은 응답 없음으로 처리한다. Peer에서 다른 peer로 중계하지
-  않는다. `NoConnection`은 그 peer의 연결 부재이며 owner 전체의 정지 증거가 아니다.
-- 응답은 현재 request leg와 admitted peer identity에 결합한다. 다른 check ID·owner token·node
-  lifecycle의 응답이나 늦은 응답은 현재 해제 판단에 쓰지 않는다. 완료된 응답을 다음 해제의
-  허가증으로 cache하지 않으며 일반 transport liveness와 별도 connection 상태를 만들지 않는다.
-- 어떤 `Alive`든 해제를 보류한다. 무응답·timeout·확인 불가는 `NoConnection`이나 `NotHeld`가
-  아니다. 질의 범위·margin·표 수와 해제·재claim 판단은
-  [Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)이 소유한다.
-
-이 메시지를 모르는 이전 peer의 거부나 무응답은 표로 세지 않는다. 시간 경과만으로 대체하지
-않고 §6.1의 과반 부재 확인 또는 owner의 `NotHeld`가 없으면 보류한다. 기존 capability가
-지원 여부를 보장한다고 해석하지 않는다.
 
 ### Classic fanout beacon
 
@@ -860,14 +799,6 @@ send-ready callback이 폐기되어도 service-wire record와 schema 값은 유�
 Wire command 자체는 우회 권한이 아니며 ordinary control·malformed record도 shared permit을 사용한다. 분류 전 permit은 [수신과 dispatch loop](../01-execution/04-application-job-queue-and-backpressure.ko.md), ordinary record storage 수명은 [Payload 소유권](../01-execution/05-payload-ownership-and-codec.ko.md)이 소유한다.
 
 ## 12. 검증 요구
-
-0.33.0의 55·56 구현에서는 schema·generated codec·golden fixture를 함께 갱신하고 다음을 확인한다.
-
-- `Alive`·`NotHeld`·`NoConnection`을 구분하며 token 불일치·정지·폐기한 owner는 `NotHeld`다.
-- Reserved result `0`, 잘못된 mode·result·길이·generation, 추가 frame·payload를 거부한다.
-- 서로 다른 origin의 같은 upstream `checkId`는 중계 leg에서 다른 ID를 사용한다. 이전 leg의
-  지연 응답과 다른 admitted identity의 응답은 현재 질의를 완료하지 못한다.
-- 이전 peer의 무응답은 표가 아니며, owner의 `NotHeld`나 필요한 표 수 없이 시간만으로 해제하지 않는다.
 
 Schema self-test, 생성된 codec의 golden fixture decode 결과와 checked-in codec table만으로 다음을
 확인한다.

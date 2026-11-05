@@ -84,11 +84,11 @@ publicly meaningful.
 New tick queue admission and callback starts are allowed only after the service runtime
 checks execution rights from [Location runtime §5](../05-location-relocation/01-location-runtime.en.md#5-blocking-a-previous-owners-new-work-when-the-store-connection-drops)
 at the existing execution gate. Timers of eligible steady `Ready` Spots continue under that
-section's conditions during a short Store-only outage.
+section's conditions during a short Store communication outage.
 
-After the admission deadline, no new callback starts without Store communication failure and
-majority connectivity permitting retention, or at `T`. Peer recovery alone never resumes stopped
-execution. The next turn gate applies the same checks after process resume; Location runtime
+After the admission deadline, start new callbacks only under that section's Store communication
+failure retention conditions. Start no callback after discard is recorded at `T`; peer recovery
+alone never resumes execution. The next turn gate applies the same checks after process resume; Location runtime
 §5.1 defines limits for resumption inside a callback and monotonic clocks stopping during suspend. Pending ticks of an object/owner authority that lost execution rights or was
 discarded are not executed. Keep timers and pending ticks unchanged for objects whose
 same-incarnation token replacement CAS succeeds under
@@ -197,11 +197,11 @@ maps to one contract test.
 
 **Owner lease**
 
-- Callbacks continue under Store communication failure with majority connectivity permitting
-  retention. Block after the admission deadline without that majority, or at `T`; peer recovery
-  alone does not resume execution. After the deadline without Store communication failure,
-  do not retain or start callbacks. Resuming a process or obtaining a new lease alone does not
-  execute discarded pending ticks.
+- Callbacks continue during Store communication failure under Location runtime §5.1's retention
+  conditions. Mesh connectivity does not determine retention. Latch discard and block callbacks
+  at `T`; peer recovery alone does not resume execution. After the admission deadline, block
+  callbacks outside the retention conditions. Resuming a process or obtaining a new lease alone
+  does not execute discarded pending ticks.
 
 ---
 

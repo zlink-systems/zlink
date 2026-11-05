@@ -92,11 +92,11 @@ caller가 관찰하는 timing 계약이다.
 
 Spot timer의 새 tick queue 투입과 callback 시작은 service runtime이
 [Location runtime §5](../05-location-relocation/01-location-runtime.ko.md#5-store-연결이-끊기면-이전-owner의-새-작업을-막는다)의
-실행권을 기존 execution gate에서 확인한 뒤에만 허용한다. Store만 단절된 짧은 장애에서
+실행권을 기존 execution gate에서 확인한 뒤에만 허용한다. Store 통신 실패 중 짧은 장애에서
 보존 가능한 steady `Ready` Spot의 timer는 그 절의 조건으로 계속 실행한다.
 
-Admission 기한 뒤 Store 통신 실패와 과반 연결의 보존 조건을 만족하지 못하거나 `T`에
-도달하면 새 callback을 시작하지 않는다. 정지 뒤 peer만 복구되어도 재개하지 않는다.
+Admission 기한 뒤에는 그 절의 Store 통신 실패 중 보존 조건에서만 새 callback을 시작한다.
+`T` 시각의 폐기 기록 뒤에는 새 callback을 시작하지 않으며 peer 복구만으로 재개하지 않는다.
 Process 재개 시 새 turn gate도 같은 판정을 적용하며, callback 도중 재개와 suspend 중
 monotonic 정지의 한계는 Location runtime §5.1을 따른다.
 실행권을 잃었거나 폐기한 object·owner authority의 pending tick은 실행하지 않는다.
@@ -202,10 +202,10 @@ batch로 처리한다.
 
 **Owner lease**
 
-- Store 통신 실패 중 과반 연결의 보존 조건에서는 callback을 계속 시작한다. Admission 기한 뒤
-  과반이 없거나 `T`에 도달하면 막고 peer만 복구되어도 재개하지 않는다. 기한을 넘겼고 Store
-  통신 실패 상태가 아니면 보존하지 않고 callback을 막는다. Process 재개와 새 lease 확보만으로
-  폐기한 pending tick을 실행하지 않는다.
+- Store 통신 실패 중 Location runtime §5.1의 보존 조건에서는 callback을 계속 시작한다.
+  Mesh 연결 여부로 보존을 판정하지 않는다. `T` 시각에 폐기를 기록하고 callback을 막으며 peer
+  복구만으로 재개하지 않는다. Admission 기한 뒤 보존 조건 밖에서는 callback을 막는다.
+  Process 재개와 새 lease 확보만으로 폐기한 pending tick을 실행하지 않는다.
 
 ---
 

@@ -379,11 +379,11 @@ Bind가 끝난 뒤에는 다음 작업이 저장한 route를 사용한다.
 - Actor에서 bound Session으로 보내는 push
 
 이 작업을 시작할 때마다 Location Store에서 Actor 위치를 조회하지 않는다. 저장 route의
-일반 유효 기간은 current owner lease의 local admission deadline까지다. Store만 단절된
+일반 유효 기간은 current owner lease의 local admission deadline까지다. Store 통신 실패 중
 짧은 장애의 bound 메시징은 [Location runtime §5](../05-location-relocation/01-location-runtime.ko.md#5-store-연결이-끊기면-이전-owner의-새-작업을-막는다)의
 보존 실행 조건을 따른다. 이미 확정된 binding route는 Actor owner lease의 만료나 일반 cache
 만료만으로 제거하지 않는다. Session owner는 그 bound route로 계속 보내고, 수신 owner의 기존
-gate가 보존 실행 여부를 판정한다. `NotHeld`, stale binding·다른 incarnation 또는 §6.1 해제
+gate가 보존 실행 여부를 판정한다. stale binding·다른 incarnation 또는 Location runtime §6.1 해제
 commit을 확인하면 즉시 route를 무효화한다. 이때 새 owner로 같은 operation을 다시 보내지 않는다.
 복구 후 fence 갱신은 [Session binding §5](../04-session/02-session-actor-binding.ko.md#5-bind와-relay)를 따른다.
 이 조건은 Store lease나 일반 route cache 수명을 연장하지 않는다.
@@ -475,7 +475,7 @@ Request는 reply, error, timeout, cancellation 또는 shutdown 가운데 먼저 
 ## 5. 구현 및 contract test 검증 요구
 
 - 일반 cache는 lease 만료에 제거하지만 이미 확정된 bound route는 보존 실행 대상 owner로
-  계속 전달한다. Owner의 `NotHeld`·stale binding·해제 commit을 확인하면 그 route를 무효화하며
+  계속 전달한다. stale binding·다른 incarnation·Location runtime §6.1 해제 commit을 확인하면 그 route를 무효화하며
   같은 operation을 새 owner로 재전송하지 않는다.
 
 공개 표면(Spot·Actor direct 시작 method, bind·relay method, reply 완료, Location Store가
