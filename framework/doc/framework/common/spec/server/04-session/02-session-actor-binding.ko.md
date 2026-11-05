@@ -180,8 +180,9 @@ Session owner 자신의 owner ID·lease generation을 담는다. Session owner�
 fence의 lease generation이 같은 lifecycle에서 자기 바로 이전 `LeaseGeneration`이어도 같은
 binding으로 수락하고 처리하며 사본을 현재 generation으로 갱신한다. 이 판정은 자기 lifecycle
 안의 값 비교이며 Store를 읽지 않는다. 다른 lifecycle·owner·binding 또는 그 밖의 lease generation은
-기존 정확 일치 검사와 결과 분류로 거부한다. Command 42·51에 담긴 Actor owner 값의 판정은
-[§8.3](#83-이미-정리된-binding에-대한-seal)을 그대로 따른다.
+기존 정확 일치 검사와 결과 분류로 거부한다. Command 42의 Actor owner 값은
+[§8.3](#83-이미-정리된-binding에-대한-seal)을, command 51의 source fence는
+[§6](#6-rebind와-이전-연결-교체)의 기존 판정을 따른다.
 Binding generation·token, Actor incarnation과 Session sequence는 유지한다. 새 wire field나
 재전송은 추가하지 않는다. 이 갱신은 기존 binding fence 관리가 소유한다.
 

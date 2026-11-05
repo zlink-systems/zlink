@@ -202,8 +202,9 @@ are unchanged, the Session owner accepts and processes the command as the same b
 when the fence carries its immediately previous `LeaseGeneration` within the same lifecycle,
 and refreshes the copy to its current generation. This compares values within its own lifecycle
 without a Store read. Reject a different lifecycle, owner, binding, or any other lease generation
-through existing exact-match checks and result classifications. Actor owner values in commands
-42/51 continue to follow [§8.3](#83-sealing-an-already-cleaned-binding).
+through existing exact-match checks and result classifications. Actor owner values in command
+42 follow [§8.3](#83-sealing-an-already-cleaned-binding); command 51's source fence follows the
+existing decisions in [§6](#6-rebind-and-replacing-the-previous-connection).
 Keep binding generation/token, Actor incarnation, and Session sequence. Add no wire field or
 retransmission. Existing binding-fence management owns this refresh.
 

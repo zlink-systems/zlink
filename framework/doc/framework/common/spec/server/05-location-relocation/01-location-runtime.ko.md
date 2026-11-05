@@ -803,6 +803,12 @@ Downgrade나 이전 버전 host 추가 전에는 보존을 끄고 기존 `T` 보
   namespace flush를 허용하는 뜻은 아니다.
 - 다른 owner·incarnation으로의 변경이나 local 실행권 상실이 확정되면 mesh 연결과 `T`에 관계없이
   해당 객체의 새 실행을 중단한다. Store에서 유효하지 않은 token으로 변경하지 않는다.
+- User Spot incarnation과 그 host에 있는 해당 incarnation의 local member Actor 전체를 하나의
+  보존·복구·폐기 단위로 취급한다. 모든 구성원이 기존 보존 조건을 만족할 때만 그 단위를 보존한다.
+  복구 때도 모든 구성원이 아래 조건을 만족해야 그 단위의 기존 gate들을 다시 연다. 하나라도 조건을 확인하지 못하거나 폐기되면 단위 전체를 폐기한다.
+  다른 host의 member Actor는 이 단위에 포함하지 않는다. 그 Actor의 authority와 실행권은 해당
+  owner가 소유하므로 [Spot·Actor membership §1·§3](../03-spot-actor/05-spot-actor-membership.ko.md#1-identity와-authority)의
+  기존 membership 계약과 §6.1의 해제 조건을 따른다.
 - Store 복구를 확인하면 객체의 기존 gate를 닫고, 연속성과 각 보존 단위의 authority·
   `ObjectGeneration`·`AuthorityOwnerGeneration`·owner token·node lifecycle 및 미폐기 상태를 확인한다.
   기존 token이 아직 유효하면 같은 token의 renew로 admission 기한을 갱신하고 token 교체 CAS 없이
@@ -819,22 +825,29 @@ Downgrade나 이전 버전 host 추가 전에는 보존을 끄고 기존 `T` 보
   교체한다. Owner identity와 node lifecycle은 유지한다. 이 전이는 §6.1의 `Preserve`이며 다른
   generation과 수용 공간을 바꾸지 않는다. 교체 CAS는 그 요청 시작 시각에 renew timeout을 더한
   시각이 원래 보존 기한 `T` 이하일 때만 제출한다. `T` 전에 교체 CAS 성공과 새 descriptor의
-  Store 반영을 모두 확인한 객체만 기존 gate를 다시 연다. 원래 `T` 안에 두 확인을 모두 받지
-  못했거나 이미 폐기한 객체는 버리고 아래 폐기 후 authority 정리 규칙을 따른다.
+  Store 반영을 보존 단위의 모든 구성원에 대해 확인한 경우에만 그 단위의 기존 gate들을 다시 연다.
+  원래 `T` 안에 하나라도 두 확인을 모두 받지 못했거나 이미 폐기됐으면 단위 전체를 버리고
+  아래 폐기 후 authority 정리 규칙을 따른다.
   `T` 이상 시각의 성공 응답이나 §10 재확인으로 교체 성공을 알게 되면 아래 폐기 후 authority
   정리 규칙을 따른다.
   `Missing`이나 다른 incarnation·owner record를 local memory로 복원하지 않는다. 성공 객체의
   pending message·timer·binding·지연 completion은 재생성하거나 재전송하지 않는다.
-  늦은 복구에서는 새 claim·descriptor 게시 확인·객체별 CAS를 원래 `T` 안에 끝낼 수 있는 객체만 보존된다.
+  늦은 복구에서도 새 claim·descriptor 게시 확인·객체별 CAS를 원래 `T` 안에 모두 끝낸 단위만 보존된다.
   Binding identity와 Session sequence는 유지하되 lease fence 사본은
   [Session binding §5](../04-session/02-session-actor-binding.ko.md#5-bind와-relay)의 갱신 규칙을 따른다.
 - 폐기한 각 객체는 Store 복구 뒤 authority 정리까지 수행한다. Authority가 같은 자기
   owner·node lifecycle·`ObjectGeneration`·`AuthorityOwnerGeneration`이고 현재 자기의 유효 lease
   token을 가리키면, token 유지·교체와 관계없이 현재 읽은 `StoreVersion`을 조건으로 §6.1의
-  `Delete`를 수행한다. User Spot authority의 Delete는 §6.1의 해제와 같이 그 incarnation의
-  membership을 같은 batch에서 지우며, member Actor authority의 Delete는 자기 membership row도
-  함께 제거한다. Provider의 batch 상한을 넘으면 일부만 지우지 않고 아무것도 바꾸지 않은 채
-  기존 renew interval의 다음 정리에서 다시 시도한다. 확인하지 못한 renew가 나중에 확인된 경우도
+  `Delete`를 수행한다. User Spot 단위는 먼저 폐기한 local member Actor마다 기존 Actor별
+  Delete로 자기 membership row와 authority·수용 공간을 함께 제거한다. 이 정리를 끝낸 뒤
+  Spot Delete를 수행한다. 전체 local member를 한 batch에 넣거나 상한을 넘는 Spot batch를
+  반복 제출하지 않는다. Spot Delete는 §6.1의 해제 조건을 만족하는 남은 membership과 authority·
+  수용 공간을 provider의 기존 batch 상한 안에서 함께 정리한다. 다른 host member의 row는
+  기존 leave·destroy에 따른 membership 제거 또는 §6.1의 owner가 끝난 member 해제 조건을
+  따르며, local 단위 폐기만으로 다른 owner의 Actor나 그 row를 삭제하지 않는다. 해당 row가
+  남아 §6.1 조건이나 batch 상한을 만족하지 못하면 기존 membership 정리로 row가 줄어든 뒤
+  Spot 정리를 진행한다. 따라서 local member 수가 2,048-key 상한을 넘더라도 Actor별 정리가
+  먼저 진행되어 Spot batch의 크기를 줄인다. 확인하지 못한 renew가 나중에 확인된 경우도
   포함한다. Delete 응답이
   불확정이면 §10으로 재확인하며, 자기 유효 token의 해당 record가 남아 있는 동안 기존 renew
   interval마다 재확인 후 필요한 Delete를 다시 시도한다. 삭제 확인 또는 다른 owner·incarnation으로의
@@ -1701,7 +1714,11 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   §5.1의 폐기 후 authority 정리 규칙을 따른다. 동일 token renew 적용 뒤 응답·재확인이 실패하고
   `T`에 폐기한 다음 lease 만료 전에 복구하여 정상 heartbeat를 계속하는 경우도, 해당 authority를
   정리하여 새 incarnation을 만들 수 있어야 한다. Delete 응답 불확정 시 §10의 재확인과 정리 종료
-  조건을 검사한다. `T` 전 동일 token 복구는 기존 객체를 유지하며, 폐기 객체는 복원하지 않는다.
+  조건을 검사한다. User Spot의 local member 교체 CAS 성공은 `T` 전에 확인했지만 Spot 성공은
+  `T` 뒤에만 확인되고, membership을 포함한 batch가 2,048-key를 초과하며 heartbeat가 계속되는
+  조합도 검사한다. 어떤 gate도 먼저 열리지 않고 단위 전체를 폐기하며, Actor별 Delete가 row를
+  줄인 뒤 기존 상한 안의 Spot Delete로 정리가 끝나야 한다. 다른 host member에는 기존
+  membership·해제 조건을 유지한다. `T` 전 동일 token 복구는 기존 객체를 유지하며, 폐기 객체는 복원하지 않는다.
 - 해제는 해당 authority owner token의 무효 첫 관찰 뒤 local monotonic `3·margin`(기본값 예시 15초)을 요구한다.
   Lease `Missing`·다른 token·만료 record를 같은 무효로 취급한다. Authority 자체가 `Missing`인
   최초 생성과 target lifecycle이 끝난 reservation 해제에는 이 대기를 적용하지 않는다.
@@ -1713,8 +1730,8 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   재전송을 추가하지 않는다. 새 claim 뒤 descriptor 재게시는 객체별 교체 CAS 제출보다 앞선다.
   Session owner 자신의 lease 교체 직후 바로 이전 generation을 실은 command 42·51·54는
   Session binding §5의 같은 binding 조건에서 Store read 없이 수락하고 사본을 갱신한다.
-  다른 lifecycle·binding·그 밖의 generation은 거부한다. Command 42·51의 Actor owner 값은
-  Session binding §8.3의 기존 판정을 따른다.
+  다른 lifecycle·binding·그 밖의 generation은 거부한다. Command 42의 Actor owner 값은
+  Session binding §8.3을, command 51의 source fence는 같은 문서 §6의 기존 판정을 따른다.
   반복 생성 호출은 같은 token의 최초 무효 관찰 시각을 유지한다.
 - 최초 owner lease claim이 renew timeout까지 lease를 확인하지 못하면 startup은 성공하고 위
   네 대상이 막힌다.
