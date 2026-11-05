@@ -1198,7 +1198,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                                     )
                                 : result == RequestResult.Rejected && rejectionMessage is not null
                                     ? new ServiceWireCodec.RequestSpecificTailCase3(
-                                        new ServiceWireCodec.Text16(rejectionMessage)
+                                        new ServiceWireCodec.NonemptyText16(rejectionMessage)
                                     )
                                 : new ServiceWireCodec.RequestSpecificTailOtherwise(),
                             null

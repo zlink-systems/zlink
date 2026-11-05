@@ -594,7 +594,7 @@ internal static class ServiceWireCodec
     internal sealed record RequestSpecificTailCase0(ActorRef Actor, Text8 SpotId, NonzeroU64 SpotGeneration, NonzeroU64 MembershipEpoch, NonzeroU64 AuthorityOwnerGeneration) : RequestSpecificTail;
     internal sealed record RequestSpecificTailCase1(ActorJoinReplyTail Join) : RequestSpecificTail;
     internal sealed record RequestSpecificTailCase2(NonzeroU64 BindingGeneration, NonzeroU64 AuthorityOwnerGeneration) : RequestSpecificTail;
-    internal sealed record RequestSpecificTailCase3(Text16 RejectionMessage) : RequestSpecificTail;
+    internal sealed record RequestSpecificTailCase3(NonemptyText16 RejectionMessage) : RequestSpecificTail;
     internal sealed record RequestSpecificTailCase4(UserSpotCreateResult CreateResult, SpotRef Spot) : RequestSpecificTail;
     internal sealed record RequestSpecificTailCase5(Bool8 Closed) : RequestSpecificTail;
     internal sealed record RequestSpecificTailCase6(ActorCreateTerminal Creation) : RequestSpecificTail;
@@ -4651,7 +4651,7 @@ internal static class ServiceWireCodec
         }
         else if (OriginalOperationKind == MeshOperationKind.StreamBind && TerminalResult == RequestTerminalResult.Rejected)
         {
-            var RejectionMessage = ReadText16(ref selected, context);
+            var RejectionMessage = ReadNonemptyText16(ref selected, context);
             var caseValue = new RequestSpecificTailCase3(RejectionMessage);
             RequestSpecificTail value = caseValue;
             return value;
@@ -4714,7 +4714,7 @@ internal static class ServiceWireCodec
         {
             if ((context.OriginalOperationKind ?? throw Error("missing context originalOperationKind")) != MeshOperationKind.StreamBind) throw Error("request-specific-tail: discriminator");
             if (enclosingTerminalResult != RequestTerminalResult.Rejected) throw Error("request-specific-tail: discriminator");
-            WriteText16(ref writer, item.RejectionMessage, context);
+            WriteNonemptyText16(ref writer, item.RejectionMessage, context);
             break;
         }
         case RequestSpecificTailCase4 item:
