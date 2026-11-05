@@ -81,15 +81,16 @@ publicly meaningful.
 
 ## 3. Owner Lease and Admission
 
-A Spot timer can only be admitted after the service runtime checks the current
-[owner lease](../00-foundation/02-glossary.en.md#owner-lease) and the admission deadline.
+New tick queue admission and callback starts are allowed only after the service runtime
+checks execution rights from [Location runtime §5](../05-location-relocation/01-location-runtime.en.md#5-blocking-a-previous-owners-new-work-when-the-store-connection-drops)
+at the existing execution gate. Timers of eligible steady `Ready` Spots continue under that
+section's conditions during a short Store-only outage.
 
-If lease renewal stops and the monotonic deadline is exceeded, no new tick is queued and no callback is started
-after resuming, even if the Framework process had been suspended.
-
-Pending ticks from a previous object/owner authority are not run either — if a timer kept running outside the
-owner lease, the old owner's callback could touch the state of an object that has already
-passed to a different owner.
+No new callback starts when admission is blocked by loss of both the Store and all mesh
+peers, or when retention bound `T` is exceeded. The same decision applies after a suspended
+process resumes. Pending ticks of a previous object/owner authority are not executed.
+Obtaining a new lease alone does not restore discarded timers or pending ticks. Ordinary
+overrun follows the policies in §2.
 
 ## 4. Shared Scheduler — Resources Do Not Scale with Registration Count
 
@@ -192,9 +193,9 @@ maps to one contract test.
 
 **Owner lease**
 
-- After the owner lease expires, a new tick doesn't start its callback, and while the lease
-  isn't renewed, backed-up ticks don't all run at once even if the process was suspended and
-  then resumed.
+- Callbacks continue under retained-execution conditions during a Store-only outage. No new
+  callback starts after loss of both the Store and all mesh peers, or beyond `T`. Resuming a
+  process or obtaining a new lease alone does not execute discarded pending ticks.
 
 ---
 

@@ -406,6 +406,54 @@ Probe timing and ACK judgment are defined by [Transport liveness §3](05-transpo
 The probe, ACK, and timer are handled by the infrastructure reserve and are not delivered to the application queue or a handler.
 - **Probe and ACK ride the admitted physical connection's current epoch, and that epoch is stable for the connection's lifetime.** A `livenessProbe` and its `livenessAck` are addressed to the peer identity and connection generation that admission established (`scope: admitted-physical-connection-lifetime`). A redundant re-dial or a repeated `hello`/`admit` for a peer that is already admitted on a live physical connection is idempotent: it neither supersedes the admitted connection nor rotates its connection generation. Emitting a probe or ACK stamped with a superseded or not-yet-delivered generation — one the peer's live pipe does not recognize — is a defect; the peer silently discards it without recognizing it as a record of the current admitted connection. [Transport liveness §3](05-transport-liveness.en.md#3-routemesh-and-clientserver) defines its effect on the peer deadline. A new connection generation is minted only when Core's selected route changes to a new route generation ([Transport liveness §5](05-transport-liveness.en.md#5-ready-and-failure-determination)), not on every inbound admission record for an already-admitted, unchanged descriptor.
 
+### 5.1 Owner Liveness Check Draft
+
+This proposes owner liveness messages for 0.33.0. The IDs and bodies below are a draft pending
+schema integration; they do not alter the current command table or closed decoder definition.
+Section 1's single schema owner remains in effect. Existing `livenessProbe` and `livenessAck`
+are not reinterpreted as authorization to release ownership.
+
+| Proposed ID | Name | Domain | Application payload | Flags | Direction |
+|---|---|---|---|---|---|
+| 55 | `ownerLivenessQuery` | infrastructure | forbidden | none | `[request]` to an admitted RouteMesh peer |
+| 56 | `ownerLivenessResult` | infrastructure | forbidden | none | `[reply]` to the corresponding request |
+
+The service header follows §2 with flags `0`. Multi-byte integers are big-endian.
+Both bodies use the following field order, with no optional tail, metadata, or payload.
+
+| Field (wire order) | Format | Meaning |
+|---|---|---|
+| `checkId` | `nonzero-u64` | Check ID not reused within the requesting node lifecycle; no numeric ordering |
+| `ownerId` | `text8` | Host OwnerId being checked; `1..255` UTF-8 bytes |
+| `leaseGeneration` | `u64` | Bounded generation of the owner token being checked, `1..2^63-1` |
+| `ownerNodeRid` | `rid` | MeshNode RID being checked; `1..255` bytes |
+| `ownerNodeGeneration` | `nonzero-u64` | Node lifecycle being checked; opaque equality comparison only |
+| `mode` (55 only) | `u8` | `0`: direct owner check; `1`: owner check through the receiving peer |
+| `result` (56 only) | `u8` | `0`: `Unconfirmed`; `1`: `Alive` |
+
+`text8` and `rid` use a `u8` length prefix excluded from the byte count.
+`nonzero-u64` covers the entire 64-bit range except zero. Unknown enum values and invalid
+lengths or generations are protocol errors. Reply identity fields must match the request byte for byte.
+
+- A direct check returns `Alive` only when the owner responds with its current admitted identity
+  matching the requested token, RID, and lifecycle. A transport connection or past liveness
+  record does not replace this response.
+- A peer-check recipient sends mode `0` to the owner with the same tuple and `checkId`, returning
+  `Alive` only after confirming a current response to that request. It does not forward the
+  peer check to another peer. Without a confirmed owner response, the result is `Unconfirmed`,
+  which does not confirm termination.
+- Bind responses to the current request leg and admitted peer identity. Responses with another
+  check ID, owner token, or node lifecycle, and late responses, do not inform the current release
+  decision. Do not cache a response as release authorization or create connection state separate
+  from ordinary transport liveness.
+- Any `Alive` is evidence to defer release. `Unconfirmed`, timeout, and silence do not authorize
+  release. [Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas)
+  owns release and reclaim decisions.
+
+Schema and golden-fixture integration, required capability, and treatment of older peers must
+be settled before adoption. Until then, do not transmit these messages or interpret the
+existing capability as guaranteeing support.
+
 ### Classic Fanout Beacon
 
 A one-way delivery style where the receiving side never responds is called

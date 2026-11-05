@@ -2195,7 +2195,7 @@ role.
 | Shape | A composite lease record of an owner token and expiry |
 | .NET notation | `ZLinkLocationOwnerToken`, `ZLinkOwnerLeaseReadResult.Found` |
 | Creation/management | The Location Store provider issues a generation on claim, and the host renews it on a fixed schedule. |
-| Lifetime | Valid until `LeaseExpiresAt`. Stale if the stored owner token differs or the store-relative expiry has passed. |
+| Lifetime | Valid until `LeaseExpiresAt`; the default TTL is 30 seconds. Stale if the stored owner token differs or Store-relative expiry has passed. [Location runtime §5](../05-location-relocation/01-location-runtime.en.md#5-blocking-a-previous-owners-new-work-when-the-store-connection-drops) owns local execution rights during Store outages without extending the Store lease. |
 
 Owner identity is bundled into the following `ZLinkLocationOwnerToken`.
 
@@ -2226,8 +2226,8 @@ public abstract record ZLinkOwnerLeaseReadResult
 <a id="fencing-deadline"></a>
 ### Fencing Deadline
 
-The final time point by which a Server that failed to renew its owner lease must
-stop accepting new business messages.
+The ordinary new-work cutoff derived from the owner lease.
+[Location runtime §5](../05-location-relocation/01-location-runtime.en.md#5-blocking-a-previous-owners-new-work-when-the-store-connection-drops) defines retained execution during Store outages.
 
 | Item | Content |
 |---|---|
@@ -2235,7 +2235,7 @@ stop accepting new business messages.
 | .NET notation | No public standalone type. The computed result is a `DateTimeOffset` time point. |
 | Public composition | A single time point reflecting the fencing margin against the last valid owner lease deadline. |
 | Creation/management | Computed by the framework from the last confirmed valid lease and location options. |
-| Lifetime | Refreshed whenever a new valid lease is confirmed. Once the deadline is reached, new business admission closes regardless of Store failure grace. |
+| Lifetime | Refreshed whenever a new valid lease is confirmed. With the default 30-second TTL and 5-second margin, it is 25 seconds from the last successful renewal reference time. Ordinary new-work blocking and retained execution after this deadline follow Location runtime §5. |
 
 ## 9. Network Listener
 

@@ -678,11 +678,18 @@ Topology 열거는 MeshNode descriptor만 대상으로 한다. ClientServer chan
 상태는 [Runtime 상태와 운영 진단 §5](../06-observability/01-runtime-monitoring.ko.md#5-topology-상태--routemeshclientserverautomatic-fanout)로
 확인한다(§7.4에서 다시 인용한다).
 
-## 5. Store 연결이 끊기면 이전 owner의 새 작업을 막는다
+<a id="5-store-연결이-끊기면-이전-owner의-새-작업을-막는다"></a>
+## 5. Store 장애 중 실행권과 새 작업 수용
 
-Owner lease를 갱신하지 못한 host가 계속 새 작업을 받으면 새 owner와 동시에 처리할 수 있다.
-이를 막기 위해 각 host는 Store 응답 시각으로 "새 작업을 받을 수 있는 마지막 시각"을
-계산한다. 이 시각을 [local admission deadline](../00-foundation/02-glossary.ko.md#deadline)이라고 한다.
+**같은 객체를 두 owner에서 동시에 실행하지 않는다.** Store만 단절된 짧은 장애에서는 장애 전에
+steady `Ready`였던 객체의 bound Actor·Spot 메시징과 Spot timer를 마지막 확정 상태와 route로
+계속 처리한다. Location runtime이 실행권을 결정하고 기존 execution gate가 적용한다.
+다른 모듈에 별도 admission 판정이나 transport 연결 상태를 추가하지 않는다.
+
+Store 응답 시각으로 계산하는 일반 새 작업 수용 기한을
+[local admission deadline](../00-foundation/02-glossary.ko.md#deadline)이라고 한다.
+아래 기본값의 기한은 마지막 성공 갱신의 기준 시각에서 25초다. Store 장애 중 보존 가능한
+실행과 해제 전 확인은 §5.1·§6.1을 함께 따른다.
 
 **Location Store를 사용하는 모든 host는 startup에서 다음 관계를 검증한다.** 각 node의 접속
 식별자를 자동으로 만들었는지 수동으로 지정했는지와는 관계없다.
@@ -694,9 +701,12 @@ max(renew interval, renew timeout) + renew timeout < owner lease TTL - owner lea
 | 설정(host 하나 기준) | 기본값 |
 |---|---:|
 | Renew interval | 5초 |
-| Owner lease TTL | 15초 |
+| Owner lease TTL | 30초 |
 | Renew timeout | 3초 |
 | Owner lease fencing margin | 5초 |
+
+기본값은 `max(5, 3) + 3 = 8 < 30 - 5 = 25`로 startup 검증식을 만족한다.
+장애 전환·요금제 변경 같은 Store 노드 교체에서 관측한 5~9초를 견디는 것을 기준으로 한다.
 
 모든 값은 양수여야 한다. 위 관계를 위반하면 startup error다. 다음 갱신은 직전 갱신을 시작한 시각에서 renew interval 뒤에 시작하며, 직전 갱신이 아직 끝나지 않았으면 끝난 뒤에 시작한다. Automatic RID descriptor 등록도
 같은 host 실행 조합과 deadline을 사용한다.
@@ -706,7 +716,9 @@ Store 요청 전후의 local monotonic 시각을 함께 사용하여 network 지
 lease 갱신 한 번이 host 전체의 local admission deadline을 갱신한다. Object별 deadline은 이
 시각을 연장할 수 없다.**
 
-Deadline을 넘거나 현재 host 실행 조합이 Store 값과 다르면 다음 새 작업을 받지 않는다.
+Deadline을 넘으면 다음 표의 일반 새 작업을 받지 않는다. 단, §5.1의 보존 실행 조건을
+만족하는 bound Actor·Spot message와 Spot timer는 계속 처리한다. 현재 host 실행 조합과
+Store 값의 불일치는 정상 만료 뒤 새 claim과 구분하며, 그 자체로 보존 객체의 실행권을 부여하지 않는다.
 
 | 차단 대상 |
 |---|
@@ -731,6 +743,33 @@ interval마다 claim을 계속하고, 확보한 뒤에는 첫 갱신과 같이 d
 Claim 결과 `Conflict`와 `GenerationExhausted`는 startup error다. Caller가 startup을
 cancellation하면 startup은 취소로 끝나며 이 규칙으로 성공이 되지 않는다. 이미 시작한 claim은
 §10대로 같은 key를 다시 읽어 확인하고, 확인된 lease는 정상 해제하며 heartbeat를 시작하지 않는다.
+
+### 5.1 짧은 장애의 보존과 재참여
+
+보존 한도 `T`는 마지막 lease 갱신 성공 뒤 60초다. 경과 시간은 성공 갱신 요청을 시작한
+local monotonic 시각을 기준으로 계산하여 응답 지연만큼 보존 시간이 늘어나지 않게 한다.
+새 claim 성공만으로 이전 장애의 보존 시간을 다시 시작하지 않는다.
+
+- Store와의 통신만 실패하고 기존 admitted mesh peer가 하나 이상 유효하면, 장애 전에 steady
+  `Ready`였던 객체의 bound Actor·Spot 메시징과 Spot timer를 `T` 안에서 cache로 계속 처리한다.
+  새 객체 생성, factory·restore 확정, relocation과 수용 공간 변경은 보존 실행 대상이 아니다.
+- Store와 모든 mesh peer가 함께 단절되면 위 차단 대상 표의 새 작업 수용을 중단한다.
+  Peer 유효성은 기존 mesh liveness 판정을 사용한다. Peer 연결만으로 Store 변경 권한을 얻지는 않는다.
+- `T`를 넘으면 mesh 연결 유무와 관계없이 보존한 메모리 상태를 버린다. 기존 gate에서 이전
+  객체의 새 실행을 막고 queue·timer·binding·지연 completion을 정리한 뒤 빈 상태로 재참여한다.
+  Store 후퇴를 감지하면 `T`와 관계없이 같은 정리를 수행한다. 다른 owner의 Store record를
+  삭제하거나 namespace를 flush한다는 뜻은 아니다.
+- 다른 owner·incarnation으로의 변경이나 local 실행권의 상실이 확정되면 mesh 연결과 `T`에
+  관계없이 해당 객체의 새 실행을 중단한다. Store에서 유효하지 않은 token으로 변경하지 않는다.
+- Store 복구 뒤에는 연속성과 각 보존 단위의 authority·generation·owner token·node lifecycle을
+  다시 확인한다. 새 lease 확보만으로 이전 객체의 gate를 모두 열지 않는다. `Missing` 또는
+  다른 incarnation·owner의 record를 local memory로 복원하지 않는다. 만료 token 갱신은 계속
+  거절하며 새 자격에는 새 `LeaseGeneration`을 발급한다.
+
+연속성의 운영 요구는 [Location Store §1](02-location-store-redis.ko.md#1-범위와-독자)이 소유한다.
+복구 시 같은 incarnation의 owner token을 교체하는 원자 전이와 모든 peer 무응답 뒤의 안전한
+해제 조건은 이 초안에서 확정하지 않는다. 확정 전에는 그 전이로 보존 실행을 재승인하거나
+무응답만으로 해제를 승인하지 않는다.
 
 ## 6. 현재 위치 record를 읽고 변경한다
 
@@ -766,6 +805,17 @@ lease(owner ID와 lease generation)와 처음 읽은 target MeshNode descriptor 
 MeshNode lifecycle 재시작에서 바뀌지 않을 수 있기 때문이다. Record가 없거나 lease가 오래됐으면
 `Conflict`이며 아무것도 변경하지 않는다. Target 정보 조합 자체가 잘못됐으면 Store를
 호출하기 전에 Framework 내부 오류로 끝낸다.
+
+**다른 node의 owner 해제·재생성·재claim에는 mesh 생존 확인을 먼저 수행한다.** Lease 무효만으로
+기존 owner의 실행 중단을 증명하지 않는다. 해제 후보 authority의 owner token과 node lifecycle을
+대상으로 owner에게 직접 확인하고 기존 admitted peer들에게도 확인한다. 한 응답이라도 해당
+owner의 생존을 확인하면 해제를 보류하고 `Unavailable`을 반환한다. User Spot member 해제에도
+각 owner에 같은 검사를 적용한다. 부분 단절에서 해제 요청자만 owner와 통신하지 못하는 경우를
+다루기 위해 직접 확인만 하는 안 대신 여러 peer의 확인 중 하나라도 생존이면 보류하는 안을 채택한다.
+과거 연결 정보만으로 생존을 확정하지 않으며 현재 확인 요청에 대한 owner 응답을 요구한다.
+무응답·timeout·peer 목록의 불완전성은 정지 증거가 아니며 해제 권한을 만들지 않는다.
+해제 허용 조건이 확정되지 않은 경우 `Unavailable`로 끝낸다. Mesh 확인은 아래 Store CAS를
+대신하지 않는다. 메시지 형식은 [wire §5.1](../02-channel-transport/06-wire-protocol.ko.md#51-owner-생존-확인-초안)이 소유한다.
 
 **Target lifecycle이 끝난 reservation은 해제한다.** `Reserved` record의 target owner lease가 없거나,
 다른 `LeaseGeneration`이거나, 만료됐으면, 또는 target MeshNode descriptor record가 없거나 다른
@@ -1038,10 +1088,15 @@ Framework는 `Ready` 위치를 잠시 캐시에 둘 수 있다. Cache에는 ID, 
 `RouteCacheMaxAge` 기본값은 15초이며 owner가 새 작업을 받을 수 있는 마지막 시각을 넘지
 못한다. `Missing`, `Creating`과 Store 오류는 캐시에 두지 않는다. 더 높은 `StoreVersion`이나
 owner lease 만료를 확인하면 즉시 제거한다. 실행 중 변경한 `RouteCacheMaxAge`는 새 cache entry부터 적용하며 기존 entry의 수명을 연장하지 않는다.
+기본 lease TTL 30초·일반 admission 기한 25초에서도 cache 상한은 15초다. §5.1의 보존 실행은
+이미 확정된 binding·local authority를 사용하며 만료 cache entry를 갱신하거나 새 route로 바꾸지 않는다.
+Cache miss를 Store 장애만으로 `Missing`으로 해석하지 않는다.
 
 이동 직후 이전 owner로 들어온 message는 새 owner에게 전달할 수 있다. 이 기능을 Message
 Follow라고 하며, 기간인 `MessageFollowDuration`의 기본값은 30초다. 값이 0이면 각각 cache 또는
 전달을 끈다. 두 기능을 모두 사용하면 cache 보관 시간은 전달 기간보다 최소 5초 짧아야 한다.
+기본값은 `15 <= 30 - 5`를 만족한다. Message Follow 30초와 보존 한도 `T` 60초는
+각각 relocation 전달 기간과 장애 중 메모리 보존 한도이며 서로를 연장하지 않는다.
 잘못된 설정은 configuration error다. Message Follow 기간은 relocation commit에서 시작한다.
 이전 owner는 새 owner의 `ActorRef` 또는 Spot 위치와 만료 시각을 보관하고, 만료 뒤 route를 제거한다.
 
@@ -1450,9 +1505,9 @@ target에 대한 connection intent(아직 연결되지 않은 target 포함)를 
 상태 판단을 계속하되, 그 목록 밖의 새 target에는 connect하지 않는다. Grace가 끝난 뒤에도 descriptor
 전체를 같은 시점의 목록으로 다시 읽기 전에는 이 목록을 바꾸지 않는다.
 
-이 유예 시간은 owner lease나 relocation deadline을 연장하지 않는다. §5의 시각을 넘으면
-state를 바꾸는 message와 timer 시작, factory 완료 기록, relocation 변경과 수용 공간 확보를
-막는다. Store 연결이 복구되면 owner 정보와 descriptor 전체 목록을 다시 확인한 뒤 필요한
+이 유예 시간은 owner lease나 relocation deadline을 연장하지 않는다. 일반 새 작업 차단과
+steady `Ready` 객체의 보존 실행은 §5 한 곳에서 결정한다. Relocation 진행 중인 객체에는
+§5.1의 보존 실행을 적용하지 않는다. Store 연결이 복구되면 owner 정보와 descriptor 전체 목록을 다시 확인한 뒤 필요한
 connection 변경만 적용한다.
 
 복구 뒤 처음 다시 읽은 전체 목록에서 빠진 target의 connection intent는 곧바로 제거하지 않는다.

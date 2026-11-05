@@ -91,8 +91,10 @@ error.
 
 When a node using a fixed RID restarts and collides with the previous lifecycle's active owner
 claim, the same rule as an automatic RID applies: it does not retry with a new value but fails
-startup immediately with a conflict, and a lifecycle started after the previous owner lease expires
-claims the same RID.
+startup immediately with a conflict. Even a lifecycle started after the previous owner lease expires
+must satisfy the mesh liveness check and release conditions of
+[Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas)
+before reclaiming the same RID. Lease expiry alone does not imply termination of the previous owner.
 
 ## 4. Object Role and the Features That Can Be Registered
 

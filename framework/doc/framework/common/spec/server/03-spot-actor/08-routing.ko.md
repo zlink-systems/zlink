@@ -378,9 +378,10 @@ Bind가 끝난 뒤에는 다음 작업이 저장한 route를 사용한다.
 - Physical disconnect와 application의 logical disconnect 통지
 - Actor에서 bound Session으로 보내는 push
 
-이 작업을 시작할 때마다 Location Store에서 Actor 위치를 조회하지 않는다. 저장
-route는 current owner lease와 local admission deadline 안에서만 유효하다. Store를
-일시적으로 사용할 수 없어도 lease나 deadline을 연장하지 않는다.
+이 작업을 시작할 때마다 Location Store에서 Actor 위치를 조회하지 않는다. 저장 route의
+일반 유효 기간은 current owner lease의 local admission deadline까지다. Store만 단절된
+짧은 장애의 bound 메시징은 [Location runtime §5](../05-location-relocation/01-location-runtime.ko.md#5-store-연결이-끊기면-이전-owner의-새-작업을-막는다)의
+보존 실행 조건을 따른다. 이 조건은 Store lease나 일반 route cache 수명을 연장하지 않는다.
 
 저장 route가 더 이상 유효하지 않으면 active Message Follow route로 original
 operation을 정확히 한 번 전달하거나 `Unavailable`로 끝낸다. Location Store에서

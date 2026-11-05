@@ -44,6 +44,17 @@ Lua script splitting or connection management — is called out explicitly at
 the end of §9, and that part is updated in the document, not the code, if the
 implementation changes.
 
+**Operational requirement: the Location Store must not roll back.** AOF, synchronous replication,
+or equivalent measures must preserve successful mutations and generation-counter continuity
+across failover, pricing-plan changes, and Store node replacement. Configuration names alone
+do not establish this guarantee. Operators must ensure that recovery or promotion loses no
+successful writes and fences writes from the previous primary. On detected rollback, the
+Framework discards all local objects without retention and rejoins empty
+([Location runtime §5.1](01-location-runtime.en.md#51-retention-and-rejoining-after-a-short-outage)).
+A lease `Missing` caused by normal TTL expiry is not itself evidence of rollback. Do not compare
+opaque `StoreVersion` values numerically or treat absence of observed rollback as proof of continuity.
+
+
 ## 2. Responsibilities of the Public SPI
 
 The Location Store SPI only provides the following three operation groups.

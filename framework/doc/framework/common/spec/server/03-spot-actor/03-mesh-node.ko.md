@@ -83,7 +83,9 @@ Fixed RID는 application이 MeshNode RID를 직접 정하는 설정이다. 구�
 
 Fixed RID를 쓰는 node가 재시작해 이전 lifecycle의 active owner claim과 충돌하면 automatic RID와 같은
 규칙으로 처리한다. 새 값을 만들어 다시 시도하지 않고 즉시 conflict로 startup이 실패하며, 이전
-owner lease가 만료된 뒤 시작한 lifecycle은 같은 RID를 claim한다.
+owner lease가 만료된 뒤 시작한 lifecycle도 같은 RID의 재claim 전에
+[Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의
+mesh 생존 확인과 해제 조건을 만족해야 한다. Lease 만료만으로 이전 owner의 종료를 가정하지 않는다.
 
 ## 4. Object role과 등록할 수 있는 기능
 

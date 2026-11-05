@@ -433,10 +433,11 @@ Once bind finishes, the following work uses the stored route.
 - Physical disconnect and application logical-disconnect notification
 - A push from Actor to the bound Session
 
-Actor location isn't queried from the Location Store each time this work
-starts. The stored route is only valid within the current owner lease's
-local admission deadline. Even if the Store is temporarily unavailable, the
-lease or deadline isn't extended.
+Actor location isn't queried from the Location Store each time this work starts.
+The stored route's ordinary validity ends at the current owner lease's local admission
+deadline. Bound messaging during a short Store-only outage follows retained execution in
+[Location runtime §5](../05-location-relocation/01-location-runtime.en.md#5-blocking-a-previous-owners-new-work-when-the-store-connection-drops).
+This does not extend the Store lease or ordinary route-cache lifetime.
 
 If the stored route is no longer valid, the original operation is either
 delivered exactly once via an active Message Follow route, or ends with

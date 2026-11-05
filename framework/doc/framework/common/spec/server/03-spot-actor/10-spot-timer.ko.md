@@ -90,16 +90,15 @@ caller가 관찰하는 timing 계약이다.
 
 ## 3. Owner lease와 admission
 
-Spot timer는 service runtime이 current [owner lease](../00-foundation/02-glossary.ko.md#owner-lease)와
-admission deadline을 확인한 뒤에만 admission할 수 있다.
+Spot timer의 새 tick queue 투입과 callback 시작은 service runtime이
+[Location runtime §5](../05-location-relocation/01-location-runtime.ko.md#5-store-연결이-끊기면-이전-owner의-새-작업을-막는다)의
+실행권을 기존 execution gate에서 확인한 뒤에만 허용한다. Store만 단절된 짧은 장애에서
+보존 가능한 steady `Ready` Spot의 timer는 그 절의 조건으로 계속 실행한다.
 
-Lease 갱신이 멈춰 monotonic
-deadline을 넘으면, Framework process가 일시 정지된 상태였더라도 재개 후 새 tick을 queue에
-넣거나 callback을 시작하지 않는다.
-
-이전 object·owner authority의 pending tick도 실행하지
-않는다 — timer가 owner lease 밖에서 계속 돌면 이미 다른 owner로 넘어간 object의 상태를
-옛 owner의 callback이 건드릴 수 있기 때문이다.
+Store와 모든 mesh peer가 함께 단절되어 admission이 차단되거나 보존 한도 `T`를 넘으면 새
+callback을 시작하지 않는다. Process가 일시 정지됐다 재개해도 같은 판정을 적용한다.
+이전 object·owner authority의 pending tick은 실행하지 않는다. 새 lease 확보만으로
+폐기한 timer나 pending tick을 복원하지 않는다. 일반 overrun은 §2의 policy를 따른다.
 
 ## 4. 공유 scheduler — 자원은 등록 수에 비례하지 않는다
 
@@ -199,8 +198,9 @@ batch로 처리한다.
 
 **Owner lease**
 
-- Owner lease가 만료된 뒤에는 새 tick이 callback을 시작하지 않고, lease가 갱신되지 않는
-  동안 process가 일시 정지됐다 재개해도 밀린 tick이 한꺼번에 실행되지 않는다.
+- Store 단독 단절 중 보존 실행 조건에서는 callback을 계속 시작한다. Store와 모든 mesh peer가
+  함께 단절되거나 `T`를 넘으면 새 callback을 시작하지 않는다. Process 재개와 새 lease 확보만으로
+  폐기한 pending tick을 실행하지 않는다.
 
 ---
 

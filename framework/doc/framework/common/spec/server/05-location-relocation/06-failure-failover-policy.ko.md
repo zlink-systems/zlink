@@ -227,8 +227,8 @@ key와 처음 사용한 `StoreVersion`으로 record를 다시 읽고, 적용된 
 `StoreFailureGrace` 동안 Framework는 마지막으로 완전히 읽은 descriptor 목록과 그 target들에 대한
 connection intent를 유지하고 기존 connection의 liveness 확인을 계속한다. 그 목록 밖의 새 target에는
 connect하지 않는다([Location runtime §10](01-location-runtime.ko.md)이 소유). Grace는 owner
-lease나 relocation deadline을 연장하지 않는다. Owner 자격이 끝나면 새 message·timer 처리와
-state 변경을 중단한다. Store가 복구되면 owner와 descriptor 전체를 다시 확인한 뒤 필요한
+lease나 relocation deadline을 연장하지 않는다. 새 작업 수용과 steady `Ready` 객체의
+보존 실행은 [Location runtime §5](01-location-runtime.ko.md#5-store-연결이-끊기면-이전-owner의-새-작업을-막는다)가 결정한다. Store가 복구되면 owner와 descriptor 전체를 다시 확인한 뒤 필요한
 connection 변경만 적용한다.
 
 Store 요청의 재확인과 payload 순서는

@@ -756,12 +756,19 @@ channels and fanout channels is checked via
 [Runtime Status Query And Operational Diagnostics "5. Topology State — RouteMesh, ClientServer, Automatic Fanout"](../06-observability/01-runtime-monitoring.en.md#5-topology-state--routemesh-clientserver-automatic-fanout)
 (quoted again in §7.4).
 
-## 5. Blocking a Previous Owner's New Work When the Store Connection Drops
+<a id="5-blocking-a-previous-owners-new-work-when-the-store-connection-drops"></a>
+## 5. Execution Rights and Admission During a Store Outage
 
-If a host that fails to renew its owner lease keeps accepting new work, it can process
-concurrently with the new owner. To prevent this, each host computes "the last time it
-can accept new work" from the timestamp returned by the Store. This time is called the
+**The same object must not execute at two owners concurrently.** During a short Store-only
+outage, bound Actor/Spot messaging and Spot timers for objects already in steady `Ready`
+continue using their last confirmed state and routes. Location runtime owns the execution-right
+decision, applied by the existing execution gate. Other modules must not add a separate
+admission decision or transport connection state.
+
+The ordinary new-work cutoff computed from Store response times is the
 [local admission deadline](../00-foundation/02-glossary.en.md#deadline).
+With the defaults below, it is 25 seconds after the reference time of the last successful
+renewal. Retained execution during an outage and checks before release follow §5.1 and §6.1 together.
 
 **Every host using a Location Store validates the following relationship at startup**,
 regardless of the routing ID allocation method.
@@ -773,9 +780,13 @@ max(renew interval, renew timeout) + renew timeout < owner lease TTL - owner lea
 | Setting (per host) | Default |
 |---|---:|
 | Renew interval | 5 seconds |
-| Owner lease TTL | 15 seconds |
+| Owner lease TTL | 30 seconds |
 | Renew timeout | 3 seconds |
 | Owner lease fencing margin | 5 seconds |
+
+The defaults satisfy the startup constraint: `max(5, 3) + 3 = 8 < 30 - 5 = 25`.
+They are chosen to tolerate the observed 5–9 seconds during Store node replacements such as
+failover and pricing-plan changes.
 
 Every value must be positive. Violating the relationship above is a startup error. The next renewal starts renew interval after the previous renewal started; if the previous renewal hasn't finished yet, it starts after that renewal finishes.
 Automatic RID descriptor registration also uses the same host-run combination and
@@ -787,8 +798,10 @@ the Store request together to account for network delay. **A single owner-lease 
 refreshes the host-wide local admission deadline. A per-object deadline can't extend this
 time.**
 
-Once the deadline passes, or the current host-run combination differs from the Store
-value, the following new work isn't accepted.
+Once the deadline passes, ordinary new work in the following table is blocked. Bound
+Actor/Spot messages and Spot timers continue only under §5.1's retained-execution conditions.
+A mismatch between the current host-run combination and the Store value is distinct from
+a new claim after normal expiry and does not itself grant retained objects execution rights.
 
 | Blocked target |
 |---|
@@ -819,6 +832,39 @@ claim results `Conflict` and `GenerationExhausted` are startup errors. If the ca
 cancels startup, startup ends as cancelled; this rule does not turn it into a success.
 A claim that already started is confirmed by re-reading the same key as in §10; a
 confirmed lease is released normally and no heartbeat starts.
+
+### 5.1 Retention and Rejoining After a Short Outage
+
+The retention bound `T` is 60 seconds after the last successful lease renewal. Elapsed time
+uses the local monotonic start time of that successful renewal request so response delay
+cannot extend retention. A successful new claim alone does not restart the previous outage's
+retention period.
+
+- If only Store communication fails and at least one existing admitted mesh peer remains valid,
+  bound Actor/Spot messaging and Spot timers for objects already in steady `Ready` continue
+  from cache within `T`. New object creation, factory/restore confirmation, relocation, and
+  capacity changes are not retained execution.
+- If the Store and all mesh peers are disconnected together, stop accepting new work in the
+  blocked-target table above. Peer validity uses existing mesh liveness decisions. A peer
+  connection does not grant permission to mutate the Store.
+- Beyond `T`, discard retained memory state regardless of mesh connectivity. Block new execution
+  of old objects at the existing gate, clean up queues, timers, bindings, and delayed completions,
+  then rejoin empty. Detected Store rollback requires the same cleanup regardless of `T`.
+  This does not authorize deleting another owner's Store records or flushing the namespace.
+- A confirmed change to another owner or incarnation, or confirmed loss of local execution
+  rights, stops new execution of that object regardless of mesh connectivity or `T`. Do not
+  mutate the Store with an invalid token.
+- After Store recovery, revalidate continuity and each retained unit's authority, generations,
+  owner token, and node lifecycle. Obtaining a new lease alone does not reopen every old object's
+  gate. Do not restore `Missing` records or records of another incarnation or owner from local
+  memory. Renewals of expired tokens remain rejected; new eligibility receives a new
+  `LeaseGeneration`.
+
+[Location Store §1](02-location-store-redis.en.md#1-scope-and-audience) owns the operational
+continuity requirement. This draft does not settle the atomic transition replacing the owner
+token of the same incarnation on recovery, or the safe release condition after all peers fail
+to respond. Until settled, neither that transition nor silence alone authorizes reapproval of
+retained execution or release, respectively.
 
 ## 6. Reading and Changing the Current Location Record
 
@@ -857,6 +903,18 @@ a MeshNode lifecycle restarts within the same process. If the record
 doesn't exist or the lease is stale, it's `Conflict` and nothing changes. If the target
 information combination itself is invalid, it ends as a Framework-internal error before
 calling the Store.
+
+**Before releasing, re-creating, or reclaiming another node's ownership, check its liveness over mesh.**
+An invalid lease alone does not prove that the old owner stopped executing. Query the owner
+identified by the candidate authority's owner token and node lifecycle directly, and also query
+existing admitted peers. If any response confirms that owner's liveness, defer release and
+return `Unavailable`. Apply the same check to every owner of User Spot members being released.
+Choose an any-positive-veto check across multiple peers over a direct-only check because the
+requester alone may be partitioned from the owner. Historical connection information is not
+positive evidence: the owner must respond to the current check. Silence, timeout, and an
+incomplete peer list do not prove termination or authorize release. If release authorization
+is unsettled, end with `Unavailable`. Mesh checks do not replace the Store CAS below.
+[Wire §5.1](../02-channel-transport/06-wire-protocol.en.md#51-owner-liveness-check-draft) owns the message format.
 
 **A reservation whose target lifecycle has ended is released.** If the target owner lease of a
 `Reserved` record is missing, has a different `LeaseGeneration`, or has expired, or if the target
@@ -1161,12 +1219,18 @@ generation, and route. `RouteCacheMaxAge` defaults to 15 seconds and can't excee
 last time the owner can accept new work. `Missing`, `Creating`, and Store errors aren't
 cached. It's removed immediately on confirming a higher `StoreVersion` or owner lease
 expiry. A runtime change to `RouteCacheMaxAge` applies only to new cache entries and does not extend an existing entry’s lifetime.
+With the default 30-second lease TTL and 25-second ordinary admission cutoff, the cache bound
+remains 15 seconds. Retained execution under §5.1 uses already confirmed bindings and local
+authority; it neither refreshes expired cache entries nor replaces them with new routes.
+A cache miss during a Store outage is not interpreted as `Missing`.
 
 A message arriving at the previous owner right after a move can be delivered to the new
 owner. This feature is called Message Follow, and its period, `MessageFollowDuration`,
 defaults to 30 seconds. A value of 0 disables caching or delivery, respectively. Using both
 features, the cache retention time must be at least 5 seconds shorter than the delivery
-period. An invalid configuration is a configuration error. The Message Follow duration starts
+period. The defaults satisfy `15 <= 30 - 5`. The 30-second Message Follow duration and
+60-second retention bound `T` govern relocation forwarding and outage memory retention,
+respectively; neither extends the other. An invalid configuration is a configuration error. The Message Follow duration starts
 at relocation commit. The previous owner keeps the new owner's `ActorRef` or Spot location
 and the expiration time, and removes the route after expiration.
 
@@ -1616,9 +1680,9 @@ connection-status judgment for existing connections continues, but no connect is
 new target outside that list. Even after grace ends, that list isn't changed until the
 whole descriptor set is re-read as a same-point-in-time list.
 
-This grace period doesn't extend the owner lease or relocation deadline. Once the §5
-time passes, it blocks state-changing messages and timer starts, factory-completion
-recording, relocation changes, and capacity reservation. Once the Store connection
+This grace period doesn't extend the owner lease or relocation deadline. Section 5 alone
+owns ordinary new-work blocking and retained execution of steady `Ready` objects. Objects
+in relocation do not qualify for retained execution under §5.1. Once the Store connection
 recovers, it re-checks owner information and the full descriptor list, then applies only
 the needed connection changes.
 

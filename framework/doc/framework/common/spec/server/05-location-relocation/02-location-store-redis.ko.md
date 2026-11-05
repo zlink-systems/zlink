@@ -23,6 +23,14 @@ relocation phase의 의미를 알아야 하는 것은 아니다. Framework가 �
 구성하는 방법과 Store 등록 조건은 [Location runtime](01-location-runtime.ko.md)이 소유한다.
 이 문서는 그 동작을 반복하지 않는다.
 
+**운영 요구: Location Store는 되돌아가지 않아야 한다.** AOF·동기 복제 등으로 장애 전환,
+요금제 변경과 Store 노드 교체 뒤에도 성공한 변경과 generation counter의 연속성을 보장한다.
+설정 이름만으로 이 보장을 충족한다고 간주하지 않는다. 운영자는 복구·승격 뒤 성공한 쓰기를
+잃지 않고 이전 primary의 쓰기가 차단되는 구성을 사용해야 한다. 후퇴를 감지하면 Framework는
+보존 없이 local 객체를 모두 정리하고 빈 상태로 재참여한다([Location runtime §5.1](01-location-runtime.ko.md#51-짧은-장애의-보존과-재참여)).
+정상 TTL 만료로 인한 lease `Missing`은 그 자체로 후퇴 증거가 아니다. Opaque `StoreVersion`을
+수치 비교하거나, 후퇴를 관측하지 못했다는 사실을 연속성 증명으로 사용하지 않는다.
+
 Application은 이 SPI의 operation을 직접 호출하지 않는다. Provider package만 SPI를 구현하며
 Framework가 등록된 instance를 사용한다.
 
