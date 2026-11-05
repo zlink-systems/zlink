@@ -861,10 +861,12 @@ A domain includes every host that can read, release, or recreate global authorit
 Location Store namespace, including hosts with different MeshNames, object clients, and hosts
 that may restart or scale out. Store communication failure means a renew/read timeout or provider
 error. Definitive Store responses such as `Conflict` or `Missing` are not communication failures
-and do not enable retained execution. All hosts in the domain must use identical TTL and margin;
-different values among retention-enabled hosts are a configuration error. Domain-wide equality
-is an operational requirement, not validated by exchanging settings through Store, descriptors,
-or wire. Derive the admission deadline under §5 and `T` from the formula above. Default examples
+and do not enable retained execution. All hosts in the domain must use the same fencing margin.
+A smaller releaser margin than the old owner's can make release precede the retention deadline,
+breaking exclusivity. Domain-wide margin equality is an operational requirement; the Framework
+does not validate it by exchanging settings through Store, descriptors, or wire. Different TTLs
+across hosts do not affect release-wait safety, but identical TTLs are recommended for operational
+simplicity. Derive the admission deadline under §5 and `T` from the formula above. Default examples
 for TTL, margin, admission, and `T` are 30, 5, 25, and 40 seconds, with renew interval/timeout 5/3 seconds.
 
 **Enable retention beyond the admission deadline only when every host in the domain supports
@@ -904,7 +906,11 @@ retention does not shorten §6.1's release wait.
   that the object has not been discarded. If the existing token is still valid, renew that
   same token to refresh the admission deadline and reopen the existing gate without a
   token-replacement CAS. Only normal expiry requires a new claim issuing a new `LeaseGeneration`
-  and per-object token-replacement CAS. Reject renewal of expired tokens.
+  and per-object token-replacement CAS. After a successful new claim, republish the descriptor
+  with the new `LeaseGeneration` under §5's publication rules (`Renew` intent) before submitting
+  per-object replacement CAS or reopening gates. Recheck an uncertain publication result under
+  §10, but do not wait for publication confirmation before replacement CAS or gate reopening.
+  Reject renewal of expired tokens.
   Only for objects not discarded, replace with the currently valid new token when the same
   incarnation's old self-owned token and retained `StoreVersion`, `ObjectGeneration`, and
   `AuthorityOwnerGeneration` remain unchanged in the Store. Keep owner identity and node lifecycle.
@@ -912,14 +918,24 @@ retention does not shorten §6.1's release wait.
   CAS only if its request-start time plus renew timeout is at or before the original retention
   deadline `T`. Reopen the existing gate only for objects whose success is confirmed before `T`.
   Discard objects whose success is not confirmed before `T`, or which were already discarded. If
-  a response at or after `T` or §10's recheck reveals replacement success, clean up that record with
-  §6.1's `Delete`, conditional on the owner's own new token and the confirmed `StoreVersion` and
-  generations. Never delete another owner's or incarnation's record. Never reconstruct `Missing`
+  a response at or after `T` or §10's recheck reveals replacement success, follow the post-discard
+  authority cleanup rule below. Never reconstruct `Missing`
   or another incarnation's or owner's records from local memory. Do not recreate or retransmit
   successful objects' pending messages, timers, bindings, or delayed completions. Keep binding
   identity and Session sequence. Late recovery retains only objects whose new claim and
   per-object CAS can finish within the original `T`. Refresh lease-fence copies under
   [Session binding §5](../04-session/02-session-actor-binding.en.md#5-bind-and-relay).
+- For every object discarded at `T`, complete authority cleanup after Store recovery. If authority
+  still has the same self-owned owner, node lifecycle, `ObjectGeneration`, and
+  `AuthorityOwnerGeneration` and references the owner's currently valid lease token, perform
+  §6.1's `Delete` conditional on the freshly read `StoreVersion`, whether the token was retained
+  or replaced. This includes previously unconfirmed renewals confirmed later. Recheck uncertain
+  Delete responses under §10. While that record remains with the owner's valid token, recheck
+  at each existing renew interval and retry Delete when needed. Finish cleanup on confirmed
+  deletion or a confirmed change to another owner/incarnation. If the record's token becomes
+  invalid through expiry or replacement, finish this cleanup because §6.1's ordinary release
+  applies. Never reopen the discarded incarnation's gate or delete another owner's or
+  incarnation's record.
 
 A resumed process performs the same checks at the next turn gate. However, a monotonic clock that
 stops during host suspend cannot reveal actual elapsed time. Nor can the gate prevent a process
@@ -976,11 +992,15 @@ doesn't exist or the lease is stale, it's `Conflict` and nothing changes. If the
 information combination itself is invalid, it ends as a Framework-internal error before
 calling the Store.
 
-**Release, re-creation, and reclaim of another node's ownership use elapsed time alone for the
-release wait.** The releaser records `t0` on its own local monotonic clock at the first Store
-exact-read observation that the authority record's owner token is invalid (`Missing`, a
-different token, or an expired record with `ExpiresAt ≤ StoreNow`). Apply the same rule to each owner token when releasing User Spot members.
-Do not reuse an observation for a different authority token.
+**Release and re-creation of another node's steady `Ready` record, and Fixed RID reclaim, use
+elapsed time alone for the release wait.** Release of a reservation whose target lifecycle has
+ended, described below, does not use this wait; check only its existing conditions. The releaser
+records `t0` on its own local monotonic clock at the first Store exact-read observation that the
+owner token recorded in authority is invalid: that token's owner lease record is `Missing`, has
+a different `LeaseGeneration`, or is expired with `ExpiresAt ≤ StoreNow`. Apply the same rule to
+each owner token when releasing User Spot members. Do not reuse an observation for a different
+authority token. If the authority record itself is `Missing`, there is no record to release;
+apply §7's ordinary creation procedure without this wait.
 
 Allow release CAS only after **`t0 + 3·margin`**. Derive the wait as
 `T − TTL + margin = 3·margin` from the retention-enabled bound `T = TTL + 2·margin`. Disabling
@@ -990,11 +1010,11 @@ restarts and loses `t0`, observe invalidity again and restart the entire wait. D
 is safe. Mesh queries, responses, and connectivity are not release conditions. Neither an
 expired lease's `ExpiresAt` nor the owner's last-renewal time needs reconstruction.
 
-On a common elapsed-time axis, `t0 ≥ last successful renewal request start + old owner's TTL`,
-hence `release time ≥ last successful renewal request start + TTL + 3·margin`. The old owner
-has already latched discard at `TTL + 2·margin` on its local monotonic clock from that request
-start. The margin between these bounds covers the combined error from local-monotonic clock-rate
-differences and Store clock advance (default example: 5 seconds). This is not a comparison of
+On a common elapsed-time axis, Store application delay postpones release. Let `ε ≤ margin`
+be the combined error from local-monotonic clock-rate differences and Store clock advance.
+Release time is at least last successful renewal request start + old owner's TTL + 3·margin − ε,
+which is no earlier than the old owner's discard bound: last successful renewal request start +
+`T = TTL + 2·margin`. The default margin example is 5 seconds. This is not a comparison of
 absolute values from different clocks; it applies within
 [Location Store §1](02-location-store-redis.en.md#1-scope-and-audience)'s clock-progress and suspend
 limits. Observing a different token also assumes the old token's normal TTL lifetime and Store
@@ -1866,22 +1886,30 @@ store record golden fixture. Each item maps to one test.
   at `T` even without a turn; peer recovery never reopens execution. Limit retention to the
   admission deadline in domains with unsupported hosts.
 - A domain includes every host accessing global authority in the same namespace.
-  `StoreOutageRetention` defaults to `false`; different TTL or margin among retention-enabled
-  hosts is a configuration error. `T` is not an independent setting.
+  `StoreOutageRetention` defaults to `false`; `T` is not an independent setting. Domain-wide
+  margin equality is an operational prerequisite, not a Framework validation item. With the same
+  margin, different host TTLs must not permit release before the old owner's `T`.
 - Recovery before expiry reopens the gate with the same token after validation and renewal;
   replacement CAS is only for normal expiry. Its request start plus renew timeout must not
   exceed the original `T`. Success confirmed at or after `T` requires `Delete` of the record
-  with the owner's own token, without restoring discarded objects.
+  under §5.1's post-discard authority cleanup rule. Also cover same-token renew applied but
+  response and recheck failed, discard at `T`, recovery before lease expiry, and continuing normal
+  heartbeats: authority must be cleaned so a new incarnation can be created. Check §10 rechecks
+  and cleanup termination for uncertain Delete responses. Same-token recovery before `T` keeps
+  the existing object; never restore a discarded object.
 - Release requires `3·margin` of local monotonic time (default example: 15 seconds) after first observing invalidity of the
-  authority's owner token. Treat `Missing`, a different token, and expired records as invalid.
-  Check final CAS conditions without mesh queries. A restarted releaser
-  observes invalidity and waits again.
+  authority's owner token. Treat lease `Missing`, a different token, and expired records as invalid.
+  Initial creation with authority itself `Missing` and release of reservations whose target
+  lifecycle ended do not use this wait. Check final CAS conditions without mesh queries.
+  A restarted releaser observes invalidity and waits again.
 - Historical record generations and reordered concurrent issuance responses are not rollback.
   Only a smaller counter-current-value observation performed after the prior observation counts.
 - Binding-fence refresh after lease replacement preserves identity/sequence and permits relay,
   seal, replacement, and close; reject delayed old-token controls. Existing descriptor polling
   and Store exact reads progress Session-owner fence refresh without new wire or retransmission.
-  Repeated creation calls keep
+  Descriptor republication after a new claim precedes per-object replacement CAS submission.
+  Commands 42/51/54 arriving before polling refreshes the copy also refresh it and are processed
+  if the same Store validation conditions hold. Repeated creation calls keep
   the first invalidity-observation time for the same token.
 - If the initial owner-lease claim has not confirmed a lease by the renew timeout,
   startup succeeds and the four targets above are blocked.

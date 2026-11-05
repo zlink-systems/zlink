@@ -195,7 +195,12 @@ exact-read path, validating the Session owner's same RID and lifecycle.
 
 After observing a changed token and before Store validation, submit no new controls with the
 old fence. Submit and accept relay and commands 42/51/54 after refresh. A different token in a
-received control alone does not authorize changing a copy. Keep binding generation/token,
+received control alone does not authorize changing a copy. Before rejecting command 42/51/54
+with an Actor owner lease generation different from its copy, the Session owner performs the
+same exact-read validation once under the conditions above. If those conditions hold and the
+received command's token matches the verified current token, refresh the copy and process that
+command. Otherwise, finish with the existing rejection result. The control triggers validation;
+the Store read authorizes the copy change. Keep binding generation/token,
 Actor incarnation, and Session sequence. Reject late controls carrying an old lease token
 through existing exact-match checks and result classifications, without retransmission.
 Existing binding-fence management owns this refresh.

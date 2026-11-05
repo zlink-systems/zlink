@@ -61,9 +61,9 @@ A lease `Missing` caused by normal TTL expiry is not itself evidence of rollback
 opaque `StoreVersion` values numerically or treat absence of observed rollback as proof of continuity.
 
 **Clock and suspend operational limits.** Store time is used only to determine lease expiry.
-The Store clock must not jump forward by more than the fencing margin (5 seconds by default).
-During normal operation, the combined error from local-monotonic clock-rate differences and
-Store clock advance must also fit within that margin (default example: 5 seconds).
+The combined error from Store clock advance (including jumps during failover or promotion) and
+each node's local-monotonic clock-rate differences must fit within the fencing margin
+(default example: 5 seconds).
 Each node measures retention, stopping, and release waits with its own local monotonic clock,
 not Store-time differences. If monotonic time stops during host suspend, even the next turn gate
 cannot determine actual elapsed time. Execution exclusivity does not cover such suspend or

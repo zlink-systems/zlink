@@ -768,9 +768,11 @@ local monotonic으로 잰다. 첫 갱신 전에는 성공한 최초 claim 요청
 여기서 domain은 같은 Location Store namespace의 전역 authority를 읽거나 해제·재생성할 수
 있는 모든 host다. MeshName이 다른 host, object client, 재시작·증설 후보 host도 포함한다.
 Store 통신 실패는 renew/read의 timeout 또는 provider error다. `Conflict`·`Missing` 등 Store의
-확정 응답은 통신 실패가 아니며 보존 실행을 열지 않는다. 같은 domain은 TTL·margin을 동일하게
-설정해야 하며, 보존을 켠 host끼리 값이 다르면 configuration error다. Domain 전체의 동일 설정은
-운영 요구이며 Store·descriptor·wire로 설정을 교환하여 검증하지 않는다. Admission 기한은 §5,
+확정 응답은 통신 실패가 아니며 보존 실행을 열지 않는다. 같은 domain의 모든 host는 fencing
+margin을 동일하게 설정해야 한다. 해제자의 margin이 옛 owner보다 작으면 해제 대기가 보존 기한보다
+짧아져 배타성이 깨질 수 있다. Domain 전체의 동일 margin은 운영 요구이며 Framework는
+Store·descriptor·wire로 설정을 교환하여 검증하지 않는다. TTL은 host마다 달라도 해제 대기의
+안전성에 영향을 주지 않지만 운영 단순성을 위해 같은 값을 권장한다. Admission 기한은 §5,
 `T`는 위 식으로 계산한다. 기본값 예시는 TTL·margin·admission·`T`가 각각 30·5·25·40초이고
 renew interval/timeout은 5/3초다.
 
@@ -805,21 +807,32 @@ Downgrade나 이전 버전 host 추가 전에는 보존을 끄고 기존 `T` 보
   `ObjectGeneration`·`AuthorityOwnerGeneration`·owner token·node lifecycle 및 미폐기 상태를 확인한다.
   기존 token이 아직 유효하면 같은 token의 renew로 admission 기한을 갱신하고 token 교체 CAS 없이
   기존 gate를 다시 연다. 정상 만료된 경우에만 새 claim으로 새 `LeaseGeneration`을 발급하고
-  객체별 token 교체 CAS를 수행한다. 만료 token 갱신은 거절한다.
+  객체별 token 교체 CAS를 수행한다. 새 claim이 성공하면 객체별 교체 CAS 제출과 gate 재개 전에
+  새 `LeaseGeneration`을 기록한 descriptor를 §5의 게시 규칙(`Renew` intent)으로 다시 게시한다.
+  게시 결과가 불확정이면 §10으로 재확인하되 교체 CAS와 gate 재개는 게시 확인을 기다리지 않는다.
+  만료 token 갱신은 거절한다.
   폐기되지 않은 객체에 한하여 같은 incarnation의 자기 옛 token과 보존 시점의 `StoreVersion`·
   `ObjectGeneration`·`AuthorityOwnerGeneration`이 Store에 그대로 있을 때만 현재 유효한 새 token으로
   교체한다. Owner identity와 node lifecycle은 유지한다. 이 전이는 §6.1의 `Preserve`이며 다른
   generation과 수용 공간을 바꾸지 않는다. 교체 CAS는 그 요청 시작 시각에 renew timeout을 더한
   시각이 원래 보존 기한 `T` 이하일 때만 제출한다. `T` 전에 성공을 확인한 객체만 기존 gate를
   다시 연다. `T`에 도달할 때까지 성공을 확인하지 못했거나 이미 폐기한 객체는 버린다.
-  `T` 이상 시각의 성공 응답이나
-  §10 재확인으로 교체 성공을 알게 되면 자기 새 token과 확인한 `StoreVersion`·generation을 조건으로
-  그 record를 §6.1의 `Delete`로 정리한다. 다른 owner·incarnation의 record는 삭제하지 않는다.
+  `T` 이상 시각의 성공 응답이나 §10 재확인으로 교체 성공을 알게 되면 아래 폐기 후 authority
+  정리 규칙을 따른다.
   `Missing`이나 다른 incarnation·owner record를 local memory로 복원하지 않는다. 성공 객체의
   pending message·timer·binding·지연 completion은 재생성하거나 재전송하지 않는다.
   늦은 복구에서는 새 claim과 객체별 CAS를 원래 `T` 안에 끝낼 수 있는 객체만 보존된다.
   Binding identity와 Session sequence는 유지하되 lease fence 사본은
   [Session binding §5](../04-session/02-session-actor-binding.ko.md#5-bind와-relay)의 갱신 규칙을 따른다.
+- `T`에 폐기한 각 객체는 Store 복구 뒤 authority 정리까지 수행한다. Authority가 같은 자기
+  owner·node lifecycle·`ObjectGeneration`·`AuthorityOwnerGeneration`이고 현재 자기의 유효 lease
+  token을 가리키면, token 유지·교체와 관계없이 현재 읽은 `StoreVersion`을 조건으로 §6.1의
+  `Delete`를 수행한다. 확인하지 못한 renew가 나중에 확인된 경우도 포함한다. Delete 응답이
+  불확정이면 §10으로 재확인하며, 자기 유효 token의 해당 record가 남아 있는 동안 기존 renew
+  interval마다 재확인 후 필요한 Delete를 다시 시도한다. 삭제 확인 또는 다른 owner·incarnation으로의
+  변경 확인으로 정리를 끝낸다. 해당 record의 token이 만료·교체되어 무효가 되면 §6.1의 일반
+  해제 대상이므로 이 정리를 끝낸다. 폐기한 incarnation의 gate는 다시 열지 않는다.
+  다른 owner·incarnation의 record는 삭제하지 않는다.
 
 Process 재개 때도 새 turn gate에서 같은 검사를 수행한다. 다만 host suspend 중 monotonic이
 정지하면 실제 경과를 이 clock으로 알 수 없다. Callback 도중 장기 정지한 process가 같은 callback의
@@ -871,10 +884,14 @@ MeshNode lifecycle 재시작에서 바뀌지 않을 수 있기 때문이다. Rec
 `Conflict`이며 아무것도 변경하지 않는다. Target 정보 조합 자체가 잘못됐으면 Store를
 호출하기 전에 Framework 내부 오류로 끝낸다.
 
-**다른 node의 owner 해제·재생성·재claim은 시간만으로 해제 대기를 판정한다.** 해제자는
-해당 authority record의 owner token이 Store exact read에서 무효(`Missing`, 다른 token 또는 `ExpiresAt ≤ StoreNow`인 만료 record)인
-것을 처음 관찰한 순간을 자기 local monotonic의 `t0`로 기록한다. User Spot member 해제에도
-각 owner token에 같은 규칙을 적용한다. 다른 authority token으로 관찰을 넘겨 쓰지 않는다.
+**다른 node가 소유한 steady `Ready` record의 해제·재생성과 Fixed RID 재claim은 시간만으로
+해제 대기를 판정한다.** 아래의 target lifecycle이 끝난 reservation 해제에는 이 대기를 적용하지
+않고 기존 조건만 검사한다. 해제자는 해당 authority record에 기록된 owner token이 Store exact
+read에서 무효 — 그 token의 owner lease record가 `Missing`, 다른 `LeaseGeneration`, 또는
+`ExpiresAt ≤ StoreNow`인 만료 record — 인 것을 처음 관찰한 순간을 자기 local monotonic의 `t0`로
+기록한다. User Spot member 해제에도 각 owner token에 같은 규칙을 적용한다. 다른 authority
+token으로 관찰을 넘겨 쓰지 않는다. Authority record 자체가 `Missing`이면 해제할 record가 없으므로
+이 대기를 적용하지 않고 §7의 생성 절차를 그대로 따른다.
 
 해제 CAS는 **`t0 + 3·margin`** 이후에만 허용한다. 대기 산식은 보존 활성 시의
 `T = TTL + 2·margin`에서 `T − TTL + margin = 3·margin`으로 유도한다. 보존을 꺼서 실행 `T`를
@@ -883,10 +900,10 @@ admission 기한으로 제한해도 해제 대기는 줄이지 않는다. 기본
 처음부터 잰다. 늦어지는 방향이므로 안전하다. Mesh 질의·응답·연결 상태는 해제 조건에 사용하지
 않는다. 만료 lease의 `ExpiresAt`이나 owner의 마지막 갱신 시각을 복원할 필요도 없다.
 
-근거는 같은 경과 시간축에서 `t0 ≥ 마지막 성공 갱신 요청 시작 + 옛 owner의 TTL`이므로,
-`해제 시각 ≥ 마지막 성공 갱신 요청 시작 + TTL + 3·margin`이라는 관계다. 옛 owner는 성공 갱신
-요청 시작부터 자기 local monotonic의 `TTL + 2·margin`에 이미 폐기를 기록한다. 이 사이의 margin은
-local monotonic 진행 차이와 Store 시계 전진의 오차 합을 덮는다(기본값 예시 5초).
+같은 경과 시간축에서 Store 적용 지연은 해제를 늦춘다. Local monotonic 진행 차이와 Store
+시계 전진의 총 오차를 `ε ≤ margin`으로 두면, 해제 시각은 마지막 성공 갱신 요청 시작 + 옛 owner의
+TTL + 3·margin − ε 이상이다. 이는 옛 owner의 폐기 경계인 마지막 성공 갱신 요청 시작 +
+`T = TTL + 2·margin` 이상이다. Margin의 기본값 예시는 5초다.
 이 관계는 서로 다른 clock의 절대값을 비교하는 식이 아니며,
 [Location Store §1](02-location-store-redis.ko.md#1-범위와-독자)의 시계 진행·suspend 운영 한계 안에서
 적용한다. 다른 token 관찰도 이전 token의 정상 TTL 수명과 Store 연속성을 전제로 하며, 강제 token
@@ -1666,18 +1683,25 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   보존 message·timer만 `T` 미만에서 허용한다. `T` 시각에 turn 없이도 폐기를 기록하며 peer만
   복구되어도 다시 열지 않는다. 미지원 host가 있는 domain은 보존을 admission 기한으로 제한한다.
 - Domain은 같은 namespace의 전역 authority에 접근하는 모든 host를 포함한다. `StoreOutageRetention`은
-  기본 `false`이며, 보존을 켠 host끼리 TTL·margin이 다르면 configuration error다. `T`는 독립 설정이 아니다.
+  기본 `false`이며 `T`는 독립 설정이 아니다. Domain 전체의 동일 margin은 운영 요구로서
+  Framework 검증 항목이 아니다. 동일 margin에서 host별 TTL이 달라도 해제는 옛 owner의 `T`보다 이르지 않다.
 - 만료 전 복구는 검증·renew 뒤 같은 token으로 gate를 다시 열고, 정상 만료 뒤에만 교체 CAS를 한다.
   교체 CAS의 요청 시작 + renew timeout은 원래 `T` 이하여야 한다. `T` 이상 시각에 성공을 확인하면
-  자기 token의 record를 `Delete`로 정리하며 폐기 객체를 복원하지 않는다.
+  §5.1의 폐기 후 authority 정리 규칙을 따른다. 동일 token renew 적용 뒤 응답·재확인이 실패하고
+  `T`에 폐기한 다음 lease 만료 전에 복구하여 정상 heartbeat를 계속하는 경우도, 해당 authority를
+  정리하여 새 incarnation을 만들 수 있어야 한다. Delete 응답 불확정 시 §10의 재확인과 정리 종료
+  조건을 검사한다. `T` 전 동일 token 복구는 기존 객체를 유지하며, 폐기 객체는 복원하지 않는다.
 - 해제는 해당 authority owner token의 무효 첫 관찰 뒤 local monotonic `3·margin`(기본값 예시 15초)을 요구한다.
-  `Missing`·다른 token·만료 record를 같은 무효로 취급한다. Mesh 질의 없이 최종 CAS 조건을 검사한다.
-  재시작한 해제자는 관찰과 대기를 다시 시작한다.
+  Lease `Missing`·다른 token·만료 record를 같은 무효로 취급한다. Authority 자체가 `Missing`인
+  최초 생성과 target lifecycle이 끝난 reservation 해제에는 이 대기를 적용하지 않는다.
+  Mesh 질의 없이 최종 CAS 조건을 검사한다. 재시작한 해제자는 관찰과 대기를 다시 시작한다.
 - 정상 record의 과거 generation과 병렬 발급 응답 역전은 후퇴가 아니다. 이전 counter 현재값
   관측 뒤에 수행한 더 작은 현재값 관측만 후퇴로 판정한다.
 - Lease 교체 뒤 binding fence 갱신은 identity·sequence를 유지하고 relay·seal·replacement·close를
   허용하며, 옛 token의 지연 control은 거부한다. 기존 descriptor polling과 Store exact read가
-  Session owner의 fence 갱신을 진행하며 새 wire나 재전송을 추가하지 않는다.
+  Session owner의 fence 갱신을 진행하며 새 wire나 재전송을 추가하지 않는다. 새 claim 뒤
+  descriptor 재게시는 객체별 교체 CAS 제출보다 앞선다. Polling으로 사본을 갱신하기 전에 도착한
+  command 42·51·54도 같은 Store 확인 조건을 만족하면 사본을 갱신하여 처리한다.
   반복 생성 호출은 같은 token의 최초 무효 관찰 시각을 유지한다.
 - 최초 owner lease claim이 renew timeout까지 lease를 확인하지 못하면 startup은 성공하고 위
   네 대상이 막힌다.

@@ -821,6 +821,11 @@ lease invalid, the restarted node waits Location runtime §6.1's `3·margin` (de
 and reclaims the same RID. The host start call finishes while runtime remains `Preparing` during the
 wait. Restart after normal shutdown uses the same wait
 ([MeshNode §3.3](../../../common/spec/server/03-spot-actor/03-mesh-node.en.md#33-fixed-rid)).
+Starting while the previous lease remains valid after forced termination ends with a startup
+error; supervisor restarts can succeed only after lease expiry. That lifecycle then waits another
+`3·margin` (default example: 15 seconds). With defaults and normal clocks, termination to `Serving`
+usually takes 40–45 seconds; observation delays or restarts can postpone it
+([Location runtime §6.1](../../../common/spec/server/05-location-relocation/01-location-runtime.en.md#61-read-and-cas)).
 Framework does not retry a valid-lease conflict or select another RoutingId within the same startup
 operation. Also check that two processes are not using the same fixed RoutingId concurrently.
 

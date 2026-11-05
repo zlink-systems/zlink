@@ -174,7 +174,11 @@ owner lease exact read 경로로 갱신한다. 이쪽은 Session owner의 같은
 
 변경된 token을 관찰한 뒤 Store 확인 전에는 이전 fence로 새 control을 제출하지 않는다.
 갱신 후 relay와 command 42·51·54를 제출·수락하며, 수신 control의 token 차이만으로 사본을
-바꾸지 않는다. Binding generation·token, Actor incarnation과 Session sequence는 유지한다.
+바꾸지 않는다. Session owner는 command 42·51·54에서 사본과 다른 Actor owner lease generation을
+받으면 거부하기 전에 위 exact read 확인을 같은 조건으로 한 번 수행한다. 조건을 만족하고 수신
+command의 token이 확인한 현재 token과 일치하면 사본을 갱신하고 그 command를 처리한다.
+만족하지 않으면 기존 거부 결과로 끝낸다. 수신 control은 확인의 계기이며 사본 변경의 근거는
+Store read다. Binding generation·token, Actor incarnation과 Session sequence는 유지한다.
 이전 lease token의 늦은 control은 기존 정확 일치 검사와 결과 분류로 거부하며 재전송하지 않는다.
 이 갱신은 기존 binding fence 관리가 소유한다.
 

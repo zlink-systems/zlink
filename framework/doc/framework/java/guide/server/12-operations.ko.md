@@ -407,6 +407,10 @@ readiness를 판정하지 않고, 시작이 성공한 뒤 공개 runtime 상태�
 `3·margin`(기본값 예시 15초)을 스스로 기다리고 같은 RID를 재claim한다. Host 시작 호출은 끝나도
 그동안 runtime은 `Preparing`이다. 정상 종료 뒤 재시작도 같은 대기를 거친다
 ([MeshNode §3.3](../../../common/spec/server/03-spot-actor/03-mesh-node.ko.md#33-fixed-rid)).
+강제 종료 뒤 이전 lease가 유효한 동안 시작하면 startup error로 끝나며, supervisor의 재시작은
+lease 만료 뒤에야 성공할 수 있다. 그 lifecycle은 다시 `3·margin`(기본값 예시 15초)을 기다린다.
+기본값과 정상 시계에서 종료부터 `Serving`까지 보통 40~45초가 걸리며, 관찰 지연·재시작은 더
+늦출 수 있다([Location runtime §6.1](../../../common/spec/server/05-location-relocation/01-location-runtime.ko.md#61-read와-cas)).
 같은 시작 operation 안에서 유효 lease의 충돌을 재시도하거나 다른 RoutingId로 바꾸지 않는다.
 두 process가 동시에 같은 fixed RoutingId를 사용하는지도 확인한다.
 
