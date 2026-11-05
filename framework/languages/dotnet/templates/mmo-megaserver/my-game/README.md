@@ -102,11 +102,3 @@ The example trusts player IDs sent on the first `EnterRegionRequest`. Add applic
 The e2e fixture limits each Region node to two Region Spots and keeps forest-1 and forest-2 occupied before drain. After relocation the survivor is full. Once the replacement reports `READY`, a new desert Region must be served by that replacement. Existing Region state and Session identity checks remain required. Only Region nodes register the application Entry and its first admission handler, so only those nodes declare an Entry in `zlink.structure.json`.
 
 Message Follow is explicitly set to 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is the follow duration plus the existing relocation budget; the relocation operation deadline is unchanged.
-
-## 한국어 실행 안내
-
-기본 실행은 Docker에서 node와 e2e runner를 함께 실행하므로 호스트 .NET SDK가 필요하지 않습니다. Docker Compose v2와 Linux container 환경을 준비합니다. `./run-e2e.sh --build-only`로 이미지를 빌드하고, `./run-e2e.sh` 또는 `pwsh -NoProfile -File ./run-e2e.ps1`로 전체 시나리오를 실행합니다. `./run-e2e.sh --check-domain` 또는 `-CheckDomain`은 scenario node를 시작하지 않고 domain 경계 검사를 실행합니다. 로컬 process 디버깅에는 .NET 8 SDK와 `--local` 또는 `-Local`을 사용합니다. 실행 로그는 `.logs/docker-<project>/`와 `.logs/run-<id>/`에 남습니다.
-
-`region`은 두 replica의 정원 초과, `capacity-exhausted`, `region-unknown`, 연결 유지와 Region 간 격리를 확인합니다. `movement`는 Delta·Sequence 판정, 이동 예산 거부 뒤 상태 불변, 서버가 응답한 `RetryAfterMs` 뒤 재수락, 요청자 직접 응답과 구성원 broadcast를 확인합니다. `dungeon`, `reconnect`, `update`는 Dungeon host, 재접속 상태, host 교체 뒤 상태·연결 보존을 검사합니다.
-
-각 Region의 `Capacity`는 `server/config/regionA.json`과 `regionB.json`에서 정합니다. 허용 region, `MaxReplicasPerRegion`, `MaxStep`은 `server/MyGame.Shared/Contracts.cs`에서 관리합니다. 실행마다 Redis key prefix와 Compose project 이름이 달라지고 실제 listener endpoint를 사용합니다. 실패 원인과 message flow는 `.logs/run-<id>/`의 node stderr 로그에서 확인합니다.

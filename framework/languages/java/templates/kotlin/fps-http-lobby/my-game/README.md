@@ -83,19 +83,3 @@ Start Redis, then both Match processes using `server/config/match-a.json` and `m
 The Match configuration `roomCapacity` sets the positive per-node Room stable-type limit. Deployment configurations allow multiple Rooms. The e2e runner uses a capacity of two for `lobby`, which keeps the duel and ranked Rooms in place while the restarted Lobby provisions a new Room. Other scenarios use a capacity of one so the surviving host is full after relocation and the replacement must handle the next Room.
 
 For a Match host update, send `drain` to stdin and require `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Send `shutdown`, require `STOPPED` and exit zero, then start the replacement with the same configuration. The lobby remains outside host relocation. HTTP matchmaking holds the first POST response until another player requests the same mode; shutdown fails pending requests. The HTTP adapter removes an unpaired request when its client disconnects, allowing the same player ID to request again. Cancellation does not change paired requests.
-
-## 한국어 실행 안내
-
-기본 e2e는 Docker에서 실행합니다. 로컬 process 디버깅은 JDK 25를 준비하고 `--local` 또는 `-Local`로 실행합니다. Windows에서는 PowerShell 7을 사용합니다. e2e runner는 실행마다 별도 Redis project와 key prefix를 만들고 OS가 할당한 port를 사용하며, 로그와 message-flow 기록을 `.logs/run-<id>/`에 보존합니다.
-
-HTTP 로비는 같은 mode의 두 요청을 매칭합니다. mode를 생략하면 `duel`입니다. 로비는 UUID 기반 Room ID를 발급하고 `PrepareRoom`을 보낸 뒤 같은 `matchId`의 `RoomPrepared`를 받아야 HTTP 응답을 반환합니다. 명단과 입장 판정은 `RoomRoster`가 소유합니다. Session은 `JoinRoomRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, `SessionInfoRequest`만 중계합니다. 배포 시 Session의 `READY` 출력에서 실제 endpoint를 확인하여 로비 설정에 넣습니다.
-
-RoomState가 위치·HP·phase·winner·공유 순번·이동 예산·발사 간격·명중 판정을 소유합니다. 이동 최대 길이는 2, 속도 예산은 초당 10이며 수락된 이동 뒤 최대 2까지 회복합니다. 사거리는 80, 피해량은 25, HP는 100, 발사 간격은 250 ms입니다. 발 위치 Y는 0이며 수직 이동은 `vertical-move`로 거부합니다. 점프·중력·지연 보정·투사체·클라이언트 예측은 없습니다. 벽과 플레이어 상자 면 접촉은 교차이며 같은 거리면 벽을 선택합니다. Snapshot에는 process 절대 시각 대신 남은 ms를 저장합니다.
-
-게임 도메인 경계 검사는 46개이며 HTTP lobby 경계 검사는 19개입니다. 실행별 로그와 message-flow 기록은 `.logs/run-<id>/`에 보존됩니다. 프로덕션 배포에서는 플레이어 인증과 Redis 연결 설정을 적용해야 합니다.
-
-e2e의 `lobby` 시나리오는 duel·ranked Room 두 개를 유지한 채 새 Room을 준비하도록 node별 `roomCapacity`를 2로 설정합니다. 나머지 시나리오는 1을 사용하여 relocation 뒤 살아남은 host의 용량을 채우고 대체 host가 새 Room을 받는지 확인합니다.
-
-Action sequences are signed 64-bit values encoded as decimal JSON strings. The accepted input range is 1..9007199254740991. Values above the upper bound are rejected as `integer-out-of-range` before stale-sequence checks; values at or below the last accepted sequence are `stale-sequence`. Rejections preserve all game state. `RetryAfterMs` remains a 32-bit JSON number.
-
-입력 순번은 decimal JSON 문자열로 전달하는 signed 64-bit 값이며 수락 범위는 1..9007199254740991입니다. 상한 초과는 stale-sequence 판정 전에 `integer-out-of-range`로 거부하며, 마지막 수락 순번 이하는 `stale-sequence`로 거부합니다. 거부 시 게임 상태는 바뀌지 않습니다. `RetryAfterMs`는 32-bit JSON 숫자를 유지합니다.

@@ -139,13 +139,3 @@ Node stderr records the message flow from the dispatch diagnostics `Normal` logg
 Validated against the published Framework 0.31.0 packages.
 
 The e2e runner sets each node's optional `TableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry declarations describe the application Entry on Table nodes only; there are no fixed User Spots in this template.
-
-## 한국어 실행 안내
-
-기본 실행은 Docker에서 node와 e2e runner를 함께 실행하므로 호스트 .NET SDK가 필요하지 않습니다. Docker Compose v2와 Linux container 환경을 준비하십시오. 로컬 process 디버깅은 .NET 8 SDK를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행합니다. 이미지 빌드·정리 로그는 `.logs/docker-<project>/`, node 로그는 `.logs/run-<id>/`에 남습니다. 이 프로젝트는 Session node 하나, Table node A·B, Redis Location Store를 실행합니다.
-
-e2e는 `./run-e2e.sh` 또는 `pwsh -NoProfile -File ./run-e2e.ps1`로 실행합니다. 실행기는 구조를 검사한 뒤 도메인 경계 검사를 실행하고 `Domain checks: 7/7`을 출력합니다. 이어 Redis와 각 node를 순서대로 기동하고 `table`·`reconnect`·`update` 시나리오를 확인한 뒤 자신이 만든 process와 container를 정리합니다. `table`은 내부 패킷과 잘못된 행동을 거부하고 상태가 바뀌지 않는지, 정산 뒤 모든 좌석의 `cardCount`가 0인지, 다음 판 전 개인 패 조회 결과가 빈 패인지 확인합니다. `reconnect`와 `update`는 이동·재접속 뒤에도 상태가 유지되고 정산 뒤 패가 비는지 확인합니다. 시나리오 ID는 `Scenarios.cs`, 이 표와 `zlink.structure.json`의 `run.scenarios`에서 같은 순서로 관리합니다.
-
-게임 규칙의 판정 위치는 `server/MyGame.Table/TableSpot.cs`, 계약과 정수 상한은 `server/MyGame.Shared/Contracts.cs`, client 패킷 허용 목록은 `server/MyGame.Session/PlayerSession.cs`, 시나리오 검사는 `e2e/MyGame.E2E/Scenarios.cs`입니다. 정수 상한 또는 계산 결과를 넘긴 거부 사유는 `integer-out-of-range`입니다. `ActionRejected.RetryAfterMs`는 32-bit integer이며 기본 typed JSON serializer에서 `retryAfterMs`로 직렬화합니다. 칩·pot·handNumber는 64-bit 정수입니다. 현재 시간 제한 거부가 없어 `RetryAfterMs`는 0입니다. 확장한 시간 규칙은 단조 시계로 판정하고 relocation에는 남은 ms만 저장합니다.
-
-설정과 로그는 `.logs/run-<id>/`에 남습니다. 실패하면 첫 실행의 `<node>.err.log`에서 message flow의 마지막 transition을 먼저 확인하십시오. 공개 Framework 0.31.0 패키지로 검증했습니다.

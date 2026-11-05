@@ -113,9 +113,3 @@ A new Player joins it and earns gold; the test checks channelA1 in both response
 Existing Players remain in their relocated Zones. The replacement uses the same configuration.
 Message Follow is explicitly 30 seconds; the safe shutdown observation budget is
 derived from that duration and the existing operation budget.
-
-## 한국어 실행 안내
-
-Docker Compose v2와 Linux 컨테이너 데몬을 준비한다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 이미지 빌드부터 runner·node 컨테이너 기동과 정리까지 수행한다. Framework 버전은 `bootstrap.cmake` 한 곳에서 정하며, 빌드는 그 버전의 GitHub Release prebuilt를 받아 함께 게시된 SHA-256 체크섬으로 확인한다. `GoldBalance`가 10 gold 보상, 단조 시계 기준 1000 ms 간격과 `9,007,199,254,740,991` 상한을 판정한다. 거부 응답은 `ActionRejected(Reason, RetryAfterMs)`이며, 시간 제한은 서버가 준 ms만큼 기다린 뒤 다시 요청한다. 상한을 넘는 채널 요청은 `integer-out-of-range`로 거부하고 membership을 바꾸지 않는다. Zone은 접속 player ID를 보유하고 채널 이동·연결 종료 때 목록에서 제거한다. 채널 이동 때 client Session은 유지되고 Player Actor의 Zone이 바뀌므로 목록은 Zone membership callback에서 갱신한다. Actor와 Zone relocation snapshot은 남은 cooldown ms와 player ID 목록을 각각 저장한다.
-
-로컬 디버깅은 C++20 컴파일러, CMake, Ninja를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행한다. node 로그와 설정은 `.logs/run-<id>/`, Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다. 공개 패키지에서 확인된 차단 사항은 Known issues를 따른다.

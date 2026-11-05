@@ -99,9 +99,3 @@ Wait for `READY` before connecting clients. Send `drain` through node stdin and 
 All Object Servers that register Player factories also register the shared Entry and first-admission handler, including both Instance nodes. Entry admission joins the requested fixed Town channel. Each Instance declares its dynamic Dungeon factory in `zlink.structure.json`.
 
 The e2e configuration uses one Dungeon slot per Instance. After drain, the surviving Instance is full, so only the replacement can accept the fresh Dungeon. The structure checker enforces this configuration. Message Follow remains 30 seconds; the SafeToShutdown observation budget is derived from that duration plus the existing relocation operation budget.
-
-## 한국어 실행 안내
-
-기본 실행은 Docker에서 node와 e2e runner를 함께 실행하므로 호스트 .NET SDK가 필요하지 않습니다. Docker Compose v2와 Linux container 환경을 준비하십시오. 로컬 process 디버깅은 .NET 8 SDK를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행합니다. 이미지 빌드·정리 로그는 `.logs/docker-<project>/`, node 로그는 `.logs/run-<id>/`에 남습니다. Docker Compose를 준비한 뒤 템플릿 루트에서 위 Build 명령을 실행합니다. Windows에서는 PowerShell 7의 실행 명령을, WSL에서는 Bash 실행 명령을 사용합니다. 실행마다 Redis와 다섯 server process가 기동되며, 실제 listener endpoint는 READY 출력으로 확인할 수 있습니다.
-
-네 시나리오는 채널 이동, 서버 발급 ID와 중복 입장, 거부 뒤 상태 불변, FinalStage 완료, 재접속과 instance 교체 뒤 RunId·Phase·Stage 보존을 검증합니다. `./run-e2e.sh --check-domain` 또는 `-CheckDomain`은 node 시작 없이 도메인 경계를 검사합니다. 실패 구간과 message flow는 `.logs/run-<id>/`에 보존됩니다. 운영 환경에서는 Session의 player ID 인증과 용량 설정을 적용한 뒤 drain 완료 및 STOPPED를 확인하여 process를 교체합니다.
