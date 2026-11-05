@@ -132,7 +132,7 @@ never receives another request's reply.
   run one at a time, in order.
 
 This is the behavior from 0.33.0. Earlier versions started handlers without `await` in arrival order
-([Handler Turn §2](../../spec/server/01-execution/02-handler-turn-and-execution-gate.en.md#execution-gate)).
+([Handler Turn §2](../../../common/spec/server/01-execution/02-handler-turn-and-execution-gate.en.md#execution-gate)).
 
 ## 2. Filters — Collecting Shared Processing in One Place
 

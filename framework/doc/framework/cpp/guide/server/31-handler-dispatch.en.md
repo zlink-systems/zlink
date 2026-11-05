@@ -84,6 +84,22 @@ Dropped means the caller gets no reply, not that nothing is observable. The logg
 providers you configured receive the dispatch failure as a `no_handler`, `reply_error`, or
 `drop` structured record ([Monitoring](26-monitoring.en.md)).
 
+### 1.4 Node and ChannelName Handlers May Start Concurrently, in Any Order
+
+Node handlers and ChannelName handlers have no gate that enforces execution order. Several workers
+share the requests sent to the same MeshNode or channel, so a later request's handler may start
+before an earlier one finishes, and both start order and completion order may differ from arrival
+order. This holds even when the handler has no `await`. Replies are matched per request, so a caller
+never receives another request's reply.
+
+- The application synchronizes any state shared between handlers.
+- If requests for the same target must be processed one at a time in arrival order, keep that state
+  in a [Spot](21-spot.en.md) or Actor and send the requests to its handlers. Spot and Actor handlers
+  run one at a time, in order.
+
+This is the behavior from 0.33.0. Earlier versions started handlers without `await` in arrival order
+([Handler Turn §2](../../../common/spec/server/01-execution/02-handler-turn-and-execution-gate.en.md#execution-gate)).
+
 ## 2. Filters — Collecting Shared Processing in One Place
 
 The HTTP middleware of a web framework belongs to the HTTP pipeline, so it does not apply to

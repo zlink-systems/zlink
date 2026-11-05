@@ -124,7 +124,7 @@ handler가 시작될 수 있고, 시작 순서와 끝나는 순서도 받은 순
   두고 그쪽 handler로 보낸다. Spot·Actor handler는 한 번에 하나씩 순서대로 실행된다.
 
 0.33.0부터의 동작이다. 그 전 버전은 await 없는 handler를 받은 순서대로 시작했다
-([Handler turn §2](../../spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md#execution-gate)).
+([Handler turn §2](../../../common/spec/server/01-execution/02-handler-turn-and-execution-gate.ko.md#execution-gate)).
 
 ## 2. Filter — 공통 처리를 한곳에 모은다
 
