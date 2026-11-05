@@ -746,30 +746,38 @@ cancellation하면 startup은 취소로 끝나며 이 규칙으로 성공이 되
 
 ### 5.1 짧은 장애의 보존과 재참여
 
-보존 한도 `T`는 마지막 lease 갱신 성공 뒤 60초다. 경과 시간은 성공 갱신 요청을 시작한
-local monotonic 시각을 기준으로 계산하여 응답 지연만큼 보존 시간이 늘어나지 않게 한다.
-새 claim 성공만으로 이전 장애의 보존 시간을 다시 시작하지 않는다.
+보존 한도 `T`는 마지막 lease 갱신 성공 뒤 60초다. 첫 갱신 전에는 최초 claim 성공을 기준으로
+한다. 경과 시간은 그 성공 요청을 시작한 local monotonic 시각을 기준으로 계산하여 응답 지연만큼
+보존 시간이 늘어나지 않게 한다. 새 claim 성공만으로 이전 장애의 보존 시간을 다시 시작하지 않는다.
 
 - Store와의 통신만 실패하고 기존 admitted mesh peer가 하나 이상 유효하면, 장애 전에 steady
   `Ready`였던 객체의 bound Actor·Spot 메시징과 Spot timer를 `T` 안에서 cache로 계속 처리한다.
   새 객체 생성, factory·restore 확정, relocation과 수용 공간 변경은 보존 실행 대상이 아니다.
 - Store와 모든 mesh peer가 함께 단절되면 위 차단 대상 표의 새 작업 수용을 중단한다.
-  Peer 유효성은 기존 mesh liveness 판정을 사용한다. Peer 연결만으로 Store 변경 권한을 얻지는 않는다.
+  Peer 유효성은 기존 mesh liveness 판정을 사용한다. `T` 안에서 peer만 복구되면 보존 실행만
+  재개한다. 일반 새 작업은 Store 복구 뒤 자격을 확인한 다음 재개한다.
 - `T`를 넘으면 mesh 연결 유무와 관계없이 보존한 메모리 상태를 버린다. 기존 gate에서 이전
   객체의 새 실행을 막고 queue·timer·binding·지연 completion을 정리한 뒤 빈 상태로 재참여한다.
-  Store 후퇴를 감지하면 `T`와 관계없이 같은 정리를 수행한다. 다른 owner의 Store record를
-  삭제하거나 namespace를 flush한다는 뜻은 아니다.
+  정지됐다 재개한 process는 실행 전에 local monotonic 경과 시간을 확인하고, `T`를 넘었으면
+  먼저 같은 정리를 수행한다. Store 후퇴를 감지하면 `T`와 관계없이 같은 정리를 수행한다.
+  다른 owner의 Store record를 삭제하거나 namespace를 flush한다는 뜻은 아니다.
 - 다른 owner·incarnation으로의 변경이나 local 실행권의 상실이 확정되면 mesh 연결과 `T`에
   관계없이 해당 객체의 새 실행을 중단한다. Store에서 유효하지 않은 token으로 변경하지 않는다.
 - Store 복구 뒤에는 연속성과 각 보존 단위의 authority·generation·owner token·node lifecycle을
-  다시 확인한다. 새 lease 확보만으로 이전 객체의 gate를 모두 열지 않는다. `Missing` 또는
-  다른 incarnation·owner의 record를 local memory로 복원하지 않는다. 만료 token 갱신은 계속
-  거절하며 새 자격에는 새 `LeaseGeneration`을 발급한다.
+  다시 확인한다. 만료 token 갱신은 계속 거절하며 새 자격에는 새 `LeaseGeneration`을 발급한다.
+  객체별로 Store record에 같은 incarnation의 자기 옛 owner token이 남아 있고 authority
+  `StoreVersion`·`ObjectGeneration`·`AuthorityOwnerGeneration`이 보존 시점 값과 같은 경우에만,
+  그 token을 현재 유효한 새 `LeaseGeneration` token으로 바꾸는 CAS를 허용한다. Owner identity와
+  node lifecycle은 유지한다. 이 전이는 §6.1의 `Preserve`에 해당하며 다른 generation과 수용 공간은
+  바꾸지 않는다. CAS가 성공한 객체만 기존 gate를 다시 열고, 실패한 객체는 버린다.
+  `Missing` 또는 다른 incarnation·owner의 record를 local memory로 복원하지 않는다.
+  보존 중에도 메시징·timer가 계속 실행됐으므로 복구에서는 token만 교체한다. 성공한 객체의
+  pending message·timer·binding·지연 completion은 그대로 유지하며 재생성하거나 재전송하지 않는다.
 
-연속성의 운영 요구는 [Location Store §1](02-location-store-redis.ko.md#1-범위와-독자)이 소유한다.
-복구 시 같은 incarnation의 owner token을 교체하는 원자 전이와 모든 peer 무응답 뒤의 안전한
-해제 조건은 이 초안에서 확정하지 않는다. 확정 전에는 그 전이로 보존 실행을 재승인하거나
-무응답만으로 해제를 승인하지 않는다.
+Store에 닿지 않는 동안 host는 local admission deadline 전이라도 새 relocation을 시작하지 않는다.
+진행 중인 relocation은 [Relocation flow §9](04-relocation-flow.ko.md#9-timeout-failure와-cancellation)의
+실패 표를 따른다. 연속성의 운영 요구는 [Location Store §1](02-location-store-redis.ko.md#1-범위와-독자)이
+소유하고, 해제 허용 조건은 §6.1이 소유한다.
 
 ## 6. 현재 위치 record를 읽고 변경한다
 
@@ -788,7 +796,7 @@ Authority를 읽으면 record가 없는 `Missing(StoreNow)` 또는 현재 값이
 | `Reserve` | `Missing → Reserved`. ObjectGeneration, 첫 AuthorityOwnerGeneration과 수용 공간을 발급한다. |
 | `Commit` | 그 reservation의 `Reserved → Active`다. |
 | `Abort` | 그 reservation의 `Reserved → Missing`이다. |
-| `Preserve` | Active owner, generation과 사용 중인 수용 공간은 유지하고 `StoreVersion`과 Framework 내부 데이터만 바꾼다. 일반 사용에는 target 정보가 없어야 한다. Relocation 정리에서는 같은 `RelocationId`의 target 정보를 제거할 수 있다. |
+| `Preserve` | Active owner, ObjectGeneration·AuthorityOwnerGeneration과 사용 중인 수용 공간은 유지하고 `StoreVersion`과 Framework 내부 데이터만 바꾼다. §5.1의 보존 복구에서는 같은 owner·incarnation의 lease token만 새 token으로 바꿀 수 있다. 일반 사용에는 target 정보가 없어야 한다. Relocation 정리에서는 같은 `RelocationId`의 target 정보를 제거할 수 있다. |
 | `NewOwner` | Active record를 target owner로 바꾼다. ObjectGeneration은 유지하고 AuthorityOwnerGeneration을 증가시킨다. 미리 확보한 target 수용 공간을 사용한다. |
 | `Delete` | Active record와 조회용 index를 제거하고 사용 중인 수용 공간을 같은 요청에서 감소시킨다. |
 | `Reincarnate` | Explicit Close 중인 Active record를 같은 owner의 새 incarnation으로 바꾼다. 새 ObjectGeneration과 첫 AuthorityOwnerGeneration을 발급하고 owner·lease와 사용 중인 수용 공간을 유지한다. [Spot 주소 메시징 §7](../03-spot-actor/06-spot-address-messaging.ko.md#7-close와-generation-경계) 3단계에서만 쓴다. |
@@ -798,7 +806,8 @@ Reserved record에 `Preserve`, `NewOwner`, `Reincarnate` 또는 `Delete`를 적�
 수행한다. 별도의 create 작업 이름은 없다.
 
 Framework는 예상 version, counter, record와 조회용 index 변경을 한 Store 요청에 넣는다.
-`Preserve`, `Reincarnate`와 `Delete`는 현재 owner lease를 검증한다. `NewOwner`는 target lease와 해당
+`Preserve`, `Reincarnate`와 `Delete`는 현재 owner lease를 검증한다. §5.1의 token 교체에서는
+교체할 새 owner lease의 유효성을 검증한다. `NewOwner`는 target lease와 해당
 relocation이 미리 확보한 수용 공간을 검증한다. 생성 전이(`Reserve`, `Commit`, `Abort`)는 target owner
 lease(owner ID와 lease generation)와 처음 읽은 target MeshNode descriptor record의 `StoreVersion`을 함께
 검증한다. `descriptorLifecycleGeneration`의 CAS는 descriptor 조건이 맡는다 — owner lease는 같은 process의
@@ -806,16 +815,22 @@ MeshNode lifecycle 재시작에서 바뀌지 않을 수 있기 때문이다. Rec
 `Conflict`이며 아무것도 변경하지 않는다. Target 정보 조합 자체가 잘못됐으면 Store를
 호출하기 전에 Framework 내부 오류로 끝낸다.
 
-**다른 node의 owner 해제·재생성·재claim에는 mesh 생존 확인을 먼저 수행한다.** Lease 무효만으로
-기존 owner의 실행 중단을 증명하지 않는다. 해제 후보 authority의 owner token과 node lifecycle을
-대상으로 owner에게 직접 확인하고 기존 admitted peer들에게도 확인한다. 한 응답이라도 해당
-owner의 생존을 확인하면 해제를 보류하고 `Unavailable`을 반환한다. User Spot member 해제에도
-각 owner에 같은 검사를 적용한다. 부분 단절에서 해제 요청자만 owner와 통신하지 못하는 경우를
-다루기 위해 직접 확인만 하는 안 대신 여러 peer의 확인 중 하나라도 생존이면 보류하는 안을 채택한다.
-과거 연결 정보만으로 생존을 확정하지 않으며 현재 확인 요청에 대한 owner 응답을 요구한다.
-무응답·timeout·peer 목록의 불완전성은 정지 증거가 아니며 해제 권한을 만들지 않는다.
-해제 허용 조건이 확정되지 않은 경우 `Unavailable`로 끝낸다. Mesh 확인은 아래 Store CAS를
-대신하지 않는다. 메시지 형식은 [wire §5.1](../02-channel-transport/06-wire-protocol.ko.md#51-owner-생존-확인-초안)이 소유한다.
+**다른 node의 owner 해제·재생성·재claim에는 mesh 생존 확인을 먼저 수행한다.** 질의 대상은
+질의 시작 시점에 해제자와 같은 domain에서 연결된 admitted peer 전체와 해제 후보 authority의
+owner token·node lifecycle에 해당하는 owner 본인이다. 질의 중 membership이 바뀌어도 시작 시점의
+목록을 사용하며, 응답 대기는 renew timeout(기본 3초) 안에서 끝낸다. User Spot member 해제에도
+각 owner에 같은 검사를 적용한다. 어느 응답이든 `Alive`이면 해제를 보류하고 `Unavailable`을 반환한다.
+과거 연결 정보는 생존 응답을 대신하지 않는다.
+
+Store에서 후보 owner lease가 만료됐고 질의한 peer 전부가 해당 owner와 연결이 없다는
+`NoConnection`으로 답했으면 lease 만료 즉시 해제할 수 있다. 응답하지 않은 peer가 있거나
+`Unconfirmed`이면, 또는 물어볼 peer가 없으면 owner의 마지막 갱신 기준 시각에 `T`(60초)와
+fencing margin(5초)을 더한 시각이 지난 뒤에만 해제할 수 있다. 해제자는 Store의 해당 lease
+`ExpiresAt − TTL`로 마지막 갱신 기준 시각을 계산하고 `StoreNow`와 비교한다. 첫 갱신 전에는
+같은 식이 최초 claim 기준 시각이다. 기준 시각을 확인할 수 없으면 `Unavailable`을 반환한다.
+이 시각에는 옛 owner가 살아 있더라도 §5.1에 따라 보존 상태를 이미 버려야 한다. 무응답 자체는
+정지 증거가 아니며 `Alive`의 보류를 무효로 만들지 않는다. 최종 방어는 아래 Store CAS의
+세대·version 비교다. 메시지 형식은 [wire §5.1](../02-channel-transport/06-wire-protocol.ko.md#51-owner-생존-확인)이 소유한다.
 
 **Target lifecycle이 끝난 reservation은 해제한다.** `Reserved` record의 target owner lease가 없거나,
 다른 `LeaseGeneration`이거나, 만료됐으면, 또는 target MeshNode descriptor record가 없거나 다른

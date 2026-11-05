@@ -97,7 +97,9 @@ Spot timer의 새 tick queue 투입과 callback 시작은 service runtime이
 
 Store와 모든 mesh peer가 함께 단절되어 admission이 차단되거나 보존 한도 `T`를 넘으면 새
 callback을 시작하지 않는다. Process가 일시 정지됐다 재개해도 같은 판정을 적용한다.
-이전 object·owner authority의 pending tick은 실행하지 않는다. 새 lease 확보만으로
+실행권을 잃었거나 폐기한 object·owner authority의 pending tick은 실행하지 않는다.
+[Location runtime §5.1](../05-location-relocation/01-location-runtime.ko.md#51-짧은-장애의-보존과-재참여)의
+같은 incarnation token 교체 CAS가 성공한 객체의 timer와 pending tick은 그대로 유지한다. 새 lease 확보만으로
 폐기한 timer나 pending tick을 복원하지 않는다. 일반 overrun은 §2의 policy를 따른다.
 
 ## 4. 공유 scheduler — 자원은 등록 수에 비례하지 않는다

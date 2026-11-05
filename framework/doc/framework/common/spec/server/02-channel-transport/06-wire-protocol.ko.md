@@ -366,13 +366,14 @@ Probe 주기와 ACK 판정은 [Transport liveness §3](05-transport-liveness.ko.
 Probe, ACK와 timer는 infrastructure reserve에서 처리하며 application queue나 handler에 전달하지 않는다.
 - **probe와 ACK는 admitted 물리 connection의 현재 epoch를 타며, 그 epoch는 connection lifetime 동안 안정적이다.** `livenessProbe`와 그 `livenessAck`은 admission이 확립한 peer identity와 connection generation으로 보낸다(`scope: admitted-physical-connection-lifetime`). 이미 live 물리 connection에서 admitted된 peer에 대한 중복 re-dial이나 반복 `hello`/`admit`은 idempotent다 — admitted connection을 무효화하지도, connection generation을 회전시키지도 않는다. superseded되었거나 아직 전달되지 않은 generation(상대의 live pipe가 인식하지 못하는 값)으로 stamp된 probe·ACK를 보내는 것은 결함이며, 상대는 이를 현재 admitted connection의 record로 인정하지 않고 조용히 버린다. Peer deadline에 미치는 영향은 [Transport liveness §3](05-transport-liveness.ko.md#3-routemesh와-clientserver)이 정한다. 새 connection generation은 Core의 선택 route가 새 route generation으로 바뀔 때만([Transport liveness §5](05-transport-liveness.ko.md#5-ready와-장애-판정)) 발급하며, 변경 없는 descriptor로 이미 admitted된 peer의 매 inbound admission record마다 발급하지 않는다.
 
-### 5.1 Owner 생존 확인 초안
+### 5.1 Owner 생존 확인
 
-0.33.0의 owner 생존 확인 메시지 추가안이다. 아래 ID·body는 schema 반영 전 초안이며
-현재 command 표나 decoder의 닫힌 정의를 변경하지 않는다. §1의 schema 단일 소유 원칙은
-유지한다. 기존 `livenessProbe`·`livenessAck`를 owner 해제 승인으로 재해석하지 않는다.
+0.33.0의 owner 생존 확인 메시지는 아래 ID·body를 규범으로 사용한다.
+`framework/runtime/protocol/service-wire-v1.schema.json`과 golden fixture에는 0.33.0 구현
+작업에서 반영한다. §1의 schema 단일 소유 원칙에 따라 구현의 command 표와 decoder는 그
+schema에서 생성한다. 기존 `livenessProbe`·`livenessAck`를 owner 해제 승인으로 재해석하지 않는다.
 
-| 제안 ID | 이름 | 계층 | Application payload | Flag | 방향 |
+| ID | 이름 | 계층 | Application payload | Flag | 방향 |
 |---|---|---|---|---|---|
 | 55 | `ownerLivenessQuery` | infrastructure | 금지 | 없음 | admitted RouteMesh peer에 `[request]` |
 | 56 | `ownerLivenessResult` | infrastructure | 금지 | 없음 | 대응하는 request의 `[reply]` |
@@ -388,7 +389,7 @@ Service header는 §2와 같고 flags는 `0`이다. 모든 다중 byte 정수는
 | `ownerNodeRid` | `rid` | 확인할 MeshNode RID; byte 수 `1..255` |
 | `ownerNodeGeneration` | `nonzero-u64` | 확인할 node lifecycle; opaque equality 비교만 허용 |
 | `mode`(55만) | `u8` | `0`: owner 직접 확인, `1`: 수신 peer를 통한 owner 확인 |
-| `result`(56만) | `u8` | `0`: `Unconfirmed`, `1`: `Alive` |
+| `result`(56만) | `u8` | `0`: `Unconfirmed`, `1`: `Alive`, `2`: `NoConnection` |
 
 `text8`·`rid`의 길이는 `u8` prefix이며 prefix는 byte 수에 포함하지 않는다.
 `nonzero-u64`는 0 이외의 64-bit 전체 범위다. 위 enum 이외의 값과 잘못된 길이·generation은
@@ -396,17 +397,20 @@ protocol error다. Reply의 identity field는 request와 byte 단위로 같아�
 
 - 직접 확인은 현재 admitted owner identity와 요청의 token·RID·lifecycle이 일치하는 owner가
   응답할 때만 `Alive`다. 단순 transport 연결이나 과거 liveness 기록은 응답을 대신하지 않는다.
-- Peer 확인의 수신자는 같은 tuple과 `checkId`로 owner에게 mode `0`을 보내고, 그 요청의 현재
-  응답을 확인한 경우에만 `Alive`를 반환한다. Peer 확인을 다른 peer로 다시 중계하지 않는다.
-  Owner 응답을 확인하지 못하면 `Unconfirmed`이며 정지 확인을 뜻하지 않는다.
+- Peer 확인의 수신자는 기존 mesh liveness 판정상 해당 owner tuple과 유효한 admitted 연결이
+  없으면 `NoConnection`을 반환한다. 연결이 있으면 같은 tuple과 `checkId`로 owner에게 mode `0`을
+  보내고 현재 응답을 확인한 경우에만 `Alive`를 반환한다. 응답을 확인하지 못하거나 연결 여부를
+  확인할 수 없으면 `Unconfirmed`다. Peer 확인을 다른 peer로 다시 중계하지 않는다.
+  `NoConnection`은 해당 peer와의 연결 부재만 뜻하며 owner 전체의 정지 증거가 아니다.
 - 응답은 현재 request leg와 admitted peer identity에 결합한다. 다른 check ID·owner token·node
   lifecycle의 응답이나 늦은 응답을 현재 해제 판단에 사용하지 않는다. 응답을 해제 허가증으로
   cache하지 않는다. 일반 transport liveness와 별도 connection 상태를 만들지 않는다.
-- 어떤 `Alive`든 해제를 보류하는 근거다. `Unconfirmed`·timeout·무응답은 해제를 승인하지
-  않는다. 해제·재claim 판단은 [Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)이 소유한다.
+- 어떤 `Alive`든 해제를 보류하는 근거다. `Unconfirmed`·timeout·무응답만으로 해제를 승인하지
+  않는다. 질의 범위·시한과 `NoConnection` 또는 무응답 이후의 해제 조건을 포함한 해제·재claim 판단은 [Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)이 소유한다.
 
-Schema와 golden fixture, required capability 및 구버전 peer 처리의 확정은 이 초안의 후속
-조건이다. 그 전에는 이 메시지를 전송하거나 기존 capability가 지원을 보장한다고 해석하지 않는다.
+이 메시지를 모르는 이전 peer가 거부하거나 응답하지 않으면 응답 없음으로 취급하여
+Location runtime §6.1의 `T + fencing margin` 경과 조건을 적용한다. 기존 capability가
+지원 여부를 보장한다고 해석하지 않는다.
 
 ### Classic fanout beacon
 

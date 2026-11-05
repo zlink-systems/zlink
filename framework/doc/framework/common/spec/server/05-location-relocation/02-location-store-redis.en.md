@@ -51,6 +51,11 @@ do not establish this guarantee. Operators must ensure that recovery or promotio
 successful writes and fences writes from the previous primary. On detected rollback, the
 Framework discards all local objects without retention and rejoins empty
 ([Location runtime §5.1](01-location-runtime.en.md#51-retention-and-rejoining-after-a-short-outage)).
+A node detects rollback when it newly receives a generation value smaller than the greatest
+value it has observed from the same issuing counter (`LeaseGeneration` and other INCR-issued
+values). This detects only some rollbacks: it cannot detect rollback that stays at or above
+the observed maximum, or rollback of an unobserved counter. Operators are responsible for
+confirming restored Store continuity before the node rejoins empty after rollback.
 A lease `Missing` caused by normal TTL expiry is not itself evidence of rollback. Do not compare
 opaque `StoreVersion` values numerically or treat absence of observed rollback as proof of continuity.
 

@@ -835,36 +835,46 @@ confirmed lease is released normally and no heartbeat starts.
 
 ### 5.1 Retention and Rejoining After a Short Outage
 
-The retention bound `T` is 60 seconds after the last successful lease renewal. Elapsed time
-uses the local monotonic start time of that successful renewal request so response delay
-cannot extend retention. A successful new claim alone does not restart the previous outage's
-retention period.
+The retention bound `T` is 60 seconds after the last successful lease renewal. Before the
+first renewal, use the initial successful claim as the reference. Measure elapsed time from
+the local monotonic start time of that successful request so response delay cannot extend
+retention. A successful new claim alone does not restart the previous outage's retention period.
 
 - If only Store communication fails and at least one existing admitted mesh peer remains valid,
   bound Actor/Spot messaging and Spot timers for objects already in steady `Ready` continue
   from cache within `T`. New object creation, factory/restore confirmation, relocation, and
   capacity changes are not retained execution.
 - If the Store and all mesh peers are disconnected together, stop accepting new work in the
-  blocked-target table above. Peer validity uses existing mesh liveness decisions. A peer
-  connection does not grant permission to mutate the Store.
+  blocked-target table above. Peer validity uses existing mesh liveness decisions. If only
+  peers recover within `T`, resume retained execution only. Ordinary new work resumes after
+  Store recovery and eligibility validation.
 - Beyond `T`, discard retained memory state regardless of mesh connectivity. Block new execution
   of old objects at the existing gate, clean up queues, timers, bindings, and delayed completions,
-  then rejoin empty. Detected Store rollback requires the same cleanup regardless of `T`.
-  This does not authorize deleting another owner's Store records or flushing the namespace.
+  then rejoin empty. A suspended process must check local monotonic elapsed time before executing
+  on resume and perform this cleanup first if `T` has elapsed. Detected Store rollback requires
+  the same cleanup regardless of `T`. This does not authorize deleting another owner's Store
+  records or flushing the namespace.
 - A confirmed change to another owner or incarnation, or confirmed loss of local execution
   rights, stops new execution of that object regardless of mesh connectivity or `T`. Do not
   mutate the Store with an invalid token.
 - After Store recovery, revalidate continuity and each retained unit's authority, generations,
-  owner token, and node lifecycle. Obtaining a new lease alone does not reopen every old object's
-  gate. Do not restore `Missing` records or records of another incarnation or owner from local
-  memory. Renewals of expired tokens remain rejected; new eligibility receives a new
-  `LeaseGeneration`.
+  owner token, and node lifecycle. Renewals of expired tokens remain rejected; new eligibility
+  receives a new `LeaseGeneration`. For each object, allow a CAS replacing its old owner token
+  with the currently valid new `LeaseGeneration` token only if the Store record still contains
+  its own old token for the same incarnation and authority `StoreVersion`, `ObjectGeneration`,
+  and `AuthorityOwnerGeneration` equal their retained values. Owner identity and node lifecycle
+  remain unchanged. This transition is §6.1's `Preserve`; other generations and capacity do not
+  change. Reopen the existing gate only for objects whose CAS succeeds; discard objects whose
+  CAS fails. Do not restore `Missing` records or records of another incarnation or owner from
+  local memory. Messaging and timers continued during retention, so recovery only replaces the
+  token. Keep successful objects' pending messages, timers, bindings, and delayed completions
+  unchanged; do not recreate or retransmit them.
 
+While the Store is unreachable, a host must not start a new relocation even before its local
+admission deadline. In-flight relocations follow the failure table in
+[Relocation flow §9](04-relocation-flow.en.md#9-timeout-failure-and-cancellation).
 [Location Store §1](02-location-store-redis.en.md#1-scope-and-audience) owns the operational
-continuity requirement. This draft does not settle the atomic transition replacing the owner
-token of the same incarnation on recovery, or the safe release condition after all peers fail
-to respond. Until settled, neither that transition nor silence alone authorizes reapproval of
-retained execution or release, respectively.
+continuity requirement; §6.1 owns release authorization.
 
 ## 6. Reading and Changing the Current Location Record
 
@@ -884,7 +894,7 @@ CAS to confirm the first-read `StoreVersion` is unchanged.
 | `Reserve` | `Missing → Reserved`. Issues ObjectGeneration, the first AuthorityOwnerGeneration, and capacity. |
 | `Commit` | That reservation's `Reserved → Active`. |
 | `Abort` | That reservation's `Reserved → Missing`. |
-| `Preserve` | Keeps the Active owner, generation, and capacity in use; changes only `StoreVersion` and Framework-internal data. Ordinary use requires no target information; relocation settlement may clear target information for the same `RelocationId`. |
+| `Preserve` | Keeps the Active owner, ObjectGeneration, AuthorityOwnerGeneration, and capacity in use; changes only `StoreVersion` and Framework-internal data. During §5.1 retention recovery, only the lease token of the same owner and incarnation may change to the new token. Ordinary use requires no target information; relocation settlement may clear target information for the same `RelocationId`. |
 | `NewOwner` | Changes an Active record to the target owner. Keeps ObjectGeneration and increments AuthorityOwnerGeneration. Uses the pre-secured target capacity. |
 | `Delete` | Removes the Active record and lookup index, and decreases capacity in use in the same request. |
 | `Reincarnate` | Changes an Active record under explicit Close into a new incarnation of the same owner. Issues a new ObjectGeneration and the first AuthorityOwnerGeneration, and keeps the owner, lease, and capacity in use. Used only in step 3 of [Spot address messaging §7](../03-spot-actor/06-spot-address-messaging.en.md#7-close-and-the-generation-boundary). |
@@ -894,7 +904,8 @@ changes nothing. An Active owner change is only done via `NewOwner` or the final
 a whole User Spot move. There's no separate create operation name.
 
 The Framework puts the expected version, counter, record, and lookup-index changes into
-one Store request. `Preserve`, `Reincarnate`, and `Delete` verify the current owner lease. `NewOwner`
+one Store request. `Preserve`, `Reincarnate`, and `Delete` verify the current owner lease.
+For §5.1 token replacement, verify the validity of the new owner lease being installed. `NewOwner`
 verifies the target lease and the capacity that relocation pre-secured. The creation transitions
 (`Reserve`, `Commit`, `Abort`) verify both the target owner lease (owner ID and lease generation)
 and the `StoreVersion` of the target MeshNode descriptor record as first read. The descriptor
@@ -905,16 +916,24 @@ information combination itself is invalid, it ends as a Framework-internal error
 calling the Store.
 
 **Before releasing, re-creating, or reclaiming another node's ownership, check its liveness over mesh.**
-An invalid lease alone does not prove that the old owner stopped executing. Query the owner
-identified by the candidate authority's owner token and node lifecycle directly, and also query
-existing admitted peers. If any response confirms that owner's liveness, defer release and
-return `Unavailable`. Apply the same check to every owner of User Spot members being released.
-Choose an any-positive-veto check across multiple peers over a direct-only check because the
-requester alone may be partitioned from the owner. Historical connection information is not
-positive evidence: the owner must respond to the current check. Silence, timeout, and an
-incomplete peer list do not prove termination or authorize release. If release authorization
-is unsettled, end with `Unavailable`. Mesh checks do not replace the Store CAS below.
-[Wire §5.1](../02-channel-transport/06-wire-protocol.en.md#51-owner-liveness-check-draft) owns the message format.
+Query all admitted peers connected to the releaser in the same domain at query start, plus the
+owner identified by the candidate authority's owner token and node lifecycle. Use that initial
+list even if membership changes during the query. Finish waiting within renew timeout (3 seconds
+by default). Apply the same check to every owner of User Spot members being released. Any
+`Alive` response defers release and returns `Unavailable`. Historical connection information
+does not replace a current liveness response.
+
+If the candidate owner lease has expired in the Store and every queried peer responds
+`NoConnection` for that owner, release is allowed immediately upon lease expiry. If any peer
+does not respond or returns `Unconfirmed`, or there are no peers to query, release is allowed
+only after the owner's last renewal reference time plus `T` (60 seconds) plus the fencing margin
+(5 seconds). The releaser computes that reference time from the lease's Store `ExpiresAt − TTL`
+and compares it with `StoreNow`. Before the first renewal, the same formula gives the initial
+claim reference time. If the reference time cannot be established, return `Unavailable`.
+By that time, even a live old owner must have discarded retained state under §5.1. Silence itself
+is not proof of termination and does not override an `Alive` veto. The final defense is the
+Store CAS generation and version comparison below.
+[Wire §5.1](../02-channel-transport/06-wire-protocol.en.md#51-owner-liveness-check) owns the message format.
 
 **A reservation whose target lifecycle has ended is released.** If the target owner lease of a
 `Reserved` record is missing, has a different `LeaseGeneration`, or has expired, or if the target

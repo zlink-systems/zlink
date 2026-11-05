@@ -88,7 +88,10 @@ section's conditions during a short Store-only outage.
 
 No new callback starts when admission is blocked by loss of both the Store and all mesh
 peers, or when retention bound `T` is exceeded. The same decision applies after a suspended
-process resumes. Pending ticks of a previous object/owner authority are not executed.
+process resumes. Pending ticks of an object/owner authority that lost execution rights or was
+discarded are not executed. Keep timers and pending ticks unchanged for objects whose
+same-incarnation token replacement CAS succeeds under
+[Location runtime §5.1](../05-location-relocation/01-location-runtime.en.md#51-retention-and-rejoining-after-a-short-outage).
 Obtaining a new lease alone does not restore discarded timers or pending ticks. Ordinary
 overrun follows the policies in §2.
 
