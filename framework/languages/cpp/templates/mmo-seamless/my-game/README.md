@@ -112,9 +112,3 @@ For a planned update, write `drain` to the affected process's standard input. Wa
 `SessionInfo` carries Session ID, Actor ID, and object generation from the actual bound Actor. `ZonePositionDomain` in `server/zone/domain.hpp` owns player positions, sequences, movement budgets, and connected-player visibility. Zone transitions use its calculated position and remaining budget milliseconds. Relocation adapters preserve application state only.
 
 Fixed Zones are bootstrapped serially: Zone A fills its three-Spot capacity before Zone B starts. This makes the declared initial owners deterministic through public stable-type capacity. During e2e, Zone B has capacity for all but one world Zone. Before update drains Zone A, `vacate-zone` closes the unused first Zone through the public Spot manager. The remaining Zones fill Zone B; the replacement Zone A recreates the first Zone through its startup `get_or_create`; a fresh player then joins it, and the test verifies its host and continued movement. Existing relocated players remain on Zone B.
-
-## 한국어 실행 안내
-
-Docker Compose v2와 Linux 컨테이너 데몬을 준비한다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 이미지 빌드, 도메인 경계 검사, runner·node 컨테이너 기동과 정리를 수행한다. `./run-e2e.sh --check-domain` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain`은 node를 시작하지 않고 도메인 검사를 실행한다. 기본 시나리오는 `cross`, `border`, `reconnect`, `update`다. Framework 버전은 `bootstrap.cmake` 한 곳에서 정하며, 빌드는 그 버전의 GitHub Release prebuilt를 받아 함께 게시된 SHA-256 체크섬으로 확인한다.
-
-로컬 디버깅은 C++20 컴파일러, CMake, Ninja를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행한다. node 로그와 설정은 `.logs/run-<id>/`, Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다. 공개 패키지에서 확인된 차단 사항은 Known issues를 따른다.

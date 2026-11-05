@@ -80,15 +80,3 @@ The match configuration `roomCapacity` sets the positive per-node Room stable-ty
 For a match host update, send `drain` to stdin and require `RELOCATION_REQUESTED`, `RELOCATED` and `SAFE_TO_SHUTDOWN`. Send `shutdown`, require `STOPPED` and exit zero, then start the replacement with the same configuration. The lobby remains outside host relocation. HTTP matchmaking holds the first POST response until another player requests the same mode; shutdown fails pending requests. The Netty HTTP adapter removes an unpaired request when its client disconnects, allowing the same player ID to request again. Cancellation does not change paired requests.
 
 The Room domain is in `server/match/.../domain/RoomState.java`. HTTP and ZLink lobby adapters implement the application matching port. No player route, membership, lease or Actor reference is serialized by an application relocation adapter.
-
-## 한국어 실행 안내
-
-기본 e2e는 runner와 node를 Docker에서 실행합니다. 로컬 process 디버깅에는 JDK 25를 준비하고 `--local` 또는 `-Local`을 지정합니다.
-
-Docker Compose를 설치한 뒤 위 Build 명령으로 빌드합니다. Windows에서는 PowerShell 7을 사용합니다. e2e runner는 실행마다 별도 Redis project와 key prefix를 만들고 임시 포트를 사용하며, 로그를 `.logs/run-<id>/`에 보존합니다.
-
-HTTP 로비는 같은 mode의 두 요청을 모으며, mode 생략은 `duel`로 처리합니다. `room-`과 소문자 32자 UUID로 Room ID를 만들고, 매칭 명단으로 Room을 준비해 `RoomPrepared`를 받은 뒤 Session endpoint를 반환합니다. Session은 client packet 허용 목록만 중계하고 `PrepareRoom` 같은 내부 packet은 `ActionRejected("packet-not-allowed", 0)`으로 거부합니다. 게임 정수는 `9,007,199,254,740,991` 이하이며, 도메인 시계는 단조 시계이고 relocation snapshot은 timer의 남은 ms를 저장합니다.
-
-`lobby`는 외부인 입장 거부를 매칭 플레이어가 Room에 입장하기 전에 확인하고, 생략한 mode의 `duel` 기본값, client `PrepareRoom` 거부, lobby 재시작 뒤 새 Room ID를 검사합니다. `hit`은 out-of-range·no-target·관측된 cooldown 거부 뒤 상태 불변, 서버의 `RetryAfterMs`만 기다리는 재시도와 승자·phase를 확인합니다. `wall`은 벽 양쪽 사격 거부 뒤 HP·순번 불변과 벽 아래 통로 사격을 확인합니다. `input`은 oversized·stale·벽 통과·관측된 move-budget 거부 뒤 상태 불변과 서버 `RetryAfterMs` 대기를 확인합니다. `reconnect`는 sequence·phase·winner 복원을 확인하고, `update`는 relocation 뒤 game·roster 복원과 교체 process의 새 Room 수락을 확인합니다. `--check-domain`은 게임·HTTP 경계만 실행합니다. 단조 timer의 경계는 domain 검사에서 결정적으로 확인합니다. 배포 시 Session의 READY 출력에서 실제 endpoint를 확인하여 로비 설정에 넣습니다. match node 교체는 drain 완료와 SAFE_TO_SHUTDOWN을 확인한 뒤 shutdown 순서로 수행합니다.
-
-`input`은 이동 요청 두 개와 사격 요청 두 개를 각각 응답 대기 없이 연속 전송한다. 수락 결과와 시간 제한 거부를 모두 확인하고, 거부 뒤 값·순번·쿨다운 불변 및 서버가 준 `RetryAfterMs` 뒤 같은 요청의 수락을 검사한다. 게임 경계는 기준 match-entry-lobby의 게임 범주 9개로 검사하며, 매칭 범주는 HTTP 경계 19개에서 검사한다. `wall`은 벽 반대편 사격 거부와 HP 불변 및 벽 구간 밖 명중을 확인한다.

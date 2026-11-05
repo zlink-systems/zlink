@@ -68,16 +68,3 @@ Start Redis, the lobby, both instance nodes, and then the Session node. Configur
 Each process prints `READY` with actual listener endpoints. Send `drain` on standard input to request planned maintenance. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`; send `shutdown` and require `STOPPED` before replacing the process with the same configuration. Party and Dungeon adapters preserve application state only; Framework owns memberships, routes, leases, queues, and relocation progress.
 
 The first party member is the leader. A party accepts at most four distinct players. The leader may enter only after every member is ready. Dungeon preparation fixes the party roster before travel. Pushes use Actor IDs, and Actor delivery handlers forward the typed payload to the bound Session. `SessionInfo` reads Actor identity from the Session binding rather than game state.
-
-## 한국어 실행 안내
-
-기본 e2e는 runner와 node를 Docker에서 실행합니다. 로컬 process 디버깅에는 JDK 25를 준비하고 `--local` 또는 `-Local`을 지정합니다.
-
-Docker Compose v2를 준비한 뒤 위 Build 명령으로 빌드합니다. `run-e2e.sh` 또는 `run-e2e.ps1`을 실행하면 구조 검사, Redis와 node 기동, 시나리오 실행, 자원 정리를 순서대로 수행합니다. 실행 설정과 로그는 `.logs/run-<id>/`에 보존합니다.
-
-`party`는 준비 여부와 던전 입장을, `reconnect`는 Actor와 게임 상태 유지를, `update`는 instance node의 relocation과 교체를 검증합니다. 기본 실행은 세 시나리오를 모두 수행합니다.
-
-
-Domain extension: change PartyState and DungeonState, add shared typed contracts, update the Session client allowlist and add boundary tests and scenario observations. Integer values are bounded by 9,007,199,254,740,991; rejected inputs leave state unchanged. ActionRejected includes a 32-bit RetryAfterMs, always zero in this structure. No floating-point action input or time restriction is used.
-
-한국어 안내: 이 템플릿의 파티·던전 도메인을 확장하여 MORPG 서버를 만든다. party는 중복 입장·서버 발급 ID·거부 뒤 상태 불변·최종 완료를 관찰한다. reconnect·update는 RunId·Phase·Stage 보존을 검사한다. 도메인 경계 시험은 AGENTS의 확장 절차에 따라 실행한다.

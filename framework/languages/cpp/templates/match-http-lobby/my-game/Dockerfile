@@ -29,7 +29,7 @@ FROM node AS runner
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 WORKDIR /template
 COPY bootstrap.cmake zlink.structure.json docker-compose.yml ./
-COPY README.md AGENTS.md CLAUDE.md CMakeLists.txt CMakePresets.json run-e2e.sh run-e2e.ps1 ./
+COPY README.md AGENTS.md CMakeLists.txt CMakePresets.json run-e2e.sh run-e2e.ps1 ./
 COPY server server
 COPY e2e e2e
 ENTRYPOINT ["/app/bin/my-game-e2e", "--root", "/template"]

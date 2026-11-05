@@ -76,13 +76,3 @@ Wait for the bootstrap owner to report `READY` before starting another match hos
 4. Send `drain` to the match process hosting the room. Wait for RELOCATION_REQUESTED, RELOCATED and SAFE_TO_SHUTDOWN. Send `shutdown`, verify STOPPED and process exit, then start a replacement with the same configuration and wait for READY.
 
 Framework owns Actor identity, Session binding, route and lease state, membership, completion and relocation. Application adapters capture only matchmaking queues/sequence and room combat state. Player has no application state. Extend combat in `RoomState`, matchmaking in `MatchmakingState`, and typed dispatch in `Actions`.
-
-## 한국어 실행 안내
-
-기본 e2e는 runner와 node를 Docker에서 실행합니다. 로컬 process 디버깅에는 JDK 25를 준비하고 `--local` 또는 `-Local`을 지정합니다.
-
-Docker Compose를 준비한 뒤 위의 운영체제별 Build 및 Docker e2e 명령을 실행합니다. runner는 실행마다 Redis key prefix와 Compose project를 새로 만들고, OS가 배정한 포트를 사용합니다. 로그는 `.logs/run-<id>/`에 보존되며 정리 실패도 검증 실패로 처리합니다.
-
-기본 시나리오는 `hit`, `wall`, `input`, `reconnect`, `update` 순서입니다. `hit`은 매칭·명중·사격 거부·승자를, `wall`은 벽의 이동·사격 차단과 끝을 돌아가는 경로를, `input`은 순번·이동·쿨다운 거부와 상태 불변을, `reconnect`는 진행 중·종료 뒤의 순번·phase·winner 복원을, `update`는 relocation과 대체 node 동작을 확인합니다. `./gradlew --no-daemon :server:match:test`는 단조 시계 기준의 domain 경계를 검사합니다.
-
-대기열은 Matchmaking User Spot, 위치·HP·명중·승자 판정은 Room User Spot이 소유합니다. 운영 중 교체할 때는 해당 match process에 `drain`을 보내고 `SAFE_TO_SHUTDOWN`까지 확인한 뒤 `shutdown`으로 종료합니다. 같은 설정으로 대체 process를 시작하고 `READY`를 확인합니다.

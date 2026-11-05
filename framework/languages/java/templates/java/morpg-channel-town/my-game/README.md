@@ -80,11 +80,3 @@ The first party member is the leader. A party accepts at most four distinct play
 All Object Servers that register Player factories also register the shared Entry and first-admission handler, including both Instance nodes. Entry admission joins the requested fixed Town channel. Each Instance declares its dynamic Dungeon factory in `zlink.structure.json`.
 
 The e2e configuration uses one Dungeon slot per Instance. After drain, the surviving Instance is full, so only the replacement can accept the fresh Dungeon. The structure checker enforces this configuration. Message Follow remains 30 seconds; the SafeToShutdown observation budget is derived from that duration plus the existing relocation operation budget.
-
-## 한국어 실행 안내
-
-기본 e2e는 runner와 node를 Docker에서 실행합니다. 로컬 process 디버깅에는 JDK 25를 준비하고 `--local` 또는 `-Local`을 지정합니다.
-
-Docker Compose v2를 준비한 뒤 위 Build 명령으로 빌드합니다. `run-e2e.sh` 또는 `run-e2e.ps1`을 실행하면 구조 검사, Redis와 node 기동, 시나리오 실행, 자원 정리를 순서대로 수행합니다. 실행 설정과 로그는 `.logs/run-<id>/`에 보존합니다.
-
-`channel`은 범위 밖 채널 거부와 Forming 파티의 해체, `dungeon`은 서버 발급 ID·중복 요청·거부 뒤 상태 불변·완료 전이와 다른 채널의 파티 분리를, `reconnect`는 Actor와 RunId·Phase·Stage·명단 유지를, `update`는 instance node 교체와 다른 채널의 새 run 수락을 검증합니다. 도메인 경계는 JUnit test `./gradlew --no-daemon :server:town:test :server:instance:test`로 검사합니다. 기본 실행은 네 시나리오를 모두 수행합니다.
