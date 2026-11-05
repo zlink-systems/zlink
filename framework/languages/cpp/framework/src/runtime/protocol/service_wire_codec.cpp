@@ -12,7 +12,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cassert>
 #include <atomic>
 #include <limits>
 #include <string_view>
@@ -75,14 +74,16 @@ class native_wire_writer_t
     }
     void push_back (std::uint8_t value)
     {
-        assert (_size < _message.size ());
+        if (_size >= _message.size ())
+            throw service_wire_error_t ("native wire writer exceeded allocated size");
         _data[_size++] = value;
     }
     std::uint8_t *end () { return _data + _size; }
     template <typename Iterator> void insert (std::uint8_t *, Iterator first, Iterator last)
     {
         const auto count = static_cast<std::size_t> (std::distance (first, last));
-        assert (_size + count <= _message.size ());
+        if (count > _message.size () - _size)
+            throw service_wire_error_t ("native wire writer exceeded allocated size");
         std::copy (first, last, end ());
         _size += count;
     }
@@ -92,7 +93,8 @@ class native_wire_writer_t
     }
     zlink::message_t take () &&
     {
-        assert (_size == _message.size ());
+        if (_size != _message.size ())
+            throw service_wire_error_t ("native wire writer size mismatch");
         return std::move (_message);
     }
 
@@ -351,6 +353,39 @@ actor_route_fence_t read_actor_route_fence (std::span<const std::uint8_t> bytes,
 }
 
 } // namespace
+
+bool native_wire_writer_bounds_test_access ()
+{
+    const auto rejects = [] (auto &&operation, std::string_view expected) {
+        try {
+            operation ();
+        }
+        catch (const service_wire_error_t &error) {
+            return std::string_view (error.what ()) == expected;
+        }
+        return false;
+    };
+
+    const bool push_back_rejected = rejects (
+      [] {
+          native_wire_writer_t writer (0);
+          writer.push_back (0);
+      },
+      "native wire writer exceeded allocated size");
+    const bool insert_rejected = rejects (
+      [] {
+          native_wire_writer_t writer (1);
+          writer.insert (writer.end (), {0, 1});
+      },
+      "native wire writer exceeded allocated size");
+    const bool take_rejected = rejects (
+      [] {
+          native_wire_writer_t writer (1);
+          (void) std::move (writer).take ();
+      },
+      "native wire writer size mismatch");
+    return push_back_rejected && insert_rejected && take_rejected;
+}
 
 std::vector<std::uint8_t>
 encode_session_disconnected (const session_disconnected_identity_t &identity)
@@ -2356,10 +2391,10 @@ frozen_record_t decode_frozen_record_prefix (std::span<const std::uint8_t> bytes
     if (requires_reply)
         result.reply_route_id = read_nonzero_u64 (reply, reply_offset, "reply route ID");
     require_end (reply, reply_offset, "frozen reply route");
-    const auto body = read_frozen_body (bytes, offset, result.kind, capture_flow);
+    auto body = read_frozen_body (bytes, offset, result.kind, capture_flow);
     validate_operation_matrix (result, body);
     result.target = body.target;
-    result.application = body.application;
+    result.application = std::move (body.application);
     result.canonical_bytes.assign (bytes.begin (),
                                    bytes.begin () + static_cast<std::ptrdiff_t> (offset));
     consumed = offset;
@@ -2386,7 +2421,7 @@ std::vector<std::uint8_t> encode_frozen_record (const frozen_record_t &record)
     return record.canonical_bytes;
 }
 
-frozen_record_t build_frozen_application_record (const frozen_application_record_t &record,
+frozen_record_t build_frozen_application_record (frozen_application_record_t record,
                                                  bool include_canonical)
 {
     const auto kind = static_cast<std::uint8_t> (record.kind);
@@ -2454,37 +2489,36 @@ frozen_record_t build_frozen_application_record (const frozen_application_record
     result.operation_kind = record.operation_kind;
     result.reply_route_id = record.reply_route_id;
     if (spot) {
-        const auto &body = std::get<frozen_spot_application_body_t> (record.body);
+        auto &body = std::get<frozen_spot_application_body_t> (record.body);
         result.target = frozen_target_identity_t{
           relocation_object_kind_t::user_spot, body.target.spot_id,
           body.target.object_generation,       body.target.target_node_routing_id,
           body.target.target_node_generation,  body.target.authority_owner_generation,
           body.expected_owner_lease_generation};
-        result.application = body.application;
+        result.application = std::move (body.application);
     } else {
-        const auto &body = std::get<frozen_actor_application_body_t> (record.body);
+        auto &body = std::get<frozen_actor_application_body_t> (record.body);
         result.target = frozen_target_identity_t{
           relocation_object_kind_t::actor,    body.target.actor_id,
           body.target.object_generation,      body.target.target_node_routing_id,
           body.target.target_node_generation, body.target.authority_owner_generation,
           body.target.owner_lease_generation};
-        result.application = body.application;
+        result.application = std::move (body.application);
     }
-    const frozen_body_validation_t body{std::nullopt, result.target, result.application};
-    validate_operation_matrix (result, body);
+    validate_operation_matrix (result, {});
     if (include_canonical)
         result.canonical_bytes = std::move (bytes);
     return result;
 }
 
-frozen_record_t encode_frozen_application_record (const frozen_application_record_t &record)
+frozen_record_t encode_frozen_application_record (frozen_application_record_t record)
 {
-    return build_frozen_application_record (record, true);
+    return build_frozen_application_record (std::move (record), true);
 }
 
-frozen_record_t summarize_frozen_application_record (const frozen_application_record_t &record)
+frozen_record_t summarize_frozen_application_record (frozen_application_record_t record)
 {
-    return build_frozen_application_record (record, false);
+    return build_frozen_application_record (std::move (record), false);
 }
 
 std::vector<std::uint8_t>

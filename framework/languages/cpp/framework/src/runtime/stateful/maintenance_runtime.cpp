@@ -546,18 +546,26 @@ bool maintenance_runtime_t::register_terminal_source (
     const auto dispatch = _relocation_dispatch ? _relocation_dispatch () : nullptr;
     if (!_relocation_wire || !dispatch)
         return true;
-    const auto record = turn.application_record
-                          ? protocol::summarize_frozen_application_record (*turn.application_record)
-                        : turn.frozen_record ? *turn.frozen_record
-                                             : protocol::decode_frozen_record (turn.payload);
-    if (!record.application || !record.reply_route_id)
+    std::optional<protocol::frozen_record_t> decoded_record;
+    const protocol::frozen_record_t *record = nullptr;
+    if (turn.application_record) {
+        decoded_record.emplace (
+          protocol::summarize_frozen_application_record (*turn.application_record));
+        record = &*decoded_record;
+    } else if (turn.frozen_record) {
+        record = &*turn.frozen_record;
+    } else {
+        decoded_record.emplace (protocol::decode_frozen_record (turn.payload));
+        record = &*decoded_record;
+    }
+    if (!record->application || !record->reply_route_id)
         return true;
-    if (!_relocation_wire->owns_request_source (record.source))
+    if (!_relocation_wire->owns_request_source (record->source))
         return true;
     auto terminal = terminal_identity (context.relocation, context.target_attempt_generation,
-                                       context.coordinator, participant_id, record);
+                                       context.coordinator, participant_id, *record);
     return _relocation_wire->register_terminal_source (
-      {terminal.relocation, std::move (terminal.coordinator), terminal.operation, record.source,
+      {terminal.relocation, std::move (terminal.coordinator), terminal.operation, record->source,
        context.target_node_routing_id, context.target_node_generation,
        terminal.target_attempt_generation, terminal.participant_id, terminal.sequence,
        terminal.reply_route_id,

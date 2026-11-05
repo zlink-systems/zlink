@@ -30,6 +30,11 @@ namespace protocol = zlink::framework::runtime::protocol;
 namespace mesh = zlink::framework::runtime::mesh;
 namespace messaging = zlink::framework::runtime::messaging;
 
+namespace zlink::framework::runtime::protocol
+{
+bool native_wire_writer_bounds_test_access ();
+}
+
 static_assert (
   !std::is_same_v<zlink::framework::runtime::call_id_t, protocol::wire_operation_id_t>);
 static_assert (
@@ -785,6 +790,7 @@ void verify_session_owner_identity_contract ()
 
 int main (int argc, char **argv)
 {
+    assert (protocol::native_wire_writer_bounds_test_access ());
     const auto command_golden = [] (const char *path, std::uint8_t command) {
         const auto fixture = load_fixture (path);
         const auto &canonical = fixture.at ("canonical");

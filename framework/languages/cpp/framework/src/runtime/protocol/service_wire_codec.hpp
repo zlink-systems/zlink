@@ -990,11 +990,11 @@ relocation_control_t decode_relocation_control (std::span<const std::uint8_t> by
  * Shared checksum for relocation payload manifests and cutover boundaries. */
 std::uint32_t relocation_checksum_crc32c (std::span<const std::uint8_t> payload) noexcept;
 std::vector<std::uint8_t> encode_frozen_record (const frozen_record_t &record);
-frozen_record_t encode_frozen_application_record (const frozen_application_record_t &record);
+frozen_record_t encode_frozen_application_record (frozen_application_record_t record);
 // Builds the validated frozen summary without allocating canonical relocation
 // bytes. The relocation owner encodes those bytes only when a snapshot is
 // actually retained or transmitted.
-frozen_record_t summarize_frozen_application_record (const frozen_application_record_t &record);
+frozen_record_t summarize_frozen_application_record (frozen_application_record_t record);
 /* capture_flow=false (flow-correlation §4): embedded application payload
  * flow pairs are skipped structurally instead of validated/materialized. */
 frozen_record_t decode_frozen_record (std::span<const std::uint8_t> bytes,

@@ -486,11 +486,11 @@ raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
                                            std::chrono::milliseconds window,
                                            std::optional<std::uint64_t> target_authority_generation)
 {
-    auto application = turn.application_record
-                         ? protocol::summarize_frozen_application_record (*turn.application_record)
-                       : turn.frozen_record
-                         ? *turn.frozen_record
-                         : protocol::decode_frozen_record (turn.payload, capture_flow ());
+    auto application =
+      turn.application_record
+        ? protocol::summarize_frozen_application_record (std::move (*turn.application_record))
+      : turn.frozen_record ? std::move (*turn.frozen_record)
+                           : protocol::decode_frozen_record (turn.payload, capture_flow ());
     if (!application.application)
         co_return false;
     const auto sequence = turn.sequence;
@@ -737,17 +737,17 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
                 accepted_target.owner_lease_generation =
                   accepted_authority->target_owner_lease_generation;
                 actor_header->target = std::move (accepted_target);
-                frozen =
-                  accepted_actor_record (*actor_header, accepted_authority->source, payload,
-                                         *application_command == protocol::command::actorRequest);
+                frozen = accepted_actor_record (
+                  *actor_header, accepted_authority->source, std::move (payload),
+                  *application_command == protocol::command::actorRequest);
             } else {
                 auto accepted_target = spot_header->target;
                 accepted_target.owner_lease_generation =
                   accepted_authority->target_owner_lease_generation;
                 spot_header->target = std::move (accepted_target);
-                frozen =
-                  accepted_spot_record (*spot_header, accepted_authority->source, payload,
-                                        *application_command == protocol::command::spotRequest);
+                frozen = accepted_spot_record (
+                  *spot_header, accepted_authority->source, std::move (payload),
+                  *application_command == protocol::command::spotRequest);
             }
         }
         catch (const protocol::service_wire_error_t &) {

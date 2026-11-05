@@ -441,7 +441,7 @@ using actor_join_operation_target_completion_t =
 
 using actor_join_operation_target_t =
   std::function<void (const protocol::actor_join_request_t &,
-                      const std::optional<protocol::application_payload_t> &,
+                      std::optional<protocol::application_payload_t>,
                       actor_join_operation_target_completion_t)>;
 
 using user_spot_close_completion_t =
