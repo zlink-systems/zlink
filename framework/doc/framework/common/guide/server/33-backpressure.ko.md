@@ -427,6 +427,7 @@ gauge를 유지하고 peak를 current로 재기준화하며 현재 epoch의 coun
 
 | 증상 | 원인과 확인할 것 |
 | --- | --- |
+| 흐름 제어 신호(FLOWSTATE)를 쉬지 않고 보내면 `DONTWAIT` 일반 송신이 `BACKPRESSURED`될 수 있다 | 흐름 제어 frame은 HWM admission을 우회하지만 같은 socket의 일반 송신과 byte 장부를 공유한다. 흐름 제어 신호는 송신 진행에 맞춰 보낸다 ([ZMP §4.1](../../../../../../core/doc/spec/core/protocol/01-zmp.en.md#41-request-reply-lane)). |
 | Classic fanout publish가 `DeadlineExceeded`로 끝난다 | 보낼 자리가 끝까지 생기지 않았다. 상한을 올리기 전에 받는 쪽의 Core `blocked_ratio`, Application job queue waiter와 handler 실행 시간을 확인한다. |
 | Core 보유 byte는 낮은데 수신이 기다린다 | Application job queue의 처리 자리가 찼을 수 있다. `reserved`, `queued`, `in_use`와 capacity waiter를 확인한다. |
 | Application job queue의 `queued`가 낮은데 상한에 닿는다 | receive 직전에 확보한 `reserved` 자리도 `in_use`에 포함한다. Manual 상한은 `reserved + queued` 기준으로 정한다. |

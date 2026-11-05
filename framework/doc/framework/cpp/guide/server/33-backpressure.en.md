@@ -383,6 +383,7 @@ settings and status/reset semantics.
 
 | Symptom | Cause and what to inspect |
 | --- | --- |
+| Continuously sending flow-control signals (FLOWSTATE) can leave ordinary `DONTWAIT` sends `BACKPRESSURED` | Flow-control frames bypass HWM admission but share the socket's byte accounting with ordinary sends. Send flow-control signals in step with send progress ([ZMP §4.1](../../../../../../core/doc/spec/core/protocol/01-zmp.en.md#41-request-reply-lane)). |
 | Classic fanout publish ends in `DeadlineExceeded` | A send slot never opened up. Before raising the ceiling, inspect the receiver's Core `blocked_ratio`, application job queue waiters, and handler execution time. |
 | Core-accounted bytes are low, but receiving waits | Application job queue permits may be full. Inspect `reserved`, `queued`, `in_use`, and capacity waiters. |
 | Application job queue `queued` is low, but the limit is reached | `in_use` also counts the short pre-receive `reserved` permits. Size a manual limit from `reserved + queued`. |
