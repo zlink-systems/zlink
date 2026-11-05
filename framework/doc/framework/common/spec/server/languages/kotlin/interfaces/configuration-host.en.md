@@ -87,8 +87,6 @@ public interface systems.zlink.framework.locations.ZLinkLocationOptions {
  public abstract void setOwnerLeaseRenewInterval(java.time.Duration);
  public abstract java.time.Duration ownerLeaseTtl();
  public abstract void setOwnerLeaseTtl(java.time.Duration);
- public abstract boolean storeOutageRetention();
- public abstract void setStoreOutageRetention(boolean);
  public abstract java.time.Duration pollingInterval();
  public abstract void setPollingInterval(java.time.Duration);
  public abstract java.time.Duration storeFailureGrace();
@@ -133,10 +131,6 @@ public interface systems.zlink.framework.configuration.ZLinkStreamSocketConfig {
  public abstract void setMaxMessageSize(long);
 }
 ```
-
-`ownerLeaseTtl` defaults to 30 seconds. `storeOutageRetention` is a startup-only bool option, default `false`.
-Retention eligibility, the admission bound when `false`, and domain-wide identical settings follow
-[Location runtime §5.1](../../../05-location-relocation/01-location-runtime.en.md#51-retention-and-rejoining-after-a-short-outage).
 
 Core HWM and application-job-queue configuration is obtained directly
 from `options.configureInboundDispatch()`, which returns

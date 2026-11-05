@@ -98,8 +98,6 @@ public interface ZLinkLocationOptions {
  void setOwnerLeaseRenewInterval(Duration value);
  Duration ownerLeaseTtl();
  void setOwnerLeaseTtl(Duration value);
- boolean storeOutageRetention();
- void setStoreOutageRetention(boolean value);
  Duration pollingInterval();
  void setPollingInterval(Duration value);
  Duration storeFailureGrace();
@@ -255,10 +253,6 @@ public interface FanoutChannelBuilder {
  FanoutChannelBuilder addHandlerGroup(String groupName);
 }
 ```
-
-`ownerLeaseTtl` defaults to 30 seconds. `storeOutageRetention` is a startup-only bool option, default `false`.
-Retention eligibility, the admission bound when `false`, and domain-wide identical settings follow
-[Location runtime §5.1](../../../05-location-relocation/01-location-runtime.en.md#51-retention-and-rejoining-after-a-short-outage).
 
 The `coreHwmMemoryLimitBytes`, `coreHwmBudgetBytes`, and `coreHwmProfile` members of the
 `ZLinkInboundDispatchOptions` returned by `configureInboundDispatch()` are forwarded to Core. Core and job-queue profiles are independent enums, both defaulting to `BALANCED`.
@@ -670,8 +664,6 @@ public interface systems.zlink.framework.locations.ZLinkLocationOptions {
  public abstract void setOwnerLeaseRenewInterval(java.time.Duration);
  public abstract java.time.Duration ownerLeaseTtl();
  public abstract void setOwnerLeaseTtl(java.time.Duration);
- public abstract boolean storeOutageRetention();
- public abstract void setStoreOutageRetention(boolean);
  public abstract java.time.Duration pollingInterval();
  public abstract void setPollingInterval(java.time.Duration);
  public abstract java.time.Duration storeFailureGrace();
