@@ -158,7 +158,6 @@ export interface ZLinkNestFrameworkAdditionalOptions {
 export interface ZLinkLocationOptions {
  ownerLeaseRenewIntervalMs(value: number): this;
  ownerLeaseTtlMs(value: number): this;
- storeOutageRetention(value: boolean): this;
  pollingIntervalMs(value: number): this;
  storeFailureGraceMs(value: number): this;
  ownerLeaseFencingMarginMs(value: number): this;
@@ -217,10 +216,6 @@ export type ZLinkNestProviderDiscoveryRoot = string | {
  readonly options?: ZLinkNestProviderDiscoveryOptions;
 };
 ```
-
-`ownerLeaseTtlMs` defaults to 30 seconds (`30000` ms). `storeOutageRetention` is a startup-only bool option, default `false`.
-Retention eligibility, the admission bound when `false`, and domain-wide identical settings follow
-[Location runtime §5.1](../../../05-location-relocation/01-location-runtime.en.md#51-retention-and-rejoining-after-a-short-outage).
 
 `disableImplicitHandlerAutoRegistration()` disables the scan that turns Nest provider metadata and
 role-root discoveries into handler registrations for the module built by this builder. Automatic

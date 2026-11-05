@@ -25,8 +25,7 @@ namespace zlink::framework {
 
 struct location_options_t {
     std::chrono::milliseconds owner_lease_renew_interval{5000};
-    std::chrono::milliseconds owner_lease_ttl{30000};
-    bool store_outage_retention{false};
+    std::chrono::milliseconds owner_lease_ttl{15000};
     std::chrono::milliseconds polling_interval{1000};
     std::chrono::milliseconds store_failure_grace{30000};
     std::chrono::milliseconds owner_lease_fencing_margin{5000};
@@ -42,10 +41,6 @@ struct location_options_t {
 
 } // namespace zlink::framework
 ```
-
-`owner_lease_ttl` 기본값은 30초다. `store_outage_retention`은 startup-only bool option이며 기본값은 `false`다.
-보존 활성 조건·`false`의 admission 한도·domain 동일 설정 요구는
-[Location runtime §5.1](../../../05-location-relocation/01-location-runtime.ko.md#51-짧은-장애의-보존과-재참여)을 따른다.
 
 Store 등록 member는 [Configuration과 host](02-configuration-host.ko.md)의
 `zlink_framework_options_t`가 소유한다. Application은 기존 `add_location_store(...)`와

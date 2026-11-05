@@ -528,7 +528,6 @@ export declare function ZLinkHandlerGroup(groupName: string): ClassDecorator;
 export interface ZLinkLocationOptionValues {
  readonly ownerLeaseRenewIntervalMs: number;
  readonly ownerLeaseTtlMs: number;
- readonly storeOutageRetention: boolean;
  readonly pollingIntervalMs: number;
  readonly storeFailureGraceMs: number;
  readonly ownerLeaseFencingMarginMs: number;
@@ -570,10 +569,6 @@ export interface ZLinkInboundDispatchOptions {
 }
 
 ```
-
-`ownerLeaseTtlMs` defaults to 30 seconds (`30000` ms). `storeOutageRetention` is a startup-only bool option, default `false`.
-Retention eligibility, the admission bound when `false`, and domain-wide identical settings follow
-[Location runtime §5.1](../../../05-location-relocation/01-location-runtime.en.md#51-retention-and-rejoining-after-a-short-outage).
 
 The four diagnostic levels respectively mean disabled diagnostics, errors
 only, key transitions, and detailed diagnostics. The startup diagnostics level
