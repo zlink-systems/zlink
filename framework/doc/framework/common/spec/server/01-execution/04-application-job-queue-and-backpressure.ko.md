@@ -117,10 +117,12 @@ Ordinary ingress는 다음 순서를 지킨다.
 2. Permit을 얻은 뒤에만 Core·binding에서 record를 receive·claim한다.
 3. Application record는 permit을 owner mailbox나 serial queue의 handler turn으로 이전한다.
 4. Control 또는 malformed ordinary record는 유한한 내부 처리를 마친 뒤 permit을 반환한다.
-5. 각 job은 자신을 실행하는 callback handler가 시작되기 직전에 queue에서 빠지고 permit을
-   반환한다. 그 handler가 Node handler인지 Spot·Actor handler인지는 job마다 다르지만 반환
-   시점은 하나다 — 자기 handler의 첫 instruction 직전이다. 유입 종류에 따라 다른 시점을
-   두지 않는다.
+5. 각 job은 자신을 실행하는 callback handler의 실제 첫 instruction 직전까지 Application
+   job queue의 permit을 보유하고 queued job으로 센다. Worker가 owner queue에서 record를
+   먼저 꺼내더라도 이 계산과 permit 소유권은 바뀌지 않는다. Callback 전에 terminal로
+   끝나면 그 정리 과정에서 permit을 정확히 한 번 반환한다. 그 밖에는 callback handler의
+   실제 첫 instruction 직전에 반환한다. Node·Spot·Actor handler와 유입 종류에 따라 다른
+   반환 시점을 두지 않는다.
 
 ```mermaid
 sequenceDiagram
@@ -186,16 +188,40 @@ supply가 아니다. 이 control record는 application data line에 남아 기�
 
 ### 준비된 owner 집합 (구현)
 
-Record가 permit을 얻어 owner queue로 들어가려면, 그 owner에 지금 처리할 일이 있다는 사실을
-실행 자원이 알아야 한다.
+Permit을 얻어 owner queue에 들어온 record의 실행 가능 여부는 준비된 owner 집합으로
+나타낸다. 같은 owner는 집합에 한 번만 들어 있다.
 
-- **지금 처리할 일이 있는 owner를 상태로 유지한다.** 이 상태는 "무엇이 바뀌었다"는 1회성
-  알림이 아니라 "지금 이 상태다"를 나타내며, 같은 owner가 중복해서 들어가지 않는다. 알림이
-  유실돼도 처리할 일이 남은 owner는 결국 처리돼야 하므로, 깨어난 실행 자원은 언제나 이
-  상태를 다시 확인한다.
+Gate가 없는 Node·ChannelName owner는 아직 worker가 꺼내지 않은 실행 가능한 record가
+남아 있는 동안 집합에 남는다. 이미 다른 worker가 그 owner의 handler를 실행 중이라는
+이유로 제외하지 않는다. Record를 꺼낼 때는 queue head의 record 하나를 한 worker에만
+넘기고, 남은 record에 맞게 집합의 membership을 갱신한다. Enqueue, 마지막 record를 꺼낼
+때의 제거, 새 record가 들어올 때의 재등록은 같은 scheduling 상태 소유자가 하나의 순서로
+확정한다. Queue head의 record 선택은 그 owner를 독점할 권한을 주지 않는다. Gate가 있는
+owner의 실행 가능 여부는 기존 gate·claim 규칙을 따른다.
 
-내부 확인 조건 — 알림이 유실되어도 깨어난 실행 자원이 준비된 owner 집합을 다시 확인해 missed
-wakeup이 없다는 것은 이 상태 관리의 white-box 불변 조건이다.
+Worker는 대기 알림을 받을 수 있는 상태로 등록한 뒤 ready 집합을 다시 확인하고, 처리할
+일이 없을 때만 실제로 기다린다. Ready 상태의 게시와 대기 전환은 게시자가 대기 worker를
+확인하거나 대기하려는 worker가 게시된 작업을 확인하도록 조정한다. 깨어난 worker도 집합을
+다시 확인한다. 일시적인 알림의 유실이나 게시와 대기의 경쟁 때문에 실행 가능한 작업을
+남긴 채 사용 가능한 모든 worker가 계속 대기하는 상태가 되어서는 안 된다.
+
+Ready 작업의 최초 실행을 예약할 때는 record 하나만 있어도 대기 worker를 깨울 수 있다.
+Gate가 없는 owner를 추가 worker에 배정할 때는 아직 꺼내지 않은 record가 남아 있고,
+application 실행에 사용할 수 있으며 아직 깨우기나 실행이 예약되지 않은 idle worker가
+있어야 한다. 이 조건은 작업 게시와 worker가 idle이 되는 경계에서 확인한다. 이미
+예약되었거나 실행 중인 worker에 같은 깨우기를 반복하지 않는다. 알림은 게시한 작업 묶음과
+worker 가용 상태에 따라 합치며, 각 record의 enqueue나 take를 이유로 무조건 알리지 않는다.
+수신 역할을 맡았거나 그 역할에 예약된 자원은 idle application worker로 세지 않는다.
+
+이 판정은 기존 scheduler 상태 관리 안에서 끝내고, 알림은 그 상태 변경 구간을 벗어난 뒤
+전달한다. Handler와 filter를 그 상태 변경 구간 안에서 호출하지 않는다. 별도 record별
+notification queue나 dispatch task를 만들지 않는다.
+
+내부 확인 조건 — record별 실행 소유권이 중복되지 않고, runnable record가 남은 gate 없는
+owner의 ready 등록에 누락·중복이 없으며, enqueue와 마지막 take의 경쟁 및 ready 게시와
+worker 대기 전환의 경쟁에서 작업이 누락되지 않는지 확인한다. 추가 worker 알림은 위의
+가용 조건을 만족하고 이미 예약된 worker에 중복되지 않아야 한다. 이 조건들은 scheduling
+상태 관리의 white-box 불변 조건이다.
 
 ### 넣을지 판단하는 것과 넣는 것을 쪼개지 않는다 (구현)
 
@@ -212,8 +238,8 @@ node에 있는지, 자리가 있는지, 이동으로 봉인되지 않았는지.
 2. 대상 객체가 이 node에 있고 owner 정보가 유효한가
 3. 이동 봉인·생성 대기·session 연결 대기 중이 아닌가
 4. 수락 순서를 나타내는 sequence를 확정하고 owner queue 뒤에 넣는다
-5. 비어 있던 queue가 채워졌으면 준비된 owner 집합에 그 owner를 넣고 실행 자원에 즉시
-   알린다
+5. 비어 있던 queue가 채워졌으면 그 owner의 ready 상태를 게시하고, 이 절의 준비된 owner
+   집합 규칙에 따라 즉시 실행 예약을 요청한다. 실제 알림은 commit 구간을 벗어난 뒤 전달한다.
 
 - **확인에 실패한 message는 대기열에 나타나지 않는다.** 일단 넣었다가 빼는 방식으로 만들지
   않는다 — 넣었다 빼면 그 사이에 실행될 수 있고, 뺐다는 사실을 관측에서 구분할 수도 없다.
