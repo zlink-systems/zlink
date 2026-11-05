@@ -1,6 +1,11 @@
 {
   global:
     main;
+    # Keep replacement allocation pairs visible to shared libraries and sanitizers.
+    _Znw*;
+    _Zna*;
+    _Zdl*;
+    _Zda*;
   local:
     *;
 };
