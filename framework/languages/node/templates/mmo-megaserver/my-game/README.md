@@ -13,7 +13,7 @@ flowchart LR
 
 ## Prerequisites
 
-Docker Compose v2, and PowerShell 7 for the PowerShell runner. Framework packages are pinned to 0.30.3 in `package.json`. The binding package installs its published native runtime. Configuration defaults bind listeners to port zero.
+Docker Compose v2, and PowerShell 7 for the PowerShell runner. Framework packages are pinned to 0.32.0 in `package.json`. The binding package installs its published native runtime. Configuration defaults bind listeners to port zero.
 
 ## Build
 
@@ -63,7 +63,7 @@ Each scenario uses an isolated Compose project, Redis prefix and `.logs/run-<id>
 
 ## Known issues
 
-Validated against the published Framework 0.30.3 packages.
+Validated against the published Framework 0.32.0 packages.
 
 Node typed handler forwarding requires the packet-name-to-class table in `server/region/infrastructure/zlink/handlers.ts` until #1731 is fixed in 0.32.0. No Framework state is included in application relocation snapshots.
 

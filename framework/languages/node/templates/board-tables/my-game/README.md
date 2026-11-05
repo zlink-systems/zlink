@@ -11,12 +11,12 @@ flowchart LR
 
 ## Prerequisites
 
-- Local process debugging: Node.js 22 or later with npm. The supported range of public binding 1.20.0 is `>=22`.
+- Local process debugging: Node.js 22 or later with npm. The supported range of public binding 1.23.0 is `>=22`.
 - Docker Engine with Docker Compose v2, reachable from the current shell.
 - PowerShell 7 on Windows; Bash on Linux and WSL.
 - A Windows x64 or Linux x64 environment supported by the published native binding.
 
-The Framework package is pinned to `0.30.3` and the binding to `1.20.0`. Copy only this directory and install from the public npm registry.
+The Framework package is pinned to `0.32.0` and the binding to `1.23.0`. Copy only this directory and install from the public npm registry.
 
 ## Build
 
@@ -72,7 +72,7 @@ To check only the structure, run `./run-e2e.sh --check-structure` or `pwsh -NoPr
 
 ## Known issues
 
-Validated against the published Framework 0.30.3 packages.
+Validated against the published Framework 0.32.0 packages.
 
 Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is that period plus the existing relocation budget. Update waits for replacement `READY`, then asserts that the replacement hosts the new table and completes a hand.
 

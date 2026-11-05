@@ -20,7 +20,7 @@ Default execution requires Docker Linux containers; no host .NET SDK is needed.
 - Bash on Linux or WSL, or PowerShell 7 on Windows.
 - An operating system and architecture supported by the published Zlink native package.
 
-`Directory.Packages.props` pins the Zlink.Framework package family and the STREAM connector to `0.31.0`. `nuget.config` uses nuget.org only. This directory can be copied and built independently.
+`Directory.Packages.props` pins the Zlink.Framework package family and the STREAM connector to `0.32.0`. `nuget.config` uses nuget.org only. This directory can be copied and built independently.
 
 ## Build
 
@@ -136,6 +136,6 @@ Node stderr records the message flow from the dispatch diagnostics `Normal` logg
 
 ## Known issues in the public package
 
-Validated against the published Framework 0.31.0 packages.
+Validated against the published Framework 0.32.0 packages.
 
 The e2e runner sets each node's optional `TableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry declarations describe the application Entry on Table nodes only; there are no fixed User Spots in this template.
