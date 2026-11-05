@@ -900,6 +900,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                                actor_transfer_token_t &token,
                                                actor_transfer_prepare_result_t &result);
     bool reply (const reply_token_t &token, const std::vector<zlink::message_t> &parts);
+    bool reply (const reply_token_t &token, std::vector<zlink::message_t> &&parts);
 
     static actor_ref_t remote_actor_ref (const zlink::routing_id_t &node,
                                          std::string actor_id,
@@ -925,6 +926,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                     mesh::service_mailbox_t::application_dispatch_t resume = {});
 
   private:
+    template <typename Parts> bool reply_parts (const reply_token_t &token, Parts &&parts);
     mesh::service_node_descriptor_t
     expected_peer_descriptor (const std::string &endpoint,
                               const zlink::routing_id_t &expected,
@@ -1435,6 +1437,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
 
 zlink::submit_result_t reply (const reply_token_t &token,
                               const std::vector<zlink::message_t> &parts);
+zlink::submit_result_t reply (const reply_token_t &token, std::vector<zlink::message_t> &&parts);
 bool actor_join_reply (const reply_token_t &token,
                        result_t<actor_join_result_t> result,
                        const std::vector<zlink::message_t> &parts);

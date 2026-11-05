@@ -220,6 +220,11 @@ inline zlink::message_t materialize_binding_part (raw_bytes_t bytes)
     return message;
 }
 
+inline zlink::message_t materialize_binding_part (zlink::message_t message)
+{
+    return message;
+}
+
 inline std::vector<zlink::message_t> materialize_binding_parts (raw_message_t parts)
 {
     std::vector<zlink::message_t> result;

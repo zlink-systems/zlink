@@ -525,7 +525,10 @@ static void test_application_payload_wire_bytes ()
                     assert (owned_parts.empty ());
                     assert (moved_parts.parts ()->front ().data () == owned_storage);
                     const auto retained_copy = native;
-                    assert (retained_copy.parts () == native.parts ());
+                    assert (retained_copy.parts () != native.parts ());
+                    if (size >= 1024)
+                        assert (retained_copy.parts ()->back ().data ()
+                                == native.parts ()->back ().data ());
                     assert (native == retained_copy);
                     assert (native == payload && payload == native);
                     auto separate_parts =
@@ -570,6 +573,92 @@ static void test_application_payload_wire_bytes ()
     }
 }
 
+static void test_native_service_headers ()
+{
+    const protocol::application_payload_t inline_payload{"p", "c", {}};
+    const auto inline_wire = from_hex ("01000000080170016300000000");
+    assert (protocol::encode_application_payload (inline_payload) == inline_wire);
+    assert (protocol::encode_application_payload_message (inline_payload).to_bytes ()
+            == inline_wire);
+
+    for (const auto correlation : {std::uint64_t{1}, UINT64_MAX}) {
+        assert (protocol::encode_channel_request_header_message (correlation, "alpha").to_bytes ()
+                == protocol::encode_channel_request_header (correlation, "alpha"));
+        assert (protocol::encode_channel_send_header_message ("alpha").to_bytes ()
+                == protocol::encode_channel_send_header ("alpha"));
+        const protocol::spot_route_fence_t spot{"spot", 3, {'n'}, 5, 7, 8};
+        const protocol::actor_route_fence_t actor{"actor", 3, {'n'}, 5, 7, 8};
+        for (const bool request : {false, true}) {
+            const std::optional<std::uint64_t> reply_route =
+              request ? std::make_optional (correlation) : std::nullopt;
+            const auto spot_kind =
+              request ? protocol::command::spotRequest : protocol::command::spotSend;
+            const auto actor_kind =
+              request ? protocol::command::actorRequest : protocol::command::actorSend;
+            assert (protocol::encode_spot_message_header_message (spot_kind, "source", spot,
+                                                                  {9, 10}, reply_route)
+                      .to_bytes ()
+                    == protocol::encode_spot_message_header (spot_kind, "source", spot, {9, 10},
+                                                             reply_route));
+            for (const bool has_source : {false, true}) {
+                const std::optional<std::pair<std::string, std::uint64_t>> source =
+                  has_source
+                    ? std::make_optional (std::pair<std::string, std::uint64_t>{"source", 1})
+                    : std::nullopt;
+                for (const bool bound : {false, true}) {
+                    const std::optional<protocol::actor_message_header_t::bound_session_source_t>
+                      session =
+                        bound
+                          ? std::make_optional (
+                              protocol::actor_message_header_t::bound_session_source_t{{'s'}, 2, 3})
+                          : std::nullopt;
+                    assert (protocol::encode_actor_message_header_message (
+                              actor_kind, source, actor, {9, 10}, reply_route, 0, session)
+                              .to_bytes ()
+                            == protocol::encode_actor_message_header (
+                              actor_kind, source, actor, {9, 10}, reply_route, 0, session));
+                }
+            }
+        }
+        assert (protocol::encode_bound_session_send_message ({actor, 1}).to_bytes ()
+                == protocol::encode_bound_session_send ({actor, 1}));
+    }
+    bool rejected = false;
+    try {
+        (void) protocol::encode_node_request_header_message (0);
+    }
+    catch (const protocol::service_wire_error_t &) {
+        rejected = true;
+    }
+    assert (rejected);
+}
+
+// Existing codec accessors expose both container and native payload identity.
+static void test_moved_multipart_ownership ()
+{
+    protocol::application_payload_t::multipart_t parts;
+    parts.push_back (zlink::message_t::from (std::vector<std::uint8_t> (1024, 0xa5)));
+    parts.push_back (zlink::message_t::from (std::vector<std::uint8_t> (2048, 0x5a)));
+    const auto *items = parts.data ();
+    const auto *first = parts[0].data ();
+    const auto *second = parts[1].data ();
+    const auto first_refs = parts[0].ref_count ();
+    auto payload = protocol::application_payload_t::from_parts (std::move (parts));
+    assert (parts.empty ());
+    assert (payload.parts ()->data () == items);
+    assert ((*payload.parts ())[0].data () == first);
+    assert ((*payload.parts ())[1].data () == second);
+    assert ((*payload.parts ())[0].ref_count () == first_refs);
+    // A retained payload has its own list and shares only the binding storage.
+    // A shared multipart wrapper fails this assertion.
+    auto retained = payload;
+    assert (retained.parts () != payload.parts ());
+    assert (retained.parts ()->data () != items);
+    assert ((*retained.parts ())[0].data () == first);
+    payload = {};
+    assert ((*retained.parts ())[0].to_bytes () == std::vector<std::uint8_t> (1024, 0xa5));
+}
+
 // Round 3 baseline: retain an in-flight multipart payload after its source
 // messages have gone away, and compare every byte with the original wire
 // layout. Include empty parts and both small-message and heap storage sizes.
@@ -600,6 +689,27 @@ static void test_retained_multipart_wire_bytes ()
             std::vector<std::uint8_t> expected{1};
             put_u32 (expected, frozen_body.size ());
             expected.insert (expected.end (), frozen_body.begin (), frozen_body.end ());
+            const auto request = protocol::encode_node_request_header (0x0102030405060708);
+            const auto reply = protocol::encode_reply_header (0x0102030405060708, 0, 0);
+            const auto send = protocol::encode_node_send_header ();
+            assert (request == from_hex ("5a4d0111000102030405060708"));
+            assert (reply == from_hex ("5a4d01140001020304050607080000000000000000"));
+            assert (send == from_hex ("5a4d011000"));
+            assert (protocol::encode_node_request_header_message (0x0102030405060708).to_bytes ()
+                    == request);
+            assert (protocol::encode_reply_header_message (0x0102030405060708, 0, 0).to_bytes ()
+                    == reply);
+            assert (protocol::encode_node_send_header_message ().to_bytes () == send);
+            const auto native_payload = protocol::encode_application_payload_message (retained);
+            assert (native_payload.to_bytes () == expected);
+            for (const auto &head : {request, reply, send}) {
+                const std::vector<std::vector<std::uint8_t>> expected_wire{head, expected};
+                std::vector<std::vector<std::uint8_t>> actual_wire{head,
+                                                                   native_payload.to_bytes ()};
+                assert (actual_wire == expected_wire);
+                actual_wire[1].back () ^= 1;
+                assert (actual_wire != expected_wire);
+            }
             const auto in_flight = retained;
             assert (protocol::encode_application_payload (retained) == expected);
             assert (protocol::encode_application_payload (in_flight) == expected);
@@ -834,6 +944,9 @@ int main (int argc, char **argv)
     }
     test_application_payload_wire_bytes ();
     test_retained_multipart_wire_bytes ();
+    test_moved_multipart_ownership ();
+    test_native_service_headers ();
+
     {
         zlink::framework::detail::backend::raw_message_t wire;
         wire.emplace_back (4096, 0x5a);
@@ -980,6 +1093,8 @@ int main (int argc, char **argv)
     const auto traced_application_wire = protocol::encode_application_payload (traced_application);
     assert (traced_application_wire.front () == 2);
     assert (protocol::decode_application_payload (traced_application_wire) == traced_application);
+    assert (protocol::encode_application_payload_message (traced_application).to_bytes ()
+            == traced_application_wire);
     /* spec 27 §4: capture_flow=false skips the observation-only flow pair
      * structurally — no validation, no materialization — so malformed flow
      * fields cannot reject a frame at Off or at frame-integrity guards. */

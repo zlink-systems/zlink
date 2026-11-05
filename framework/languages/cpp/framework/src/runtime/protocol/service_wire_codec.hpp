@@ -72,6 +72,10 @@ struct application_payload_t
     using multipart_t = std::vector<zlink::message_t>;
 
     application_payload_t () = default;
+    application_payload_t (const application_payload_t &other);
+    application_payload_t &operator= (const application_payload_t &other);
+    application_payload_t (application_payload_t &&) noexcept = default;
+    application_payload_t &operator= (application_payload_t &&) noexcept = default;
     application_payload_t (std::string packet,
                            std::string content,
                            std::vector<std::uint8_t> bytes,
@@ -87,11 +91,7 @@ struct application_payload_t
 
     static application_payload_t from_parts (const multipart_t &parts);
     static application_payload_t from_parts (multipart_t &&parts);
-    const multipart_t *parts () const noexcept
-    {
-        const auto value = std::get_if<std::shared_ptr<const multipart_t>> (&_body);
-        return value ? value->get () : nullptr;
-    }
+    const multipart_t *parts () const noexcept { return std::get_if<multipart_t> (&_body); }
     const std::vector<std::uint8_t> &payload_bytes () const
     {
         return std::get<std::vector<std::uint8_t>> (_body);
@@ -110,7 +110,7 @@ struct application_payload_t
 
   private:
     // The codec owns either incoming bytes or outgoing parts, never both.
-    std::variant<std::vector<std::uint8_t>, std::shared_ptr<const multipart_t>> _body;
+    std::variant<std::vector<std::uint8_t>, multipart_t> _body;
 };
 
 // Shared inverse of application_payload_t::from_parts; used by dispatch and diagnostics.
@@ -910,10 +910,14 @@ struct client_server_server_admission_t
 };
 
 std::vector<std::uint8_t> encode_node_send_header ();
+zlink::message_t encode_node_send_header_message ();
 std::vector<std::uint8_t> encode_node_request_header (std::uint64_t correlation);
+zlink::message_t encode_node_request_header_message (std::uint64_t correlation);
 std::uint64_t decode_node_request_header (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_channel_request_header (std::uint64_t correlation,
                                                          const std::string &channel_name);
+zlink::message_t encode_channel_request_header_message (std::uint64_t correlation,
+                                                        const std::string &channel_name);
 struct channel_request_header_t
 {
     std::uint64_t correlation;
@@ -921,6 +925,7 @@ struct channel_request_header_t
 };
 channel_request_header_t decode_channel_request_header (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_channel_send_header (const std::string &channel_name);
+zlink::message_t encode_channel_send_header_message (const std::string &channel_name);
 std::vector<std::uint8_t>
 encode_spot_message_header (command kind,
                             const std::string &source_spot_id,
@@ -928,6 +933,13 @@ encode_spot_message_header (command kind,
                             wire_operation_id_t operation,
                             std::optional<std::uint64_t> correlation = std::nullopt,
                             std::uint8_t message_follow_hop_count = 0);
+zlink::message_t
+encode_spot_message_header_message (command kind,
+                                    const std::string &source_spot_id,
+                                    const spot_route_fence_t &target,
+                                    wire_operation_id_t operation,
+                                    std::optional<std::uint64_t> correlation = std::nullopt,
+                                    std::uint8_t message_follow_hop_count = 0);
 spot_message_header_t decode_spot_message_header (std::span<const std::uint8_t> bytes,
                                                   command expected_kind);
 std::vector<std::uint8_t> encode_actor_message_header (
@@ -939,9 +951,19 @@ std::vector<std::uint8_t> encode_actor_message_header (
   std::uint8_t message_follow_hop_count = 0,
   std::optional<actor_message_header_t::bound_session_source_t> bound_session_source =
     std::nullopt);
+zlink::message_t encode_actor_message_header_message (
+  command kind,
+  const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
+  const actor_route_fence_t &target,
+  wire_operation_id_t operation,
+  std::optional<std::uint64_t> correlation = std::nullopt,
+  std::uint8_t message_follow_hop_count = 0,
+  std::optional<actor_message_header_t::bound_session_source_t> bound_session_source =
+    std::nullopt);
 actor_message_header_t decode_actor_message_header (std::span<const std::uint8_t> bytes,
                                                     command expected_kind);
 std::vector<std::uint8_t> encode_bound_session_send (const bound_session_send_t &record);
+zlink::message_t encode_bound_session_send_message (const bound_session_send_t &record);
 bound_session_send_t decode_bound_session_send (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_bound_session_bind (const bound_session_bind_t &record);
 bound_session_bind_t decode_bound_session_bind (std::span<const std::uint8_t> bytes);
@@ -1002,6 +1024,7 @@ user_spot_close_header_t decode_user_spot_close_header (std::span<const std::uin
 service_wire_header_t decode_header (std::span<const std::uint8_t> bytes);
 std::string decode_channel_send_header (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_application_payload (const application_payload_t &payload);
+zlink::message_t encode_application_payload_message (const application_payload_t &payload);
 /* capture_flow gates the observation-only flow pair (flow-correlation §4):
  * false skips it structurally — no semantic validation, no materialization —
  * so malformed observation fields cannot fail a frame at Off or at pure
@@ -1043,6 +1066,9 @@ std::uint32_t decode_reject (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_reply_header (std::uint64_t correlation,
                                                std::uint32_t terminal_result,
                                                std::uint32_t failure_code);
+zlink::message_t encode_reply_header_message (std::uint64_t correlation,
+                                              std::uint32_t terminal_result,
+                                              std::uint32_t failure_code);
 reply_header_t decode_reply_header (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t>
 encode_stream_bind_reply (std::uint64_t correlation,

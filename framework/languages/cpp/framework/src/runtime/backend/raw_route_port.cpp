@@ -137,6 +137,21 @@ raw_send_submission_t raw_route_port_t::submit_send (const raw_bytes_t &target_r
                                                      raw_message_t parts,
                                                      raw_send_stage_trace_t trace)
 {
+    return submit_send_impl (target_routing_id, std::move (parts), std::move (trace));
+}
+
+raw_send_submission_t raw_route_port_t::submit_send (const raw_bytes_t &target_routing_id,
+                                                     std::vector<zlink::message_t> parts,
+                                                     raw_send_stage_trace_t trace)
+{
+    return submit_send_impl (target_routing_id, std::move (parts), std::move (trace));
+}
+
+template <typename Parts>
+raw_send_submission_t raw_route_port_t::submit_send_impl (const raw_bytes_t &target_routing_id,
+                                                          Parts parts,
+                                                          raw_send_stage_trace_t trace)
+{
     // The binding owns DONTWAIT backpressure retry and its payload snapshot.
     // Submit under the socket lock. Its terminal observer deliberately has no
     // handler-executor scheduler, so completion classification stays on the
@@ -316,6 +331,30 @@ void raw_route_port_t::request (const raw_bytes_t &target_routing_id,
                                 std::function<void (result_t<raw_request_completion_t>)> completion,
                                 runtime::mesh::service_liveness_registry_t::connection_t admission,
                                 std::shared_ptr<task_completion_source_t<void>> admitted)
+{
+    return request_impl (target_routing_id, std::move (parts), timeout, std::move (completion),
+                         std::move (admission), std::move (admitted));
+}
+
+void raw_route_port_t::request (const raw_bytes_t &target_routing_id,
+                                std::vector<zlink::message_t> parts,
+                                std::chrono::milliseconds timeout,
+                                std::function<void (result_t<raw_request_completion_t>)> completion,
+                                runtime::mesh::service_liveness_registry_t::connection_t admission,
+                                std::shared_ptr<task_completion_source_t<void>> admitted)
+{
+    return request_impl (target_routing_id, std::move (parts), timeout, std::move (completion),
+                         std::move (admission), std::move (admitted));
+}
+
+template <typename Parts>
+void raw_route_port_t::request_impl (
+  const raw_bytes_t &target_routing_id,
+  Parts parts,
+  std::chrono::milliseconds timeout,
+  std::function<void (result_t<raw_request_completion_t>)> completion,
+  runtime::mesh::service_liveness_registry_t::connection_t admission,
+  std::shared_ptr<task_completion_source_t<void>> admitted)
 {
     auto finish = [completion = std::move (completion),
                    admitted] (result_t<raw_request_completion_t> result) mutable {

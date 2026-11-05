@@ -8546,20 +8546,32 @@ public_host_runtime_t::prepare_actor_transfer_async (const actor_transfer_prepar
     co_return true;
 }
 
-bool public_host_runtime_t::reply (const reply_token_t &token,
-                                   const std::vector<zlink::message_t> &parts)
+template <typename Parts>
+bool public_host_runtime_t::reply_parts (const reply_token_t &token, Parts &&parts)
 {
     try {
-        if (token.local_reply) {
+        if (token.local_reply)
             return token.local_reply (parts);
-        }
-        return token.request && _transport->reply (*token.request, encode_application (parts));
+        return token.request
+               && _transport->reply (*token.request,
+                                     encode_application (std::forward<Parts> (parts)));
     }
     catch (const zlink::submit_error_t &) {
         return false;
     }
 }
 
+bool public_host_runtime_t::reply (const reply_token_t &token,
+                                   const std::vector<zlink::message_t> &parts)
+{
+    return reply_parts (token, parts);
+}
+
+bool public_host_runtime_t::reply (const reply_token_t &token,
+                                   std::vector<zlink::message_t> &&parts)
+{
+    return reply_parts (token, std::move (parts));
+}
 
 task_t<std::optional<stateful::object_ref_t>>
 public_host_runtime_t::resolve_actor_async (const actor_ref_t &actor) const
@@ -9785,12 +9797,24 @@ task_t<bool> actor_transfer_token_t::commit_membership ()
     co_return error == stateful::stateful_error_t::none;
 }
 
+template <typename Parts>
+zlink::submit_result_t submit_reply (const reply_token_t &token, Parts &&parts)
+{
+    const auto host = token.host.lock ();
+    return host && host->reply (token, std::forward<Parts> (parts))
+             ? zlink::submit_result_t::ok
+             : zlink::submit_result_t::terminated;
+}
+
 zlink::submit_result_t reply (const reply_token_t &token,
                               const std::vector<zlink::message_t> &parts)
 {
-    const auto host = token.host.lock ();
-    return host && host->reply (token, parts) ? zlink::submit_result_t::ok
-                                              : zlink::submit_result_t::terminated;
+    return submit_reply (token, parts);
+}
+
+zlink::submit_result_t reply (const reply_token_t &token, std::vector<zlink::message_t> &&parts)
+{
+    return submit_reply (token, std::move (parts));
 }
 
 bool actor_join_reply (const reply_token_t &token,

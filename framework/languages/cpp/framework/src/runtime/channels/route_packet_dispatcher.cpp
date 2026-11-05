@@ -72,13 +72,13 @@ void trace_route_flow (const dispatch_options_t &options,
       });
 }
 
-result_t<std::optional<route_dispatch_reply_t>> reply_route_error (
-  const dispatch_options_t &options,
-  const std::string &router,
-  const std::function<result_t<void> (const route_dispatch_reply_t &)> &submit_reply,
-  const route_received_packet_t &received,
-  const runtime::messaging::envelope_header_t &header,
-  const framework_exception_t &error)
+result_t<std::optional<route_dispatch_reply_t>>
+reply_route_error (const dispatch_options_t &options,
+                   const std::string &router,
+                   const std::function<result_t<void> (route_dispatch_reply_t &&)> &submit_reply,
+                   const route_received_packet_t &received,
+                   const runtime::messaging::envelope_header_t &header,
+                   const framework_exception_t &error)
 {
     dispatch_error_reporter_t (options).report_lazy ([&] {
         auto event = message_dispatch_error_event_t{dispatch_error_surface_t::route_mesh_channel,
@@ -105,7 +105,7 @@ result_t<std::optional<route_dispatch_reply_t>> reply_route_error (
     route_dispatch_reply_t response{received.source_node_rid, received.request_seq,
                                     std::move (reply)};
     if (submit_reply) {
-        auto submitted = submit_reply (response);
+        auto submitted = submit_reply (std::move (response));
         if (!submitted)
             return propagate_failure<std::optional<route_dispatch_reply_t>> (
               submitted, "MeshNode error reply submit failed");
@@ -133,7 +133,7 @@ route_packet_dispatcher_t::route_packet_dispatcher_t (
   handler_dispatch_kind_t request_dispatch_kind,
   std::function<void ()> before_application_handler,
   std::shared_ptr<void> registration,
-  std::function<result_t<void> (const route_dispatch_reply_t &)> submit_reply) :
+  std::function<result_t<void> (route_dispatch_reply_t &&)> submit_reply) :
     _router_channel_id (std::move (router_channel_id)),
     _services (&services),
     _serializers (&serializers),
@@ -438,7 +438,7 @@ task_t<std::optional<route_dispatch_reply_t>> route_packet_dispatcher_t::dispatc
                                      runtime::messaging::message_kind_t::response, router, header),
                                    reply.value ())};
         if (submit_reply) {
-            auto submitted = submit_reply (response);
+            auto submitted = submit_reply (std::move (response));
             if (!submitted)
                 return propagate_failure<std::optional<route_dispatch_reply_t>> (
                   submitted, "MeshNode reply submit failed");

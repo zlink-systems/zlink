@@ -573,20 +573,20 @@ class raw_mesh_node_owner_t
     };
     struct send_completion_state_t;
     send_start_result_t start_send (const std::vector<std::uint8_t> &target_routing_id,
-                                    detail::backend::raw_message_t parts,
+                                    std::vector<zlink::message_t> parts,
                                     bool needs_public_completion,
                                     detail::backend::raw_send_stage_trace_t trace = {});
     send_start_result_t start_send_on_lane (const std::vector<std::uint8_t> &target_routing_id,
-                                            detail::backend::raw_message_t parts,
+                                            std::vector<zlink::message_t> parts,
                                             bool needs_public_completion,
                                             detail::backend::raw_send_stage_trace_t trace);
     task_t<zlink::submit_result_t>
     submit_owned_send_result (const std::vector<std::uint8_t> &target_routing_id,
-                              detail::backend::raw_message_t parts,
+                              std::vector<zlink::message_t> parts,
                               detail::backend::raw_send_stage_trace_t trace);
     task_t<zlink::submit_result_t>
     send_with_header_result (const std::vector<std::uint8_t> &target_routing_id,
-                             std::vector<std::uint8_t> header,
+                             zlink::message_t header,
                              protocol::application_payload_t application_payload,
                              detail::backend::raw_send_stage_trace_t trace = {},
                              bool target_claimed = false,
@@ -611,7 +611,7 @@ class raw_mesh_node_owner_t
     observe_request_peer_on_lane (const std::vector<std::uint8_t> &target_routing_id) const;
     task_t<bool> request_with_header (
       const std::vector<std::uint8_t> &target_routing_id,
-      const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
+      const std::function<zlink::message_t (std::uint64_t)> &header,
       const protocol::application_payload_t &application_payload,
       foundation::operation_registry_t::clock_t::time_point deadline,
       foundation::operation_registry_t::callback_t callback,

@@ -34,9 +34,9 @@ struct raw_mesh_node_owner_test_access_t
         return owner.request_with_header (
           {'n'},
           [] (std::uint64_t correlation) {
-              return protocol::encode_actor_message_header (protocol::command::actorRequest, {},
-                                                            {"actor", 3, {'n'}, 5, 7, 11},
-                                                            {1, correlation}, correlation);
+              return protocol::encode_actor_message_header_message (
+                protocol::command::actorRequest, {}, {"actor", 3, {'n'}, 5, 7, 11},
+                {1, correlation}, correlation);
           },
           {"request", "application/json", {123, 125}},
           foundation::operation_registry_t::clock_t::now ()
