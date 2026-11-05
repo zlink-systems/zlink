@@ -835,25 +835,28 @@ Downgrade나 이전 버전 host 추가 전에는 보존을 끄고 기존 `T` 보
   늦은 복구에서도 새 claim·descriptor 게시 확인·객체별 CAS를 원래 `T` 안에 모두 끝낸 단위만 보존된다.
   Binding identity와 Session sequence는 유지하되 lease fence 사본은
   [Session binding §5](../04-session/02-session-actor-binding.ko.md#5-bind와-relay)의 갱신 규칙을 따른다.
-- 폐기한 각 객체는 Store 복구 뒤 authority 정리까지 수행한다. Authority가 같은 자기
-  owner·node lifecycle·`ObjectGeneration`·`AuthorityOwnerGeneration`이고 현재 자기의 유효 lease
-  token을 가리키면, token 유지·교체와 관계없이 현재 읽은 `StoreVersion`을 조건으로 §6.1의
-  `Delete`를 수행한다. User Spot 단위는 먼저 폐기한 local member Actor마다 기존 Actor별
-  Delete로 자기 membership row와 authority·수용 공간을 함께 제거한다. 이 정리를 끝낸 뒤
-  Spot Delete를 수행한다. 전체 local member를 한 batch에 넣거나 상한을 넘는 Spot batch를
-  반복 제출하지 않는다. Spot Delete는 §6.1의 해제 조건을 만족하는 남은 membership과 authority·
-  수용 공간을 provider의 기존 batch 상한 안에서 함께 정리한다. 다른 host member의 row는
-  기존 leave·destroy에 따른 membership 제거 또는 §6.1의 owner가 끝난 member 해제 조건을
-  따르며, local 단위 폐기만으로 다른 owner의 Actor나 그 row를 삭제하지 않는다. 해당 row가
-  남아 §6.1 조건이나 batch 상한을 만족하지 못하면 기존 membership 정리로 row가 줄어든 뒤
-  Spot 정리를 진행한다. 따라서 local member 수가 2,048-key 상한을 넘더라도 Actor별 정리가
-  먼저 진행되어 Spot batch의 크기를 줄인다. 확인하지 못한 renew가 나중에 확인된 경우도
-  포함한다. Delete 응답이
-  불확정이면 §10으로 재확인하며, 자기 유효 token의 해당 record가 남아 있는 동안 기존 renew
-  interval마다 재확인 후 필요한 Delete를 다시 시도한다. 삭제 확인 또는 다른 owner·incarnation으로의
-  변경 확인으로 정리를 끝낸다. 해당 record의 token이 만료·교체되어 무효가 되면 §6.1의 일반
-  해제 대상이므로 이 정리를 끝낸다. 폐기한 incarnation의 gate는 다시 열지 않는다.
-  다른 owner·incarnation의 record는 삭제하지 않는다.
+- 폐기한 각 객체는 Store 복구 뒤 authority 정리까지 수행한다. 정리는 Location repository가 객체
+  하나씩 수행한다. Actor 하나의 정리 batch에는 그 Actor의 authority·수용 공간과, member Actor면 그
+  Actor의 membership row 하나만 넣는다. 객체마다 Store exact read 결과로 다음 중 하나를 적용한다.
+  - Authority가 같은 자기 owner·node lifecycle·`ObjectGeneration`·`AuthorityOwnerGeneration`이고
+    현재 자기의 유효 lease token을 가리키면, token 유지·교체와 관계없이 현재 읽은 `StoreVersion`을
+    조건으로 §6.1의 `Delete`를 수행한다. 확인하지 못한 renew가 나중에 확인된 경우도 포함한다.
+  - Authority가 같은 incarnation이지만 무효가 된 자기 옛 token을 가리키면, 애플리케이션의 생성
+    호출 없이 이 정리가 §6.1의 해제를 시작한다. 그 token의 무효를 처음 관찰한 뒤 `3·margin`을
+    기다리고, authority `StoreVersion`·owner lease 무효·descriptor·수용 공간을 한 batch의 조건으로
+    검사해 authority와 수용 공간을 해제한다. 새 incarnation을 만들지 않으므로 생성 경로의 type
+    relocation 정책 조건은 적용하지 않는다. 무효 token으로 `Delete`하지 않는다.
+  - 다른 owner·incarnation으로 바뀌었거나 authority가 `Missing`이면 그 객체의 정리를 끝낸다.
+- User Spot 단위는 local member Actor의 정리 완료를 모두 확인한 뒤 Spot을 정리한다. Spot 자신도 위
+  두 경우를 따른다. Local member의 row는 각 Actor batch가 이미 지웠으므로 Spot 정리 batch에는 남은
+  membership만 들어간다. 다른 host member의 row는 그 owner의 leave·destroy나 §6.1의 owner가 끝난
+  member 해제를 따르며, local 단위 폐기만으로 다른 owner의 Actor나 그 row를 지우지 않는다. 그 row
+  때문에 Spot 정리가 §6.1 조건이나 provider batch 상한을 만족하지 못하면 기존 membership 정리로
+  row가 줄어든 뒤 진행한다. 이 순서에서 local member 수는 Spot batch 크기에 들어가지 않는다.
+- 정리 요청의 응답이 불확정이면 §10으로 재확인한다. 대상 record가 남아 있는 동안 기존 renew
+  interval마다 재확인하고 필요한 요청을 다시 제출한다. 삭제·해제 확인 또는 다른 owner·incarnation으로의
+  변경 확인으로 정리를 끝낸다. 폐기한 incarnation의 gate는 다시 열지 않으며, 다른 owner·incarnation의
+  record는 삭제하지 않는다.
 
 Process 재개 때도 새 turn gate에서 같은 검사를 수행한다. 다만 host suspend 중 monotonic이
 정지하면 실제 경과를 이 clock으로 알 수 없다. Callback 도중 장기 정지한 process가 같은 callback의
@@ -1716,8 +1719,11 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   정리하여 새 incarnation을 만들 수 있어야 한다. Delete 응답 불확정 시 §10의 재확인과 정리 종료
   조건을 검사한다. User Spot의 local member 교체 CAS 성공은 `T` 전에 확인했지만 Spot 성공은
   `T` 뒤에만 확인되고, membership을 포함한 batch가 2,048-key를 초과하며 heartbeat가 계속되는
-  조합도 검사한다. 어떤 gate도 먼저 열리지 않고 단위 전체를 폐기하며, Actor별 Delete가 row를
-  줄인 뒤 기존 상한 안의 Spot Delete로 정리가 끝나야 한다. 다른 host member에는 기존
+  조합과, Spot과 일부 member만 새 token으로 교체되고 나머지 member는 무효가 된 옛 token에 남으며
+  local member 수가 2,048-key를 넘고 heartbeat가 계속되며 Actor 생성 호출이 없는 조합도 검사한다.
+  어떤 gate도 먼저 열리지 않고 단위 전체를 폐기하며, 유효 token member는 `Delete`, 옛 token member는
+  무효 첫 관찰 뒤 `3·margin`의 해제로 각자의 row와 함께 정리된 뒤 Spot 정리가 끝나야 한다. 모든
+  교체가 적용된 경우도 같은 순서로 정리가 끝나야 한다. 다른 host member에는 기존
   membership·해제 조건을 유지한다. `T` 전 동일 token 복구는 기존 객체를 유지하며, 폐기 객체는 복원하지 않는다.
 - 해제는 해당 authority owner token의 무효 첫 관찰 뒤 local monotonic `3·margin`(기본값 예시 15초)을 요구한다.
   Lease `Missing`·다른 token·만료 record를 같은 무효로 취급한다. Authority 자체가 `Missing`인
