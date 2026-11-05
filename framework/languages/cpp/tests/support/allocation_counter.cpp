@@ -92,29 +92,32 @@ std::string describe_allocations (const allocation_event_log_t &log)
     return output.str ();
 }
 
-void check_allocation_failure ()
+bool should_fail_allocation () noexcept
 {
     if (!allocations_before_failure)
-        return;
+        return false;
     if ((*allocations_before_failure)-- == 0) {
         allocations_before_failure.reset ();
-        throw std::bad_alloc ();
+        return true;
     }
+    return false;
 }
 
-void *allocate_bytes (std::size_t size)
+void *allocate_bytes (std::size_t size) noexcept
 {
-    check_allocation_failure ();
+    if (should_fail_allocation ())
+        return nullptr;
     if (void *memory = std::malloc (size == 0 ? 1 : size)) {
         record_allocation (memory, size);
         return memory;
     }
-    throw std::bad_alloc ();
+    return nullptr;
 }
 
-void *allocate_aligned_bytes (std::size_t size, std::size_t alignment)
+void *allocate_aligned_bytes (std::size_t size, std::size_t alignment) noexcept
 {
-    check_allocation_failure ();
+    if (should_fail_allocation ())
+        return nullptr;
 #if defined(_MSC_VER)
     void *memory = _aligned_malloc (size == 0 ? 1 : size, alignment);
 #else
@@ -127,7 +130,14 @@ void *allocate_aligned_bytes (std::size_t size, std::size_t alignment)
         record_allocation (memory, size);
         return memory;
     }
-    throw std::bad_alloc ();
+    return nullptr;
+}
+
+void *require_allocation (void *memory)
+{
+    if (memory == nullptr)
+        throw std::bad_alloc ();
+    return memory;
 }
 
 void free_aligned_bytes (void *memory) noexcept
@@ -146,17 +156,33 @@ using namespace zlink::framework::tests;
 
 void *operator new (std::size_t size)
 {
-    return allocate_bytes (size);
+    return require_allocation (allocate_bytes (size));
 }
 void *operator new[] (std::size_t size)
 {
-    return allocate_bytes (size);
+    return require_allocation (allocate_bytes (size));
 }
 void *operator new (std::size_t size, std::align_val_t alignment)
 {
-    return allocate_aligned_bytes (size, static_cast<std::size_t> (alignment));
+    return require_allocation (allocate_aligned_bytes (size, static_cast<std::size_t> (alignment)));
 }
 void *operator new[] (std::size_t size, std::align_val_t alignment)
+{
+    return require_allocation (allocate_aligned_bytes (size, static_cast<std::size_t> (alignment)));
+}
+void *operator new (std::size_t size, const std::nothrow_t &) noexcept
+{
+    return allocate_bytes (size);
+}
+void *operator new[] (std::size_t size, const std::nothrow_t &) noexcept
+{
+    return allocate_bytes (size);
+}
+void *operator new (std::size_t size, std::align_val_t alignment, const std::nothrow_t &) noexcept
+{
+    return allocate_aligned_bytes (size, static_cast<std::size_t> (alignment));
+}
+void *operator new[] (std::size_t size, std::align_val_t alignment, const std::nothrow_t &) noexcept
 {
     return allocate_aligned_bytes (size, static_cast<std::size_t> (alignment));
 }
@@ -189,6 +215,22 @@ void operator delete (void *memory, std::size_t, std::align_val_t) noexcept
     free_aligned_bytes (memory);
 }
 void operator delete[] (void *memory, std::size_t, std::align_val_t) noexcept
+{
+    free_aligned_bytes (memory);
+}
+void operator delete (void *memory, const std::nothrow_t &) noexcept
+{
+    std::free (memory);
+}
+void operator delete[] (void *memory, const std::nothrow_t &) noexcept
+{
+    std::free (memory);
+}
+void operator delete (void *memory, std::align_val_t, const std::nothrow_t &) noexcept
+{
+    free_aligned_bytes (memory);
+}
+void operator delete[] (void *memory, std::align_val_t, const std::nothrow_t &) noexcept
 {
     free_aligned_bytes (memory);
 }
