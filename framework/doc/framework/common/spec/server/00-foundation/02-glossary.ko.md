@@ -2129,7 +2129,7 @@ Owner lease에서 계산하는 일반 새 작업 수용의 마지막 시점이�
 | .NET 표기 | Public standalone type 없음. 계산 결과는 `DateTimeOffset` 시점이다. |
 | 공개 구성 | 마지막 valid owner lease deadline에서 fencing margin을 반영한 시점 하나다. |
 | 생성·관리 | Framework가 마지막으로 확인한 valid lease와 location option으로 계산한다. |
-| 수명 | 새 valid lease를 확인하면 갱신된다. 기본 TTL 30초·margin 5초에서 마지막 성공 갱신 기준 25초다. Deadline 뒤 일반 새 작업 차단과 보존 실행은 Location runtime §5를 따른다. |
+| 수명 | 새 valid lease를 확인하면 갱신된다. 기본 TTL 30초·margin 5초에서 Location runtime §5의 요청 시작 기준 산식으로 25초 이하다. Deadline 뒤 일반 새 작업 차단과 보존 실행은 Location runtime §5를 따른다. |
 
 ## 9. Network listener
 

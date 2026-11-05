@@ -175,18 +175,30 @@ smaller than the previous value.
 **Lease replacement and fence copies within the same lifecycle.** During retained execution
 under [Location runtime §5.1](../05-location-relocation/01-location-runtime.en.md#51-retention-and-rejoining-after-a-short-outage)
 in a Store communication outage, keep both existing binding-fence copies and exact-match checks.
-The Store validation and fence refresh below apply to lease replacement after recovery.
-After Store recovery, a new
-claim, and successful per-object token replacement CAS, do not recreate bindings. The existing
-binding managers at Session and Actor owners refresh both sides' lease-fence copies at their
-execution gates. Validate against the current Store owner lease and descriptor for the same
-RID/lifecycle; the Actor side also confirms successful token replacement CAS for the same
-incarnation. Before Store validation, do not submit new controls with the old fence. Submit and
-accept relay and commands 42/51/54 only after refresh. A different token in a received control
-alone does not authorize changing a copy. Keep binding generation/token, Actor incarnation, and
-Session sequence; reject late controls with an old lease token through existing exact-match
-checks. Existing binding-fence management owns this refresh, with no separate binding identity
-or retry path.
+Recovery with a still-valid token resumes with the same fence after Location runtime §5.1's
+validation and renewal. Even after normal expiry, a new claim, and successful per-object
+token-replacement CAS, do not recreate bindings. When reopening its existing gate, the Actor
+owner updates its binding route's Actor lease token to the new token.
+
+When the existing Location `PollingInterval` descriptor check observes a bound Actor owner's
+lease token differing from the copy, the Session owner exact-reads that Actor authority and
+owner lease. The existing binding manager updates only the copy's lease token at the execution
+gate when owner RID, `descriptorLifecycleGeneration`, `ObjectGeneration`, and
+`AuthorityOwnerGeneration` are unchanged and the currently valid lease token matches both
+authority and descriptor. If the descriptor changed before authority replacement CAS is
+confirmed, keep the copy unchanged and perform the same check on the next existing poll.
+Manual topology uses the same Location polling path; do not read the Store per message or add
+a timer or wire. A confirmed different owner, incarnation, lifecycle, or §6.1 release commit
+invalidates the route under Routing §3.2. When the Session owner's own token changes, the Actor
+owner refreshes its Session-fence copy through the same descriptor-check and owner-lease
+exact-read path, validating the Session owner's same RID and lifecycle.
+
+After observing a changed token and before Store validation, submit no new controls with the
+old fence. Submit and accept relay and commands 42/51/54 after refresh. A different token in a
+received control alone does not authorize changing a copy. Keep binding generation/token,
+Actor incarnation, and Session sequence. Reject late controls carrying an old lease token
+through existing exact-match checks and result classifications, without retransmission.
+Existing binding-fence management owns this refresh.
 
 A STREAM packet is first dispatched to the session's typed handler
 registry. The framework resolves the packet's `actor_slot`

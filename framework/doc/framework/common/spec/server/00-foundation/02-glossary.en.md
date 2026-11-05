@@ -2235,7 +2235,7 @@ The ordinary new-work cutoff derived from the owner lease.
 | .NET notation | No public standalone type. The computed result is a `DateTimeOffset` time point. |
 | Public composition | A single time point reflecting the fencing margin against the last valid owner lease deadline. |
 | Creation/management | Computed by the framework from the last confirmed valid lease and location options. |
-| Lifetime | Refreshed whenever a new valid lease is confirmed. With the default 30-second TTL and 5-second margin, it is 25 seconds from the last successful renewal reference time. Ordinary new-work blocking and retained execution after this deadline follow Location runtime §5. |
+| Lifetime | Refreshed whenever a new valid lease is confirmed. With the default 30-second TTL and 5-second margin, it is at most 25 seconds under Location runtime §5's request-start formula. Ordinary new-work blocking and retained execution after this deadline follow Location runtime §5. |
 
 ## 9. Network Listener
 

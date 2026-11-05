@@ -101,7 +101,8 @@ Process 재개 시 새 turn gate도 같은 판정을 적용하며, callback 도�
 monotonic 정지의 한계는 Location runtime §5.1을 따른다.
 실행권을 잃었거나 폐기한 object·owner authority의 pending tick은 실행하지 않는다.
 [Location runtime §5.1](../05-location-relocation/01-location-runtime.ko.md#51-짧은-장애의-보존과-재참여)의
-같은 incarnation token 교체 CAS가 성공한 객체의 timer와 pending tick은 그대로 유지한다. 새 lease 확보만으로
+기존 token의 유효성 확인·renew 또는 만료 뒤 같은 incarnation token 교체 CAS로 gate가
+다시 열린 객체의 timer와 pending tick은 그대로 유지한다. 새 lease 확보만으로
 폐기한 timer나 pending tick을 복원하지 않는다. 일반 overrun은 §2의 policy를 따른다.
 
 ## 4. 공유 scheduler — 자원은 등록 수에 비례하지 않는다

@@ -19,7 +19,8 @@ public sealed class ZLinkLocationOptions
  public TimeSpan OwnerLeaseRenewInterval { get; set; }
  = TimeSpan.FromSeconds(5);
  public TimeSpan OwnerLeaseTtl { get; set; }
- = TimeSpan.FromSeconds(15);
+ = TimeSpan.FromSeconds(30);
+ public bool StoreOutageRetention { get; set; } = false;
  public TimeSpan PollingInterval { get; set; }
  = TimeSpan.FromSeconds(1);
  public TimeSpan StoreFailureGrace { get; set; }
@@ -44,6 +45,10 @@ public sealed class ZLinkLocationOptions
  = TimeSpan.FromSeconds(1);
 }
 ```
+
+`OwnerLeaseTtl` 기본값은 30초다. `StoreOutageRetention`은 startup-only bool option이며 기본값은 `false`다.
+보존 활성 조건·`false`의 admission 한도·domain 동일 설정 요구는
+[Location runtime §5.1](../../../05-location-relocation/01-location-runtime.ko.md#51-짧은-장애의-보존과-재참여)을 따른다.
 
 Root의 `AddLocationStore(...)`, `AddRelocationStore(...)`와 `ConfigureLocations()` signature는
 [Topology configuration](03-configuration-topology.ko.md#2-등록-인터페이스)가 소유한다. Store는 역할별로

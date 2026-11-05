@@ -90,8 +90,9 @@ After the admission deadline, start new callbacks only under that section's Stor
 failure retention conditions. Start no callback after discard is recorded at `T`; peer recovery
 alone never resumes execution. The next turn gate applies the same checks after process resume; Location runtime
 §5.1 defines limits for resumption inside a callback and monotonic clocks stopping during suspend. Pending ticks of an object/owner authority that lost execution rights or was
-discarded are not executed. Keep timers and pending ticks unchanged for objects whose
-same-incarnation token replacement CAS succeeds under
+discarded are not executed. Keep timers and pending ticks unchanged for objects whose gate
+reopens after existing-token validation and renewal, or same-incarnation token replacement CAS
+after expiry, under
 [Location runtime §5.1](../05-location-relocation/01-location-runtime.en.md#51-retention-and-rejoining-after-a-short-outage).
 Obtaining a new lease alone does not restore discarded timers or pending ticks. Ordinary
 overrun follows the policies in §2.

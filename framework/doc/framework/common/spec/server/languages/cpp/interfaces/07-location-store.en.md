@@ -30,7 +30,8 @@ namespace zlink::framework {
 
 struct location_options_t {
  std::chrono::milliseconds owner_lease_renew_interval{5000};
- std::chrono::milliseconds owner_lease_ttl{15000};
+ std::chrono::milliseconds owner_lease_ttl{30000};
+ bool store_outage_retention{false};
  std::chrono::milliseconds polling_interval{1000};
  std::chrono::milliseconds store_failure_grace{30000};
  std::chrono::milliseconds owner_lease_fencing_margin{5000};
@@ -46,6 +47,10 @@ struct location_options_t {
 
 } // namespace zlink::framework
 ```
+
+`owner_lease_ttl` defaults to 30 seconds. `store_outage_retention` is a startup-only bool option, default `false`.
+Retention eligibility, the admission bound when `false`, and domain-wide identical settings follow
+[Location runtime §5.1](../../../05-location-relocation/01-location-runtime.en.md#51-retention-and-rejoining-after-a-short-outage).
 
 The Store registration member is owned by
 [Configuration and host](02-configuration-host.en.md)'s

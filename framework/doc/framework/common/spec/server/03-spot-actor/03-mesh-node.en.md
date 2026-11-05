@@ -89,14 +89,17 @@ fixed RID can be used in manual topology and in
 object role. Setting a fixed RID and an automatic RID prefix together is a startup configuration
 error.
 
-A restarting Fixed RID node waits 15 seconds on its own local monotonic clock from first
-observing in the Store that the previous lifecycle's lease is invalid (`Missing` or a different
-token), then reclaims the same RID.
-[Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas) owns the wait.
-Startup remains `Preparing` during it. If the lease is still valid, apply the existing `Conflict`
-rule. A restart that loses the observation time observes again and restarts the full 15-second
-wait. No mesh query or existing connection is required, and no new RID is issued. After reclaim,
-follow §6's descriptor publication, bind, and admission sequence.
+A restarting Fixed RID node records `t0` on its own local monotonic clock when it first
+observes the previous lifecycle's lease invalid by Store exact read (`Missing`, a different
+token, or an expired record with `ExpiresAt ≤ StoreNow`). The wait follows
+[Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas):
+`3·margin` (default example: 15 seconds). The host start call finishes as in Location runtime §5's
+startup without a lease, while the host remains `Preparing`. Reclaim the same RID at the first
+claim opportunity on the renew-interval schedule after `t0 + 3·margin`; submit no claim before
+then. Restart after normal shutdown uses the same wait. If the lease is still valid, apply the
+existing `Conflict` rule. A restart that loses the observation time observes again and restarts
+the entire wait. No mesh query or existing connection is required, and no new RID is issued.
+After reclaim, follow §6's descriptor publication, bind, and admission sequence.
 
 ## 4. Object Role and the Features That Can Be Registered
 

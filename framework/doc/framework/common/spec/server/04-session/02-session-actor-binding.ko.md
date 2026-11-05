@@ -157,15 +157,26 @@ session owner lifecycle 안에서만 유효하다. 다른 MeshNode가 bind하거
 **같은 lifecycle의 lease 교체와 fence 사본.** Store 통신 실패 중
 [Location runtime §5.1](../05-location-relocation/01-location-runtime.ko.md#51-짧은-장애의-보존과-재참여)의
 보존 실행에서는 기존 binding의 양쪽 fence 사본과 정확 일치 검사를 그대로 사용한다.
-아래의 Store 확인·fence 갱신은 복구 뒤 lease 교체에 적용한다. Store 복구 뒤 새 claim과 객체별 token 교체 CAS가
-성공하면 binding을 재생성하지 않는다. Session owner와 Actor owner의 기존 binding 관리자가
-자기 execution gate에서 양쪽 lease fence 사본을 갱신한다. 갱신 근거는 현재 Store owner lease와
-같은 RID·lifecycle의 descriptor이며, Actor 쪽은 같은 incarnation의 token 교체 CAS 성공도 확인한다.
-Store 확인 전에는 이전 fence로 새 control을 제출하지 않는다. 갱신 후에만 relay와 command
-42·51·54를 제출·수락한다. 수신 control의 token이 다르다는 사실만으로 사본을 바꾸지 않는다.
-Binding generation·token, Actor incarnation과 Session sequence는 유지하고 이전 lease token의
-늦은 control은 기존 정확 일치 검사로 거부한다. 이 갱신은 기존 binding fence 관리가 소유하며
-별도 binding identity나 재시도 경로를 만들지 않는다.
+기존 token이 유효한 복구는 Location runtime §5.1의 확인·renew 뒤 같은 fence로 재개한다.
+정상 만료 뒤 새 claim과 객체별 token 교체 CAS가 성공한 경우에도 binding을 재생성하지 않는다.
+Actor owner는 기존 gate를 다시 열 때 자기 binding route의 Actor lease token을 새 token으로 갱신한다.
+
+Session owner는 기존 Location `PollingInterval`의 descriptor 확인에서 bound Actor owner의
+lease token이 사본과 달라졌음을 관찰하면 해당 Actor authority와 owner lease를 exact read한다.
+같은 owner RID·`descriptorLifecycleGeneration`·`ObjectGeneration`·`AuthorityOwnerGeneration`이고
+현재 유효한 lease token이 authority와 descriptor에 모두 일치할 때 기존 binding 관리자가 execution
+gate에서 사본의 lease token만 갱신한다. Descriptor가 먼저 갱신되고 authority 교체 CAS가 아직
+확인되지 않았으면 사본을 바꾸지 않고 다음 기존 polling에서 같은 확인을 수행한다. Manual topology도
+같은 Location polling 경로를 사용하며 메시지마다 Store를 읽거나 새 timer·wire를 추가하지 않는다.
+다른 owner·incarnation·lifecycle 또는 §6.1 해제 commit을 확인하면 Routing §3.2대로 route를 무효화한다.
+Session owner 자신의 token이 바뀐 경우 Actor owner가 보관한 Session fence도 같은 descriptor 확인과
+owner lease exact read 경로로 갱신한다. 이쪽은 Session owner의 같은 RID·lifecycle을 검증한다.
+
+변경된 token을 관찰한 뒤 Store 확인 전에는 이전 fence로 새 control을 제출하지 않는다.
+갱신 후 relay와 command 42·51·54를 제출·수락하며, 수신 control의 token 차이만으로 사본을
+바꾸지 않는다. Binding generation·token, Actor incarnation과 Session sequence는 유지한다.
+이전 lease token의 늦은 control은 기존 정확 일치 검사와 결과 분류로 거부하며 재전송하지 않는다.
+이 갱신은 기존 binding fence 관리가 소유한다.
 
 STREAM packet은 먼저 session의 typed handler registry로 dispatch된다. Framework는 packet의
 `actor_slot`([Stream Connector 공통 스펙 §4.2](../../stream-connector/32-stream-connector.ko.md#42-header))을
