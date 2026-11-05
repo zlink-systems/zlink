@@ -6,7 +6,7 @@ vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 vcpkg_download_distfile(ARCHIVE
     URLS "https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v${VERSION}/zlink-framework-cpp-${VERSION}.tar.gz"
     FILENAME "zlink-framework-cpp-${VERSION}.tar.gz"
-    SHA512 8eecd037a714436caf135d16f79bd1ecdf624e73a4bf06bbc712bb4538c3f3f14ee5bbb62e9e59982ddac11acb0dcb5433829b09cd5315f802cf54c9c9d6afb1
+    SHA512 cf56f7c6adca1f1a2d7449f7594222a4aacb6553fd94a8442302eeaa1deb82880d046079c562f220b4c8b74ea8e55ab625b0538ae9260fc626233d2211e24e70
 )
 vcpkg_extract_source_archive(SOURCE_PATH ARCHIVE "${ARCHIVE}")
 if(NOT EXISTS "${SOURCE_PATH}/runtime/protocol/generated/cpp/service_wire_constants.hpp")
