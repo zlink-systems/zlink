@@ -120,9 +120,3 @@ Coordinates use `Vec3(x, y, z)` with Y up. `ArenaMap` defines bounds X/Z 0–100
 Move and Shoot share one increasing sequence. Rejections change neither position, HP, sequence nor movement/fire timing. Stale input is `stale-sequence`; a full or mismatched Room admission is `admission-rejected`; an internal client packet is `packet-not-allowed`. `RetryAfterMs` is positive only for movement-budget or fire-interval rejection; clients wait for that reported duration and resend the same input. `MoveResult` and `ShotResult` acknowledge accepted actions; `ActionRejected` and `ShotRejected` report rejected inputs. `RoomView` includes all positions, HP, last sequences, phase and winner so a reconnecting client can continue with the last sequence plus one. At zero HP the match finishes as `match-finished` and later Move/Shoot inputs are rejected.
 
 Hit detection uses the current server state. There is no lag compensation, projectile simulation or client prediction. Extend `RoomState` for weapons and match rules, `ArenaMap` for geometry and spawn selection, and the shared contracts for client-facing actions. Keep cooldown, movement budget and hit decisions in `RoomState`. `RoomSnapshot` stores only remaining milliseconds for timing; it never transfers a process's absolute clock reading.
-
-## 한국어 실행 안내
-
-Docker Compose v2와 Linux 컨테이너 데몬을 준비한다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 이미지 빌드부터 runner·node 컨테이너 기동과 정리까지 수행한다. 시나리오는 matchmaking, hit, wall, input, reconnect, update 순서로 실행한다. Framework 0.31.0는 `bootstrap.cmake`에서 고정한다.
-
-로컬 디버깅은 C++20 컴파일러, CMake, Ninja를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행한다. 노드 로그와 설정은 `.logs/run-<id>/`, Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다. `RoomState`가 이동 예산·발사 간격·명중 판정·체력·공유 순번·승자를 소유한다. 발은 Y=0이고 수직 이동은 `vertical-move`로 거부한다. 공개 패키지의 알려진 문제는 Known issues를 따른다.

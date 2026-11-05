@@ -78,9 +78,3 @@ Player Actor factories and the shared Entry implementation are registered on bot
 Message Follow is explicitly 30 seconds, matching the Framework default and the other structures. Safe-shutdown observation is derived from the shared Message Follow duration plus the relocation budget. Relocation operation deadlines are unchanged.
 
 Initial Field placement uses public stable-type capacity and sequential startup. Set each Field node capacity to exactly its configured Field ID count. Start one Field node and wait for its READY, which follows creation of all its Fields, before starting the next Field node. Earlier nodes are full, so the newly started node is the only eligible Field host. Do not start initial Field hosts concurrently.
-
-## 한국어 실행 안내
-
-기본 빌드와 e2e는 Docker에서 runner와 node를 실행한다. Bash는 `./run-e2e.sh`, PowerShell 7은 `pwsh -NoProfile -File ./run-e2e.ps1`을 사용한다. 로컬 프로세스 디버깅은 Node.js와 npm을 설치한 뒤 `--local` 또는 `-Local`로 실행한다. Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다.
-
-이 디렉터리에서 Build와 Docker e2e의 명령을 실행합니다. `field`, `dungeon`, `reconnect`, `update`는 서버 권위 이동 거부 뒤 상태 불변과 Field 간 파티 유지, 중복 던전 입장 및 실행 완료, 재접속과 instance 교체 뒤 RunId·Phase·Stage 복원을 검증합니다. `--check-domain`으로 도메인 경계 시험을 따로 실행합니다. 실행 로그와 message-flow 기록은 `.logs/run-<id>/`에 남습니다. 배포 시 Redis, fieldA, fieldB, 두 instance, Session 순서로 시작하고 READY를 확인합니다. instance 교체 시 drain의 relocation 및 SafeToShutdown 결과를 확인한 뒤 shutdown하고 같은 설정으로 대체 프로세스를 시작합니다.

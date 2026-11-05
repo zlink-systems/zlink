@@ -84,11 +84,3 @@ Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` o
 Production launchers use the configuration files directly. The e2e runner derives its node IDs and configuration paths from the structure and replaces Redis, key-prefix and listener endpoint values only in its run-specific copies. Application transfer contains no Framework routing, membership or lease state.
 
 The e2e runner sets each node's optional `tableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry declarations describe the application Entry on Table nodes only; there are no fixed User Spots in this template.
-
-## 한국어 실행 안내
-
-기본 e2e는 runner와 node를 Docker에서 실행합니다. 로컬 process 디버깅에는 JDK 25를 준비하고 `--local` 또는 `-Local`을 지정합니다.
-
-Docker Compose v2를 준비한 뒤 Linux·WSL에서는 `./run-e2e.sh`, Windows PowerShell 7에서는 `pwsh -NoProfile -File ./run-e2e.ps1`로 실행한다. runner는 시나리오 전에 Table server의 `--check-domain`을 실행해 `Domain checks: 7/7 passed`를 출력하고 `ActionRejected` JSON 계약을 검사한다. `retryAfterMs`는 lower camel case JSON 필드인 signed 32-bit 정수이며, 칩·pot·hand 번호는 64-bit 정수다. 이어서 독립 Redis와 Session·Table process를 기동하고 `table`, `reconnect`, `update` 시나리오를 검사한다. `table`은 client가 보낸 내부 packet과 잘못된 행동을 거부하고, 상한 초과는 `integer-out-of-range`로 응답하며 `retryAfterMs`가 0이고 상태가 유지되는지 확인한다. 정산 결과와 최종 view의 모든 좌석은 `cardCount`가 0이고, 정산 뒤 개인 패 조회는 빈 목록을 반환한다. `reconnect`와 `update`도 정산 및 빈 패 조회를 확인한다.
-
-실행별 설정과 node 로그는 `.logs/run-<id>/`에 남는다. 운영 배포에서는 Redis를 먼저 준비하고 Table node를 기동한 뒤 Session node를 기동한다. Table node 교체 시에는 `drain`의 `SAFE_TO_SHUTDOWN`을 확인한 뒤 `shutdown`하고 같은 설정으로 대체 process를 기동한다. 도메인 규칙은 server가 입력을 검사하고 계산하며, 거부 응답 `ActionRejected`의 `retryAfterMs`는 현재 0이다.

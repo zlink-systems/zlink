@@ -65,14 +65,3 @@ Validated against the published Framework 0.31.0 packages.
 4. Confirm `STOPPED` and exit code zero. Start a replacement with the same configuration and wait for `READY` before assigning new work.
 
 Instance capacity is one Dungeon per process to make replacement placement observable. Framework owns placement, membership, route continuity, and relocation. Application adapters capture only Party and Dungeon game state; Player has no application state. Non-request pushes use player IDs through Actor delivery handlers, without retaining Actor references in Spots.
-
-## 한국어 실행 안내
-
-기본 e2e는 Docker에서 실행합니다. 로컬 process 디버깅은 JDK 25를 준비하고 `--local` 또는 `-Local`로 실행합니다. Docker Compose를 준비한 뒤 위 Build 명령으로 배포 파일을 생성합니다. Windows에서는 PowerShell 7을 사용합니다. Docker e2e 명령은 구조 검사, Redis와 노드 기동, 시나리오 판정, 자원 정리를 수행하며 실행 기록은 `.logs/run-<id>/`에 남깁니다.
-
-파티 구성과 준비 상태는 Party User Spot이 소유하고 던전 진행 상태는 Dungeon User Spot이 소유합니다. 인스턴스 교체 시에는 `drain` 뒤 `SAFE_TO_SHUTDOWN`을 확인하고 `shutdown`을 보낸 다음 같은 설정으로 대체 프로세스를 기동합니다. 공개 패키지 결함으로 실패하면 우회하지 않고 최초 오류와 message-flow 기록을 보존합니다.
-
-
-Domain extension: change PartyState and DungeonState, add shared typed contracts, update the Session client allowlist and add boundary tests and scenario observations. Integer values are bounded by 9,007,199,254,740,991; rejected inputs leave state unchanged. ActionRejected includes a 32-bit RetryAfterMs, always zero in this structure. No floating-point action input or time restriction is used.
-
-한국어 안내: 이 템플릿의 파티·던전 도메인을 확장하여 MORPG 서버를 만든다. party는 중복 입장·서버 발급 ID·거부 뒤 상태 불변·최종 완료를 관찰한다. reconnect·update는 RunId·Phase·Stage 보존을 검사한다. 도메인 경계 시험은 AGENTS의 확장 절차에 따라 실행한다.
