@@ -98,8 +98,6 @@ Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the sa
 
 `--check-domain` (`-CheckDomain` in PowerShell) runs 46 game domain checks and one separate wire golden check for four samples. The wire check briefly starts one local typed Session host and observes its public connector payloads; Redis and game scenario nodes are not started.
 
-`--check-domain`(PowerShell `-CheckDomain`)은 게임 도메인 46개와 네 표본을 비교하는 별도 wire golden 1개를 검사합니다. Wire 검사는 local typed Session host 하나를 잠시 시작하고 public connector payload를 관찰합니다. Redis와 게임 시나리오 노드는 시작하지 않습니다.
-
 ## Known issues
 
 Validated against the published Framework 0.31.0 packages.
@@ -111,9 +109,3 @@ Wait for the bootstrap owner to report `READY` before starting another match hos
 Start Redis, then match A (which bootstraps `matchmaking`), match B, and Session, using each project's `--config server/config/<node>.json` argument. Configure production Redis endpoints, unique key prefixes and listener addresses. Both match processes register relocation adapters and the same stable types.
 
 Send `drain` on the selected match process's standard input. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, then `SAFE_TO_SHUTDOWN`. Send `shutdown`, require successful process termination, and start the same role with the same configuration. Read actual bound endpoints from `READY` JSON. The runner performs this sequence without client reconnection.
-
-## 한국어 실행 안내
-
-기본 실행은 Docker에서 node와 e2e runner를 함께 실행하므로 호스트 .NET SDK가 필요하지 않습니다. Docker Compose v2와 Linux container 환경을 준비하십시오. 로컬 process 디버깅은 .NET 8 SDK를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행합니다. 이미지 빌드·정리 로그는 `.logs/docker-<project>/`, node 로그는 `.logs/run-<id>/`에 남습니다. Docker Compose를 준비하고 위 Build 명령으로 빌드합니다. Windows에서는 PowerShell 7의 `run-e2e.ps1`, Linux에서는 `run-e2e.sh`를 실행합니다. 시나리오를 지정하지 않으면 matchmaking, hit, wall, input, reconnect, update를 순서대로 검증합니다.
-
-매칭 대기열은 Matchmaking User Spot이, 위치·HP·순번·쿨다운·이동 예산·명중 판정은 RoomState가 소유합니다. 발 위치 Y는 항상 0이며 수직 이동은 vertical-move로 거부합니다. 점프·중력은 없습니다. 현재 서버 상태 기준 판정이며 지연 보정·투사체·클라이언트 예측은 없습니다. 이 템플릿의 도메인을 확장하여 FPS 서버를 만듭니다. 실행별 로그와 message-flow 기록은 `.logs/run-<id>/`에 보존됩니다. 프로덕션 배포에서는 플레이어 인증과 Redis 연결 설정을 적용해야 합니다.

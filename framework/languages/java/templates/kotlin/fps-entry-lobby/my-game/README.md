@@ -78,15 +78,3 @@ Coordinates use `Vec3(x, y, z)` with Y up. `ArenaMap` defines X/Z bounds 0 throu
 Move and Shoot share one increasing sequence. Rejections change neither position, HP, sequence, nor movement/fire timing. `retryAfterMs` is positive only for movement-budget or fire-interval rejection; clients wait that reported duration and resend the same input. `MoveResult` and `ShotResult` acknowledge accepted actions; rejection packets report rejected inputs. `RoomView` includes all positions, HP, last sequences, phase, and winner so a fresh client can continue with its last sequence plus one. At zero HP the match finishes and later Move/Shoot inputs are rejected.
 
 Hit detection uses current server state. There is no lag compensation, projectile simulation, or client prediction. Extend `RoomState` for weapons and match rules, `Geometry.kt` for level geometry and spawn selection, and the shared contracts for client-facing actions. Keep cooldown, movement budget, and hit decisions in `RoomState`. `RoomSnapshot` carries only remaining milliseconds for timing; it never transfers a process's absolute clock reading.
-
-## 한국어 실행 안내
-
-기본 e2e는 Docker에서 실행합니다. 로컬 process 디버깅은 JDK 25를 준비하고 `--local` 또는 `-Local`로 실행합니다. Windows에서는 PowerShell 7을 사용합니다. runner는 시나리오마다 별도 Redis Compose project와 key prefix를 만들고 임시 port를 사용하며, 실행 설정과 message-flow 기록을 `.logs/run-<id>/`에 보존합니다.
-
-대기열과 Room 배정은 고정 Matchmaking User Spot이 소유하며, Entry Spot은 플레이어를 해당 Spot으로 보냅니다. RoomState가 위치·HP·phase·winner·공유 순번·이동 예산·발사 간격·명중 판정을 소유합니다. 이동 최대 길이는 2, 속도 예산은 초당 10이며 수락된 이동 뒤 최대 2까지 회복합니다. 사거리는 80, 피해량은 25, HP는 100, 발사 간격은 250 ms입니다. 발 위치 Y는 0이며 수직 이동은 `vertical-move`로 거부합니다. 점프·중력·지연 보정·투사체·클라이언트 예측은 없습니다. 벽과 플레이어 상자 면 접촉은 교차이며 같은 거리면 벽을 선택합니다. Snapshot에는 process 절대 시각 대신 남은 ms를 저장합니다.
-
-46개 게임 도메인 경계 검사는 `./gradlew --no-daemon :server:match:test`로 실행합니다. 갱신할 때는 Room host에 `drain`을 보내고 `SAFE_TO_SHUTDOWN`을 확인한 뒤 종료합니다. 대체 process는 같은 설정으로 시작하며 bootstrap의 GetOrCreate가 기존 Matchmaking object를 사용합니다.
-
-Action sequences are signed 64-bit values encoded as decimal JSON strings. The accepted input range is 1..9007199254740991. Values above the upper bound are rejected as `integer-out-of-range` before stale-sequence checks; values at or below the last accepted sequence are `stale-sequence`. Rejections preserve all game state. `RetryAfterMs` remains a 32-bit JSON number.
-
-입력 순번은 decimal JSON 문자열로 전달하는 signed 64-bit 값이며 수락 범위는 1..9007199254740991입니다. 상한 초과는 stale-sequence 판정 전에 `integer-out-of-range`로 거부하며, 마지막 수락 순번 이하는 `stale-sequence`로 거부합니다. 거부 시 게임 상태는 바뀌지 않습니다. `RetryAfterMs`는 32-bit JSON 숫자를 유지합니다.

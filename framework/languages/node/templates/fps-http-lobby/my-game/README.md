@@ -83,8 +83,6 @@ Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the sa
 
 `--check-domain` (`-CheckDomain` in PowerShell) runs 46 game domain checks and one separate wire golden check for four samples. The wire check runs in the Framework execution image; the runner does not load Framework. It briefly starts one local typed Session host and observes its public connector payloads; Redis and game scenario nodes are not started.
 
-`--check-domain`(PowerShell `-CheckDomain`)은 게임 도메인 46개와 네 표본을 비교하는 별도 wire golden 1개를 검사합니다. Wire 검사는 local typed Session host 하나를 잠시 시작하고 public connector payload를 관찰합니다. Redis와 게임 시나리오 노드는 시작하지 않습니다.
-
 ## Known issues
 
 Validated against the published Framework 0.30.3 packages. The typed push delivery table restores declared DTO classes for the public typed-handler limitation tracked in [#1731](https://github.com/zlink-systems/zlink/issues/1731). Do not replace it with a manual codec.
@@ -94,11 +92,3 @@ Validated against the published Framework 0.30.3 packages. The typed push delive
 Start Redis, then Match A and Match B, Session, and the HTTP Lobby. The Lobby requires the Session endpoint; each role reports `READY` with its actual listener endpoint. The Lobby creates dynamic Room Spots through the RouteMesh and waits for Room preparation before returning an HTTP response.
 
 Configure Redis, unique key prefixes, and listener addresses in `server/config/`. Start `dist/server/match/main.js` with `server/config/match-a.json`, then the same entrypoint with `server/config/match-b.json`. Start `dist/server/session/main.js` with `server/config/session.json`, then `dist/server/lobby/main.js` with `server/config/lobby.json` containing the actual Session endpoint. All roles use the common hosting module. To update a Match host, write `drain` to its standard input and wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Write `shutdown`, verify `STOPPED` with outcome `Stopped` and reason `None`, and wait for exit. Start a replacement with the same node configuration and wait for `READY`. Redis must remain available during relocation and Lobby restart.
-
-## 한국어 실행 안내
-
-기본 빌드와 e2e는 Docker에서 runner와 node를 실행합니다. Bash는 `./run-e2e.sh`, PowerShell 7은 `pwsh -NoProfile -File ./run-e2e.ps1`을 사용합니다. 로컬 process 디버깅은 Node.js 22 이상과 npm을 설치한 뒤 `--local` 또는 `-Local`로 실행합니다. Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남습니다.
-
-Docker Compose를 준비하고 Build 절의 명령으로 이미지를 빌드합니다. `run-e2e.sh` 또는 PowerShell 7의 `run-e2e.ps1`을 실행하면 구조 검사, 46개 게임과 19개 HTTP Lobby 도메인 경계 검사, Redis·서버 기동, 시나리오 판정과 자원 정리를 수행합니다. 기본 시나리오는 `lobby`, `hit`, `wall`, `input`, `reconnect`, `update` 순서입니다. Wire golden 검사는 Framework 실행 image에서 실행하며 runner는 Framework를 load하지 않습니다. 실행 로그와 message-flow는 `.logs/run-<id>/`에 보존됩니다.
-
-HTTP Matchmaker는 mode별 매칭과 Room ID 발급을 소유하고, RoomRoster는 명단과 입장 판정을 소유합니다. 위치·HP·순번·쿨다운·이동 예산·명중 판정은 `RoomState`가 소유합니다. 발 위치 Y는 항상 0이며 수직 이동은 `vertical-move`로 거부합니다. 점프와 중력은 없습니다. 현재 서버 상태를 기준으로 명중을 판정하며 지연 보정·투사체·클라이언트 예측은 없습니다. 게임 규칙은 `RoomState`와 `ArenaMap`, typed 계약을 확장합니다. 프로덕션 배포에서는 플레이어 인증과 Redis 연결 설정을 적용해야 합니다.

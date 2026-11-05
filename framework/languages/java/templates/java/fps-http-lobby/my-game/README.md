@@ -88,17 +88,3 @@ The match configuration `roomCapacity` sets the positive per-node Room stable-ty
 For a match host update, send `drain` to stdin and require `RELOCATION_REQUESTED`, `RELOCATED` and `SAFE_TO_SHUTDOWN`. Send `shutdown`, require `STOPPED` and exit zero, then start the replacement with the same configuration. The lobby remains outside host relocation. HTTP matchmaking holds the first POST response until another player requests the same mode; shutdown fails pending requests. The Netty HTTP adapter removes an unpaired request when its client disconnects, allowing the same player ID to request again. Cancellation does not change paired requests.
 
 The Room domain is in `server/match/src/main/java/MyGame/match/domain/RoomState.java`. `RoomRoster` owns admission. HTTP and ZLink lobby adapters implement the application matching port. No player route, membership, lease or Actor reference is serialized by an application relocation adapter.
-
-## 한국어 실행 안내
-
-기본 e2e는 runner와 node를 Docker에서 실행합니다. 로컬 process 디버깅에는 JDK 25를 준비하고 `--local` 또는 `-Local`을 지정합니다. 시나리오를 지정하지 않으면 lobby, hit, wall, input, reconnect, update 순서로 실행합니다. 도메인 경계 46개와 HTTP 경계 19개는 `./gradlew --no-daemon :server:match:test :server:lobby:test`로 확인합니다.
-
-HTTP `POST /match`는 mode가 생략되면 `duel`을 사용합니다. Matchmaker는 같은 mode의 두 요청을 매칭하고, 하이픈 없는 32자 UUID가 붙은 Room ID를 발급합니다. 룸이 멤버 명단으로 준비되어 `RoomPrepared`를 반환한 뒤에만 HTTP 응답을 보냅니다. `RoomRoster`가 입장을 판정하고 relocation snapshot에 게임 상태와 명단을 함께 저장합니다. Session의 첫 정상 STREAM packet은 `JoinRoomRequest`입니다. `PrepareRoom`, `RoomPrepared`, `HttpNodeReady`는 client 허용 목록에 없습니다.
-
-좌표는 Y축이 위이고 발 위치는 Y=0입니다. 수직 이동은 `vertical-move`로 거부되며 점프와 중력은 구현하지 않습니다. 이동 최대 step은 2, 속도 예산은 초당 10 단위이며 최대 2 단위로 제한됩니다. 발사 사거리는 80, 피해는 25, 간격은 250ms입니다. 가장 가까운 벽 또는 플레이어 AABB를 선택하고 동률이면 벽이 이깁니다. 거부 입력은 위치·HP·순번·이동 예산·발사 간격을 바꾸지 않습니다. `RetryAfterMs`를 받은 경우 서버가 전달한 시간 뒤 같은 입력을 다시 보낼 수 있습니다.
-
-Room 도메인은 `server/match/src/main/java/MyGame/match/domain/RoomState.java`, 입장 명단은 `RoomRoster.java`가 소유합니다. 배포 시 Session의 `READY` 출력에서 endpoint를 확인해 Lobby 설정에 넣습니다. Match host를 교체할 때는 `drain` 뒤 `SAFE_TO_SHUTDOWN`까지 확인하고 `shutdown`합니다. 로그는 `.logs/run-<id>/`에 보존합니다.
-
-Action sequences are signed 64-bit values encoded as decimal JSON strings. The accepted input range is 1..9007199254740991. Values above the upper bound are rejected as `integer-out-of-range` before stale-sequence checks; values at or below the last accepted sequence are `stale-sequence`. Rejections preserve all game state. `RetryAfterMs` remains a 32-bit JSON number.
-
-입력 순번은 decimal JSON 문자열로 전달하는 signed 64-bit 값이며 수락 범위는 1..9007199254740991입니다. 상한 초과는 stale-sequence 판정 전에 `integer-out-of-range`로 거부하며, 마지막 수락 순번 이하는 `stale-sequence`로 거부합니다. 거부 시 게임 상태는 바뀌지 않습니다. `RetryAfterMs`는 32-bit JSON 숫자를 유지합니다.

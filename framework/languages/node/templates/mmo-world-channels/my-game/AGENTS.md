@@ -4,7 +4,7 @@
 
 This Node.js 22 (TypeScript, NestJS) project is an MMO server example with isolated worlds, each with its own Session endpoint, mesh, Redis database, and Player Actors. Players earn persistent gold and switch between the fixed channel Zones of a world without replacing their connected Session. It runs an Accounts node that publishes the world list over HTTP, Session nodes A and B, Channel nodes A1, A2, and B, and a separate Redis per world. `package.json` pins the ZLink Framework and connector packages to `0.30.3`.
 
-The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime. [한국어](AGENTS.ko.md) provides the same guide in Korean.
+The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
 > **Documentation and package versions.** The [ZLink documentation](https://docs.zlink.systems/), [Node.js guide](https://docs.zlink.systems/node/guide/server/), [API reference](https://docs.zlink.systems/node/reference/), and [agent index](https://docs.zlink.systems/llms.txt) are the public documentation entry points. When a current guide describes a newer release, check its API against the package pinned in `package.json`.
 

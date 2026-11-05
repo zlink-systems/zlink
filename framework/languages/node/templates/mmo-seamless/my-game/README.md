@@ -77,9 +77,3 @@ Message Follow is explicitly configured to 30 seconds in shared hosting. The wai
 Each process is started with `node dist/server/<role>/main.js server/config/<node>.json`. Use deployment listener endpoints in those configuration files. The e2e runner overrides Redis and listener endpoints for its isolated run.
 
 Fixed Zones are bootstrapped serially: Zone A fills its three-Spot capacity before Zone B starts. This makes the declared initial owners deterministic through public stable-type capacity. During e2e, Zone B has capacity for all but one world Zone. Before update drains Zone A, `vacate-zone` closes the unused first Zone through the public Spot manager. The remaining Zones fill Zone B; the replacement Zone A recreates the first Zone through its startup `getOrCreate`; a fresh player then joins it, and the test verifies its host and continued movement. Existing relocated players remain on Zone B.
-
-## 한국어 실행 안내
-
-Docker Compose v2를 설치한 뒤 위 Build 명령으로 이미지를 빌드합니다. 기본 e2e는 runner와 node를 컨테이너에서 실행합니다. 로컬 프로세스 디버깅은 Node.js 22 이상을 설치하고 `--local` 또는 `-Local`로 실행합니다. Windows에서는 PowerShell 7로 `run-e2e.ps1`을 실행하고, Linux에서는 `run-e2e.sh`를 실행합니다.
-
-기본 검증은 거부 뒤 상태 불변, Zone 경계 이동, 인접 Zone의 appearance·movement·departure 관찰, 재접속과 host 교체를 순서대로 실행합니다. `--check-domain`은 JSON으로 전송하지 않는 비유한 값과 경계 입력을 도메인에서 검사합니다. 실행별 node 로그와 message-flow 기록은 `.logs/run-<id>/`에 보존됩니다. 공개 Framework 0.30.3 패키지로 검증했습니다.

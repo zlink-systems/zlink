@@ -104,17 +104,3 @@ This template answers `SessionInfoRequest` with a typed `SessionInfo` push; Fram
 Start Redis, then the match nodes, Session, and HTTP lobby. Each process has its own executable and JSON configuration in `server/config/`. Mesh and STREAM listeners bind port 0 and publish their endpoints in `READY`. The runner supplies the Session endpoint to the lobby. Clients first match over HTTP and then join over STREAM using `JoinRoomRequest`.
 
 For a match-node update, write `drain` to stdin and wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Write `shutdown`, verify `STOPPED` and exit code 0, then start a replacement with the same configuration. Do not stop a draining host before its public safety observation. Lobby updates require a separate application policy for pending HTTP matches.
-
-## 한국어 실행 안내
-
-Docker Compose v2와 Linux 컨테이너 데몬을 준비한다. 템플릿 디렉터리에서 Linux는 `./run-e2e.sh`, Windows는 `pwsh -NoProfile -File ./run-e2e.ps1`을 실행한다. 기본 실행은 이미지 빌드부터 runner·node 컨테이너 기동과 정리까지 수행한다. Framework 버전은 `bootstrap.cmake` 한 곳에서 정하며, 빌드는 그 버전의 GitHub Release prebuilt를 받아 함께 게시된 SHA-256 체크섬으로 확인한다.
-
-시나리오는 `lobby`, `hit`, `wall`, `input`, `reconnect`, `update` 순서로 실행한다. `lobby`는 mode 생략 시 `duel`, Room 준비 완료 뒤 HTTP 응답, 두 matched player 입장 전 빈 prepared Room에서 outsider `JoinRoomRequest` 거부, 두 player 입장 뒤 client `PrepareRoom` 거부, 로비 재시작 뒤 새 Room ID를 확인한다. `hit`은 없는 대상과 사거리 밖 사격 거부 뒤 상태 불변 및 사격 쿨다운의 `RetryAfterMs` 대기를 확인한다. `wall`은 `(48,24)`에서 벽 통과 이동과 반대편 사격을 거부하고 상태·순번·HP 불변을 확인한 뒤, `(40,10)`으로 돌아와 `y=10` 벽 구간 밖에서 사격이 명중하는 것을 확인한다. `input`은 최대 걸음 초과·낡은 순번·벽 통과 이동 거부 뒤 상태 불변 및 이동 예산의 `RetryAfterMs` 대기를 확인한다. `hit`, `wall`, `input`은 수락된 액션의 순번, phase와 winner도 확인한다. 시간 제한 거부 뒤에는 응답의 `RetryAfterMs`만 기다린다. `reconnect`와 `update`는 순번·phase·winner·잔여 ms를 포함한 snapshot 복원을 확인한다.
-
-로컬 디버깅은 C++20 컴파일러, CMake, Ninja를 설치한 뒤 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -File ./run-e2e.ps1 -Local`로 실행한다. node 로그와 설정은 `.logs/run-<id>/`, Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다. 공개 패키지에서 확인된 차단 사항은 Known issues를 따른다.
-
-`input`은 이동 요청 두 개와 사격 요청 두 개를 각각 응답 대기 없이 연속 전송한다. 수락 결과와 시간 제한 거부를 모두 확인하고, 거부 뒤 값·순번·쿨다운 불변 및 서버가 준 `RetryAfterMs` 뒤 같은 요청의 수락을 검사한다. 게임 경계는 기준 match-entry-lobby의 게임 범주 9개로 검사하며, 매칭 범주는 HTTP 경계 19개에서 검사한다. `wall`은 벽 반대편 사격 거부와 HP 불변 및 벽 구간 밖 명중을 확인한다.
-
-Run domain and wire checks separately with `./run-e2e.sh --check-domain` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain`. Game boundary checks use the existing language-specific test location; the HTTP domain suite contains 19 checks.
-
-C++ 공개 0.31.0 serializer는 64-bit `sequence`를 JSON number로 출력한다. 공통 메시지 모델이 요구하는 10진 문자열과 달라 wire 표본 8개 중 5개는 #1694로 차단된다. 나머지 3개 표본은 통과한다.

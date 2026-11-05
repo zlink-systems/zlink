@@ -101,12 +101,3 @@ To update a channel host, write `drain` to its stdin. Wait for
 verify `STOPPED`, and start a replacement with the same configuration. Framework
 owns relocation, routing and membership. Accounts is an ordinary HTTP service;
 its control protocol accepts `shutdown` and it does not host relocatable objects.
-
-## 한국어 실행 안내
-
-기본 빌드와 e2e는 Docker에서 runner와 node를 실행한다. Bash는 `./run-e2e.sh`, PowerShell 7은 `pwsh -NoProfile -File ./run-e2e.ps1`을 사용한다. 로컬 프로세스 디버깅은 Node.js와 npm을 설치한 뒤 `--local` 또는 `-Local`로 실행한다. Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남는다.
-
-이 템플릿은 월드별 Session endpoint, mesh, Redis와 Player Actor를 분리합니다.
-`GoldBalance`가 고정 gold 보상과 earn 시간을 판정하고 Zone은 접속한 player ID를 소유합니다.
-시나리오는 같은 channel의 목록 공유, 다른 channel 격리, 이동·연결 종료 뒤 제거와 보상 제한을 검사합니다. `EarnRequest`에는 보상량을 넣지 않고 `GoldBalance`가 수락마다 10 gold를 지급합니다. 단조 시계 기준 1000 ms 안의 요청은 `earn-too-soon`과 서버가 계산한 `RetryAfterMs`로 거부하며 gold와 cooldown을 바꾸지 않습니다. 상한 `9,007,199,254,740,991`에서 상한−10 수락과 상한−9 거부를 도메인 검사로 확인합니다. 상한을 넘는 채널 요청은 `integer-out-of-range`로 거부하고 membership을 바꾸지 않습니다. Session은 허용 목록의 client packet만 전달하고 내부 packet은 `packet-not-allowed`로 거부합니다. Zone player ID는 relocation snapshot에 저장합니다. 채널 이동 때 client Session은 유지되고 Player Actor의 Zone이 바뀌므로 목록은 Zone membership callback에서 갱신합니다. 채널 변경은 공개 Actor join API를 사용하므로 client 연결을 유지합니다. Docker Compose를 준비한 뒤 위 Build 명령을 실행하고 Docker e2e로 검증합니다. 실행별 로그는 `.logs/run-<id>/`에 남습니다. channel node를 교체할 때는
-`drain` 완료와 `SAFE_TO_SHUTDOWN`을 확인한 뒤 종료하고 같은 설정으로 다시 기동합니다.
