@@ -48,6 +48,36 @@ const context = {
 
 after(() => fs.rmSync(outputDirectory, { recursive: true, force: true }));
 
+test('streamBind rejection requires a nonempty message on encode and decode', () => {
+  const bindContext = { ...context, originalOperationKind: 'streamBind' };
+  const reply = {
+    command: 'reply',
+    flags: 0,
+    correlation: 1n,
+    terminalResult: 'rejected',
+    failureCode: 'requestRejected',
+    tail: {
+      originalOperationKind: 'streamBind',
+      terminalResult: 'rejected',
+      rejectionMessage: 'already signed in'
+    }
+  };
+  const frames = codec.encodeReplyCommand(reply, bindContext);
+  assert.equal(
+    codec.decodeReplyCommand(frames, bindContext).tail.rejectionMessage,
+    reply.tail.rejectionMessage
+  );
+  assert.throws(() =>
+    codec.encodeReplyCommand(
+      { ...reply, tail: { ...reply.tail, rejectionMessage: '' } },
+      bindContext
+    )
+  );
+  const emptyMessageFrame = Buffer.from(frames[0]).subarray(0, 23);
+  emptyMessageFrame.writeUInt16BE(0, 21);
+  assert.throws(() => codec.decodeReplyCommand([emptyMessageFrame], bindContext));
+});
+
 function pointer(document, value) {
   return value
     .split('/')
