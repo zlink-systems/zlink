@@ -23,8 +23,13 @@ std::shared_ptr<offload_executor_t> infrastructure_executor ()
     std::lock_guard lock (mutex);
     auto executor = shared.lock ();
     if (!executor) {
-        executor = std::make_shared<offload_executor_t> (
-          std::max (1u, ::zlink::framework::runtime::available_processor_count ()), "zlink-infra");
+        auto workers = std::max (1u, available_processor_count ());
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+        if (const auto *probe = std::getenv ("ZLINK_CPP_TEST_SINGLE_INFRA_WORKER");
+            probe && std::string_view (probe) == "1")
+            workers = 1;
+#endif
+        executor = std::make_shared<offload_executor_t> (workers, "zlink-infra");
         shared = executor;
     }
     return executor;

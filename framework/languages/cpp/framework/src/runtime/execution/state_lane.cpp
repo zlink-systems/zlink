@@ -75,8 +75,14 @@ state_lane_t *state_lane_t::current () noexcept
 
 void state_lane_t::close ()
 {
-    if (auto completion = begin_close ())
-        completion->task ().result ().value ();
+    if (auto completion = begin_close ()) {
+        auto task = completion->task ();
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+        if (offload_executor_t::current_worker_executor () == &_executor && !task.await_ready ())
+            detail::fail_infrastructure_wait ("state-lane/close");
+#endif
+        task.result ().value ();
+    }
 }
 
 task_t<void> state_lane_t::close_async ()
