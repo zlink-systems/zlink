@@ -406,6 +406,7 @@ declines isn't an error, so it's `Rejected`, not `Failed`.
 | The Actor generation differs from the current value. | `InvalidOperation` |
 | The owner or membership fence differs, or the Actor is moving. This also includes a membership change to the target User Spot rejected under the `SpotWide` aggregate constraints in [Location runtime §8.1](../05-location-relocation/01-location-runtime.en.md#81-values-distinguishing-the-same-move-and-target-request). | `Unavailable` |
 | Runtime shutdown started first and interrupted before relay-ready was accepted. | `ShuttingDown` |
+| The target User Spot was discarded under [Location runtime §5.1](../05-location-relocation/01-location-runtime.en.md#51-retention-and-rejoining-after-a-short-outage) and interrupted before relay-ready was accepted ([Relocation flow §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover)). | `Unavailable` |
 
 `Accepted` means location and membership change was committed. It doesn't
 mean the completion callback execution has finished too. The framework
