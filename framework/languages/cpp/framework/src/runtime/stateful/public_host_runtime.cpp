@@ -3260,11 +3260,11 @@ public_host_runtime_t::request_to_node (const zlink::routing_id_t &target,
                                         std::shared_ptr<task_completion_source_t<void>> admitted)
 try {
     const auto host = shared_from_this ();
-    auto target_bytes = target.to_bytes ();
+    const std::span<const std::uint8_t> target_bytes (target.data (), target.size ());
     auto accepted =
       _transport->request_to_node (target_bytes, encode_application (std::move (parts)), timeout,
                                    std::move (completion), {}, std::move (admitted));
-    auto classify = [host, target_bytes = std::move (target_bytes)] (const result_t<bool> &result) {
+    auto classify = [host, target] (const result_t<bool> &result) {
         if (!result)
             return detail::result_access_t::failure<zlink::submit_result_t> (result.exception ());
         const auto accepted = result.value ();
@@ -3285,7 +3285,7 @@ try {
             //  TARGET_NOT_FOUND, i.e. NotFound) and Node's
             //  raw-service-mesh-runtime.ts knownTarget gate (unknown RID ->
             //  RequestResult.NotFound).
-            if (!host->_transport->topology ().peer (target_bytes))
+            if (!host->_transport->topology ().peer ({target.data (), target.size ()}))
                 return result_t<zlink::submit_result_t>::success (
                   zlink::submit_result_t::not_found);
         }

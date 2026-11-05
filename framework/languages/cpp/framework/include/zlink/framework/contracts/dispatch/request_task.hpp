@@ -26,30 +26,89 @@ struct public_request_projection_t
 {
 };
 
+// Copies retain the same operation's callable without cloning its captures.
+template <typename... TArgs> class request_callback_t
+{
+  public:
+    request_callback_t () = default;
+    template <typename TCallback>
+        requires (!std::is_same_v<std::decay_t<TCallback>, request_callback_t>)
+    request_callback_t (TCallback &&callback) :
+        request_callback_t (from_shared (
+          std::make_shared<std::decay_t<TCallback>> (std::forward<TCallback> (callback))))
+    {
+    }
+
+    template <typename TOwner, typename TInvoke>
+        requires (std::is_empty_v<TInvoke> && std::is_default_constructible_v<TInvoke>)
+    request_callback_t (std::shared_ptr<TOwner> owner, TInvoke) :
+        _owner (std::move (owner)), _invoke ([] (void *owner, TArgs... arguments) {
+            TInvoke{}(*static_cast<TOwner *> (owner), std::forward<TArgs> (arguments)...);
+        })
+    {
+    }
+
+    template <typename TCallback>
+    static request_callback_t from_shared (std::shared_ptr<TCallback> callback)
+    {
+        request_callback_t selected;
+        selected._owner = std::move (callback);
+        selected._invoke = [] (void *owner, TArgs... arguments) {
+            (*static_cast<TCallback *> (owner)) (std::forward<TArgs> (arguments)...);
+        };
+        return selected;
+    }
+
+    explicit operator bool () const noexcept { return bool (_owner); }
+    void operator() (TArgs... arguments) const
+    {
+        if (!_owner)
+            throw std::bad_function_call ();
+        const auto invoke = _invoke;
+        const auto owner = _owner;
+        invoke (owner.get (), std::forward<TArgs> (arguments)...);
+    }
+
+  private:
+    std::shared_ptr<void> _owner;
+    void (*_invoke) (void *, TArgs...) = nullptr;
+};
+
 // The selected operation delivers into the final reply. Codec owners compose
-// synchronous conversions here without adding asynchronous result states.
+// synchronous conversions without adding asynchronous result states.
+// Completion and public failure retain independent callable ownership.
 template <typename T> struct request_receiver_t
 {
     std::shared_ptr<task_completion_source_t<void>> admitted;
-    std::function<void (const result_t<T> &)> complete;
-    std::function<void (std::exception_ptr)> fail_public;
+    request_callback_t<const result_t<T> &> complete;
+    request_callback_t<std::exception_ptr> fail_public;
+
+    template <typename TInput, typename TProject> struct projection_t
+    {
+        request_callback_t<const result_t<T> &> deliver;
+        TProject project;
+        void operator() (const result_t<TInput> &terminal)
+        {
+            auto projected = [&] () -> result_t<T> {
+                try {
+                    return project (terminal);
+                }
+                catch (...) {
+                    return current_exception_result<T> ();
+                }
+            }();
+            deliver (projected);
+        }
+    };
 
     template <typename TInput, typename TProject>
     request_receiver_t<TInput> project (TProject &&project)
     {
+        using storage_t = projection_t<TInput, std::decay_t<TProject>>;
+        auto storage = std::make_shared<storage_t> (
+          storage_t{std::move (complete), std::forward<TProject> (project)});
         return {std::move (admitted),
-                [deliver = std::move (complete), project = std::forward<TProject> (project)] (
-                  const result_t<TInput> &terminal) mutable {
-                    auto projected = [&] () -> result_t<T> {
-                        try {
-                            return project (terminal);
-                        }
-                        catch (...) {
-                            return current_exception_result<T> ();
-                        }
-                    }();
-                    deliver (projected);
-                },
+                request_callback_t<const result_t<TInput> &>::from_shared (std::move (storage)),
                 std::move (fail_public)};
     }
 
@@ -231,9 +290,10 @@ template <typename TReply> class request_task_t : public task_t<TReply>
 
     detail::request_receiver_t<TReply> receiver (detail::request_projection_t)
     {
-        return {_admitted, [reply = this->shared_state ()] (const result_t<TReply> &result) {
-                    reply->complete (result);
-                }};
+        return {_admitted,
+                detail::request_callback_t<const result_t<TReply> &> (
+                  this->shared_state (),
+                  [] (auto &reply, const result_t<TReply> &result) { reply.complete (result); })};
     }
 
     detail::request_receiver_t<TReply> receiver (detail::public_request_projection_t)
@@ -261,9 +321,10 @@ template <typename TReply> class request_task_t : public task_t<TReply>
               physical->complete (projected);
               reply->complete (std::move (projected));
           },
-          [reply = this->shared_state ()] (std::exception_ptr failure) {
-              reply->complete (detail::result_access_t::failure<TReply> (std::move (failure)));
-          }};
+          detail::request_callback_t<std::exception_ptr> (
+            this->shared_state (), [] (auto &reply, std::exception_ptr failure) {
+                reply.complete (detail::result_access_t::failure<TReply> (std::move (failure)));
+            })};
     }
 
     /* The reply of a selected request in this reply type (hot path E4·E5:
@@ -417,7 +478,7 @@ struct request_task_access_t
     template <typename T, typename TTag, typename TSubmit, typename TReceiver>
     static request_task_t<T> receive (TTag tag, TSubmit &&submit, TReceiver &&make_receiver)
     {
-        auto admitted = std::make_shared<task_completion_source_t<void>> ();
+        auto admitted = make_task_completion_source<void> ();
         request_task_t<T> pending (tag, admitted);
         auto receiver = std::forward<TReceiver> (make_receiver) (pending);
         try {

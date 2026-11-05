@@ -325,10 +325,10 @@ raw_route_port_t::request (const raw_bytes_t &target_routing_id,
     return result;
 }
 
-void raw_route_port_t::request (const raw_bytes_t &target_routing_id,
-                                raw_message_t parts,
+void raw_route_port_t::request (std::span<const std::uint8_t> target_routing_id,
+                                raw_message_t &&parts,
                                 std::chrono::milliseconds timeout,
-                                std::function<void (result_t<raw_request_completion_t>)> completion,
+                                raw_request_callback_t completion,
                                 runtime::mesh::service_liveness_registry_t::connection_t admission,
                                 std::shared_ptr<task_completion_source_t<void>> admitted)
 {
@@ -336,10 +336,10 @@ void raw_route_port_t::request (const raw_bytes_t &target_routing_id,
                          std::move (admission), std::move (admitted));
 }
 
-void raw_route_port_t::request (const raw_bytes_t &target_routing_id,
-                                std::vector<zlink::message_t> parts,
+void raw_route_port_t::request (std::span<const std::uint8_t> target_routing_id,
+                                std::vector<zlink::message_t> &&parts,
                                 std::chrono::milliseconds timeout,
-                                std::function<void (result_t<raw_request_completion_t>)> completion,
+                                raw_request_callback_t completion,
                                 runtime::mesh::service_liveness_registry_t::connection_t admission,
                                 std::shared_ptr<task_completion_source_t<void>> admitted)
 {
@@ -349,10 +349,10 @@ void raw_route_port_t::request (const raw_bytes_t &target_routing_id,
 
 template <typename Parts>
 void raw_route_port_t::request_impl (
-  const raw_bytes_t &target_routing_id,
-  Parts parts,
+  std::span<const std::uint8_t> target_routing_id,
+  Parts &&parts,
   std::chrono::milliseconds timeout,
-  std::function<void (result_t<raw_request_completion_t>)> completion,
+  raw_request_callback_t completion,
   runtime::mesh::service_liveness_registry_t::connection_t admission,
   std::shared_ptr<task_completion_source_t<void>> admitted)
 {
@@ -379,10 +379,11 @@ void raw_route_port_t::request_impl (
                 return;
             }
             if (!admission && _request_receive_source)
-                admission = _request_receive_source (target_routing_id);
-            auto operation =
-              std::move (_socket->request (zlink::routing_id_t::from (target_routing_id)))
-                .message (materialize_binding_part (std::move (parts[0])));
+                admission = _request_receive_source (
+                  raw_bytes_t (target_routing_id.begin (), target_routing_id.end ()));
+            auto operation = std::move (_socket->request (zlink::routing_id_t::from (
+                                          target_routing_id.data (), target_routing_id.size ())))
+                               .message (materialize_binding_part (std::move (parts[0])));
             for (std::size_t index = 1; index < parts.size (); ++index) {
                 operation = std::move (operation).message (
                   materialize_binding_part (std::move (parts[index])));

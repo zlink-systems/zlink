@@ -4171,7 +4171,8 @@ mesh_node_runtime_t::classify_node_target_from_topology (const zlink::routing_id
                                                          bool &unknown) const
 {
     using node_target_t = runtime::mesh::raw_mesh_node_owner_t::node_target_t;
-    const auto classified = _node->transport ().classify_node_target (target.to_bytes ());
+    const auto classified =
+      _node->transport ().classify_node_target ({target.data (), target.size ()});
     unknown = classified == node_target_t::unknown;
     if (classified == node_target_t::object_client)
         return zlink::submit_result_t::not_found;

@@ -86,12 +86,6 @@ struct raw_mesh_node_options_t
     metric_provider_t metric_provider = noop_metric_provider ();
 };
 
-struct raw_mesh_byte_vector_less_t
-{
-    bool operator() (const std::vector<std::uint8_t> &left,
-                     const std::vector<std::uint8_t> &right) const noexcept;
-};
-
 /* Outcome of an exact-identity-fenced relocationPrepare(40) round trip
  * (spec 15 §4.2 / spec 28). Exactly one of ready/failed is set for a usable
  * reply whose identity fields (relocation, target_attempt_generation,
@@ -237,7 +231,7 @@ class raw_mesh_node_owner_t
                             const std::string &source_spot_id,
                             const protocol::application_payload_t &application_payload,
                             const std::vector<std::uint8_t> &metadata);
-    task_t<bool> request_to_node (const std::vector<std::uint8_t> &target_routing_id,
+    task_t<bool> request_to_node (std::span<const std::uint8_t> target_routing_id,
                                   const protocol::application_payload_t &application_payload,
                                   std::chrono::milliseconds timeout,
                                   foundation::operation_registry_t::callback_t callback,
@@ -508,7 +502,7 @@ class raw_mesh_node_owner_t
         object_client,
         unknown
     };
-    node_target_t classify_node_target (const std::vector<std::uint8_t> &target_routing_id) const;
+    node_target_t classify_node_target (std::span<const std::uint8_t> target_routing_id) const;
     // Selected Core route generation and remote ADMIT readiness.
     std::pair<std::uint64_t, bool>
     peer_route (const std::vector<std::uint8_t> &rid,
@@ -610,7 +604,7 @@ class raw_mesh_node_owner_t
     service_topology_registry_t::peer_observer_t
     observe_request_peer_on_lane (const std::vector<std::uint8_t> &target_routing_id) const;
     task_t<bool> request_with_header (
-      const std::vector<std::uint8_t> &target_routing_id,
+      std::span<const std::uint8_t> target_routing_id,
       const std::function<zlink::message_t (std::uint64_t)> &header,
       const protocol::application_payload_t &application_payload,
       foundation::operation_registry_t::clock_t::time_point deadline,
@@ -687,6 +681,8 @@ class raw_mesh_node_owner_t
     static void publish_peer_metrics (opentelemetry::metrics::ObserverResult result, void *state);
     std::atomic_size_t _last_pump_bytes{0};
     std::shared_ptr<foundation::operation_registry_t> _operations;
+    // The owner lane clears consumed frames while retaining the two-part vector capacity.
+    std::vector<zlink::message_t> _request_wire;
     std::map<std::vector<std::uint8_t>, service_node_descriptor_t, raw_mesh_byte_vector_less_t>
       _expected_peers;
     peer_reconcile_t _peer_reconcile;
