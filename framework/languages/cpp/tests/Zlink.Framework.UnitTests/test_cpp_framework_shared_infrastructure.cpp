@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "runtime/mesh/service_liveness_registry.hpp"
 #include "runtime/mesh/service_topology_registry.hpp"
+#include "runtime/utils/available_processor_count.hpp"
 #include <gtest/gtest.h>
 #include "../support/scope_exit.hpp"
 #include <atomic>
@@ -8,8 +9,43 @@
 #include <cstdlib>
 #include <future>
 #include <memory>
+#include <string_view>
 #include <thread>
 #include <vector>
+
+namespace
+{
+struct lane_owner_t
+{
+    lane_owner_t (zlink::framework::runtime::offload_executor_t &executor,
+                  std::promise<bool> &released) :
+        lane (executor), released (released), worker (std::this_thread::get_id ())
+    {
+    }
+    ~lane_owner_t ()
+    {
+        lane.close ();
+        released.set_value (worker != std::this_thread::get_id ());
+    }
+    zlink::framework::runtime::state_lane_t lane;
+    std::promise<bool> &released;
+    std::thread::id worker;
+};
+} // namespace
+
+TEST (ZLinkStateLane, SharedPoolUsesRequestedWorkerCount)
+{
+    using namespace zlink::framework::runtime;
+    state_lane_t lane;
+    auto expected = available_processor_count ();
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+    if (const auto *probe = std::getenv ("ZLINK_CPP_TEST_SINGLE_INFRA_WORKER");
+        probe && std::string_view (probe) == "1")
+        expected = 1;
+#endif
+    RecordProperty ("infrastructure_workers", lane.executor ().live_worker_count ());
+    EXPECT_EQ (expected, lane.executor ().live_worker_count ());
+}
 
 #ifdef __linux__
 #include <unistd.h>
@@ -189,6 +225,76 @@ TEST (ZLinkStateLane, CloseFromOnlyWorkerYieldsUntilPostedCapturesAreReleased)
                          std::_Exit (5);
                      // Repeated close and destruction retain the same completed drain.
                      lane.close ();
+                     executor.drain ();
+                     std::_Exit (0);
+                 }()),
+                 ::testing::ExitedWithCode (0), "");
+}
+
+TEST (ZLinkStateLane, QueuedTaskReleasesLastLaneOwnerOutsideItsWorker)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    for (const bool asynchronous : {false, true}) {
+        ASSERT_EXIT (
+          ([asynchronous] {
+              offload_executor_t executor (1);
+              std::promise<bool> released;
+              auto destruction = released.get_future ();
+              std::promise<bool> completed;
+              auto completion = completed.get_future ();
+              task_completion_source_t<int> inner;
+              executor.submit ([&] {
+                  auto owner = std::make_shared<lane_owner_t> (executor, released);
+                  if (!owner->lane.try_post ([] {}))
+                      std::_Exit (1);
+                  auto pending =
+                    asynchronous ? owner->lane.run_task ([owner, &inner] { return inner.task (); })
+                                 : owner->lane.run_task ([owner] { return 42; });
+                  owner.reset ();
+                  detail::observe_task_completion (pending, [&] (const result_t<int> &result) {
+                      completed.set_value (result && result.value () == 42);
+                  });
+              });
+              // The invocation's captures must be released even if its
+              // returned task has not completed yet.
+              if (!destruction.get ())
+                  std::_Exit (2);
+              inner.complete (result_t<int>::success (42));
+              if (!completion.get ())
+                  std::_Exit (3);
+              executor.drain ();
+              std::_Exit (0);
+          }()),
+          ::testing::ExitedWithCode (0), "");
+    }
+}
+
+TEST (ZLinkStateLane, QueuedTaskResultReleasesLastLaneOwnerOutsideItsWorker)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    ASSERT_EXIT (([] {
+                     offload_executor_t executor (1);
+                     std::promise<bool> released;
+                     auto destruction = released.get_future ();
+                     std::promise<void> observed;
+                     auto observation = observed.get_future ();
+                     executor.submit ([&] {
+                         auto owner = std::make_shared<lane_owner_t> (executor, released);
+                         if (!owner->lane.try_post ([] {}))
+                             std::_Exit (1);
+                         auto pending = owner->lane.run_task ([owner] { return owner; });
+                         owner.reset ();
+                         detail::observe_task_completion (pending, [&] (const auto &result) {
+                             if (!result || !result.value ())
+                                 std::_Exit (2);
+                             observed.set_value ();
+                         });
+                     });
+                     observation.get ();
+                     if (!destruction.get ())
+                         std::_Exit (3);
                      executor.drain ();
                      std::_Exit (0);
                  }()),

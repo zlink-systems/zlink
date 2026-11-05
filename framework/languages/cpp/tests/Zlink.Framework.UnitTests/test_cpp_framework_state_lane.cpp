@@ -1880,7 +1880,57 @@ TEST (ZLinkStateLane, DebugWaitRejectsPendingCompletionFromCurrentLane)
       },
       "infrastructure wait guard: state-lane/pending-test");
 }
+
+TEST (ZLinkStateLane, DebugCloseRejectsPendingDrainOnItsOnlyWorker)
+{
+    ASSERT_DEATH (
+      {
+          offload_executor_t executor (1);
+          state_lane_t lane (executor);
+          std::promise<void> done;
+          executor.submit ([&] {
+              EXPECT_TRUE (lane.try_post ([] {}));
+              lane.close ();
+              done.set_value ();
+          });
+          done.get_future ().wait ();
+      },
+      "infrastructure wait guard: state-lane/close");
+}
+
+TEST (ZLinkStateLane, DebugDestructorRejectsPendingDrainOnItsOnlyWorker)
+{
+    ASSERT_DEATH (
+      {
+          offload_executor_t executor (1);
+          std::promise<void> done;
+          executor.submit ([&] {
+              auto lane = std::make_unique<state_lane_t> (executor);
+              EXPECT_TRUE (lane->try_post ([] {}));
+              lane.reset ();
+              done.set_value ();
+          });
+          done.get_future ().wait ();
+      },
+      "infrastructure wait guard: state-lane/close");
+}
 #endif
+
+TEST (ZLinkStateLane, CloseAndDestructionOfDrainedLaneOnItsOnlyWorkerComplete)
+{
+    offload_executor_t executor (1);
+    std::promise<void> done;
+    executor.submit ([&] {
+        {
+            state_lane_t lane (executor);
+            lane.run_sync ([] {});
+            lane.close ();
+        }
+        done.set_value ();
+    });
+    done.get_future ().get ();
+    executor.drain ();
+}
 
 TEST (ZLinkStateLane, AnAvailableLaneDoesNotWaitForUnrelatedExecutorWork)
 {
