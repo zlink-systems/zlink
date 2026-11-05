@@ -1032,7 +1032,9 @@ public sealed class AutoConnectReconcilerTests
     [Fact]
     public async Task Store_Outage_Defers_Missing_Target_Removal_Until_Lease_Ttl_After_Recovery()
     {
-        var fixture = await FixtureAsync();
+        var fixture = await FixtureAsync(options =>
+            options.OwnerLeaseTtl = TimeSpan.FromSeconds(15)
+        );
         await fixture.PublishPeerAsync("r1", "tcp://r:1");
         await fixture.Reconciler.TickAsync();
         Assert.Single(fixture.Reconciler.ActiveTargets);
@@ -1143,8 +1145,10 @@ public sealed class AutoConnectReconcilerTests
     public async Task StoreFailureGrace_Keeps_Ready_Connections_And_Blocks_New_Outbound_During_Outage()
     {
         var fixture = await FixtureAsync(options =>
-            options.StoreFailureGrace = TimeSpan.FromSeconds(3)
-        );
+        {
+            options.OwnerLeaseTtl = TimeSpan.FromSeconds(15);
+            options.StoreFailureGrace = TimeSpan.FromSeconds(3);
+        });
         await fixture.PublishPeerAsync("r1", "tcp://r:1");
         await fixture.Reconciler.TickAsync();
         Assert.Equal("tcp://r:1", Assert.Single(fixture.Reconciler.ActiveTargets).Endpoint);

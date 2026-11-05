@@ -384,6 +384,11 @@ public sealed partial class EntrySpotActorDispatchTests
                 null
             );
         fixture.Time.Advance(TimeSpan.FromSeconds(2));
+        var waiting = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await fixture.Runtime.GetOrCreate(fixture.ObjectId, fixture.StableType).Async()
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, waiting.Kind);
+        fixture.Time.Advance(TimeSpan.FromSeconds(15));
         var result = await fixture
             .Runtime.GetOrCreate(fixture.ObjectId, fixture.StableType)
             .Async();
@@ -507,6 +512,15 @@ public sealed partial class EntrySpotActorDispatchTests
             var previous = await ReadAuthorityAsync(fixture.Store, fixture.AuthorityKey);
             fixture.Time.Advance(TimeSpan.FromSeconds(2));
             var manager = new ZLinkActorManagerService(fixture.Runtime);
+            var waiting = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await manager
+                    .GetOrCreate(fixture.ObjectId, fixture.StableType)
+                    .InMesh("entry")
+                    .Timeout(JoinDecisionRequestTimeout)
+                    .Async()
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, waiting.Kind);
+            fixture.Time.Advance(TimeSpan.FromSeconds(15));
             // Location runtime §6.1 permits explicit creation after conditional release.
             var result = await manager
                 .GetOrCreate(fixture.ObjectId, fixture.StableType)
@@ -910,7 +924,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 ? inner =>
                     corruptStore = new(inner, ZLinkProviderLocationRepository.OwnerKey(ownerId))
                 : null,
-            locationTimeProvider: time
+            locationTimeProvider: time,
+            joinTimeProvider: time
         );
         try
         {

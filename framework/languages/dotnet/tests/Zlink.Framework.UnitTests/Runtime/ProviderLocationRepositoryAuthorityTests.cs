@@ -3,7 +3,10 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.AspNetCore;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Codecs;
@@ -144,7 +147,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         );
         IZLinkLocationRepository repository = inMemory
             ? new ZLinkInMemoryLocationStore(time)
-            : new ZLinkProviderLocationRepository(provider);
+            : new ZLinkProviderLocationRepository(provider, time);
         var owner = await ClaimAsync(repository, "creation-release-owner");
         var descriptor = SpotReclaimDescriptor("source", owner, ZLinkPlacementObjectKind.UserSpot);
         await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
@@ -181,6 +184,18 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         Assert.IsType<ZLinkAuthorityReadResult.Found>(
             await repository.ReadAuthorityAsync(request.Key)
         );
+        var recovery = new ZLinkCreationAuthorityRecovery(
+            ZLinkObjectRelocationRegistration.DisabledPolicy
+        );
+        var waiting = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await repository.ReleaseEndedReservationAsync(
+                request.Key,
+                committed.StoreVersion,
+                recovery
+            )
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, waiting.Kind);
+        time.Advance(TimeSpan.FromSeconds(15));
         var conflicts = 0;
         if (!inMemory)
             provider.Inspect = async write =>
@@ -209,7 +224,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             await repository.ReleaseEndedReservationAsync(
                 request.Key,
                 committed.StoreVersion,
-                new ZLinkCreationAuthorityRecovery(ZLinkObjectRelocationRegistration.DisabledPolicy)
+                recovery
             )
         );
         Assert.Equal(inMemory ? 0 : 1, conflicts);
@@ -552,7 +567,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         );
         IZLinkLocationRepository repository = inMemory
             ? new ZLinkInMemoryLocationStore(time)
-            : new ZLinkProviderLocationRepository(provider);
+            : new ZLinkProviderLocationRepository(provider, time);
         var oldOwner = await ClaimAsync(repository, "ended-spot-old");
         var oldDescriptor = SpotReclaimDescriptor("source", oldOwner, kind);
         _ = await repository.UpdateMeshNodeAsync(oldDescriptor, ZLinkLocationWriteIntent.NewClaim);
@@ -704,6 +719,22 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                 : scenario == "recreate" ? ZLinkObjectRelocationRegistration.RecreatePolicy
                 : ZLinkObjectRelocationRegistration.DisabledPolicy,
         };
+        if (
+            scenario
+            is "expired"
+                or "race"
+                or "policySource"
+                or "member"
+                or "firstPageMember"
+                or "snapshotExpired"
+        )
+        {
+            var waiting = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await repository.ReserveAsync(next)
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, waiting.Kind);
+            time.Advance(TimeSpan.FromSeconds(15));
+        }
         var expired = false;
         if (scenario is "firstPageMember" or "snapshotExpired" or "storeFailure")
             provider.ScanOverride = async scan =>
@@ -1094,7 +1125,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         );
         IZLinkLocationRepository repository = inMemory
             ? new ZLinkInMemoryLocationStore(time)
-            : new ZLinkProviderLocationRepository(provider);
+            : new ZLinkProviderLocationRepository(provider, time);
         const ZLinkPlacementObjectKind kind = ZLinkPlacementObjectKind.UserSpot;
         var spotOwner = await ClaimAsync(repository, "member-spot-owner");
         var spotDescriptor = SpotReclaimDescriptor("source", spotOwner, kind);
@@ -1282,6 +1313,11 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         {
             ObjectRelocationPolicy = ZLinkObjectRelocationRegistration.DisabledPolicy,
         };
+        var releaseWait = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await repository.ReserveAsync(next)
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, releaseWait.Kind);
+        time.Advance(TimeSpan.FromSeconds(15));
         if (scenario == "memberCapacityCorrupt")
         {
             var capacityKey = CapacityKey(memberDescriptor);
@@ -1397,6 +1433,16 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             // Actor slot was returned before accepting the next reservation.
             var memberOwnerAgain = await ClaimAsync(repository, "member-node-owner-next");
             var memberNodeAgain = MemberNodeDescriptor(memberOwnerAgain);
+            Assert.Equal(
+                ZLinkLocationWriteStatus.IgnoredStale,
+                (
+                    await repository.UpdateMeshNodeAsync(
+                        memberNodeAgain,
+                        ZLinkLocationWriteIntent.NewClaim
+                    )
+                ).Status
+            );
+            time.Advance(TimeSpan.FromSeconds(15));
             await PublishAsync(repository, memberNodeAgain, ZLinkLocationWriteIntent.NewClaim);
             var again = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
                 await repository.ReserveAsync(
@@ -1429,6 +1475,326 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                     )
                     .Snapshot.StoreVersion
             );
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EndedReadyActorReleaseWaitsForThreeMargins(bool inMemory)
+    {
+        var time = new ManualTimeProvider();
+        var provider = new ZLinkInMemoryProviderLocationStore(time);
+        IZLinkLocationRepository repository = inMemory
+            ? new ZLinkInMemoryLocationStore(time)
+            : new ZLinkProviderLocationRepository(provider, time);
+        var oldOwner = await ClaimAsync(repository, "ready-actor-old-owner");
+        var oldDescriptor = Descriptor("ready-actor-old", oldOwner);
+        await PublishAsync(repository, oldDescriptor, ZLinkLocationWriteIntent.NewClaim);
+        var original = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(Reservation("ready-actor-delay", oldDescriptor, oldOwner))
+        );
+        _ = await repository.CompleteCreationAsync(
+            original.Reservation,
+            new ZLinkObjectCreationCompletion.Created(
+                new byte[] { 9 },
+                new ZLinkCreationTerminalPublication(
+                    new ZLinkCreationOperationId(RoutingId.From("ready-actor-old"), 1, 1, 1),
+                    new byte[] { 1 },
+                    time.GetUtcNow().AddMinutes(5)
+                )
+            )
+        );
+        var committedVersion = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(
+                await repository.ReadAuthorityAsync(original.Reservation.Key)
+            )
+            .Snapshot.StoreVersion;
+        Assert.Equal(
+            ZLinkOwnerLeaseReleaseResult.Released,
+            await repository.ReleaseOwnerLeaseAsync(oldOwner)
+        );
+        var newOwner = await ClaimAsync(repository, "ready-actor-new-owner");
+        var newDescriptor = Descriptor("ready-actor-new", newOwner);
+        await PublishAsync(repository, newDescriptor, ZLinkLocationWriteIntent.NewClaim);
+        var request = Reservation("ready-actor-delay", newDescriptor, newOwner) with
+        {
+            ObjectRelocationPolicy = ZLinkObjectRelocationRegistration.DisabledPolicy,
+        };
+
+        var waiting = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await repository.ReserveAsync(request)
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, waiting.Kind);
+        Assert.Equal(
+            committedVersion,
+            Assert
+                .IsType<ZLinkAuthorityReadResult.Found>(
+                    await repository.ReadAuthorityAsync(request.Key)
+                )
+                .Snapshot.StoreVersion
+        );
+
+        time.Advance(TimeSpan.FromSeconds(15) - TimeSpan.FromTicks(1));
+        waiting = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await repository.ReserveAsync(request)
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, waiting.Kind);
+
+        time.Advance(TimeSpan.FromTicks(1));
+        Assert.IsType<ZLinkObjectReserveResult.Reserved>(await repository.ReserveAsync(request));
+    }
+
+    [Fact]
+    public async Task EndedReadyActorReleaseRestartsItsObservation()
+    {
+        var time = new ManualTimeProvider();
+        var provider = new ZLinkInMemoryProviderLocationStore(time);
+        IZLinkLocationRepository repository = new ZLinkProviderLocationRepository(provider, time);
+        var oldOwner = await ClaimAsync(repository, "restarted-actor-old-owner");
+        var oldDescriptor = Descriptor("restarted-actor-old", oldOwner);
+        await PublishAsync(repository, oldDescriptor, ZLinkLocationWriteIntent.NewClaim);
+        var original = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(Reservation("restarted-actor", oldDescriptor, oldOwner))
+        );
+        _ = await repository.CompleteCreationAsync(
+            original.Reservation,
+            new ZLinkObjectCreationCompletion.Created(
+                new byte[] { 9 },
+                new ZLinkCreationTerminalPublication(
+                    new ZLinkCreationOperationId(RoutingId.From("restarted-actor-old"), 1, 1, 1),
+                    new byte[] { 1 },
+                    time.GetUtcNow().AddMinutes(5)
+                )
+            )
+        );
+        var committedVersion = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(
+                await repository.ReadAuthorityAsync(original.Reservation.Key)
+            )
+            .Snapshot.StoreVersion;
+        _ = await repository.ReleaseOwnerLeaseAsync(oldOwner);
+        var newOwner = await ClaimAsync(repository, "restarted-actor-new-owner");
+        var newDescriptor = Descriptor("restarted-actor-new", newOwner);
+        await PublishAsync(repository, newDescriptor, ZLinkLocationWriteIntent.NewClaim);
+        var request = Reservation("restarted-actor", newDescriptor, newOwner) with
+        {
+            ObjectRelocationPolicy = ZLinkObjectRelocationRegistration.DisabledPolicy,
+        };
+
+        _ = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await repository.ReserveAsync(request)
+        );
+        Assert.Equal(
+            committedVersion,
+            Assert
+                .IsType<ZLinkAuthorityReadResult.Found>(
+                    await repository.ReadAuthorityAsync(request.Key)
+                )
+                .Snapshot.StoreVersion
+        );
+        time.Advance(TimeSpan.FromSeconds(15));
+        repository = new ZLinkProviderLocationRepository(provider, time);
+        var restartedWait = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await repository.ReserveAsync(request)
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, restartedWait.Kind);
+
+        time.Advance(TimeSpan.FromSeconds(15));
+        Assert.IsType<ZLinkObjectReserveResult.Reserved>(await repository.ReserveAsync(request));
+    }
+
+    [Fact]
+    public async Task CreatingAuthorityWithMissingRecordDoesNotWait()
+    {
+        var time = new ManualTimeProvider();
+        var repository = new ZLinkInMemoryLocationStore(time);
+        var owner = await ClaimAsync(repository, "missing-authority-owner");
+        var descriptor = Descriptor("missing-authority", owner);
+        await PublishAsync(repository, descriptor, ZLinkLocationWriteIntent.NewClaim);
+
+        Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(Reservation("missing-authority", descriptor, owner))
+        );
+    }
+
+    [Fact]
+    public async Task UserSpotReleaseMeasuresWaitFromTheFirstInvalidOwnerRead()
+    {
+        var time = new ManualTimeProvider();
+        var provider = new InspectAuthorityBatchLocationStore(
+            new ZLinkInMemoryProviderLocationStore(time)
+        );
+        var repository = new ZLinkProviderLocationRepository(provider, time);
+        var oldOwner = await ClaimAsync(repository, "scan-wait-spot-owner");
+        var oldDescriptor = SpotReclaimDescriptor(
+            "scan-wait-spot-source",
+            oldOwner,
+            ZLinkPlacementObjectKind.UserSpot
+        );
+        await PublishAsync(repository, oldDescriptor, ZLinkLocationWriteIntent.NewClaim);
+        const string spotId = "scan-wait-spot";
+        var original = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(
+                Reservation(spotId, oldDescriptor, oldOwner, ZLinkPlacementObjectKind.UserSpot)
+            )
+        );
+        _ = await repository.CommitAsync(
+            original.Reservation,
+            ZLinkUserSpotAuthorityPayloadCodec.Encode(
+                new ZLinkUserSpotAuthorityPayload(
+                    ZLinkUserSpotAuthorityState.Ready,
+                    "player",
+                    spotId,
+                    oldOwner.OwnerId,
+                    checked((ulong)oldOwner.LeaseGeneration),
+                    "play",
+                    oldDescriptor.Rid,
+                    1
+                )
+            )
+        );
+        _ = await repository.ReleaseOwnerLeaseAsync(oldOwner);
+        var newOwner = await ClaimAsync(repository, "scan-wait-new-owner");
+        var newDescriptor = SpotReclaimDescriptor(
+            "scan-wait-spot-target",
+            newOwner,
+            ZLinkPlacementObjectKind.UserSpot
+        );
+        await PublishAsync(repository, newDescriptor, ZLinkLocationWriteIntent.NewClaim);
+        var request = Reservation(
+            spotId,
+            newDescriptor,
+            newOwner,
+            ZLinkPlacementObjectKind.UserSpot
+        ) with
+        {
+            ObjectRelocationPolicy = ZLinkObjectRelocationRegistration.DisabledPolicy,
+        };
+        var scanStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseScan = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        IReadOnlyList<string> scannedKeys = [];
+        provider.ScanOverride = async scan =>
+        {
+            var result = await provider.InnerScanAsync(scan);
+            scannedKeys = result is ZLinkStoreScanResult.Page page
+                ? page.Value.Items.Select(static item => item.Key.Value).ToArray()
+                : [];
+            scanStarted.TrySetResult();
+            await releaseScan.Task;
+            return result;
+        };
+
+        var pending = repository.ReserveAsync(request).AsTask();
+        await scanStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Empty(scannedKeys);
+        time.Advance(TimeSpan.FromSeconds(15));
+        releaseScan.TrySetResult();
+
+        Assert.IsType<ZLinkObjectReserveResult.Reserved>(await pending);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EndedUserSpotMemberReleaseWaitsForEachOwnerToken(bool inMemory)
+    {
+        var time = new ManualTimeProvider();
+        var provider = new ZLinkInMemoryProviderLocationStore(time);
+        IZLinkLocationRepository repository = inMemory
+            ? new ZLinkInMemoryLocationStore(time)
+            : new ZLinkProviderLocationRepository(provider, time);
+        var spotOwner = await ClaimAsync(repository, "delayed-member-spot-owner");
+        var spotDescriptor = SpotReclaimDescriptor(
+            "delayed-member-spot",
+            spotOwner,
+            ZLinkPlacementObjectKind.UserSpot
+        );
+        await PublishAsync(repository, spotDescriptor, ZLinkLocationWriteIntent.NewClaim);
+        var memberOwner = await ClaimAsync(repository, "delayed-member-owner");
+        var memberDescriptor = MemberNodeDescriptor(memberOwner);
+        await PublishAsync(repository, memberDescriptor, ZLinkLocationWriteIntent.NewClaim);
+        const string spotId = "delayed-member-spot";
+        var spot = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(
+                Reservation(spotId, spotDescriptor, spotOwner, ZLinkPlacementObjectKind.UserSpot)
+            )
+        );
+        _ = await repository.CommitAsync(
+            spot.Reservation,
+            ZLinkUserSpotAuthorityPayloadCodec.Encode(
+                new ZLinkUserSpotAuthorityPayload(
+                    ZLinkUserSpotAuthorityState.Ready,
+                    "player",
+                    spotId,
+                    spotOwner.OwnerId,
+                    checked((ulong)spotOwner.LeaseGeneration),
+                    "play",
+                    spotDescriptor.Rid,
+                    1
+                )
+            )
+        );
+        var member = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(
+                Reservation("delayed-member-actor", memberDescriptor, memberOwner)
+            )
+        );
+        _ = await repository.CommitAsync(
+            member.Reservation,
+            MemberPayload(
+                "delayed-member-actor",
+                spotId,
+                spot.Reservation.ObjectGeneration,
+                memberOwner,
+                memberDescriptor.Rid
+            )
+        );
+
+        _ = await repository.ReleaseOwnerLeaseAsync(spotOwner);
+        var newOwner = await ClaimAsync(repository, "delayed-member-new-owner");
+        var newDescriptor = Descriptor("delayed-member-target", newOwner);
+        await PublishAsync(repository, newDescriptor, ZLinkLocationWriteIntent.NewClaim);
+        var request = Reservation(
+            spotId,
+            newDescriptor,
+            newOwner,
+            ZLinkPlacementObjectKind.UserSpot
+        ) with
+        {
+            ObjectRelocationPolicy = ZLinkObjectRelocationRegistration.DisabledPolicy,
+        };
+        var before = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+            await repository.ReadAuthorityAsync(spot.Reservation.Key)
+        );
+
+        var waitingForSpot = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await repository.ReserveAsync(request)
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, waitingForSpot.Kind);
+        time.Advance(TimeSpan.FromSeconds(5));
+        _ = await repository.ReleaseOwnerLeaseAsync(memberOwner);
+        _ = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await repository.ReserveAsync(request)
+        );
+        time.Advance(TimeSpan.FromSeconds(10));
+        _ = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await repository.ReserveAsync(request)
+        );
+        Assert.Equal(
+            before.Snapshot.StoreVersion,
+            Assert
+                .IsType<ZLinkAuthorityReadResult.Found>(
+                    await repository.ReadAuthorityAsync(spot.Reservation.Key)
+                )
+                .Snapshot.StoreVersion
+        );
+
+        time.Advance(TimeSpan.FromSeconds(5));
+        Assert.IsType<ZLinkObjectReserveResult.Reserved>(await repository.ReserveAsync(request));
     }
 
     private static async Task PublishAsync(
@@ -1529,7 +1895,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         );
         IZLinkLocationRepository repository = inMemory
             ? new ZLinkInMemoryLocationStore(time)
-            : new ZLinkProviderLocationRepository(provider);
+            : new ZLinkProviderLocationRepository(provider, time);
         var oldOwner = await ClaimAsync(repository, "reclaim-old");
         var oldDescriptor = Descriptor("source", oldOwner, 1);
         _ = await repository.UpdateMeshNodeAsync(oldDescriptor, ZLinkLocationWriteIntent.NewClaim);
@@ -1585,6 +1951,21 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                 : ZLinkObjectRelocationRegistration.DisabledPolicy,
             StableType = scenario == "typeMismatch" ? "different" : "player",
         };
+        if (
+            scenario
+            is "expired"
+                or "recreate"
+                or "race"
+                or "differentLeaseGeneration"
+                or "capacityRace"
+        )
+        {
+            var releaseWait = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await repository.ReserveAsync(next)
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, releaseWait.Kind);
+            time.Advance(TimeSpan.FromSeconds(15));
+        }
         if (scenario == "recreate")
         {
             var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
@@ -3032,12 +3413,16 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         Assert.True(result.Generation > 0);
     }
 
-    [Fact]
-    public async Task MeshNewClaimTakesOverDescriptorWhoseOwnerLeaseExpired()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MeshNewClaimWaitsAfterDescriptorOwnerLeaseExpires(bool inMemory)
     {
         var time = new ManualTimeProvider();
         var provider = new ZLinkInMemoryProviderLocationStore(time);
-        var repository = new ZLinkProviderLocationRepository(provider);
+        IZLinkLocationRepository repository = inMemory
+            ? new ZLinkInMemoryLocationStore(time)
+            : new ZLinkProviderLocationRepository(provider, time);
         var expiredOwner = await ClaimAsync(
             repository,
             "expired-descriptor-owner",
@@ -3064,6 +3449,17 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         );
 
         Assert.True(successor.LeaseGeneration > expiredOwner.LeaseGeneration);
+        var waiting = await repository.UpdateMeshNodeAsync(
+            Descriptor("source", successor),
+            ZLinkLocationWriteIntent.NewClaim
+        );
+        Assert.Equal(ZLinkLocationWriteStatus.IgnoredStale, waiting.Status);
+        var stillOwnedByPreviousLifecycle = Assert.Single(
+            (await repository.ListMeshNodesAsync("play", default)).Items
+        );
+        Assert.Equal(expiredOwner.OwnerId, stillOwnedByPreviousLifecycle.OwnerId);
+
+        time.Advance(TimeSpan.FromSeconds(15));
         Assert.Equal(
             ZLinkLocationWriteStatus.Stored,
             (
@@ -3076,10 +3472,185 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     }
 
     [Fact]
-    public async Task MeshNewClaimRejectsDescriptorWhoseOwnerLeaseIsLive()
+    public async Task MeshNewClaimRestartReobservesTheOwnerLeaseWait()
     {
-        var provider = new ZLinkInMemoryProviderLocationStore();
-        var repository = new ZLinkProviderLocationRepository(provider);
+        var time = new ManualTimeProvider();
+        var provider = new ZLinkInMemoryProviderLocationStore(time);
+        var repository = new ZLinkProviderLocationRepository(provider, time);
+        var expiredOwner = await ClaimAsync(
+            repository,
+            "restarted-descriptor-owner",
+            TimeSpan.FromSeconds(1)
+        );
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (
+                await repository.UpdateMeshNodeAsync(
+                    Descriptor("restarted", expiredOwner),
+                    ZLinkLocationWriteIntent.NewClaim
+                )
+            ).Status
+        );
+        time.Advance(TimeSpan.FromSeconds(1));
+        var successor = await ClaimAsync(
+            repository,
+            "restarted-descriptor-successor",
+            TimeSpan.FromMinutes(1)
+        );
+
+        Assert.Equal(
+            ZLinkLocationWriteStatus.IgnoredStale,
+            (
+                await repository.UpdateMeshNodeAsync(
+                    Descriptor("restarted", successor),
+                    ZLinkLocationWriteIntent.NewClaim
+                )
+            ).Status
+        );
+        time.Advance(TimeSpan.FromSeconds(15));
+        var restartedRepository = new ZLinkProviderLocationRepository(provider, time);
+        Assert.Equal(
+            ZLinkLocationWriteStatus.IgnoredStale,
+            (
+                await restartedRepository.UpdateMeshNodeAsync(
+                    Descriptor("restarted", successor),
+                    ZLinkLocationWriteIntent.NewClaim
+                )
+            ).Status
+        );
+
+        time.Advance(TimeSpan.FromSeconds(15));
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (
+                await restartedRepository.UpdateMeshNodeAsync(
+                    Descriptor("restarted", successor),
+                    ZLinkLocationWriteIntent.NewClaim
+                )
+            ).Status
+        );
+    }
+
+    [Fact]
+    public async Task FixedRidHostStaysPreparingUntilTheReleaseWaitExpires()
+    {
+        const string meshName = "play";
+        var fixedRid = RoutingId.From("fixed-rid-restart");
+        var time = new ManualTimeProvider();
+        var backingStore = new ZLinkInMemoryProviderLocationStore(time);
+        var seedingRepository = new ZLinkProviderLocationRepository(backingStore, time);
+        var previousOwner = await ClaimAsync(
+            seedingRepository,
+            "fixed-rid-previous-owner",
+            TimeSpan.FromSeconds(1)
+        );
+        var previousDescriptor = new ZLinkMeshNodeDescriptor(
+            meshName,
+            fixedRid,
+            1,
+            1,
+            "tcp://127.0.0.1:7102",
+            new Dictionary<string, int>(StringComparer.Ordinal),
+            string.Empty,
+            previousOwner.OwnerId,
+            previousOwner.LeaseGeneration,
+            time.GetUtcNow()
+        )
+        {
+            ObjectRole = ZLinkMeshNodeObjectRole.Client,
+            State = ZLinkFrameworkRuntimeState.Serving,
+        };
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (
+                await seedingRepository.UpdateMeshNodeAsync(
+                    previousDescriptor,
+                    ZLinkLocationWriteIntent.NewClaim
+                )
+            ).Status
+        );
+        time.Advance(TimeSpan.FromSeconds(1));
+
+        var locationStore = new FixedRidTrackingLocationStore(
+            backingStore,
+            ZLinkProviderLocationRepository.MeshKey(meshName, fixedRid)
+        );
+        var services = new ServiceCollection();
+        services.AddZLinkFramework(options =>
+        {
+            options.UseTestTimeProvider(time);
+            options.AddLocationStore(locationStore);
+            options.ConfigureLocations().PollingInterval = TimeSpan.FromDays(1);
+            options
+                .AddRouteMesh(meshName)
+                .Listen("tcp://127.0.0.1:0")
+                .SetRoutingId(fixedRid)
+                .Objects()
+                .Client();
+        });
+        var serviceProvider = services.BuildServiceProvider();
+        var hosted = serviceProvider
+            .GetServices<IHostedService>()
+            .Single(static service => service is ZLinkFrameworkHostedService);
+        try
+        {
+            await hosted.StartAsync(CancellationToken.None);
+            var framework = serviceProvider.GetRequiredService<ZLinkFrameworkRuntime>();
+            var locationRuntime = serviceProvider.GetRequiredService<ZLinkLocationRuntime>();
+            var node = framework.GetMeshNodeRuntime(meshName);
+            var startup = Assert.IsType<ZLinkMeshNodeStartupState>(node.StartupState);
+            Assert.Equal(ZLinkFrameworkRuntimeState.Preparing, startup.Descriptor.State);
+            Assert.Equal(0UL, startup.StoreGeneration);
+            Assert.Null(node.LocalSessionOwner);
+            Assert.Equal(0, locationStore.DescriptorWriteCount);
+            Assert.Equal(
+                previousOwner.OwnerId,
+                Assert
+                    .Single((await seedingRepository.ListMeshNodesAsync(meshName, default)).Items)
+                    .OwnerId
+            );
+
+            time.Advance(TimeSpan.FromSeconds(15) - TimeSpan.FromTicks(1));
+            Assert.Equal(
+                ZLinkLocationWriteStatus.IgnoredStale,
+                (
+                    await locationRuntime.WriteDescriptorAsync(
+                        startup.Descriptor,
+                        ZLinkLocationWriteIntent.NewClaim
+                    )
+                ).Status
+            );
+            Assert.Equal(0UL, node.StartupState!.StoreGeneration);
+            Assert.Equal(0, locationStore.DescriptorWriteCount);
+
+            time.Advance(TimeSpan.FromTicks(1));
+            Assert.True(await locationRuntime.RenewOwnerLeaseOnceAsync());
+            await locationStore.DescriptorWritten.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(node.StartupState!.StoreGeneration > 0);
+            Assert.Equal(
+                locationRuntime.OwnerToken.OwnerId,
+                Assert
+                    .Single((await seedingRepository.ListMeshNodesAsync(meshName, default)).Items)
+                    .OwnerId
+            );
+        }
+        finally
+        {
+            await hosted.StopAsync(CancellationToken.None);
+            await serviceProvider.DisposeAsync();
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MeshNewClaimRejectsDescriptorWhoseOwnerLeaseIsLive(bool inMemory)
+    {
+        var time = new ManualTimeProvider();
+        var provider = new ZLinkInMemoryProviderLocationStore(time);
+        IZLinkLocationRepository repository = inMemory
+            ? new ZLinkInMemoryLocationStore(time)
+            : new ZLinkProviderLocationRepository(provider, time);
         var liveOwner = await ClaimAsync(repository, "live-descriptor-owner");
         Assert.Equal(
             ZLinkLocationWriteStatus.Stored,
@@ -6689,5 +7260,46 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             ScanOverride is { } scan
                 ? new ValueTask<ZLinkStoreScanResult>(scan(request))
                 : inner.ScanAsync(request, cancellationToken);
+    }
+
+    private sealed class FixedRidTrackingLocationStore(
+        IZLinkLocationStore inner,
+        ZLinkStoreKey descriptorKey
+    ) : IZLinkLocationStore
+    {
+        private readonly TaskCompletionSource _descriptorWritten = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        private int _descriptorWriteCount;
+
+        internal Task DescriptorWritten => _descriptorWritten.Task;
+        internal int DescriptorWriteCount => Volatile.Read(ref _descriptorWriteCount);
+
+        public ValueTask<ZLinkStoreReadResult> ReadAsync(
+            ZLinkStoreKey key,
+            CancellationToken cancellationToken = default
+        ) => inner.ReadAsync(key, cancellationToken);
+
+        public async ValueTask<ZLinkStoreWriteResult> WriteAsync(
+            ZLinkStoreWriteRequest request,
+            CancellationToken cancellationToken = default
+        )
+        {
+            var writesDescriptor = request
+                .Mutations.OfType<ZLinkStoreMutation.Put>()
+                .Any(mutation => mutation.Key == descriptorKey);
+            var result = await inner.WriteAsync(request, cancellationToken);
+            if (writesDescriptor && result is ZLinkStoreWriteResult.Applied)
+            {
+                Interlocked.Increment(ref _descriptorWriteCount);
+                _descriptorWritten.TrySetResult();
+            }
+            return result;
+        }
+
+        public ValueTask<ZLinkStoreScanResult> ScanAsync(
+            ZLinkStoreScanRequest request,
+            CancellationToken cancellationToken = default
+        ) => inner.ScanAsync(request, cancellationToken);
     }
 }

@@ -13356,9 +13356,12 @@ public sealed partial class EntrySpotActorDispatchTests
         var locationProvider = new ZLinkInMemoryProviderLocationStore(locationTime);
         var runtimeLocationProvider =
             locationStoreWrapper?.Invoke(locationProvider) ?? locationProvider;
-        var locationStore = new ZLinkProviderLocationRepository(locationProvider);
+        var locationStore = new ZLinkProviderLocationRepository(locationProvider, locationTime);
         locationStoreCapture?.Invoke(locationStore);
-        var runtimeLocationStore = new ZLinkProviderLocationRepository(runtimeLocationProvider);
+        var runtimeLocationStore = new ZLinkProviderLocationRepository(
+            runtimeLocationProvider,
+            locationTime
+        );
         await locationStore.ClaimLiveOwnerAsync(locationOwnerId, TimeSpan.FromMinutes(5));
         var locationOptions = new ZLinkLocationOptions { PollingInterval = TimeSpan.Zero };
         var leaseTracker = new ZLinkOwnerLeaseTracker(

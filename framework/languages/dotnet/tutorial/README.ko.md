@@ -162,11 +162,13 @@ Rider 또는 Visual Studio 2022·2026에서 `Tutorial.sln`을 연다. `Server`�
   그런 다음 Server와 Client를 다시 실행한다. 기존 Redis를 사용했다면 "종료" 절의
   `docker rm` 명령은 실행하지 않는다.
 - **`dotnet`이 호환되는 SDK가 없다고 한다** — .NET 8.0 이상 SDK를 설치한다.
-- **강제 종료 후 RID 등록이 `RejectedConflict`로 거부된다.** 이전 owner lease는 최대
-  15초 동안 유효할 수 있다([owner lease TTL 기본값](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#L670-L674)).
-  만료될 때까지 기다린 뒤 Server를 다시 실행한다. 시작에 실패한 process는 자동으로
-  재시도하지 않는다. 즉시 다시 시작하려면 이전 tutorial process를 종료하고 아래 명령으로
-  이 tutorial의 `zlink-tutorial:*` 키만 삭제한다. 같은 Redis의 다른 키는 지우지 않는다.
+- **강제 종료 후 Fixed RID 재claim이 지연된다.** 이전 owner lease는 기본 TTL 30초 동안
+  유효할 수 있다([owner lease 기본값](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#L706-L714)).
+  lease가 무효인 것을 확인한 뒤에도 기본 fencing margin 5초의 세 배인 15초를 기다린다.
+  이 동안 host는 `Preparing`에 머물며 owner lease renew interval마다 다시 claim한다.
+  기본 설정에서 가장 이른 재생성 시점은 마지막 성공 갱신 요청 시작 후 45초다. 즉시
+  다시 시작하려면 이전 tutorial process를 종료하고 아래 명령으로 이 tutorial의
+  `zlink-tutorial:*` 키만 삭제한다. 같은 Redis의 다른 키는 지우지 않는다.
 
   ```bash
   redis-cli --scan --pattern 'zlink-tutorial:*' | xargs -r redis-cli del

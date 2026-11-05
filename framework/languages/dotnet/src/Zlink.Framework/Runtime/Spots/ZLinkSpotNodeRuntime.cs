@@ -1034,10 +1034,10 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     /// attempt is retried by the next one, and a claimed descriptor is not
     /// claimed again.
     /// </summary>
-    internal async ValueTask StartOwnerBoundAsync()
+    internal async ValueTask<bool> StartOwnerBoundAsync()
     {
         if (Volatile.Read(ref _localRequestSource) is not null)
-            return;
+            return true;
         var lifecycle = _locationLifecycle;
         ZLinkServiceWireCodec.RequestSourceFence? localRequestSource = null;
         if (lifecycle is not null)
@@ -1065,6 +1065,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                         ZLinkLocationWriteIntent.NewClaim
                     )
                     .ConfigureAwait(false);
+                if (claim.Status == ZLinkLocationWriteStatus.IgnoredStale)
+                    return false;
                 if (claim.Status != ZLinkLocationWriteStatus.Stored)
                     throw new ZLinkConfigurationException(
                         $"MeshNode '{Registration.SpotNodeName}' could not "
@@ -1089,6 +1091,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         if (localRequestSource is { } installed)
             Volatile.Write(ref _localRequestSource, new(installed));
         Node.ActivateIngress();
+        return true;
     }
 
     public async ValueTask InitializeEntrySpotAsync()

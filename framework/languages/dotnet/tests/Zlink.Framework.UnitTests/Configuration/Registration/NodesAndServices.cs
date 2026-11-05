@@ -1269,7 +1269,7 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
         var options = new ZLinkLocationOptions();
 
         Assert.Equal(TimeSpan.FromSeconds(5), options.OwnerLeaseRenewInterval);
-        Assert.Equal(TimeSpan.FromSeconds(15), options.OwnerLeaseTtl);
+        Assert.Equal(TimeSpan.FromSeconds(30), options.OwnerLeaseTtl);
         Assert.Equal(TimeSpan.FromSeconds(5), options.OwnerLeaseFencingMargin);
         Assert.Equal(TimeSpan.FromSeconds(3), options.OwnerLeaseRenewTimeout);
         Assert.Equal(TimeSpan.FromSeconds(15), options.RouteCacheMaxAge);
@@ -1298,6 +1298,7 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
             new ServiceCollection().AddZLinkFramework(options =>
             {
                 var locations = options.ConfigureLocations();
+                locations.OwnerLeaseTtl = TimeSpan.FromSeconds(15);
                 locations.OwnerLeaseRenewInterval = TimeSpan.FromSeconds(1);
                 locations.OwnerLeaseRenewTimeout = TimeSpan.FromSeconds(8);
             })

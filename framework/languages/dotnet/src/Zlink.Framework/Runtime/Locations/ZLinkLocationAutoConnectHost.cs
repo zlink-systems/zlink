@@ -113,7 +113,14 @@ internal sealed class ZLinkLocationAutoConnectHost
             try
             {
                 foreach (var node in state.SpotNodes.Values)
-                    await node.StartOwnerBoundAsync().ConfigureAwait(false);
+                    if (!await node.StartOwnerBoundAsync().ConfigureAwait(false))
+                    {
+                        Interlocked.Exchange(
+                            ref _deferredStart,
+                            new DeferredStart(state, published)
+                        );
+                        return;
+                    }
                 var registration = state.Registration;
                 if (
                     registration.Channels.Values.Any(static channel =>

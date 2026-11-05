@@ -13,11 +13,17 @@ namespace Zlink.Framework.Runtime.Locations;
 /// </summary>
 internal sealed partial class ZLinkProviderLocationRepository(
     IZLinkLocationStore provider,
-    TimeProvider? timeProvider = null
+    TimeProvider? timeProvider = null,
+    TimeSpan? ownerLeaseFencingMargin = null
 ) : IZLinkLocationRepository
 {
     private readonly ProviderBoundary _provider = new(provider);
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly TimeSpan _ownerLeaseFencingMargin =
+        ownerLeaseFencingMargin ?? TimeSpan.FromSeconds(5);
+    private readonly ZLinkOwnerLeaseReleaseWait _ownerLeaseReleaseWait = new(
+        timeProvider ?? TimeProvider.System
+    );
     private const string Prefix = "zlink:v11:";
     private const long MaximumGeneration = long.MaxValue;
     private const int MaximumDescriptorWriteRetries = 3;
@@ -586,15 +592,23 @@ internal sealed partial class ZLinkProviderLocationRepository(
             return ZLinkLocationWriteResult.IgnoredStale;
 
         var current = await _provider.ReadAsync(rowKey, cancellationToken).ConfigureAwait(false);
+        ZLinkStoreCondition? predecessorOwnerCondition = null;
         if (current is ZLinkStoreReadResult.Found found)
         {
             var record = DecodeDescriptor<T>(found.Value.Bytes);
             var storedOwner = record.OwnerId;
             var storedLeaseGeneration = record.LeaseGeneration;
+            var storedOwnerToken = new ZLinkLocationOwnerToken(storedOwner, storedLeaseGeneration);
+            _ownerLeaseReleaseWait.ForgetIfTokenChanged(rowKey.Value, storedOwnerToken);
             var storedOwnerLease = await _provider
                 .ReadAsync(OwnerKey(storedOwner), cancellationToken)
                 .ConfigureAwait(false);
-            var storedOwnerLive = storedOwnerLease is ZLinkStoreReadResult.Found;
+            var isMeshNodeClaim =
+                descriptor is ZLinkMeshNodeDescriptor
+                && intent == ZLinkLocationWriteIntent.NewClaim;
+            var storedOwnerLive = isMeshNodeClaim
+                ? IsDescriptorOwnerLeaseLive(storedOwnerLease, storedOwner, storedLeaseGeneration)
+                : storedOwnerLease is ZLinkStoreReadResult.Found;
             var isMeshNodeRetry =
                 descriptor is ZLinkMeshNodeDescriptor
                 && intent is ZLinkLocationWriteIntent.NewClaim or ZLinkLocationWriteIntent.Renew;
@@ -611,6 +625,29 @@ internal sealed partial class ZLinkProviderLocationRepository(
                 );
             if (intent == ZLinkLocationWriteIntent.NewClaim && storedOwnerLive)
                 return ZLinkLocationWriteResult.RejectedConflict;
+            if (isMeshNodeClaim)
+            {
+                if (
+                    !_ownerLeaseReleaseWait.HasElapsed(
+                        rowKey.Value,
+                        storedOwnerToken,
+                        _ownerLeaseFencingMargin
+                    )
+                )
+                    return ZLinkLocationWriteResult.IgnoredStale;
+                if (storedOwner != ownerId)
+                    predecessorOwnerCondition = storedOwnerLease switch
+                    {
+                        ZLinkStoreReadResult.Found storedLease => new ZLinkStoreCondition.Version(
+                            OwnerKey(storedOwner),
+                            storedLease.Value.Version
+                        ),
+                        ZLinkStoreReadResult.Missing => new ZLinkStoreCondition.Missing(
+                            OwnerKey(storedOwner)
+                        ),
+                        _ => throw new InvalidOperationException(),
+                    };
+            }
             if (intent == ZLinkLocationWriteIntent.Takeover && storedOwnerLive)
                 return ZLinkLocationWriteResult.IgnoredStale;
             if (
@@ -627,6 +664,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
         }
         else
         {
+            _ownerLeaseReleaseWait.Forget(rowKey.Value);
             if (intent == ZLinkLocationWriteIntent.Renew)
                 return ZLinkLocationWriteResult.IgnoredStale;
         }
@@ -635,16 +673,38 @@ internal sealed partial class ZLinkProviderLocationRepository(
             new DescriptorRecord<T>(ownerId, leaseGeneration, descriptorRevision, descriptor),
             ZLinkJsonSerializerOptions.Default
         );
-        return await WriteDescriptorWithReconciliationAsync(
+        var result = await WriteDescriptorWithReconciliationAsync(
                 leaseKey,
                 ownerId,
                 leaseGeneration,
                 rowKey,
                 current,
                 encodedDescriptor,
+                predecessorOwnerCondition,
                 cancellationToken
             )
             .ConfigureAwait(false);
+        if (
+            result.Status == ZLinkLocationWriteStatus.Stored
+            && descriptor is ZLinkMeshNodeDescriptor
+        )
+            _ownerLeaseReleaseWait.Forget(rowKey.Value);
+        return result;
+    }
+
+    private static bool IsDescriptorOwnerLeaseLive(
+        ZLinkStoreReadResult read,
+        string expectedOwnerId,
+        long expectedLeaseGeneration
+    )
+    {
+        if (read is not ZLinkStoreReadResult.Found found)
+            return false;
+        var owner = DecodeOwner(found.Value.Bytes);
+        if (owner.OwnerId != expectedOwnerId || found.Value.ExpiresAt is null)
+            throw new InvalidDataException("The Location Store owner lease record is invalid.");
+        return owner.LeaseGeneration == expectedLeaseGeneration
+            && found.Value.ExpiresAt > found.Value.StoreNow;
     }
 
     // The framework no longer keeps its own generation counter inside the
@@ -680,6 +740,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
         ZLinkStoreKey rowKey,
         ZLinkStoreReadResult predecessor,
         ReadOnlyMemory<byte> encodedDescriptor,
+        ZLinkStoreCondition? predecessorOwnerCondition,
         CancellationToken cancellationToken
     )
     {
@@ -697,8 +758,15 @@ internal sealed partial class ZLinkProviderLocationRepository(
                 ZLinkStoreReadResult.Missing => new ZLinkStoreCondition.Missing(rowKey),
                 _ => throw new InvalidOperationException(),
             };
+            var conditions = new List<ZLinkStoreCondition>
+            {
+                new ZLinkStoreCondition.Value(leaseKey, expectedLease),
+                rowCondition,
+            };
+            if (predecessorOwnerCondition is not null)
+                conditions.Add(predecessorOwnerCondition);
             var request = new ZLinkStoreWriteRequest(
-                [new ZLinkStoreCondition.Value(leaseKey, expectedLease), rowCondition],
+                conditions,
                 [new ZLinkStoreMutation.Put(rowKey, encodedDescriptor, null)]
             );
 
