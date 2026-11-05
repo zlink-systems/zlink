@@ -232,8 +232,8 @@ class raw_route_port_t
                                                 raw_send_stage_trace_t trace = {});
     task_t<bool> send (const raw_bytes_t &target_routing_id, raw_message_t parts);
     void set_request_receive_source (
-      std::function<runtime::mesh::service_liveness_registry_t::connection_t (const raw_bytes_t &)>
-        source)
+      std::function<runtime::mesh::service_liveness_registry_t::connection_t (
+        std::span<const std::uint8_t>)> source)
     {
         _request_receive_source = std::move (source);
     }
@@ -277,7 +277,8 @@ class raw_route_port_t
                        runtime::mesh::service_liveness_registry_t::connection_t admission,
                        std::shared_ptr<task_completion_source_t<void>> admitted);
 
-    std::function<runtime::mesh::service_liveness_registry_t::connection_t (const raw_bytes_t &)>
+    std::function<runtime::mesh::service_liveness_registry_t::connection_t (
+      std::span<const std::uint8_t>)>
       _request_receive_source;
     std::unique_ptr<zlink::poller_t> _owned_poller;
     zlink::poller_t *_poller;

@@ -681,8 +681,6 @@ class raw_mesh_node_owner_t
     static void publish_peer_metrics (opentelemetry::metrics::ObserverResult result, void *state);
     std::atomic_size_t _last_pump_bytes{0};
     std::shared_ptr<foundation::operation_registry_t> _operations;
-    // The owner lane clears consumed frames while retaining the two-part vector capacity.
-    std::vector<zlink::message_t> _request_wire;
     std::map<std::vector<std::uint8_t>, service_node_descriptor_t, raw_mesh_byte_vector_less_t>
       _expected_peers;
     peer_reconcile_t _peer_reconcile;

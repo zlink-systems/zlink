@@ -379,8 +379,7 @@ void raw_route_port_t::request_impl (
                 return;
             }
             if (!admission && _request_receive_source)
-                admission = _request_receive_source (
-                  raw_bytes_t (target_routing_id.begin (), target_routing_id.end ()));
+                admission = _request_receive_source (target_routing_id);
             auto operation = std::move (_socket->request (zlink::routing_id_t::from (
                                           target_routing_id.data (), target_routing_id.size ())))
                                .message (materialize_binding_part (std::move (parts[0])));

@@ -246,14 +246,13 @@ request_admission_completion (foundation::operation_registry_t::callback_t callb
 }
 
 template <typename Parts>
-bool start_admitted_request (
-  const std::shared_ptr<detail::backend::raw_route_port_t> &port,
-  const admitted_peer_t *peer,
-  std::span<const std::uint8_t> target_routing_id,
-  Parts &request_parts,
-  foundation::operation_registry_t::clock_t::time_point deadline,
-  const std::shared_ptr<task_completion_source_t<void>> &admitted,
-  detail::backend::raw_request_callback_t completion)
+bool start_admitted_request (const std::shared_ptr<detail::backend::raw_route_port_t> &port,
+                             const admitted_peer_t *peer,
+                             std::span<const std::uint8_t> target_routing_id,
+                             Parts &request_parts,
+                             foundation::operation_registry_t::clock_t::time_point deadline,
+                             const std::shared_ptr<task_completion_source_t<void>> &admitted,
+                             detail::backend::raw_request_callback_t completion)
 {
     if (!peer || !peer->ready)
         return false;
@@ -571,7 +570,7 @@ void raw_mesh_node_owner_t::start ()
                     zlink::poll_event_flag_t::pollin | zlink::poll_event_flag_t::pollroute
                       | zlink::poll_event_flag_t::pollconnect,
                     ingress_poller.get (), 1);
-                  _port->set_request_receive_source ([this] (const auto &target) {
+                  _port->set_request_receive_source ([this] (std::span<const std::uint8_t> target) {
                       const auto peer = _topology.peer (target);
                       return peer ? peer->liveness : service_liveness_registry_t::connection_t{};
                   });
@@ -1563,10 +1562,7 @@ try {
         value.correlation = take_reply_route_id_locked (requested_correlation);
         value.operation =
           operation_id (_options.descriptor.lifecycle_generation, value.correlation);
-        auto clear_wire = [] (std::vector<zlink::message_t> *wire) { wire->clear (); };
-        std::unique_ptr<std::vector<zlink::message_t>, decltype (clear_wire)> wire_storage (
-          &_request_wire, clear_wire);
-        auto &wire = *wire_storage;
+        std::vector<zlink::message_t> wire;
         wire.reserve (2);
         wire.push_back (header (value.correlation));
         wire.push_back (std::move (encoded_payload));
