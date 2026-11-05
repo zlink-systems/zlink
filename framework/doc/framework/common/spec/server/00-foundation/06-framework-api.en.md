@@ -618,11 +618,20 @@ of jobs the host has waiting for a handler, and memory is measured in bytes by C
 HWM ([Application Job Queue And Backpressure §1](../01-execution/04-application-job-queue-and-backpressure.en.md#1-two-independent-capacity-authorities)).
 Counting items or bytes again per mailbox would count the same thing twice.
 
-There's a cap on how long one owner continuously occupies the scheduler. Once the cap is
-reached, remaining work is returned to the ready state and execution is handed to another
-ready owner. This cap sets the maximum wait time other owners on the same node experience.
-A single running handler that runs past the cap isn't covered by this contract — it's only
-checked at handler boundaries.
+For an owner with a gate, there is a cap on how long it continuously occupies the scheduler. Once
+the cap is reached, remaining work is returned to the ready state and execution is handed to another
+ready owner. This cap sets the maximum wait time other owners on the same node experience. A single
+running handler that runs past the cap is not covered; the cap is checked only at handler boundaries.
+
+For a Node or ChannelName owner without a gate, each worker's consecutive drain of that owner is
+subject to the time budget in
+[Handler Turn §9](../01-execution/02-handler-turn-and-execution-gate.en.md#9-time-budget-and-batch-processing-implementation).
+On exhaustion, records not yet taken remain ready, and that worker gives another waiting ready
+owner an execution opportunity before continuing the expired owner's drain. If no other owner is
+ready, it may continue the same owner. Repeated selection must not indefinitely postpone an owner
+already waiting for execution. This gate-less rule applies independently to each worker even when
+several workers serve the same owner; it does not interrupt handlers already running. It does not
+guarantee a fixed maximum wait time for other owners on the node.
 
 The scheduler wakes on arrival when waiting for work to arrive. If a language runtime can't
 provide blocking wait or callback wakeup and uses periodic polling instead, that period is

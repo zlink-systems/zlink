@@ -100,12 +100,12 @@ handler start through terminal completion.
   record cannot overlap the current handler's state access.
 - **Node handlers and [ChannelName](../00-foundation/02-glossary.en.md#channelname) handlers have no
   execution gate.** Each record's handler turn is independent. These handlers hold no state; state
-  that must persist is owned by Spots and Actors. Records start their handlers in the order
-  received, and the next record does not wait for the previous handler to complete. Start here means
-  entry into that record's filter and handler pipeline. While an earlier record's filter waits
-  asynchronously, the next record's pipeline may enter, so the order in which handler bodies are
-  entered after filters is not defined. The same handler runs concurrently for several records, so the
-  application owns synchronization of any application state shared between handlers.
+  that must persist is owned by Spots and Actors. Workers take records from the owner queue in FIFO
+  order, but the order of entry into each record's filter and handler pipeline and into handler
+  bodies is not defined. Taking a record from the queue does not start its handler turn; the turn
+  starts at actual entry into that record's filter and handler pipeline. The next record's pipeline
+  may execute on another application worker before the preceding handler suspends or completes.
+  The application owns synchronization of application state shared between handlers.
 - **Two application turns on the same gate never run concurrently.** `Yield` transfers authority
   as specified in [§3](#yield-gate-and-claim); [§16](#yield-call-eligibility) specifies availability
   by execution mode and call.
@@ -466,6 +466,15 @@ released.
 This time budget is the same value as the occupancy cap of
 [§7](#execution-lanes) (default 10 ms), and the same value applies per execution
 object even where execution units already have separate gates, as in `PerActor`.
+
+For a Node or ChannelName owner without a gate, apply the same budget to each worker's consecutive
+drain interval. The interval starts when that worker first selects a record of the owner; selecting
+the same owner again, or another worker taking a record, does not reset it. It ends when the worker
+processes another owner's work or actually becomes idle. Check the budget when W3 completes
+synchronously or suspends and the worker returns to W5. Waiting for a suspended handler's terminal
+completion occupies neither the worker nor its budget. Do not sum several workers' time into an
+owner-wide total. After budget exhaustion, selection of the worker's next owner follows the scheduler
+fairness rule in [Framework API §11](../00-foundation/06-framework-api.en.md#11-handler-execution-object-and-dependency-lifetime).
 
 ## 10. Execution Resources Do Not Scale with the Number of Spots (Implementation)
 

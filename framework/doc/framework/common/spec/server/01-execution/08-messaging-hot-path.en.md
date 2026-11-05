@@ -201,7 +201,7 @@ sequenceDiagram
 | I1 permit | Before claiming ordinary records, acquires this turn's permit budget from the host-shared permit in the order of [Application Job Queue "3"](04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order). The budget is the smaller of the per-turn limit (64) and the remaining permits. Without a permit it stops ordinary receive, while handling of supply identified pre-receive as a terminal completion, management deadlines, permit returns and shutdown notifications keep progressing. | Never receives without a permit, and with zero permits the completions of already started operations and the management work never stall. |
 | I2 claim | Claims records from Core/binding continuously within the budget, applying whichever of permit, count (at most 64), byte and elapsed-time limits is reached first and keeping the cursor ([Application Job Queue "4"](04-application-job-queue-and-backpressure.en.md#4-reading-multiple-items-from-the-socket-implementation)). Never ends the turn after one record. | Wake-up and read are not repeated once per queued record. |
 | I3 classify | Decodes only the header of each record. Control records — liveness probes and ACKs, topology — are handled internally here and their permit returned; they are never put on an application handler queue. For application records the payload is not decoded; only the owner is determined. | A claimed control record never waits behind the application workers' backlog (§4.2). |
-| I4 commit | Enqueues the application record to its owner queue — the atomic check-and-enqueue section of ["Do Not Separate the Admission Decision from Enqueueing"](04-application-job-queue-and-backpressure.en.md#do-not-separate-the-admission-decision-from-enqueueing-implementation). The record is moved, not copied. Each owner whose empty queue became non-empty is added to the ready set. §4.4 decides the resource that runs that owner's turn. | The Framework introduces at most one execution-resource switch per owner (§4.4). |
+| I4 commit | Enqueues the application record to its owner queue — the atomic check-and-enqueue section of ["Do Not Separate the Admission Decision from Enqueueing"](04-application-job-queue-and-backpressure.en.md#do-not-separate-the-admission-decision-from-enqueueing-implementation). The record is moved, not copied. Each owner whose empty queue became non-empty is added to the ready set. §4.4 decides the resource that runs that owner's turn. | From each record's claim to its handler's first instruction, the Framework introduces at most one execution-resource switch (§4.4). |
 
 **In the receive turn the Framework introduces at most one execution-resource switch, the one that
 comes from the placement of §4.4 after I4** — a shape in which one record moves through three queues, "receive loop → separate mailbox →
@@ -240,15 +240,29 @@ Records in an owner queue are taken and run by application workers.
 
 | Stage | What the worker does | So that |
 |---|---|---|
-| W1 acquire | Takes an owner from the ready set and, if the owner has one, acquires its [execution gate](../00-foundation/02-glossary.en.md#execution-gate) ([Handler Turn "6"](02-handler-turn-and-execution-gate.en.md#6-the-trap-in-acquiring-processing-authority-implementation), ["11"](02-handler-turn-and-execution-gate.en.md#11-making-the-two-synchronization-points-cheap-implementation)). | Without contention the gate is acquired with one atomic operation. |
+| W1 acquire | Selects an owner from the ready set. If the owner has an [execution gate](../00-foundation/02-glossary.en.md#execution-gate), acquires it ([Handler Turn "6"](02-handler-turn-and-execution-gate.en.md#6-the-trap-in-acquiring-processing-authority-implementation), ["11"](02-handler-turn-and-execution-gate.en.md#11-making-the-two-synchronization-points-cheap-implementation)). For a Node or ChannelName owner without a gate, acquires execution ownership of one record under the rules below. | An uncontended gate acquisition takes one atomic operation. An owner without a gate uses record-level execution ownership. |
 | W2 decode | Deserialises the typed payload once ([Payload Ownership "6"](05-payload-ownership-and-codec.en.md#6-when-deserialization-happens)). | Nothing is deserialised before the execution right is held. |
 | W3 run | Invokes the handler. The permit is returned right before the handler's first instruction. Ordinary asynchronous resumption follows the turn-retention rule of [Handler Turn §2](02-handler-turn-and-execution-gate.en.md#execution-gate); only resumption after an eligible `Yield` follows [Handler Turn "3"](02-handler-turn-and-execution-gate.en.md#3-gate-and-claim-on-yield). | An `await` inside the handler never re-acquires the permit. |
 | W4 reply | After the handler completed, in that turn context, encodes the reply payload and starts the binding's reply operation right there. Never hands it to another execution resource. | The reply path has no Framework execution-resource switch. |
 | W5 next | Within the time budget ([Handler Turn "9"](02-handler-turn-and-execution-gate.en.md#9-time-budget-and-batch-processing-implementation)) processes the same owner's next record; otherwise releases the gate if one is held and moves to the next owner. | One owner cannot monopolise a worker. |
 
-A Node or ChannelName owner without a gate starts handlers in owner-queue FIFO order, and the next
-record does not wait for the preceding handler's terminal completion. When the W3 handler suspends,
-the worker proceeds to W5; W4 reply runs after that handler completes, in that handler's turn context.
+Record selection and handler execution order for a Node or ChannelName owner without a gate follow
+[Handler Turn §2](02-handler-turn-and-execution-gate.en.md#execution-gate).
+
+**Several application workers may process a Node or ChannelName owner without a gate.** In W1 a
+worker acquires execution ownership of one record at the owner-queue head, not exclusive ownership
+of the whole owner. Another worker's take of the next record does not require the preceding handler
+to suspend or reach terminal completion. The procedure for taking a record and updating readiness,
+and the conditions for waking workers, are owned by
+[the set of ready owners in Application Job Queue §3](04-application-job-queue-and-backpressure.en.md#the-set-of-ready-owners-implementation).
+The worker taking the record is responsible for W2–W4 and that record's terminal cleanup. After
+handler suspension, the existing continuation path carries that responsibility. An empty queue or
+absence from the ready set does not by itself mean that in-progress dispatches have finished.
+
+When a handler without a gate suspends in W3, the worker proceeds to W5. That handler's W4 reply
+runs after it completes, in its handler-turn context. For owners with a gate, gate and claim scope,
+and authority retention or transfer across ordinary asynchronous waits and `Yield`, follow Handler
+Turn §2–§3.
 
 **The Framework creates no separate dispatch task or supervisor wrapper per record; it reuses the
 shared workers' drain.** Creating a task, future or virtual thread per request and registering it with a
@@ -308,6 +322,12 @@ Internal check — that ready-owner registration has no omission or duplicate an
 §4.4 runs that turn, and that no per-record dispatch task or supervisor registration exists between W1
 and W4, are white-box invariants verified by tracing. Wake-ups of application execution resources and of
 receive hand-off resources are recorded separately.
+Verify record-take order for owners without a gate, and its atomic relationship to ready membership
+and worker wait transitions, under the internal confirmation conditions of Application Job Queue §3.
+Apply those conditions when several workers serve the same owner. Verify that reselecting the same
+owner does not reset a worker's drain budget and that each record has at most one execution-resource
+switch from I4 to W3.
+
 
 ### 4.4 Placing the execution resource — handing off the receive role
 
@@ -430,6 +450,17 @@ of §3 and §4, and the language pages link the instrumentation points and test 
   (`D / T ≤ 0.10`). The judgement applies only after full reception, zero errors and zero abandoned
   operations are confirmed. The `drain_ms` the bench runner records includes the settle check and is a
   diagnostic value; D is measured separately from target receive events.
+
+- (f) **Dispatch and lifetime for owners without a gate**: in runtimes providing several application
+  execution resources, independent records of the same Node or ChannelName owner can execute
+  without waiting for the preceding handler's suspension or terminal completion. A runtime with
+  one execution resource verifies independent progress across existing asynchronous suspension.
+  In both cases, records are not executed twice, handler and filter scopes are separate per record,
+  and each dispatch reaches its terminal and cleanup exactly once. Verify the existing serial rule
+  for two handlers sharing a gate. Under sustained load for an owner without a gate, other ready
+  owners receive execution opportunities under the per-worker time-budget rule. Shutdown treats
+  records already taken by workers or running as accepted work. The language pages link the
+  verification methods.
 
 Missing (c) means that language's runtime violates this page; bench conditions, timeouts and HWM values
 are never adjusted to meet it.
