@@ -459,7 +459,7 @@ Framework는 교체된 이전 binding에 `boundSessionReplaced(51)` one-way reco
 최대 한 번 적용한다. Record는 Actor authority source fence와 이전 session owner의 Session
 owner identity(§4)·session RID·retired binding generation을 함께 전달한다. 보내는 node는 record의 Actor authority target과 일치해야
 한다. 받는 node는 이전 session owner identity의 모든 값이 현재 교체 대상과 일치할
-때만 session의 Actor 중복 연결 callback을 실행한다. Actor authority source fence는
+때만(§5의 같은 lifecycle 내 바로 이전 lease generation 수락 규칙 포함) session의 Actor 중복 연결 callback을 실행한다. Actor authority source fence는
 받는 node가 local Actor를 찾는 용도로 사용하지 않는다.
 
 - **연결 관계는 값 하나가 아니라 `(연결 식별자, 교체 순번)` 쌍으로 식별한다.** 교체 중에 이전 연결로 보낸 응답이 늦게 도착할 수 있고, 순번을
@@ -695,7 +695,8 @@ Store CAS가 결정했으므로 Session owner가 Store나 Actor authority mirror
    binding generation으로 먼저 좁히지 않는다.
    - Current binding이 없으면 **exact binding 부재**다.
    - Current binding이 있고 Session identity·SessionRid, binding generation,
-     `ObjectGeneration`이 command 42와 모두 같으면 **seal 설치**다. 그 binding에 다른 relocation
+     `ObjectGeneration`이 command 42와 모두 같으면(§5의 같은 lifecycle 내 바로 이전 lease generation
+     수락 규칙 포함) **seal 설치**다. 그 binding에 다른 relocation
      identity의 seal이 이미 있으면 불일치다.
    - Current binding이 있으나 위 값 중 하나라도 다르면 **불일치**다. Command 42의
      `expectedOwnerLeaseGeneration`이 current binding route에 보관한 `OwnerLeaseGeneration`(§8.2)보다

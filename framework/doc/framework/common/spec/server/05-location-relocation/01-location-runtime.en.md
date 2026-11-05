@@ -901,11 +901,13 @@ retention does not shorten §6.1's release wait.
 - A confirmed change to another owner/incarnation or loss of local execution rights stops new
   execution of the affected object regardless of mesh connectivity or `T`. Do not mutate the
   Store with an invalid token.
-- Treat a User Spot incarnation and all its local member Actors on that host as one retention,
-  recovery, and discard unit. Retain the unit only when every constituent meets the existing
-  retention conditions. On recovery, reopen the unit's existing gates only when every constituent
-  meets all recovery conditions below. If any constituent lacks confirmation or is discarded, discard
-  the entire unit. Member Actors on other hosts are outside this unit. Their respective owners
+- Bind a User Spot incarnation and its local member Actors on that host only in the discard
+  direction. When the Spot is discarded, discard its local members too. A discarded local member
+  does not discard the Spot or other members; each follows its own retention and recovery
+  confirmation. Reopen a local member's gate only after its Spot's gate has reopened. An object
+  that does not meet the retention conditions (including a member in relocation when the outage
+  starts) uses the admission deadline as `T` and follows the same discard and cleanup rules.
+  Member Actors on other hosts are outside this binding. Their respective owners
   own their authority and execution rights, so they follow the existing membership contract in
   [Spot/Actor membership §1 and §3](../03-spot-actor/05-spot-actor-membership.en.md#1-identity-and-authority)
   and §6.1's release conditions.
@@ -928,16 +930,17 @@ retention does not shorten §6.1's release wait.
   `AuthorityOwnerGeneration` remain unchanged in the Store. Keep owner identity and node lifecycle.
   This is §6.1's `Preserve`, without changing other generations or capacity. Submit replacement
   CAS only if its request-start time plus renew timeout is at or before the original retention
-  deadline `T`. Reopen the unit's existing gates only when replacement CAS success and new
-  descriptor publication in the Store are both confirmed for every constituent before `T`.
-  If any constituent lacks either confirmation within the original `T` or is already discarded,
-  discard the entire unit and apply the post-discard authority cleanup rule below. If
+  deadline `T`. Reopen each object's existing gate only when its own replacement CAS success and
+  new descriptor publication in the Store are both confirmed before `T` (a local member also follows
+  the binding rule above). Discard an object that lacks either confirmation within the original `T`
+  or is already discarded; for a User Spot also discard its local members; then apply the
+  post-discard authority cleanup rule below. If
   a response at or after `T` or §10's recheck reveals replacement success, follow the post-discard
   authority cleanup rule below. Never reconstruct `Missing`
   or another incarnation's or owner's records from local memory. Do not recreate or retransmit
   successful objects' pending messages, timers, bindings, or delayed completions. Keep binding
-  identity and Session sequence. Late recovery also retains only units whose new claim,
-  descriptor publication confirmation, and every per-object CAS finish within the original `T`.
+  identity and Session sequence. Late recovery also retains only objects whose new claim,
+  descriptor publication confirmation, and own CAS finish within the original `T`.
   Refresh lease-fence copies under
   [Session binding §5](../04-session/02-session-actor-binding.en.md#5-bind-and-relay).
 - For every discarded object, complete authority cleanup after Store recovery. The Location
@@ -959,14 +962,18 @@ retention does not shorten §6.1's release wait.
     policy condition does not apply. Never `Delete` with an invalid token.
   - If authority changed to another owner or incarnation, or is `Missing`, cleanup for that
     object ends.
-- A User Spot unit cleans the Spot only after confirming cleanup of every local member Actor. The
-  Spot itself follows the two cases above. Each Actor batch has already removed its local member's
-  row, so the Spot cleanup batch contains only remaining membership. Rows for members on other
-  hosts follow that owner's leave/destroy or §6.1's release of members whose owners have ended;
-  discarding the local unit alone does not delete another owner's Actor or its row. If such rows
-  prevent the Spot cleanup from meeting §6.1's conditions or the provider batch bound, proceed after
-  existing membership cleanup reduces them. In this order the local member count does not enter
-  the Spot batch size.
+- Clean a discarded User Spot only after confirming cleanup of every discarded local member
+  Actor. The Spot itself follows the three cases above. Both `Delete` and release in Spot cleanup
+  include, as a condition of the same batch, that no membership row remains for that SpotId and
+  `ObjectGeneration`. As with the member condition of §6.1 release, this keeps a live owner's Actor
+  from pointing at a `Missing` Spot. While rows of members on other hosts remain, do not change the
+  Spot authority and recheck at each existing renew interval. Those rows decrease only through that
+  owner's leave/destroy or the §6.1 release of members whose owners have ended; discarding locally
+  never deletes another owner's Actor or its row. Meanwhile the Spot authority remains a valid
+  record pointing at the discarded incarnation. The discarded incarnation's gate never reopens,
+  and a `GetOrCreate` that reads this record follows the `Ready` result of §7. Each Actor batch has
+  already removed its local member's row, so the local member count does not enter the Spot batch
+  size.
 - Recheck uncertain cleanup responses under §10. While the target record remains, recheck at each
   existing renew interval and resubmit the needed request. Finish cleanup on confirmed deletion
   or release, or a confirmed change to another owner or incarnation. Never reopen the discarded
@@ -1118,7 +1125,10 @@ the release decision (a different type keeps the existing `TypeMismatch`). If th
 valid, the existing result for the type and operation is returned. If the owner lease is invalid
 and the release conditions aren't met, `Unavailable` is returned. Ordinary messages and `Find`
 don't start this release. This release is a conditional repository batch, distinct from `Delete`,
-which requires a valid owner lease.
+which requires a valid owner lease. Besides create operations, only the post-discard cleanup of
+§5.1 starts this release, when the owner's own same-incarnation record points at its own old
+invalid token. The conditions are the same, but no new incarnation is created, so the type's
+relocation policy condition does not apply.
 
 **An operation that receives `Conflict` continues after re-checking its eligibility.** A provider
 `Conflict` changed nothing but doesn't say which condition failed. The Framework re-reads the
@@ -1936,12 +1946,15 @@ store record golden fixture. Each item maps to one test.
   and cleanup termination for uncertain Delete responses. Also cover the combination where
   local member replacement CAS success is confirmed before `T`, Spot success is confirmed only
   after `T`, the batch including membership exceeds 2,048 keys, and heartbeats continue. No gate
-  may reopen early. Also cover the combination where the Spot and only some members were replaced
-  with the new token, the remaining members stay on the old token that became invalid, local
-  members exceed 2,048 keys, heartbeats continue, and no Actor create call arrives. Discard the
-  entire unit; valid-token members are cleaned by `Delete` and old-token members by release
-  `3·margin` after first invalidity observation, each with its own row, and then the Spot cleanup
-  must finish. Each batch includes §6.1's required conditions and index changes, and a batch whose
+  may reopen early because the Spot is unconfirmed; discard the Spot and its local members. Also
+  cover the combination where the Spot and only some members were replaced with the new token, the
+  remaining members stay on the old token that became invalid, local members exceed 2,048 keys,
+  heartbeats continue, and no Actor create call arrives; keep the confirmed Spot and members and
+  discard only the unconfirmed members. In either case valid-token members are cleaned by `Delete`
+  and old-token members by release `3·margin` after first invalidity observation, each with its own
+  row, and a discarded Spot's cleanup must then finish. When a discarded Spot still has one member
+  on another host, Spot cleanup must wait without change while the row remains after local member
+  cleanup, and finish at the next renew interval after that member leaves. Each batch includes §6.1's required conditions and index changes, and a batch whose
   conditions changed must end in `Conflict` with no change. The same order must also finish when
   every replacement was applied. Keep existing membership and release
   conditions for members on other hosts. Same-token recovery before `T` keeps the existing

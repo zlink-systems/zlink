@@ -803,13 +803,15 @@ Downgrade나 이전 버전 host 추가 전에는 보존을 끄고 기존 `T` 보
   namespace flush를 허용하는 뜻은 아니다.
 - 다른 owner·incarnation으로의 변경이나 local 실행권 상실이 확정되면 mesh 연결과 `T`에 관계없이
   해당 객체의 새 실행을 중단한다. Store에서 유효하지 않은 token으로 변경하지 않는다.
-- User Spot incarnation과 그 host에 있는 해당 incarnation의 local member Actor 전체를 하나의
-  보존·복구·폐기 단위로 취급한다. 모든 구성원이 기존 보존 조건을 만족할 때만 그 단위를 보존한다.
-  복구 때도 모든 구성원이 아래 조건을 만족해야 그 단위의 기존 gate들을 다시 연다. 하나라도 조건을 확인하지 못하거나 폐기되면 단위 전체를 폐기한다.
-  다른 host의 member Actor는 이 단위에 포함하지 않는다. 그 Actor의 authority와 실행권은 해당
+- User Spot incarnation과 그 host에 있는 해당 incarnation의 local member Actor는 폐기 방향으로만
+  함께 묶는다. Spot이 폐기되면 그 local member도 함께 폐기한다. Local member가 폐기되어도 Spot과
+  다른 member는 각자의 보존·복구 확인 결과를 따른다. Local member의 gate는 그 Spot의 gate가 다시
+  열린 뒤에만 다시 연다. 보존 조건을 만족하지 못한 객체(장애 시작 때 relocation 진행 중인 member
+  포함)는 admission 기한을 `T`로 보고 같은 폐기·정리 규칙을 적용한다.
+  다른 host의 member Actor는 이 묶음에 포함하지 않는다. 그 Actor의 authority와 실행권은 해당
   owner가 소유하므로 [Spot·Actor membership §1·§3](../03-spot-actor/05-spot-actor-membership.ko.md#1-identity와-authority)의
   기존 membership 계약과 §6.1의 해제 조건을 따른다.
-- Store 복구를 확인하면 객체의 기존 gate를 닫고, 연속성과 각 보존 단위의 authority·
+- Store 복구를 확인하면 객체의 기존 gate를 닫고, 연속성과 각 보존 객체의 authority·
   `ObjectGeneration`·`AuthorityOwnerGeneration`·owner token·node lifecycle 및 미폐기 상태를 확인한다.
   기존 token이 아직 유효하면 같은 token의 renew로 admission 기한을 갱신하고 token 교체 CAS 없이
   기존 gate를 다시 연다. 정상 만료된 경우에만 새 claim으로 새 `LeaseGeneration`을 발급하고
@@ -824,15 +826,15 @@ Downgrade나 이전 버전 host 추가 전에는 보존을 끄고 기존 `T` 보
   `ObjectGeneration`·`AuthorityOwnerGeneration`이 Store에 그대로 있을 때만 현재 유효한 새 token으로
   교체한다. Owner identity와 node lifecycle은 유지한다. 이 전이는 §6.1의 `Preserve`이며 다른
   generation과 수용 공간을 바꾸지 않는다. 교체 CAS는 그 요청 시작 시각에 renew timeout을 더한
-  시각이 원래 보존 기한 `T` 이하일 때만 제출한다. `T` 전에 교체 CAS 성공과 새 descriptor의
-  Store 반영을 보존 단위의 모든 구성원에 대해 확인한 경우에만 그 단위의 기존 gate들을 다시 연다.
-  원래 `T` 안에 하나라도 두 확인을 모두 받지 못했거나 이미 폐기됐으면 단위 전체를 버리고
-  아래 폐기 후 authority 정리 규칙을 따른다.
+  시각이 원래 보존 기한 `T` 이하일 때만 제출한다. 각 객체는 `T` 전에 자기 교체 CAS 성공과 새
+  descriptor의 Store 반영을 모두 확인한 경우에만 기존 gate를 다시 연다(local member는 위 묶음 규칙도
+  따른다). 원래 `T` 안에 두 확인을 모두 받지 못했거나 이미 폐기된 객체는 버리고, User Spot이면 그
+  local member도 버린 뒤 아래 폐기 후 authority 정리 규칙을 따른다.
   `T` 이상 시각의 성공 응답이나 §10 재확인으로 교체 성공을 알게 되면 아래 폐기 후 authority
   정리 규칙을 따른다.
   `Missing`이나 다른 incarnation·owner record를 local memory로 복원하지 않는다. 성공 객체의
   pending message·timer·binding·지연 completion은 재생성하거나 재전송하지 않는다.
-  늦은 복구에서도 새 claim·descriptor 게시 확인·객체별 CAS를 원래 `T` 안에 모두 끝낸 단위만 보존된다.
+  늦은 복구에서도 새 claim·descriptor 게시 확인·자기 CAS를 원래 `T` 안에 모두 끝낸 객체만 보존된다.
   Binding identity와 Session sequence는 유지하되 lease fence 사본은
   [Session binding §5](../04-session/02-session-actor-binding.ko.md#5-bind와-relay)의 갱신 규칙을 따른다.
 - 폐기한 각 객체는 Store 복구 뒤 authority 정리까지 수행한다. 정리는 Location repository가 객체
@@ -850,12 +852,16 @@ Downgrade나 이전 버전 host 추가 전에는 보존을 끄고 기존 `T` 보
     검사해 authority와 수용 공간을 해제한다. 새 incarnation을 만들지 않으므로 생성 경로의 type
     relocation 정책 조건은 적용하지 않는다. 무효 token으로 `Delete`하지 않는다.
   - 다른 owner·incarnation으로 바뀌었거나 authority가 `Missing`이면 그 객체의 정리를 끝낸다.
-- User Spot 단위는 local member Actor의 정리 완료를 모두 확인한 뒤 Spot을 정리한다. Spot 자신도 위
-  두 경우를 따른다. Local member의 row는 각 Actor batch가 이미 지웠으므로 Spot 정리 batch에는 남은
-  membership만 들어간다. 다른 host member의 row는 그 owner의 leave·destroy나 §6.1의 owner가 끝난
-  member 해제를 따르며, local 단위 폐기만으로 다른 owner의 Actor나 그 row를 지우지 않는다. 그 row
-  때문에 Spot 정리가 §6.1 조건이나 provider batch 상한을 만족하지 못하면 기존 membership 정리로
-  row가 줄어든 뒤 진행한다. 이 순서에서 local member 수는 Spot batch 크기에 들어가지 않는다.
+- 폐기한 User Spot은 폐기한 local member Actor의 정리 완료를 모두 확인한 뒤 정리한다. Spot 자신도 위
+  세 경우를 따른다. Spot 정리의 `Delete`와 해제는 모두 그 SpotId·`ObjectGeneration`에 membership row가
+  하나도 남지 않았음을 같은 batch의 condition으로 포함한다. §6.1 해제의 member 조건과 같은 근거로,
+  살아 있는 owner의 Actor가 `Missing` Spot을 가리키지 않게 하기 위해서다. 다른 host member의 row가
+  남아 있으면 Spot authority를 바꾸지 않고 기존 renew interval마다 재확인한다. 그 row는 해당 owner의
+  leave·destroy 또는 §6.1의 owner가 끝난 member 해제로만 줄어들며, local 폐기만으로 다른 owner의
+  Actor나 그 row를 지우지 않는다. 그동안 Spot authority는 폐기한 incarnation을 가리키는 유효 record로
+  남는다. 폐기한 incarnation의 gate는 다시 열지 않으며, 이 record를 읽은 `GetOrCreate`는 §7 표의
+  `Ready` 결과를 따른다. Local member의 row는 각 Actor batch가 이미 지웠으므로 local member 수는
+  Spot batch 크기에 들어가지 않는다.
 - 정리 요청의 응답이 불확정이면 §10으로 재확인한다. 대상 record가 남아 있는 동안 기존 renew
   interval마다 재확인하고 필요한 요청을 다시 제출한다. 삭제·해제 확인 또는 다른 owner·incarnation으로의
   변경 확인으로 정리를 끝낸다. 폐기한 incarnation의 gate는 다시 열지 않으며, 다른 owner·incarnation의
@@ -989,7 +995,9 @@ incarnation으로 시작한다. 이 batch가 provider의 한 batch 상한을 넘
 kind와 stable type이 같은지 확인한다(다르면 기존 `TypeMismatch`). Owner lease가 유효하면 type과
 operation에 따른 기존 결과를 반환한다. Owner lease가 무효이고 해제 조건을 만족하지 않으면
 `Unavailable`을 반환한다. 일반 message와 `Find`는 이 해제를 시작하지 않는다. 이 해제는 유효한 owner
-lease를 요구하는 `Delete`와 다른, repository의 조건부 batch다.
+lease를 요구하는 `Delete`와 다른, repository의 조건부 batch다. 생성 operation 외에는 §5.1의 폐기 후
+정리만 이 해제를 시작한다. Owner 자신의 같은 incarnation record가 자기 옛 무효 token을 가리킬 때다.
+조건은 같지만 새 incarnation을 만들지 않으므로 type의 relocation 정책 조건은 적용하지 않는다.
 
 **`Conflict`를 받은 작업은 작업 자격을 다시 확인해 이어 간다.** Provider `Conflict`는 아무것도 변경하지
 않았지만 어느 조건이 맞지 않았는지는 알려 주지 않는다. Framework는 authority record를 다시 읽어, 처음
@@ -1724,8 +1732,12 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   `T` 뒤에만 확인되고, membership을 포함한 batch가 2,048-key를 초과하며 heartbeat가 계속되는
   조합과, Spot과 일부 member만 새 token으로 교체되고 나머지 member는 무효가 된 옛 token에 남으며
   local member 수가 2,048-key를 넘고 heartbeat가 계속되며 Actor 생성 호출이 없는 조합도 검사한다.
-  어떤 gate도 먼저 열리지 않고 단위 전체를 폐기하며, 유효 token member는 `Delete`, 옛 token member는
-  무효 첫 관찰 뒤 `3·margin`의 해제로 각자의 row와 함께 정리된 뒤 Spot 정리가 끝나야 한다. 각 batch에
+  첫 조합에서는 Spot이 확인되지 않았으므로 어떤 member gate도 먼저 열리지 않고 Spot과 local member를
+  모두 폐기한다. 둘째 조합에서는 확인된 Spot과 member는 유지하고 확인되지 않은 member만 폐기한다.
+  어느 경우든 유효 token member는 `Delete`, 옛 token member는 무효 첫 관찰 뒤 `3·margin`의 해제로 각자의
+  row와 함께 정리돼야 하고, 폐기한 Spot은 그 뒤 정리가 끝나야 한다. 다른 host member 1개가 남은
+  Spot을 폐기하면 local member 정리 뒤 Spot 정리는 row가 남아 있는 동안 변경 없이 기다리고, 그
+  member가 leave하면 다음 renew interval에 끝나야 한다. 각 batch에
   §6.1의 필수 condition과 index 변경이 포함되며, condition이 달라진 batch는 변경 없이 `Conflict`여야 한다. 모든
   교체가 적용된 경우도 같은 순서로 정리가 끝나야 한다. 다른 host member에는 기존
   membership·해제 조건을 유지한다. `T` 전 동일 token 복구는 기존 객체를 유지하며, 폐기 객체는 복원하지 않는다.
