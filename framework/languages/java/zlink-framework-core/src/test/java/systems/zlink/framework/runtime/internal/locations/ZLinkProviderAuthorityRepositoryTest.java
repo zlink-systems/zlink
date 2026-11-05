@@ -1316,6 +1316,70 @@ final class ZLinkProviderAuthorityRepositoryTest {
         assertArrayEquals(before.payload(), after.payload());
     }
 
+    @RepeatedTest(100)
+    void successfulDeleteClearsOwnerWaitObservationForOpaqueAuthorityKey() throws Exception {
+        var monotonicNanos = new AtomicLong();
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var owners = new ZLinkProviderOwnerLeaseRepository(provider);
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                owners.claim("delete-wait", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var descriptors = new ZLinkProviderDescriptorRepository(provider);
+        var descriptor = capacityDescriptor(owner);
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                descriptors
+                        .updateMeshNode(descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+        var waitTracker = new ZLinkOwnerLeaseWaitTracker(monotonicNanos::get, Duration.ofNanos(1));
+        var repository = new ZLinkProviderAuthorityRepository(provider, descriptors, waitTracker);
+        String key = ZLinkAuthorityKeyCodec.spot("delete-wait");
+        var reservation =
+                assertInstanceOf(
+                                ZLinkObjectReserved.class,
+                                repository
+                                        .reserve(
+                                                capacityRequest(key, descriptor, owner),
+                                                () -> false)
+                                        .toCompletableFuture()
+                                        .get())
+                        .reservation();
+        assertEquals(
+                ZLinkObjectCommitResult.COMMITTED,
+                repository
+                        .commit(reservation, new byte[] {2}, null, () -> false)
+                        .toCompletableFuture()
+                        .get());
+        var before =
+                assertInstanceOf(
+                        ZLinkAuthoritySnapshot.class,
+                        repository.read(key, () -> false).toCompletableFuture().get());
+        String waitKey =
+                ZLinkOwnerLeaseWaitTracker.authorityRecordKey(
+                        ZLinkProviderAuthorityRepository.authorityKey(key).value());
+
+        assertTrue(waitTracker.shouldWait(waitKey, owner, true));
+        assertInstanceOf(
+                ZLinkAuthorityDeleted.class,
+                repository
+                        .compareExchange(
+                                key,
+                                new ZLinkAuthorityExpectFound(before.storeVersion()),
+                                new ZLinkAuthorityDelete(),
+                                () -> false)
+                        .toCompletableFuture()
+                        .get());
+
+        monotonicNanos.addAndGet(Duration.ofNanos(3).toNanos());
+        assertTrue(waitTracker.shouldWait(waitKey, owner, true));
+    }
+
     private record ReincarnationFixture(
             ZLinkInMemoryProviderLocationStore provider,
             ZLinkProviderAuthorityRepository repository,

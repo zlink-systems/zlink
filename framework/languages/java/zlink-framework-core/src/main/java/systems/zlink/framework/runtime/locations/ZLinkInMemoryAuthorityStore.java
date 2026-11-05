@@ -367,6 +367,7 @@ final class ZLinkInMemoryAuthorityStore {
                                                 .applicationPayloadOrOriginal(current.payload)))))
             return false;
         boolean ownerLive = ownerLeaseIsLive.test(current.owner);
+        boolean authorityOwnerWaiting = false;
         if (active) {
             if (ownerLive) {
                 ownerLeaseWait.shouldWait(waitKey, current.owner, false);
@@ -398,10 +399,7 @@ final class ZLinkInMemoryAuthorityStore {
                                                                                 .isEmpty())
                                                 .isPresent());
                 if (steadyReady) {
-                    if (ownerLeaseWait.shouldWait(waitKey, current.owner, true))
-                        throw new ZLinkFrameworkException(
-                                ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                "Owner lease is within its authority release wait");
+                    authorityOwnerWaiting = ownerLeaseWait.shouldWait(waitKey, current.owner, true);
                 } else {
                     ownerLeaseWait.clear(waitKey);
                 }
@@ -413,6 +411,7 @@ final class ZLinkInMemoryAuthorityStore {
                         current.allocation.descriptorLifecycleGeneration(),
                         current.owner);
         List<String> members = List.of();
+        boolean ownerLeaseReleaseBlocked = authorityOwnerWaiting;
         if (active) {
             if (ownerLive) return false;
             if (participantIsPrepared(key)
@@ -436,9 +435,16 @@ final class ZLinkInMemoryAuthorityStore {
                             ZLinkFrameworkErrorKind.UNAVAILABLE,
                             "Ended Spot authority is not reclaimable");
                 }
-                if (spot.get().user().isPresent())
-                    members = endedSpotMembers(key, current, spot.get().spotId());
+                if (spot.get().user().isPresent()) {
+                    var endedMembers = endedSpotMembers(key, current, spot.get().spotId());
+                    members = endedMembers.members();
+                    ownerLeaseReleaseBlocked |= endedMembers.ownerLeaseReleaseBlocked();
+                }
             }
+            if (ownerLeaseReleaseBlocked)
+                throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        "Owner lease is within its authority release wait");
         } else if (ownerLive
                 && descriptor != null
                 && descriptor.lifecycleGeneration()
@@ -464,9 +470,12 @@ final class ZLinkInMemoryAuthorityStore {
      * owner lease. The release must fit one provider batch; the key set mirrors the provider
      * repository batch (authority, owner lease, descriptor and capacity records).
      */
-    private List<String> endedSpotMembers(String spotKey, Row spot, String spotId) {
+    private record EndedSpotMembers(List<String> members, boolean ownerLeaseReleaseBlocked) {}
+
+    private EndedSpotMembers endedSpotMembers(String spotKey, Row spot, String spotId) {
         List<String> members = new ArrayList<>();
         Set<String> batchKeys = new HashSet<>();
+        boolean ownerLeaseReleaseBlocked = false;
         batchKeys.add("authority:" + spotKey);
         batchKeys.add("owner:" + spot.owner.ownerId());
         batchKeys.add("descriptor:" + spot.allocation.descriptor());
@@ -492,14 +501,10 @@ final class ZLinkInMemoryAuthorityStore {
             String waitKey = ZLinkOwnerLeaseWaitTracker.authorityRecordKey(entry.getKey());
             if (ownerLeaseIsLive.test(row.owner)) {
                 ownerLeaseWait.shouldWait(waitKey, row.owner, false);
-                throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.UNAVAILABLE,
-                        "User Spot still has a member with a live owner lease");
+                ownerLeaseReleaseBlocked = true;
+            } else {
+                ownerLeaseReleaseBlocked |= ownerLeaseWait.shouldWait(waitKey, row.owner, true);
             }
-            if (ownerLeaseWait.shouldWait(waitKey, row.owner, true))
-                throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.UNAVAILABLE,
-                        "User Spot member owner lease is within its release wait");
             members.add(entry.getKey());
             batchKeys.add("authority:" + entry.getKey());
             batchKeys.add("owner:" + row.owner.ownerId());
@@ -509,7 +514,7 @@ final class ZLinkInMemoryAuthorityStore {
             throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.UNAVAILABLE,
                     "User Spot member release exceeds one Location Store batch");
-        return members;
+        return new EndedSpotMembers(members, ownerLeaseReleaseBlocked);
     }
 
     public CompletionStage<ZLinkObjectReserveResult> reserve(

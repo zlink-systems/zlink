@@ -1142,8 +1142,11 @@ final class ZLinkProviderAuthorityRepository {
                                                 new ZLinkLocationOwnerToken(
                                                         ownerEvidence.ownerId(),
                                                         ownerEvidence.ownerLeaseGeneration());
-                                        if (!active) ownerLeaseWait.clear(waitKey);
-                                        else {
+                                        boolean authorityOwnerWaitingCandidate;
+                                        if (!active) {
+                                            ownerLeaseWait.clear(waitKey);
+                                            authorityOwnerWaitingCandidate = false;
+                                        } else {
                                             boolean steadyReady =
                                                     current.allocation().objectKind()
                                                                     == ZLinkPlacementObjectKind
@@ -1163,16 +1166,18 @@ final class ZLinkProviderAuthorityRepository {
                                             if (ownerLive) {
                                                 ownerLeaseWait.shouldWait(
                                                         waitKey, ownerToken, false);
+                                                authorityOwnerWaitingCandidate = false;
                                             } else if (steadyReady) {
-                                                if (ownerLeaseWait.shouldWait(
-                                                        waitKey, ownerToken, true))
-                                                    throw new ZLinkFrameworkException(
-                                                            ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                                            "Owner lease is within its authority release wait");
+                                                authorityOwnerWaitingCandidate =
+                                                        ownerLeaseWait.shouldWait(
+                                                                waitKey, ownerToken, true);
                                             } else {
                                                 ownerLeaseWait.clear(waitKey);
+                                                authorityOwnerWaitingCandidate = false;
                                             }
                                         }
+                                        final boolean authorityOwnerWaiting =
+                                                authorityOwnerWaitingCandidate;
                                         return provider.read(descriptorKey, cancellation)
                                                 .thenCompose(
                                                         descriptor -> {
@@ -1271,6 +1276,7 @@ final class ZLinkProviderAuthorityRepository {
                                                                                     lease,
                                                                                     descriptorCondition,
                                                                                     ended,
+                                                                                    authorityOwnerWaiting,
                                                                                     cancellation));
                                                         });
                                     });
@@ -1354,7 +1360,7 @@ final class ZLinkProviderAuthorityRepository {
                         });
     }
 
-    private void requireEndedMemberOwnerWaitElapsed(
+    private boolean requireEndedMemberOwnerWaitElapsed(
             EndedMember member, ZLinkStoreReadResult ownerRead) {
         var owner =
                 new ZLinkLocationOwnerToken(
@@ -1363,10 +1369,7 @@ final class ZLinkProviderAuthorityRepository {
         boolean live =
                 ZLinkProviderOwnerLeaseRepository.isLive(
                         ownerRead, owner.ownerId(), owner.leaseGeneration());
-        if (ownerLeaseWait.shouldWait(waitKey, owner, !live))
-            throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.UNAVAILABLE,
-                    "User Spot member owner lease is within its release wait");
+        return ownerLeaseWait.shouldWait(waitKey, owner, !live);
     }
 
     private static boolean isSpotMember(byte[] payload, String spotId, long generation) {
@@ -1412,24 +1415,28 @@ final class ZLinkProviderAuthorityRepository {
             ZLinkStoreReadResult ownerLease,
             ZLinkStoreCondition descriptorCondition,
             List<EndedMember> members,
+            boolean authorityOwnerWaiting,
             systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
         Map<String, ZLinkStoreReadResult> owners = new java.util.LinkedHashMap<>();
         owners.put(ownerId, ownerLease);
-        CompletionStage<Void> ownersRead = completed(null);
+        CompletionStage<Boolean> ownersRead = completed(authorityOwnerWaiting);
         for (var member : members) {
             String memberOwner = member.record().ownerId();
             ownersRead =
                     ownersRead.thenCompose(
-                            ignored -> {
+                            waitingSoFar -> {
                                 ZLinkStoreReadResult existing = owners.get(memberOwner);
                                 CompletionStage<ZLinkStoreReadResult> read =
                                         existing == null
                                                 ? provider.read(ownerKey(memberOwner), cancellation)
                                                 : completed(existing);
-                                return read.thenAccept(
+                                return read.thenApply(
                                         ownerRead -> {
-                                            requireEndedMemberOwnerWaitElapsed(member, ownerRead);
+                                            boolean memberWaiting =
+                                                    requireEndedMemberOwnerWaitElapsed(
+                                                            member, ownerRead);
                                             owners.putIfAbsent(memberOwner, ownerRead);
+                                            return waitingSoFar || memberWaiting;
                                         });
                             });
         }
@@ -1439,13 +1446,28 @@ final class ZLinkProviderAuthorityRepository {
             if (!descriptors.contains(member.record().allocation().descriptor()))
                 descriptors.add(member.record().allocation().descriptor());
         Map<ZLinkMeshNodeDescriptorKey, ZLinkStoreReadResult> capacities = new HashMap<>();
-        CompletionStage<Void> capacitiesRead = ownersRead;
-        for (var descriptor : descriptors)
-            capacitiesRead =
-                    capacitiesRead.thenCompose(
-                            ignored ->
-                                    provider.read(capacityKey(descriptor), cancellation)
-                                            .thenAccept(read -> capacities.put(descriptor, read)));
+        CompletionStage<Void> capacitiesRead =
+                ownersRead.thenCompose(
+                        waiting -> {
+                            if (waiting)
+                                throw new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                        "Owner lease is within its authority release wait");
+                            CompletionStage<Void> reads = completed(null);
+                            for (var descriptor : descriptors)
+                                reads =
+                                        reads.thenCompose(
+                                                ignored ->
+                                                        provider.read(
+                                                                        capacityKey(descriptor),
+                                                                        cancellation)
+                                                                .thenAccept(
+                                                                        read ->
+                                                                                capacities.put(
+                                                                                        descriptor,
+                                                                                        read)));
+                            return reads;
+                        });
         return capacitiesRead.thenCompose(
                 ignored -> {
                     List<ZLinkStoreCondition> conditions = new ArrayList<>();
@@ -3991,8 +4013,7 @@ final class ZLinkProviderAuthorityRepository {
                             }
                             if (mutation instanceof ZLinkAuthorityDelete) {
                                 ownerLeaseWait.clear(
-                                        ZLinkOwnerLeaseWaitTracker.authorityRecordKey(
-                                                authorityKey));
+                                        ZLinkOwnerLeaseWaitTracker.authorityRecordKey(key.value()));
                                 return completed(
                                         new ZLinkAuthorityDeleted(
                                                 found.value().version().value(),

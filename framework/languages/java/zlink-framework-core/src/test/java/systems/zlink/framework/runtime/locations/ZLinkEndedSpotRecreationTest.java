@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.atomic.AtomicLong;
 
 final class ZLinkEndedSpotRecreationTest {
     @ParameterizedTest
@@ -1542,6 +1543,73 @@ final class ZLinkEndedSpotRecreationTest {
         var first = read(fixture, keys.get(0)).storeVersion();
         assertUnavailableAndUnchanged(fixture, new RelocationPolicy.Disabled());
         assertEquals(first, read(fixture, keys.get(0)).storeVersion());
+    }
+
+    @org.junit.jupiter.api.RepeatedTest(100)
+    void endedUserSpotAndAllMembersStartTheirReleaseWaitTogether() throws Exception {
+        for (String backend : List.of("provider", "memory")) {
+            var monotonicNanos = new AtomicLong();
+            var fencingMargin = Duration.ofNanos(5);
+            ZLinkLocationRepository store =
+                    backend.equals("provider")
+                            ? new ZLinkProviderLocationRepository(
+                                    new ZLinkInMemoryProviderLocationStore(),
+                                    monotonicNanos::get,
+                                    fencingMargin)
+                            : new ZLinkInMemoryLocationStore(
+                                    Clock.systemUTC(), monotonicNanos::get, fencingMargin);
+            var fixture =
+                    fixture(
+                            store,
+                            ZLinkPlacementObjectKind.USER_SPOT,
+                            ZLinkServiceAuthorityPayloadCodec.State.READY,
+                            2);
+            var firstMember = endedMember(fixture, "wait-member-a", true);
+            var secondMember = endedMember(fixture, "wait-member-b", true);
+            long spotsBefore = oldSpotSlots(fixture);
+            long actorsBefore = oldSlots(fixture, true);
+            var firstBefore = read(fixture, firstMember.authorityKey());
+            var secondBefore = read(fixture, secondMember.authorityKey());
+            fixture.store.releaseOwnerLease(fixture.oldOwner).toCompletableFuture().join();
+
+            assertUnavailableAndUnchanged(fixture, new RelocationPolicy.Disabled());
+            assertEquals(
+                    firstBefore.storeVersion(),
+                    read(fixture, firstMember.authorityKey()).storeVersion());
+            assertEquals(
+                    secondBefore.storeVersion(),
+                    read(fixture, secondMember.authorityKey()).storeVersion());
+            assertEquals(spotsBefore, oldSpotSlots(fixture));
+            assertEquals(actorsBefore, oldSlots(fixture, true));
+
+            monotonicNanos.set(Duration.ofNanos(15).toNanos() - 1);
+            assertUnavailableAndUnchanged(fixture, new RelocationPolicy.Disabled());
+            assertEquals(
+                    firstBefore.storeVersion(),
+                    read(fixture, firstMember.authorityKey()).storeVersion());
+            assertEquals(
+                    secondBefore.storeVersion(),
+                    read(fixture, secondMember.authorityKey()).storeVersion());
+            assertEquals(spotsBefore, oldSpotSlots(fixture));
+            assertEquals(actorsBefore, oldSlots(fixture, true));
+
+            monotonicNanos.incrementAndGet();
+            reserveNewSpot(fixture);
+            assertInstanceOf(
+                    ZLinkAuthorityMissing.class,
+                    fixture.store
+                            .read(firstMember.authorityKey(), () -> false)
+                            .toCompletableFuture()
+                            .join());
+            assertInstanceOf(
+                    ZLinkAuthorityMissing.class,
+                    fixture.store
+                            .read(secondMember.authorityKey(), () -> false)
+                            .toCompletableFuture()
+                            .join());
+            assertEquals(0, oldSpotSlots(fixture));
+            assertEquals(0, oldSlots(fixture, true));
+        }
     }
 
     private static ZLinkAuthoritySnapshot read(Fixture fixture, String key) {
