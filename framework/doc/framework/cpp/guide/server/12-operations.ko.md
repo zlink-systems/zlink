@@ -401,10 +401,17 @@ Fixed RoutingId를 사용하는 서버를 강제 종료한 직후 다시 시작�
 readiness를 판정하지 않고, 시작이 성공한 뒤 공개 runtime 상태를 확인한다.
 
 배포 절차는 이전 서버의 정상 종료 결과를 확인한 뒤 replacement를 시작한다. 강제 종료했다면
-이전 owner lease가 만료된 뒤 새 process를 시작한다. Owner lease TTL의 기본값은 15초이며
-설정에 따라 달라진다. 같은 시작 operation 안에서 충돌을 재시도하거나 다른 RoutingId로
-바꾸는 동작은 Framework가 제공하지 않는다. 두 process가 동시에 같은 fixed RoutingId를
-사용하고 있지는 않은지도 확인한다.
+이전 owner lease가 만료된 뒤 새 process를 시작한다. Owner lease TTL의 기본값은 30초이며
+설정에 따라 달라진다. 재시작한 node는 이전 lease 무효를 처음 관찰한 뒤 Location runtime §6.1의
+`3·margin`(기본값 예시 15초)을 스스로 기다리고 같은 RID를 재claim한다. Host 시작 호출은 끝나도
+그동안 runtime은 `Preparing`이다. 정상 종료 뒤 재시작도 같은 대기를 거친다
+([MeshNode §3.3](../../../common/spec/server/03-spot-actor/03-mesh-node.ko.md#33-fixed-rid)).
+강제 종료 뒤 이전 lease가 유효한 동안 시작하면 startup error로 끝나며, supervisor의 재시작은
+lease 만료 뒤에야 성공할 수 있다. 그 lifecycle은 다시 `3·margin`(기본값 예시 15초)을 기다린다.
+기본값과 정상 시계에서 종료부터 `Serving`까지 보통 40~45초가 걸리며, 관찰 지연·재시작은 더
+늦출 수 있다([Location runtime §6.1](../../../common/spec/server/05-location-relocation/01-location-runtime.ko.md#61-read와-cas)).
+같은 시작 operation 안에서 유효 lease의 충돌을 재시도하거나 다른 RoutingId로 바꾸지 않는다.
+두 process가 동시에 같은 fixed RoutingId를 사용하는지도 확인한다.
 
 정상 shutdown은 자신이 소유한 descriptor와 owner lease를 정리한다. 강제 종료에서는 이 정리가
 실행되지 않을 수 있으며, owner lease의 갱신이 끊겨 만료될 때까지 active claim이 남는다.

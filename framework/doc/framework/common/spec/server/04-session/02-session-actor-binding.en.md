@@ -159,7 +159,8 @@ lifecycle generation match that peer's [peer admission](../00-foundation/02-glos
 the owner-lease check of [Location runtime §4.1](../05-location-relocation/01-location-runtime.en.md#41-validating-a-target-descriptors-owner-lease);
 when it is the same node, it uses its own descriptor. Without such a descriptor, the
 operation is rejected with `Unavailable`. Commands 42, 51 and 54, which carry this identity, send the stored
-values unchanged, and the receiving Session owner compares them exactly with its own current values. The binding identity
+values unchanged, and the receiving Session owner compares them exactly with its own current values
+(acceptance of the immediately previous generation within the same lifecycle follows [§5](#5-bind-and-relay)). The binding identity
 below uses only the Node RID and lifecycle generation of these; the owner ID and owner lease generation are fence values
 for commands 42, 51 and 54.
 
@@ -171,6 +172,41 @@ can register a new lifecycle identity even if the owner-local counter is
 smaller than the previous value.
 
 ## 5. Bind and Relay
+
+**Lease replacement and fence copies within the same lifecycle.** During retained execution
+under [Location runtime §5.1](../05-location-relocation/01-location-runtime.en.md#51-retention-and-rejoining-after-a-short-outage)
+in a Store communication outage, keep both existing binding-fence copies and exact-match checks.
+Recovery with a still-valid token resumes with the same fence after Location runtime §5.1's
+validation and renewal. Even after normal expiry, a new claim, and successful per-object
+token-replacement CAS, do not recreate bindings. When reopening its existing gate, the Actor
+owner updates its binding route's Actor lease token to the new token.
+
+When the existing Location `PollingInterval` descriptor check observes a bound Actor owner's
+lease token differing from the copy, the Session owner exact-reads that Actor authority and
+owner lease. The existing binding manager updates only the copy's lease token at the execution
+gate when owner RID, `descriptorLifecycleGeneration`, `ObjectGeneration`, and
+`AuthorityOwnerGeneration` are unchanged and the currently valid lease token matches both
+authority and descriptor. If the descriptor changed before authority replacement CAS is
+confirmed, keep the copy unchanged and perform the same check on the next existing poll.
+Manual topology uses the same Location polling path; do not read the Store per message or add
+a timer or wire. A confirmed different owner, incarnation, lifecycle, or §6.1 release commit
+invalidates the route under Routing §3.2. When the Session owner's own token changes, the Actor
+owner refreshes its Session-fence copy through the same descriptor-check and owner-lease
+exact-read path, validating the Session owner's same RID and lifecycle.
+
+After observing a changed token and before Store validation, submit no new controls with the
+old fence. Submit and accept relay and commands 42/51/54 after refresh. The Session fence in
+these commands carries the Session owner's own owner ID and lease generation. If its current
+lease is valid and RID, node lifecycle, owner ID, SessionRid, binding generation, and ActorRef
+are unchanged, the Session owner accepts and processes the command as the same binding even
+when the fence carries its immediately previous `LeaseGeneration` within the same lifecycle,
+and refreshes the copy to its current generation. This compares values within its own lifecycle
+without a Store read. Reject a different lifecycle, owner, binding, or any other lease generation
+through existing exact-match checks and result classifications. Actor owner values in command
+42 follow [§8.3](#83-sealing-an-already-cleaned-binding); command 51's source fence follows the
+existing decisions in [§6](#6-rebind-and-replacing-the-previous-connection).
+Keep binding generation/token, Actor incarnation, and Session sequence. Add no wire field or
+retransmission. Existing binding-fence management owns this refresh.
 
 A STREAM packet is first dispatched to the session's typed handler
 registry. The framework resolves the packet's `actor_slot`
@@ -387,10 +423,10 @@ valid, it either delivers exactly once via the active Message Follow route,
 or ends with `Unavailable`. The resubmission boundary for the same message is defined by
 [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 
-The stored route is only valid within the current owner lease and local
-admission deadline. Even if the Location Store is temporarily unavailable,
-this lease or deadline isn't extended. So even after a Store failure, the
-framework doesn't guess a new route or indefinitely use a previous binding.
+The stored route's ordinary lifetime is within the current owner lease and local admission
+deadline. Outage retention of an already established bound route follows
+[Routing §3.2](../03-spot-actor/08-routing.en.md#32-sending-a-message-using-the-stored-route).
+This does not extend Store leases or ordinary cache lifetime, or guess a new route.
 
 If the specified Actor doesn't exist on the target and there's an active
 committed Message Follow route, the original bind control request and reply
@@ -416,7 +452,8 @@ owner preserves the Session owner identity, SessionRid, binding generation, Acto
 and ObjectGeneration that the current binding names, and sends them in `boundSessionClose(54)` to the Session owner.
 The same decision applies when the Session owner is in the same process. The Session owner's binding aggregate runs the
 §2 binding check once and starts the physical connection close of that session only when the request's whole identity
-matches the current binding. A mismatch ends with `Unavailable` and never retargets another binding or connection. The
+matches the current binding, including §5's acceptance of the immediately previous lease generation within the same
+lifecycle. A mismatch ends with `Unavailable` and never retargets another binding or connection. The
 existing transport and authority boundaries verify the Actor route's sender authority; the Session owner does not look
 up Actor authority again. Relocation seal and route application do not delay the close of a valid current binding.
 

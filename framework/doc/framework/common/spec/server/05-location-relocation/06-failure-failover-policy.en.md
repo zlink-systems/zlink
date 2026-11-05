@@ -249,8 +249,9 @@ During `StoreFailureGrace`, the Framework keeps the last fully-read descriptor l
 connection intents for its targets, and continues liveness checks for existing connections. It
 doesn't connect to a new target outside that list (owned by
 [Location Runtime §10](01-location-runtime.en.md)). Grace
-doesn't extend the owner lease or relocation deadline. Once owner eligibility ends, new
-message/timer processing and state changes stop. Once the Store recovers, the owner and the full
+doesn't extend the owner lease or relocation deadline.
+[Location runtime §5](01-location-runtime.en.md#5-blocking-a-previous-owners-new-work-when-the-store-connection-drops)
+owns new-work admission and retained execution of steady `Ready` objects. Once the Store recovers, the owner and the full
 descriptor list are re-confirmed, and only the necessary connection changes are applied.
 
 The re-confirmation and payload order for a Store request are defined in the Store-response-loss

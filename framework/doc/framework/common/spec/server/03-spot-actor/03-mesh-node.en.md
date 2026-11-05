@@ -89,10 +89,17 @@ fixed RID can be used in manual topology and in
 object role. Setting a fixed RID and an automatic RID prefix together is a startup configuration
 error.
 
-When a node using a fixed RID restarts and collides with the previous lifecycle's active owner
-claim, the same rule as an automatic RID applies: it does not retry with a new value but fails
-startup immediately with a conflict, and a lifecycle started after the previous owner lease expires
-claims the same RID.
+A restarting Fixed RID node records `t0` on its own local monotonic clock when it first
+observes the previous lifecycle's lease invalid by Store exact read (`Missing`, a different
+token, or an expired record with `ExpiresAt ≤ StoreNow`). The wait follows
+[Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas):
+`3·margin` (default example: 15 seconds). The host start call finishes as in Location runtime §5's
+startup without a lease, while the host remains `Preparing`. Reclaim the same RID at the first
+claim opportunity on the renew-interval schedule after `t0 + 3·margin`; submit no claim before
+then. Restart after normal shutdown uses the same wait. If the lease is still valid, apply the
+existing `Conflict` rule. A restart that loses the observation time observes again and restarts
+the entire wait. No mesh query or existing connection is required, and no new RID is issued.
+After reclaim, follow §6's descriptor publication, bind, and admission sequence.
 
 ## 4. Object Role and the Features That Can Be Registered
 
@@ -262,7 +269,8 @@ The framework starts a MeshNode in the following order.
    automatic RID's MeshNode descriptor owner CAS. If it's an Object Server
    role, issues the Entry Spot ID and initializes the instance at this step.
    The Entry Spot isn't published to the descriptor and resolver before
-   initialization finishes.
+   initialization finishes. The wait required for Fixed RID reclaim follows
+   [§3.3](#33-fixed-rid).
 3. Binds the ROUTER, then fixes the actual endpoint to publish to other
    peers.
 4. Publishes the MeshNode descriptor containing all necessary information
