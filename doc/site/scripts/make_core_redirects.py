@@ -11,7 +11,7 @@ core 사이트가 `zlink.systems`(Pages) 최상위였을 때의 주소는 이랬
 그 두 자리에 stub을 깔아 외부 링크와 검색 색인을 잇는다.
 
 `/api/...`는 처음에 정본 spec(`/spec/core/...`)으로 보냈다. spec은 이제 이 사이트에
-싣지 않고 internal.zlink.systems에서 보므로(#3576), 같은 주제의 Core API 레퍼런스로
+싣지 않고 zlink-docs.zlink.systems에서 보므로(#3576), 같은 주제의 Core API 레퍼런스로
 보낸다. 로그인이 필요한 자리로 보내면 외부 독자가 막힌다.
 
 GitHub Pages는 정적 호스팅이라 301을 낼 수 없다. `<meta http-equiv="refresh">`와
