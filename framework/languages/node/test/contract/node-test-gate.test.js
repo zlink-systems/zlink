@@ -48,7 +48,10 @@ test('runtime gate leaves actual browser E2E to the dedicated browser gate', () 
     );
   }
   const manifest = JSON.parse(fs.readFileSync(path.join(workspaceRoot, 'package.json'), 'utf8'));
-  assert.equal(manifest.scripts['test:browser'], 'node --test test/browser/*.test.js');
+  assert.equal(
+    manifest.scripts['test:browser'],
+    'node scripts/run_node_test_gate.js test/browser/*.test.js'
+  );
   assert(!manifest.workspaces.some((entry) => entry.startsWith('samples/')));
 });
 
