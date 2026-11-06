@@ -14,6 +14,28 @@
 #include <cstring>
 #include <type_traits>
 
+//  Mirror the unfixed declarations to check the existing compiler ABI. The
+//  compiler-chosen underlying type of an unfixed enum differs (GCC unsigned,
+//  MSVC int), so only size and alignment are part of the ABI check.
+enum legacy_send_flags_t
+{
+    legacy_send_none = 0,
+    legacy_send_dontwait = 0x0001u
+};
+enum legacy_recv_flags_t
+{
+    legacy_recv_none = 0,
+    legacy_recv_dontwait = 0x0001u
+};
+static_assert (sizeof (zlink_send_flags_t) == sizeof (legacy_send_flags_t),
+               "send flags ABI size changed");
+static_assert (alignof (zlink_send_flags_t) == alignof (legacy_send_flags_t),
+               "send flags ABI alignment changed");
+static_assert (sizeof (zlink_recv_flags_t) == sizeof (legacy_recv_flags_t),
+               "recv flags ABI size changed");
+static_assert (alignof (zlink_recv_flags_t) == alignof (legacy_recv_flags_t),
+               "recv flags ABI alignment changed");
+
 static_assert (sizeof (zlink_completion_id_t) == sizeof (uint64_t),
                "completion ID ABI must stay 64-bit");
 static_assert (sizeof (zlink_reply_token_t) == sizeof (uint64_t),
