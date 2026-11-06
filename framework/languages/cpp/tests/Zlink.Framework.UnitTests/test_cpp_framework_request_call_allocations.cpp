@@ -3,10 +3,13 @@
 #include "allocation_counter.hpp"
 #include "creation_counter.hpp"
 #include "runtime/channels/channel_runtime.hpp"
+#include "runtime/channels/channel_runtime_manager.hpp"
+#include "runtime/foundation/operation_registry.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include <zlink/framework.hpp>
 #include <thread>
@@ -16,10 +19,26 @@
 #include <cstdio>
 #include <functional>
 #include <memory>
+#include <latch>
 #include <optional>
 #include <string>
 #include <span>
 #include <variant>
+
+namespace zlink::framework::runtime::host
+{
+struct public_host_runtime_test_access_t
+{
+    static void register_local_actor_request (
+      public_host_runtime_t &host,
+      pending_operation_t &operation,
+      const mesh::raw_mesh_node_owner_t::local_operation_reservation_t &reservation)
+    {
+        (void) host.register_local_completion (operation, reservation, std::chrono::seconds (5), {},
+                                               {}, mesh_request_surface_t::actor);
+    }
+};
+}
 
 #if defined(ZLINK_TEST_COUNT_REPLY_NOTIFICATIONS)
 namespace
@@ -106,7 +125,8 @@ std::optional<std::size_t> allocation_containing (const allocation_sample_t &sam
 }
 
 void expect_public_and_physical_reply_allocations (const allocation_sample_t &sample,
-                                                   const fw::request_task_t<payload_t> &pending)
+                                                   const fw::request_task_t<payload_t> &pending,
+                                                   bool coallocated = false)
 {
     auto physical = fw::detail::request_task_access_t::physical_reply (pending);
     ASSERT_TRUE (physical.await_ready ());
@@ -116,7 +136,268 @@ void expect_public_and_physical_reply_allocations (const allocation_sample_t &sa
       allocation_containing (sample, std::addressof (physical.result ()));
     ASSERT_TRUE (public_allocation.has_value ());
     ASSERT_TRUE (physical_allocation.has_value ());
-    EXPECT_NE (*public_allocation, *physical_allocation);
+    EXPECT_NE (std::addressof (pending.result ()), std::addressof (physical.result ()));
+    if (coallocated) {
+        EXPECT_EQ (*public_allocation, *physical_allocation);
+        const auto admission = fw::detail::request_task_access_t::admission_source (pending);
+        EXPECT_EQ (allocation_containing (sample, admission.get ()), public_allocation);
+    } else {
+        EXPECT_NE (*public_allocation, *physical_allocation);
+    }
+}
+
+TEST (RequestCallAllocations, PreparedReceiverAndCodecCapturesUseOneOwnershipBlock)
+{
+    std::optional<fw::detail::request_receiver_t<int>> terminal;
+    std::optional<fw::request_task_t<int>> pending;
+    const auto allocation = sample_allocations ([&] {
+        pending.emplace (
+          fw::detail::request_task_access_t::receive_public<int> ([&] (auto receiver) {
+              auto first = receiver.template project<int> ([] (const fw::result_t<int> &value) {
+                  return fw::result_t<int>::success (value.value () + 1);
+              });
+              terminal.emplace (first.template project<int> ([] (const fw::result_t<int> &value) {
+                  return fw::result_t<int>::success (value.value () * 2);
+              }));
+          }));
+    });
+    EXPECT_EQ (allocation.total, 1u) << allocation.diagnostics;
+    terminal->admitted->complete (fw::result_t<void>::success ());
+    terminal->complete (fw::result_t<int>::success (20));
+    EXPECT_EQ (pending->result ().value (), 41);
+    const std::weak_ptr<fw::task_completion_source_t<void>> ownership =
+      fw::detail::request_task_access_t::admission_source (*pending);
+    {
+        auto physical = fw::detail::request_task_access_t::physical_reply (*pending);
+        EXPECT_EQ (physical.result ().value (), 41);
+        auto admitted = pending->admitted ();
+        const auto public_block = allocation_containing (allocation, &pending->result ());
+        EXPECT_EQ (public_block, allocation_containing (allocation, &physical.result ()));
+        EXPECT_EQ (public_block, allocation_containing (allocation, &admitted.result ()));
+    }
+    terminal.reset ();
+    pending.reset ();
+    EXPECT_TRUE (ownership.expired ());
+    std::printf ("prepared request ownership allocations=%zu\n", allocation.total);
+}
+
+TEST (RequestCallAllocations, LocalActorRequestCompletionRegistrationDoesNotExceedBaselineHeapCalls)
+{
+    using host_t = fw::runtime::host::public_host_runtime_t;
+    using operation_t = fw::runtime::host::pending_operation_t;
+    using parts_reply_t = fw::result_t<parts_t>;
+
+    fw::runtime::host::host_options_t options;
+    options.mesh = fw::test::runtime_failure_options (options.mesh);
+    options.mesh.descriptor = {"request-allocation",
+                               {'r'},
+                               1,
+                               1,
+                               "tcp://127.0.0.1:0",
+                               {{"actor", 100}},
+                               fw::runtime::mesh::service_node_state_t::preparing};
+    options.mesh.descriptor.lifecycle_generation = 1;
+    auto host = std::make_shared<host_t> (std::move (options));
+    host->start ();
+
+    const auto prepared = host->transport ().prepare_local_operation_async ().result ();
+    ASSERT_TRUE (prepared);
+    ASSERT_TRUE (prepared.value ());
+    operation_t operation;
+    std::optional<fw::request_task_t<parts_reply_t>> pending;
+    const auto sample = sample_allocations ([&] {
+        pending.emplace (fw::detail::request_task_access_t::receive_public<parts_reply_t> (
+          [&operation] (auto receiver) {
+              operation.receiver = [receiver] (const auto &) mutable {
+                  receiver.complete (fw::result_t<parts_reply_t>::success (parts_reply_t::failure (
+                    fw::framework_error_kind_t::unavailable, "allocation probe terminal")));
+              };
+          }));
+        fw::runtime::host::public_host_runtime_test_access_t::register_local_actor_request (
+          *host, operation, *prepared.value ());
+    });
+    print_allocation_sizes ("local Actor request completion registration", sample);
+    // 5ecae5de8b used eight heap calls for this measured local Actor path.
+    EXPECT_LE (sample.total, 8u) << sample.diagnostics;
+    EXPECT_FALSE (operation.receiver);
+
+    EXPECT_TRUE (host->transport ().fail_local_operation (
+      prepared.value ()->first, fw::runtime::foundation::operation_terminal_t::transport_failed));
+    const auto terminal_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (!pending->await_ready () && std::chrono::steady_clock::now () < terminal_deadline)
+        std::this_thread::yield ();
+    ASSERT_TRUE (pending->await_ready ());
+    ASSERT_TRUE (pending->result ());
+    EXPECT_FALSE (pending->result ().value ());
+    host->close ();
+}
+
+TEST (RequestCallAllocations, PhysicalProjectionReleasesConstCapturesWithTaskHandlesRetained)
+{
+    std::weak_ptr<int> lifetime;
+    std::optional<fw::detail::request_receiver_t<int>> terminal;
+    std::optional<fw::request_task_t<int>> pending;
+    {
+        const auto marker = std::make_shared<int> (42);
+        lifetime = marker;
+        pending.emplace (
+          fw::detail::request_task_access_t::receive_public<int> ([&] (auto receiver) {
+              terminal.emplace (receiver.template project<int> (
+                [marker] (const auto &) { return fw::result_t<int>::success (*marker); }));
+          }));
+    }
+    ASSERT_FALSE (lifetime.expired ());
+    terminal->admitted->complete (fw::result_t<void>::failure (
+      fw::framework_error_kind_t::unavailable, "public request ended first"));
+    ASSERT_FALSE (lifetime.expired ());
+    terminal->complete (fw::result_t<int>::success (0));
+    EXPECT_TRUE (lifetime.expired ());
+    EXPECT_EQ (pending->result ().error_kind (), fw::framework_error_kind_t::unavailable);
+    EXPECT_EQ (fw::detail::request_task_access_t::physical_reply (*pending).result ().value (), 42);
+}
+
+TEST (RequestCallAllocations, ThrowBeforeRegistrationReleasesUnusedProjectionWithHandlesRetained)
+{
+    std::weak_ptr<int> lifetime;
+    auto pending = [&] {
+        const auto marker = std::make_shared<int> (42);
+        lifetime = marker;
+        return fw::detail::request_task_access_t::receive_public<int, int> (
+          [&] (auto receiver) {
+              auto physical = receiver.template project<long> (
+                [marker] (const auto &) { return fw::result_t<int>::success (*marker); });
+              throw std::runtime_error ("before registration");
+          },
+          [marker] (const auto &) { return fw::result_t<int>::success (*marker); });
+    }();
+    auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+    auto public_reply = fw::detail::request_task_access_t::public_reply (pending);
+    EXPECT_FALSE (pending.result ());
+    EXPECT_FALSE (public_reply.result ());
+    EXPECT_FALSE (physical.result ());
+    EXPECT_TRUE (lifetime.expired ());
+}
+
+TEST (RequestCallAllocations, SubmissionExceptionKeepsEscapedPhysicalProjectionAlive)
+{
+    std::weak_ptr<int> lifetime;
+    std::optional<fw::detail::request_receiver_t<long>> terminal;
+    auto pending = [&] {
+        const auto marker = std::make_shared<int> (42);
+        lifetime = marker;
+        return fw::detail::request_task_access_t::receive_public<int> ([&] (auto receiver) {
+            terminal.emplace (receiver.template project<long> (
+              [marker] (const auto &) { return fw::result_t<int>::success (*marker); }));
+            throw std::runtime_error ("physical producer already owns receiver");
+        });
+    }();
+    EXPECT_FALSE (pending.result ());
+    EXPECT_FALSE (lifetime.expired ());
+    terminal->complete (fw::result_t<long>::success (0));
+    EXPECT_TRUE (lifetime.expired ());
+}
+
+TEST (RequestCallAllocations, LastCallbackOwnerReleasesUnusedProjectionWithPublicHandleRetained)
+{
+    std::weak_ptr<int> lifetime;
+    std::optional<fw::detail::request_receiver_t<long>> terminal;
+    auto pending = [&] {
+        const auto marker = std::make_shared<int> (42);
+        lifetime = marker;
+        return fw::detail::request_task_access_t::receive_public<int> ([&] (auto receiver) {
+            terminal.emplace (receiver.template project<long> (
+              [marker] (const auto &) { return fw::result_t<int>::success (*marker); }));
+        });
+    }();
+    terminal->admitted->complete (fw::result_t<void>::failure (
+      fw::framework_error_kind_t::unavailable, "no physical producer remains"));
+    EXPECT_FALSE (pending.result ());
+    EXPECT_FALSE (lifetime.expired ());
+    auto copy = *terminal;
+    terminal.reset ();
+    EXPECT_FALSE (lifetime.expired ());
+    copy = {};
+    EXPECT_TRUE (lifetime.expired ());
+}
+
+TEST (RequestCallAllocations, PreparedReceiverKeepsSeveralIndependentObservers)
+{
+    fw::completion_owner_t owner;
+    std::optional<fw::detail::request_receiver_t<int>> terminal;
+    auto pending = fw::detail::request_task_access_t::receive_public<int> (
+      [&] (auto receiver) { terminal.emplace (std::move (receiver)); });
+    auto first = fw::detail::request_task_access_t::public_reply (pending);
+    auto second = fw::detail::request_task_access_t::public_reply (pending);
+    std::latch delivered (2);
+    std::atomic<unsigned> calls{0};
+    std::atomic<unsigned> failures{0};
+    const auto register_observer = [&] (auto &task) {
+        fw::detail::observe_task_completion (task, [&] (const auto &result) {
+            if (!result || result.value () != 42)
+                ++failures;
+            ++calls;
+            delivered.count_down ();
+        });
+    };
+    register_observer (first);
+    register_observer (second);
+    terminal->admitted->complete (fw::result_t<void>::success ());
+    terminal->complete (fw::result_t<int>::success (42));
+    delivered.wait ();
+    owner.close ();
+    EXPECT_EQ (calls.load (), 2u);
+    EXPECT_EQ (failures.load (), 0u);
+    EXPECT_EQ (pending.result ().value (), 42);
+    EXPECT_EQ (first.result ().value (), 42);
+    EXPECT_EQ (second.result ().value (), 42);
+}
+
+TEST (RequestCallAllocations, ShutdownDrainsPendingPreparedReceiversAndTheirObservers)
+{
+    fw::completion_owner_t owner;
+    fw::runtime::foundation::operation_registry_t registry;
+    std::vector<fw::request_task_t<int>> requests;
+    std::latch delivered (16);
+    std::atomic<unsigned> observed{0};
+    std::atomic<unsigned> wrong_turn{0};
+    const auto notification_thread = std::this_thread::get_id ();
+    for (unsigned index = 0; index < 16; ++index) {
+        requests.push_back (
+          fw::detail::request_task_access_t::receive_public<int> ([&] (auto receiver) {
+              const fw::runtime::foundation::call_id_t id{77, index + 1};
+              auto completion =
+                receiver.complete.template capture<fw::runtime::foundation::operation_terminal_t,
+                                                   fw::result_t<zlink::message_t>> (
+                  [receiver = receiver.borrow ()] (auto terminal, auto) {
+                      EXPECT_EQ (terminal, fw::runtime::foundation::operation_terminal_t::shutdown);
+                      receiver.complete (fw::result_t<int>::failure (
+                        fw::framework_error_kind_t::shutting_down, "request owner stopped"));
+                  });
+              ASSERT_TRUE (registry.register_operation (
+                id, fw::runtime::foundation::operation_registry_t::clock_t::time_point::max (),
+                fw::runtime::foundation::operation_registry_t::callback_t (std::move (completion))
+                  .with_admission (receiver.admitted)));
+          }));
+        fw::detail::observe_task_completion (
+          requests.back (), [&, notification_thread] (const auto &result) {
+              EXPECT_EQ (result.error_kind (), fw::framework_error_kind_t::shutting_down);
+              if (std::this_thread::get_id () == notification_thread)
+                  ++wrong_turn;
+              ++observed;
+              delivered.count_down ();
+          });
+    }
+    EXPECT_EQ (registry.shutdown (), 16u);
+    delivered.wait ();
+    owner.close ();
+    EXPECT_EQ (observed.load (), 16u);
+    EXPECT_EQ (wrong_turn.load (), 0u);
+    for (auto &pending : requests) {
+        EXPECT_EQ (pending.result ().error_kind (), fw::framework_error_kind_t::shutting_down);
+        EXPECT_TRUE (fw::detail::request_task_access_t::physical_reply (pending).await_ready ());
+        EXPECT_TRUE (pending.admitted ().await_ready ());
+    }
+    EXPECT_EQ (registry.shutdown (), 0u);
 }
 
 using node_transport_t =
@@ -299,45 +580,27 @@ TEST (RequestCallAllocations, NodeReplyConstructsOnlyFinalPublicAndPhysicalResul
     });
     auto client = builder.route_client (serializers);
     auto call = client.request_to_node ("m", zlink::routing_id_t::from ("n"), payload_t{});
-    const auto mesh_state = sample_allocations ([] {
-        (void) std::make_shared<fw::detail::application_task_shared_state_t<transport_reply_t>> ();
-    });
-    const auto channel_state = sample_allocations ([] {
-        (void) std::make_shared<fw::detail::application_task_shared_state_t<zlink::message_t>> ();
-    });
-    const auto typed_state = sample_allocations (
-      [] { (void) std::make_shared<fw::detail::application_task_shared_state_t<payload_t>> (); });
-    ASSERT_EQ (mesh_state.count, 1u);
-    ASSERT_EQ (channel_state.count, 1u);
-    ASSERT_EQ (typed_state.count, 1u);
-    // Use this standard library's allocation sizes, including its control blocks.
-    // Admission and submission are different result types and remain out of scope.
-    const auto is_reply_state = [&] (std::size_t size) {
-        return size == mesh_state.events[0].size || size == channel_state.events[0].size
-               || size == typed_state.events[0].size;
-    };
+    const auto before = fw::tests::creation_counts ();
     std::optional<fw::request_task_t<payload_t>> pending;
     const auto sample = sample_allocations ([&] { pending.emplace (call.async<payload_t> ()); });
+    const auto created = fw::tests::creation_counts () - before;
+    const auto only_request_stages = [] (const auto &counts) {
+        // Independent admission, public reply and physical reply; no conversion state.
+        return counts.shared_states == 3 && counts.coroutine_states == 0;
+    };
+    EXPECT_TRUE (only_request_stages (created)) << sample.diagnostics;
     ASSERT_NE (borrowed_target, nullptr);
     const auto target_allocation = allocation_containing (sample, borrowed_target);
     ASSERT_TRUE (target_allocation.has_value ());
     EXPECT_EQ (borrowed_target->to_string (), "n");
-    std::size_t reply_states = 0;
-    for (std::size_t index = 0; index < sample.count; ++index) {
-        // RID storage can share a size with a reply state; identify it by its live address.
-        if (index != *target_allocation)
-            reply_states += is_reply_state (sample.events[index].size);
-    }
-    std::printf (
-      "node reply states/request=%zu total allocations/request=%zu state sizes=%zu/%zu/%zu\n",
-      reply_states, sample.total, mesh_state.events[0].size, channel_state.events[0].size,
-      typed_state.events[0].size);
-    EXPECT_EQ (reply_states, 2u) << sample.diagnostics;
-    // Prove the allocation guard also rejects an injected conversion state.
-    const auto injected = sample_allocations ([] {
-        (void) std::make_shared<fw::detail::application_task_shared_state_t<transport_reply_t>> ();
-    });
-    EXPECT_TRUE (is_reply_state (injected.events[0].size));
+    // The creation guard must reject a genuine additional conversion state,
+    // even when existing request stages share their backing allocation.
+    const auto injected =
+      std::make_shared<fw::detail::application_task_shared_state_t<transport_reply_t>> ();
+    const auto with_conversion = fw::tests::creation_counts () - before;
+    EXPECT_FALSE (only_request_stages (with_conversion));
+    std::printf ("node request stage objects=%zu injected=%zu allocations=%zu\n",
+                 created.shared_states, with_conversion.shared_states, sample.total);
     fw::runtime::host::operation_completion_t reply;
     reply.record.terminal_result = static_cast<int> (zlink::request_result_t::ok);
     reply.parts = std::move (reply_parts (41)).take_items ();
@@ -354,6 +617,71 @@ TEST (RequestCallAllocations, NodeReplyConstructsOnlyFinalPublicAndPhysicalResul
 #endif
     ASSERT_TRUE (pending->result ());
     EXPECT_EQ (pending->result ().value ().value, 41);
+    expect_public_and_physical_reply_allocations (sample, *pending, true);
+    EXPECT_EQ (target_allocation, allocation_containing (sample, &pending->result ()));
+}
+
+TEST (RequestCallAllocations, NodeProjectionKeepsSubmitTargetWhenInlineReplyReleasesDecoder)
+{
+    fw::serializer_registry_t serializers;
+    add_payload (serializers);
+    auto builder = fw::test::runtime_failure_builder ();
+    auto channel = fw::detail::channel_runtime_t::from (builder.message_bus ());
+    channel.bind_serializers (serializers);
+    unsigned submissions = 0;
+    channel.bind_mesh_node_transport ("m", {}, [&] (const auto &target, auto, auto, auto receiver) {
+        EXPECT_EQ (target.to_string (), "n");
+        receiver.admitted->complete (fw::result_t<void>::success ());
+        receiver.complete (
+          fw::result_t<transport_reply_t>::success (transport_reply_t::success (reply_parts (41))));
+        // Completion destroys the request decoder while submit is still active.
+        EXPECT_EQ (target.to_string (), "n");
+        ++submissions;
+    });
+    auto pending = builder.route_client (serializers)
+                     .request_to_node ("m", zlink::routing_id_t::from ("n"), payload_t{})
+                     .async<payload_t> ();
+    EXPECT_EQ (pending.result ().value ().value, 41);
+    EXPECT_EQ (submissions, 1u);
+}
+
+TEST (RequestCallAllocations, RouteNodeProjectionDecodesPhysicalReplyAfterEarlyPublicFailure)
+{
+    fw::serializer_registry_t serializers;
+    unsigned decoded = 0;
+    serializers.add<payload_t> (
+      [] (const payload_t &payload) {
+          return fw::encoded_payload_t::from_string (std::to_string (payload.value));
+      },
+      [&] (const fw::encoded_payload_t &payload) {
+          ++decoded;
+          return payload_t{std::stoi (payload.to_string ())};
+      },
+      "x/y");
+    auto builder = fw::test::runtime_failure_builder ();
+    builder.route_channel ("m");
+    auto manager = fw::detail::channel_runtime_manager_t::from (builder);
+    manager.initialize_route_channels (builder);
+    auto &route = manager.get_route_channel ("m");
+    fw::task_completion_source_t<parts_t> terminal;
+    auto admitted = std::make_shared<fw::task_completion_source_t<void>> ();
+    route.set_request_backend ([&] (const auto &target, const auto &, const auto &, auto) {
+        EXPECT_EQ (target.to_string (), "n");
+        return fw::request_task_t<parts_t> (terminal.task (), admitted);
+    });
+    auto pending = builder.route_client (serializers)
+                     .request_to_node ("m", zlink::routing_id_t::from ("n"), payload_t{})
+                     .async<payload_t> ();
+    auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+    admitted->complete (fw::result_t<void>::failure (fw::framework_error_kind_t::unavailable,
+                                                     "admission ended first"));
+    EXPECT_EQ (pending.result ().error_kind (), fw::framework_error_kind_t::unavailable);
+    EXPECT_FALSE (physical.await_ready ());
+    terminal.complete (fw::result_t<parts_t>::success (reply_parts (51)));
+    EXPECT_EQ (physical.result ().value ().value, 51);
+    EXPECT_EQ (decoded, 1u);
+    EXPECT_EQ (pending.result ().error_kind (), fw::framework_error_kind_t::unavailable);
+    route.stop ();
 }
 
 TEST (RequestCallAllocations, NodeRequestUsesOnlyItsPreparedReceiverAboveTheTransport)
@@ -419,7 +747,7 @@ TEST (RequestCallAllocations, NodeRequestUsesOnlyItsPreparedReceiverAboveTheTran
     const auto &reply = pending->result ();
     ASSERT_TRUE (reply);
     EXPECT_EQ (reply.value ().value, 41);
-    expect_public_and_physical_reply_allocations (actual, *pending);
+    expect_public_and_physical_reply_allocations (actual, *pending, true);
 }
 
 TEST (RequestCallAllocations, ChannelRequestAddsOneReplyPerReplyTypeAboveTheTransport)
@@ -694,7 +1022,7 @@ TEST (RequestCallAllocations, SpotFinalReceiverUsesFewerAllocationsThanTheConver
             // The typed Framework path adds no copy above this same transport.
             EXPECT_EQ (native[6], transport_copies);
 #endif
-            expect_public_and_physical_reply_allocations (actual, *pending);
+            expect_public_and_physical_reply_allocations (actual, *pending, true);
         }
         if (records == 1) {
             single = created;
@@ -1141,7 +1469,7 @@ TEST (RequestCallAllocations, AppClassifiedNodeFailureAddsNoTransportReplyState)
         auto call = client.request_to_node ("m", target, payload_t{});
         auto sample = sample_allocations ([&] { pending.emplace (call.async<payload_t> ()); });
         EXPECT_EQ (pending->result ().error_kind (), fw::framework_error_kind_t::not_found);
-        expect_public_and_physical_reply_allocations (sample, *pending);
+        expect_public_and_physical_reply_allocations (sample, *pending, true);
         const auto admission = fw::detail::request_task_access_t::admission_source (*pending);
         EXPECT_TRUE (allocation_containing (sample, admission.get ()).has_value ());
         auto admission_task = admission->task ();
