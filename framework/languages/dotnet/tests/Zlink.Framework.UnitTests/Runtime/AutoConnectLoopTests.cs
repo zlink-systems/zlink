@@ -287,6 +287,7 @@ public sealed class AutoConnectLoopTests
         var store = new ZLinkInMemoryLocationStore(time);
         var options = new ZLinkLocationOptions
         {
+            OwnerLeaseTtl = TimeSpan.FromSeconds(15),
             PollingInterval = TimeSpan.Zero,
             OwnerLeaseRenewInterval = TimeSpan.FromSeconds(1),
         };

@@ -222,7 +222,7 @@ public sealed class AutoConnectLifecycleCoordinatorTests
     )
     {
         return new ZLinkAutoConnectLifecycleCoordinator(
-            (_, _, _) =>
+            (_, _, _, _) =>
             {
                 started();
                 return ValueTask.CompletedTask;

@@ -242,6 +242,17 @@ public sealed class StartupStoreStallTests
         await firstHosted.StartAsync(CancellationToken.None).WaitAsync(Hang);
         try
         {
+            Assert.True(
+                await first.GetRequiredService<ZLinkLocationRuntime>().RenewOwnerLeaseOnceAsync()
+            );
+            using var startupTimeout = new CancellationTokenSource(Hang);
+            await foreach (
+                var observed in first
+                    .GetRequiredService<ZLinkFrameworkMaintenanceRuntime>()
+                    .ObserveAsync(startupTimeout.Token)
+            )
+                if (observed.Status.State == ZLinkFrameworkRuntimeState.Serving)
+                    break;
             await using var second = BuildProvider(
                 new GatedLocationStore(shared),
                 fixedRid: "stall-fixed"
@@ -274,7 +285,9 @@ public sealed class StartupStoreStallTests
             // answer into a timeout; a held Store still outlasts it.
             locations.OwnerLeaseRenewTimeout = TimeSpan.FromSeconds(1);
             locations.OwnerLeaseTtl = TimeSpan.FromSeconds(30);
-            locations.OwnerLeaseFencingMargin = TimeSpan.FromSeconds(5);
+            locations.OwnerLeaseFencingMargin = fixedRid is null
+                ? TimeSpan.FromSeconds(5)
+                : TimeSpan.FromTicks(1);
             var mesh = options.AddRouteMesh(MeshName).Listen("tcp://127.0.0.1:0");
             mesh = fixedRid is null
                 ? mesh.SetRoutingIdPrefix("stall")

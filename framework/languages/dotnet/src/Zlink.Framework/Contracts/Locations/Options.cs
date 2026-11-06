@@ -16,7 +16,7 @@ public sealed class ZLinkLocationOptions
 
     /// <summary>Owner lease lifetime. Rows of an expired owner are treated
     /// as stale everywhere.</summary>
-    public TimeSpan OwnerLeaseTtl { get; set; } = TimeSpan.FromSeconds(15);
+    public TimeSpan OwnerLeaseTtl { get; set; } = TimeSpan.FromSeconds(30);
 
     private bool _storeOutageRetention;
     private bool _storeOutageRetentionFrozen;

@@ -1272,10 +1272,13 @@ public sealed class RouteMeshRuntimeServiceTests
         )
         {
             listenEndpoint ??= $"inproc://route-runtime-{Guid.NewGuid():N}";
+            var fixedRid = routingId is not null;
             var services = new ServiceCollection();
             services.AddZLinkFramework(options =>
             {
                 options.UseTestLocationStore();
+                if (fixedRid)
+                    options.ConfigureLocations().OwnerLeaseFencingMargin = TimeSpan.FromTicks(1);
                 if (pollingInterval is { } interval)
                     options.ConfigureLocations().PollingInterval = interval;
                 var node = options
@@ -1293,7 +1296,7 @@ public sealed class RouteMeshRuntimeServiceTests
                 else
                     node.Objects().Server();
             });
-            return await StartProviderAsync(services, listenEndpoint);
+            return await StartProviderAsync(services, listenEndpoint, fixedRid);
         }
 
         internal static async Task<RuntimeFixture> StartManualAsync(
@@ -1323,7 +1326,8 @@ public sealed class RouteMeshRuntimeServiceTests
 
         private static async Task<RuntimeFixture> StartProviderAsync(
             ServiceCollection services,
-            string listenEndpoint
+            string listenEndpoint,
+            bool releaseFixedRidWait = false
         )
         {
             var provider = services.BuildServiceProvider();
@@ -1334,6 +1338,15 @@ public sealed class RouteMeshRuntimeServiceTests
             {
                 await hosted.StartAsync(CancellationToken.None);
                 var frameworkRuntime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+                if (releaseFixedRidWait)
+                {
+                    Assert.True(
+                        await provider
+                            .GetRequiredService<ZLinkLocationRuntime>()
+                            .RenewOwnerLeaseOnceAsync()
+                    );
+                    await WaitUntilServingAsync(provider);
+                }
                 return new RuntimeFixture(
                     provider,
                     hosted,
@@ -1358,6 +1371,19 @@ public sealed class RouteMeshRuntimeServiceTests
                 await provider.DisposeAsync();
                 throw;
             }
+        }
+
+        private static async Task WaitUntilServingAsync(IServiceProvider provider)
+        {
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await foreach (
+                var observed in provider
+                    .GetRequiredService<ZLinkFrameworkMaintenanceRuntime>()
+                    .ObserveAsync(cancellation.Token)
+            )
+                if (observed.Status.State == ZLinkFrameworkRuntimeState.Serving)
+                    return;
+            throw new InvalidOperationException("Fixed RID test host stopped before Serving.");
         }
 
         internal async Task PublishDescriptorAsync(

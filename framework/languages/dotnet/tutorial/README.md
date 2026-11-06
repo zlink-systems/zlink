@@ -175,13 +175,19 @@ order. Stop with the IDE's Stop button.
   Stop.
 - **`dotnet` reports no compatible SDK** -- install the .NET 8.0 (or newer)
   SDK.
-- **RID registration is rejected with `RejectedConflict` after a forced stop.**
-  The previous owner lease can remain valid for up to 15 seconds
-  ([default owner lease TTL](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#L670-L674)).
-  Wait for it to expire, then start the Server again; a failed start does not
-  retry. To restart immediately, stop earlier tutorial processes and clear
-  only this tutorial's `zlink-tutorial:*` keys with the command below. Leave
-  other keys in that Redis intact:
+- **Fixed RID reclaim waits before publication.** The wait starts when the
+  old owner lease is observed invalid, or when the descriptor is already
+  missing. This includes a restart after normal shutdown removed the
+  descriptor. The default fencing margin is five seconds, so publication
+  waits three times that margin (15 seconds) from the first observation. The
+  host remains `Preparing` during this wait and retries at the owner lease
+  renewal interval. After a forced stop, the previous owner lease can remain
+  valid for up to 30 seconds (the default TTL)
+  ([default owner lease settings](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#L706-L714)),
+  making the earliest recreation about 45 seconds after the last successful
+  renewal started. Clearing only this tutorial's `zlink-tutorial:*` keys
+  avoids waiting for that stale lease; a missing descriptor still waits 15
+  seconds from its first observation. Leave other keys in that Redis intact:
 
   ```bash
   redis-cli --scan --pattern 'zlink-tutorial:*' | xargs -r redis-cli del

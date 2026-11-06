@@ -39,14 +39,16 @@ internal sealed class ZLinkLocationRegistration(Func<TimeProvider>? timeProvider
         if (StoreInstance is not null)
             return _repository ??= new ZLinkProviderLocationRepository(
                 StoreInstance,
-                timeProvider?.Invoke()
+                timeProvider?.Invoke(),
+                Options.OwnerLeaseFencingMargin
             );
         if (!UseInMemoryStores)
             return null;
         _inMemoryStore ??= new ZLinkInMemoryProviderLocationStore();
         return _repository ??= new ZLinkProviderLocationRepository(
             _inMemoryStore,
-            timeProvider?.Invoke()
+            timeProvider?.Invoke(),
+            Options.OwnerLeaseFencingMargin
         );
     }
 
