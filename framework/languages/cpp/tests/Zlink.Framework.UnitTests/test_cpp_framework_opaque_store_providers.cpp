@@ -17,6 +17,8 @@
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/spots/spot_runtime.hpp"
+#include "runtime/host/app_test_access.hpp"
+#include "runtime/host/hosted_service_lifecycle.hpp"
 #include <fstream>
 #include <condition_variable>
 #include <zlink/framework/contracts/configuration/app.hpp>
@@ -6646,7 +6648,7 @@ class reclaim_count_memory_repository_t final : public in_memory_location_reposi
     std::atomic<unsigned> &claims;
 };
 
-class fixed_rid_startup_probe_t final : public hosted_service_t
+class fixed_rid_startup_probe_t : public hosted_service_t
 {
   public:
     std::function<void (framework_runtime_state_t)> status_changed;
@@ -6725,6 +6727,8 @@ class startup_review_store_t final : public location_store_t
   public:
     task_t<store_read_result_t> read (store_key_t key) override
     {
+        if (before_read)
+            co_await before_read (key);
         if (unavailable && key.value.starts_with ("owner-lease"))
             co_return result_t<store_read_result_t>::failure (framework_error_kind_t::unavailable,
                                                               "startup owner read unavailable");
@@ -6757,7 +6761,9 @@ class startup_review_store_t final : public location_store_t
     }
     task_t<store_scan_result_t> scan (store_scan_request_t request) override
     {
-        return inner.scan (std::move (request));
+        if (before_scan)
+            co_await before_scan (request);
+        co_return co_await inner.scan (std::move (request));
     }
     bool wait_held ()
     {
@@ -6774,6 +6780,8 @@ class startup_review_store_t final : public location_store_t
     bool hold_claims = false;
     std::array<task_completion_source_t<void>, 2> releases;
     std::atomic_uint conflicts{0};
+    std::function<task_t<void> (const store_key_t &)> before_read;
+    std::function<task_t<void> (const store_scan_request_t &)> before_scan;
 
   private:
     std::mutex mutex;
@@ -6907,6 +6915,245 @@ TEST (CppFrameworkOpaqueLocationStore, FixedRidCompetingStartupRejectsLoserAfter
     };
     for (unsigned mode = 0; mode < 3; ++mode)
         verify (mode);
+}
+
+namespace
+{
+class startup_shutdown_probe_t final : public fixed_rid_startup_probe_t,
+                                       public hosted_service_lifecycle_t
+{
+  public:
+    task_completion_source_t<void> start_release;
+    std::function<void ()> before_stop, on_seal;
+
+    task_t<void> start (service_provider_t &services) override
+    {
+        co_await fixed_rid_startup_probe_t::start (services);
+        co_await start_release.task ();
+    }
+    int shutdown_stop_priority () const noexcept override
+    {
+        return std::numeric_limits<int>::max ();
+    }
+    void stop () noexcept override
+    {
+        if (before_stop)
+            before_stop ();
+        fixed_rid_startup_probe_t::stop ();
+    }
+    void seal_application_dispatch () noexcept override
+    {
+        if (on_seal)
+            on_seal ();
+    }
+};
+
+void verify_startup_failure_joins_shutdown (bool handoff_before_run_check)
+{
+    auto store = std::make_shared<startup_review_store_t> ();
+    auto repository = std::make_shared<provider_location_repository_t> (*store);
+    location_reclaim_test_access_t clock;
+    clock.bind (*repository);
+    auto first = app_t::create ();
+    auto second = app_t::create ();
+    std::array<app_t *, 2> apps{&first, &second};
+    std::array<startup_shutdown_probe_t *, 2> probes{};
+    std::array<std::jthread, 2> running;
+    std::array<int, 2> exits{-1, -1};
+    std::jthread handoff_watch;
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::thread::id shutdown_thread;
+    bool scan_held = false, scan_released = false, stop_started = false, handed_off = false;
+    std::atomic_bool hold_mesh_reads{false};
+    unsigned held_reads = 0;
+    std::optional<unsigned> winner_index, loser_index;
+    std::array<task_completion_source_t<void>, 2> read_release;
+    task_completion_source_t<void> scan_release;
+    std::vector<task_t<bool>> publications;
+    struct stop_on_exit_t
+    {
+        std::array<app_t *, 2> &apps;
+        std::array<startup_shutdown_probe_t *, 2> &probes;
+        std::array<std::jthread, 2> &running;
+        std::jthread &handoff_watch;
+        std::array<task_completion_source_t<void>, 2> &read_release;
+        task_completion_source_t<void> &scan_release;
+        ~stop_on_exit_t ()
+        {
+            for (auto &release : read_release)
+                release.complete (result_t<void>::success ());
+            scan_release.complete (result_t<void>::success ());
+            for (auto *probe : probes)
+                if (probe)
+                    probe->start_release.complete (result_t<void>::success ());
+            for (auto *app : apps)
+                app->request_stop ();
+            for (auto &thread : running)
+                if (thread.joinable ())
+                    thread.join ();
+            handoff_watch.request_stop ();
+            if (handoff_watch.joinable ())
+                handoff_watch.join ();
+        }
+    } stop{apps, probes, running, handoff_watch, read_release, scan_release};
+    store->before_read = [&] (const auto &key) -> task_t<void> {
+        if (hold_mesh_reads.load () && key.value.starts_with ("mesh-node")) {
+            unsigned index;
+            {
+                const std::lock_guard lock (mutex);
+                index = held_reads++;
+                changed.notify_all ();
+            }
+            if (index < read_release.size ())
+                co_await read_release[index].task ();
+        }
+    };
+    store->before_scan = [&] (const auto &request) -> task_t<void> {
+        bool hold;
+        {
+            const std::lock_guard lock (mutex);
+            hold = std::this_thread::get_id () == shutdown_thread
+                   && request.prefix.starts_with ("mesh-node") && !scan_held;
+            if (hold) {
+                scan_held = true;
+                changed.notify_all ();
+            }
+        }
+        if (hold) {
+            co_await scan_release.task ();
+            const std::lock_guard lock (mutex);
+            scan_released = true;
+            changed.notify_all ();
+        }
+    };
+    for (unsigned index = 0; index < apps.size (); ++index) {
+        configure_review_host (*apps[index], store, repository);
+        auto probe = std::make_unique<startup_shutdown_probe_t> ();
+        probes[index] = probe.get ();
+        probe->on_seal = [&] {
+            const std::lock_guard lock (mutex);
+            shutdown_thread = std::this_thread::get_id ();
+        };
+        probe->before_stop = [&, index] {
+            std::unique_lock lock (mutex);
+            if (loser_index != index)
+                return;
+            stop_started = true;
+            changed.notify_all ();
+            EXPECT_TRUE (scan_released)
+              << "hosted-service stop preceded the shutdown descriptor read completion";
+            EXPECT_TRUE (detail::app_test_access_t::stop_requested (*apps[index])
+                           .load (std::memory_order_acquire));
+            // Let the old implementation fail without racing descriptor destruction.
+            if (!scan_released) {
+                lock.unlock ();
+                scan_release.complete (result_t<void>::success ());
+                lock.lock ();
+            }
+            EXPECT_TRUE (changed.wait_for (lock, 5s, [&] { return handed_off; }));
+        };
+        apps[index]->add_hosted_service (std::move (probe));
+        running[index] = std::jthread ([&, index] {
+            char program[] = "startup-shutdown";
+            char *arguments[] = {program, nullptr};
+            exits[index] = apps[index]->run (1, arguments);
+        });
+        ASSERT_TRUE (probes[index]->wait_started ());
+        EXPECT_EQ (apps[index]->runtime_state (), framework_runtime_state_t::preparing);
+        publications.push_back (detail::app_test_access_t::startup_publication (*apps[index]));
+        detail::observe_task_terminal (publications.back (), [&, index] (const auto &result) {
+            if (result && result.value ()) {
+                const std::lock_guard lock (mutex);
+                winner_index = index;
+                changed.notify_all ();
+            }
+        });
+        if (!handoff_before_run_check)
+            probes[index]->start_release.complete (result_t<void>::success ());
+    }
+    hold_mesh_reads.store (true);
+    clock.advance (21ms);
+    {
+        std::unique_lock lock (mutex);
+        ASSERT_TRUE (changed.wait_for (lock, 5s, [&] { return held_reads >= 2; }));
+    }
+    read_release[0].complete (result_t<void>::success ());
+    unsigned winner, loser;
+    {
+        std::unique_lock lock (mutex);
+        ASSERT_TRUE (changed.wait_for (lock, 5s, [&] { return winner_index.has_value (); }));
+        winner = *winner_index;
+        loser = 1 - winner;
+        loser_index = loser;
+    }
+    probes[winner]->start_release.complete (result_t<void>::success ());
+    ASSERT_TRUE (probes[winner]->wait_ready ());
+    const auto winner_owner = probes[winner]->current_owner ();
+    ASSERT_TRUE (winner_owner.has_value ());
+    const auto &stop_requested = detail::app_test_access_t::stop_requested (*apps[loser]);
+    handoff_watch = std::jthread ([&] (std::stop_token cancelled) {
+        while (!cancelled.stop_requested ()) {
+            if (stop_requested.load (std::memory_order_acquire)) {
+                const std::lock_guard lock (mutex);
+                handed_off = true;
+                changed.notify_all ();
+                return;
+            }
+            std::this_thread::yield ();
+        }
+    });
+    auto termination = apps[loser]->shutdown ();
+    {
+        std::unique_lock lock (mutex);
+        ASSERT_TRUE (changed.wait_for (lock, 5s, [&] { return scan_held; }));
+    }
+    read_release[1].complete (result_t<void>::success ());
+    const auto failed = publications[loser].result_for (5s);
+    ASSERT_TRUE (failed.has_value ());
+    ASSERT_FALSE (*failed);
+    EXPECT_EQ (failed->error_kind (), framework_error_kind_t::not_configured);
+    {
+        std::unique_lock lock (mutex);
+        if (!handoff_before_run_check)
+            EXPECT_FALSE (changed.wait_for (lock, 100ms, [&] { return stop_started; }));
+    }
+    scan_release.complete (result_t<void>::success ());
+    if (handoff_before_run_check) {
+        std::unique_lock lock (mutex);
+        ASSERT_TRUE (changed.wait_for (lock, 5s, [&] { return handed_off; }));
+        EXPECT_FALSE (stop_started);
+        lock.unlock ();
+        probes[loser]->start_release.complete (result_t<void>::success ());
+    }
+    const auto terminated = termination.result_for (5s);
+    ASSERT_TRUE (terminated.has_value ());
+    EXPECT_TRUE (*terminated);
+    EXPECT_EQ (terminated->value ().outcome, termination_outcome_t::stopped);
+    EXPECT_EQ (terminated->value ().reason, termination_reason_t::none);
+    running[loser].join ();
+    EXPECT_EQ (exits[loser], 1);
+    EXPECT_EQ (apps[loser]->runtime_state (), framework_runtime_state_t::error);
+    EXPECT_TRUE (stop_started);
+    const auto descriptors = repository->list_mesh_nodes ("startup-review-0").result ().value ();
+    ASSERT_EQ (descriptors.items.size (), 1u);
+    EXPECT_EQ (descriptors.items.front ().owner_id, winner_owner->owner_id);
+    EXPECT_EQ (descriptors.items.front ().lease_generation, winner_owner->lease_generation);
+    EXPECT_EQ (apps[winner]->runtime_state (), framework_runtime_state_t::serving);
+    apps[winner]->request_stop ();
+    running[winner].join ();
+    EXPECT_EQ (exits[winner], 0);
+}
+} // namespace
+
+TEST (CppFrameworkOpaqueLocationStore, StartupPublicationFailureWaitsForShutdownResourceHandoff)
+{
+    verify_startup_failure_joins_shutdown (false);
+}
+
+TEST (CppFrameworkOpaqueLocationStore, StartupPublicationFailureSurvivesShutdownBeforeRunCheck)
+{
+    verify_startup_failure_joins_shutdown (true);
 }
 
 TEST (CppFrameworkOpaqueLocationStore, LeaseLessStartupObservesAllFixedRidsOnFirstRecovery)
