@@ -159,7 +159,8 @@ jobs:
             -DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF \
             -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/.github/workflows/framework-cpp-system-toolchain.cmake" \
             -DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF \
-            -DZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=OFF
+            -DZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=OFF \
+            -DCMAKE_CXX_SCAN_FOR_MODULES=OFF
           cmake --build --preset linux-ninja-release --parallel "${BUILD_PARALLEL}"
 
       - name: Run CTest suites and create sanitizer summary
