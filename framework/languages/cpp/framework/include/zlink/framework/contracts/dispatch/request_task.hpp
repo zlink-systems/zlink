@@ -31,12 +31,17 @@ template <typename... TArgs> class request_callback_t
 {
   public:
     request_callback_t () = default;
+    request_callback_t (std::nullptr_t) {}
     template <typename TCallback>
         requires (!std::is_same_v<std::decay_t<TCallback>, request_callback_t>)
-    request_callback_t (TCallback &&callback) :
-        request_callback_t (from_shared (
-          std::make_shared<std::decay_t<TCallback>> (std::forward<TCallback> (callback))))
+    request_callback_t (TCallback &&callback)
     {
+        if constexpr (requires { static_cast<bool> (callback); }) {
+            if (!callback)
+                return;
+        }
+        *this = from_shared (
+          std::make_shared<std::decay_t<TCallback>> (std::forward<TCallback> (callback)));
     }
 
     template <typename TOwner, typename TInvoke>
