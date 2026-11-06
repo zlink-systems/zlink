@@ -32,6 +32,26 @@ namespace Zlink.Framework.Runtime.Execution;
 /// </remarks>
 internal sealed class ZLinkStateLane : IAsyncDisposable
 {
+#if DEBUG
+    internal static readonly AsyncLocal<Action<string, ZLinkStateLane?>?> WorkObserver = new();
+#endif
+
+    [System.Diagnostics.Conditional("DEBUG")]
+    private void ObserveEntry()
+    {
+#if DEBUG
+        WorkObserver.Value?.Invoke("lane-entry", this);
+#endif
+    }
+
+    [System.Diagnostics.Conditional("DEBUG")]
+    internal static void ObserveWork(string stage)
+    {
+#if DEBUG
+        WorkObserver.Value?.Invoke(stage, Current);
+#endif
+    }
+
     private ConcurrentQueue<LaneWork>? _mailbox;
     private TaskCompletionSource? _completed;
 
@@ -77,6 +97,7 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
     internal ValueTask<T> RunAsync<TState, T>(Func<TState, T> work, TState state)
     {
         ArgumentNullException.ThrowIfNull(work);
+        ObserveEntry();
         ThrowIfReentrant();
         if (Volatile.Read(ref _closed) != 0)
             throw new ObjectDisposedException(nameof(ZLinkStateLane));
@@ -160,6 +181,7 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
     internal ValueTask RunAsync(Func<ValueTask> work)
     {
         ArgumentNullException.ThrowIfNull(work);
+        ObserveEntry();
         if (Volatile.Read(ref _closed) != 0)
             return ValueTask.FromException(new ObjectDisposedException(nameof(ZLinkStateLane)));
 
@@ -192,6 +214,7 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
     internal bool TryPost<TState>(Action<TState> work, TState state)
     {
         ArgumentNullException.ThrowIfNull(work);
+        ObserveEntry();
         if (Volatile.Read(ref _closed) != 0)
             return false;
         Mailbox.Enqueue(new PostWork<TState>(work, state));
@@ -244,7 +267,11 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         do
         {
             while (_mailbox is { } mailbox && mailbox.TryDequeue(out var work))
+#if DEBUG
+                await work.RunObservedAsync().ConfigureAwait(false);
+#else
                 await work.RunAsync().ConfigureAwait(false);
+#endif
         } while (ReleaseDrain());
     }
 
@@ -266,6 +293,26 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
     // queued turn allocates no wrapper closure around the caller's work.
     private abstract class LaneWork
     {
+#if DEBUG
+        private readonly Action<string, ZLinkStateLane?>? _observer = WorkObserver.Value;
+
+        internal async ValueTask RunObservedAsync()
+        {
+            // Queued turns run in the drainer's context. Carry only the test
+            // observer, without changing runtime ExecutionContext ownership.
+            var previous = WorkObserver.Value;
+            WorkObserver.Value = _observer;
+            try
+            {
+                await RunAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                WorkObserver.Value = previous;
+            }
+        }
+#endif
+
         internal abstract ValueTask RunAsync();
     }
 
