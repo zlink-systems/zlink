@@ -72,7 +72,7 @@ jobs:
             -o Binary::apt::APT::Keep-Downloaded-Packages=true \
             install -y \
               build-essential cmake ninja-build git pkg-config curl \
-              clang-19 libclang-rt-19-dev llvm-19 libboost-all-dev libgtest-dev libgmock-dev liblz4-dev \
+              libboost-all-dev libgtest-dev libgmock-dev liblz4-dev \
               nlohmann-json3-dev libssl-dev protobuf-compiler libprotobuf-dev
 
       - name: Resolve the runner vcpkg
@@ -106,8 +106,12 @@ jobs:
 
       - name: Build ASan and UBSan Core
         env:
-          CC: clang-19
-          CXX: clang++-19
+          CC: gcc
+          CXX: g++
+          # Core's ENABLE_UBSAN adds clang-only checks; take UBSan from the shared flags.
+          CFLAGS: -fsanitize=undefined -fno-omit-frame-pointer
+          CXXFLAGS: -fsanitize=undefined -fno-omit-frame-pointer
+          LDFLAGS: -fsanitize=undefined
         run: |
           set -euo pipefail
           core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)"
@@ -117,7 +121,7 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="${core_prefix}" \
             -DENABLE_LTO=OFF \
             -DENABLE_ASAN=ON \
-            -DENABLE_UBSAN=ON \
+            -DENABLE_UBSAN=OFF \
             -DZLINK_BUILD_TESTS=ON \
             -DBUILD_TESTS=ON \
             -DBUILD_BENCHMARKS=OFF \
@@ -127,8 +131,8 @@ jobs:
 
       - name: Build the checkout C++ binding with sanitizers
         env:
-          CC: clang-19
-          CXX: clang++-19
+          CC: gcc
+          CXX: g++
           CFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
           CXXFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
           LDFLAGS: -fsanitize=address,undefined
@@ -144,31 +148,22 @@ jobs:
       - name: Configure and build Framework C++ with sanitizers
         working-directory: framework/languages/cpp
         env:
-          CC: clang-19
-          CXX: clang++-19
+          CC: gcc
+          CXX: g++
           CFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
           CXXFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
-          # The test executables link with --exclude-libs,ALL, which hides a static
-          # sanitizer runtime from the sanitized Core and binding DSOs; use the shared one.
-          LDFLAGS: -fsanitize=address,undefined -shared-libsan
+          LDFLAGS: -fsanitize=address,undefined
         run: |
           set -euo pipefail
-          # Deep template instantiation under the sanitizers needs more than the
-          # default 8 MiB compiler stack.
-          ulimit -s "$(ulimit -H -s)"
           cmake --preset linux-ninja-release \
             -DZLINK_FRAMEWORK_CPP_TEST_PROBES=ON \
             -DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF \
             -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/.github/workflows/framework-cpp-system-toolchain.cmake" \
             -DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF \
-            -DZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=OFF \
-            -DCMAKE_CXX_SCAN_FOR_MODULES=OFF
+            -DZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=OFF
           cmake --build --preset linux-ninja-release --parallel "${BUILD_PARALLEL}"
 
       - name: Run CTest suites and create sanitizer summary
-        env:
-          ASAN_SYMBOLIZER_PATH: /usr/lib/llvm-19/bin/llvm-symbolizer
-          LD_LIBRARY_PATH: /usr/lib/llvm-19/lib/clang/19/lib/linux
         run: |
           python3 scripts/ci/sanitizer-summary.py \
             --suite core "${GITHUB_WORKSPACE}/.artifacts/nightly-stress/core-asan-ubsan" \

@@ -42,7 +42,7 @@ trap 'rm -rf "$work"' EXIT
 # registration symbols such as ___asan_globals_registered; release archives have none.
 "$nm_tool" --defined-only --extern-only --format=posix "$archive" \
     | awk 'NF >= 2 && length($2) == 1 { print $1 }' \
-    | grep -Ev '^_{0,3}(asan|ubsan|sancov)_' \
+    | grep -Ev '^_{0,3}(asan|ubsan|sancov|odr_asan)[_.]' \
     | sort -u > "$work/exported"
 
 comm -13 "$work/allowed" "$work/exported" > "$work/unexpected"
