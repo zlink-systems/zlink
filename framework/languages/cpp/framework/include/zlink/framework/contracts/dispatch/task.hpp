@@ -12,6 +12,7 @@
 #endif
 
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <condition_variable>
 #include <coroutine>
@@ -729,6 +730,7 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
                               std::unique_ptr<std::optional<TCallback>, decltype (reset_callback)>
                                 callback_lifetime (&this->callback, reset_callback);
                               const auto ambient_guard = enter_ambient_context (ambient);
+                              assert (this->callback.has_value ());
                               if (cancelled) {
                                   const auto failure = result_t<T>::failure (
                                     framework_error_kind_t::shutting_down,
@@ -740,6 +742,10 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
                           std::move (scheduler))
                     {
                     }
+                    observer_t (const observer_t &) = delete;
+                    observer_t &operator= (const observer_t &) = delete;
+                    observer_t (observer_t &&) = delete;
+                    observer_t &operator= (observer_t &&) = delete;
                     std::weak_ptr<task_shared_state_t<T>> owner;
                     std::optional<TCallback> callback;
                     // Destroy the stop registration before its callable captures.
@@ -1024,8 +1030,24 @@ template <typename T> class task_completion_source_t
         _state (std::make_shared<detail::application_task_shared_state_t<T>> ())
     {
     }
-    task_completion_source_t (task_completion_source_t &&) noexcept = default;
-    task_completion_source_t &operator= (task_completion_source_t &&) noexcept = default;
+    task_completion_source_t (task_completion_source_t &&other) noexcept
+    {
+        *this = std::move (other);
+    }
+    task_completion_source_t &operator= (task_completion_source_t &&other) noexcept
+    {
+        if (this != &other) {
+            // A combined source borrows its enclosing state. Moving either end
+            // would detach that borrow from the allocation that owns it.
+            const auto borrowed = [] (const auto &state) {
+                return state && state.use_count () == 0;
+            };
+            if (borrowed (_state) || borrowed (other._state))
+                std::terminate ();
+            _state = std::move (other._state);
+        }
+        return *this;
+    }
     task_completion_source_t (const task_completion_source_t &) = delete;
     task_completion_source_t &operator= (const task_completion_source_t &) = delete;
 
@@ -1054,6 +1076,10 @@ template <typename T> std::shared_ptr<task_completion_source_t<T>> make_task_com
     struct shared_source_t final : application_task_shared_state_t<T>
     {
         shared_source_t () : source (this) {}
+        shared_source_t (const shared_source_t &) = delete;
+        shared_source_t &operator= (const shared_source_t &) = delete;
+        shared_source_t (shared_source_t &&) = delete;
+        shared_source_t &operator= (shared_source_t &&) = delete;
         task_completion_source_t<T> source;
     };
     auto storage = std::make_shared<shared_source_t> ();

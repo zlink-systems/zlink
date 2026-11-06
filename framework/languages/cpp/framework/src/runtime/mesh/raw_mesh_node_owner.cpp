@@ -221,30 +221,6 @@ void observe_infrastructure_request (
     }
 }
 
-foundation::operation_registry_t::callback_t
-request_admission_completion (foundation::operation_registry_t::callback_t callback,
-                              std::shared_ptr<task_completion_source_t<void>> admitted)
-{
-    return [callback = std::move (callback), admitted = std::move (admitted)] (
-             foundation::operation_terminal_t terminal,
-             ::zlink::framework::result_t<zlink::message_t> completion_payload) {
-        if (terminal != foundation::operation_terminal_t::completed) {
-            if (terminal == foundation::operation_terminal_t::cancelled)
-                admitted->complete (detail::result_access_t::failure<void> (
-                  detail::make_cancellation_exception ("request was cancelled")));
-            else
-                admitted->complete (detail::boundary_failure<void> (
-                  terminal == foundation::operation_terminal_t::timed_out
-                    ? detail::boundary_error_t::timed_out
-                  : terminal == foundation::operation_terminal_t::shutdown
-                    ? detail::boundary_error_t::shutdown
-                    : detail::boundary_error_t::disconnected,
-                  "request ended before admission"));
-        }
-        callback (terminal, std::move (completion_payload));
-    };
-}
-
 template <typename Parts>
 bool start_admitted_request (const std::shared_ptr<detail::backend::raw_route_port_t> &port,
                              const admitted_peer_t *peer,
@@ -1549,11 +1525,7 @@ try {
         if (!target_claimed && !peer && !_expected_peers.contains (target_routing_id))
             return std::optional<request_start_t>{};
         auto encoded_payload = protocol::encode_application_payload_message (application_payload);
-        std::shared_ptr<detail::backend::raw_route_port_t> port;
-        {
-            std::lock_guard lifecycle_lock (_lifecycle_mutex);
-            port = _port;
-        }
+        const auto &port = _port;
         if (!port)
             return std::optional<request_start_t>{};
         request_start_t value;
@@ -1569,8 +1541,7 @@ try {
         if (request && request->operation == foundation::call_id_t{})
             request->operation = value.operation;
         value.registered = _operations->register_operation (
-          value.operation, deadline,
-          request_admission_completion (std::move (callback), value.admitted),
+          value.operation, deadline, std::move (callback).with_admission (value.admitted),
           peer && peer->ready
             ? std::vector<std::uint8_t>{}
             : std::vector<std::uint8_t> (target_routing_id.begin (), target_routing_id.end ()),
@@ -1986,10 +1957,7 @@ raw_mesh_node_owner_t::prepare_relocation_ready_reply (const service_mailbox_rec
 {
     if (request.source_routing_id.empty () || !request.reply_token)
         co_return std::function<bool ()>{};
-    auto port = co_await _lane.run_task ([this] {
-        std::lock_guard lifecycle_lock (_lifecycle_mutex);
-        return _port;
-    });
+    auto port = co_await _lane.run_task ([this] { return _port; });
     if (!port)
         co_return std::function<bool ()>{};
     co_return std::function<bool ()>{[port = std::move (port), source = request.source_routing_id,
@@ -2005,12 +1973,7 @@ bool raw_mesh_node_owner_t::reply_relocation_failed (const service_mailbox_recor
 {
     if (request.source_routing_id.empty () || !request.reply_token)
         return false;
-    const auto port = _lane
-                        .run ([this] {
-                            std::lock_guard lifecycle_lock (_lifecycle_mutex);
-                            return _port;
-                        })
-                        .get ();
+    const auto port = _lane.run ([this] { return _port; }).get ();
     if (!port)
         return false;
     detail::backend::raw_message_t parts{protocol::encode_relocation_control (failure)};
@@ -2027,10 +1990,7 @@ bool raw_mesh_node_owner_t::reply (const service_mailbox_record_t &request,
     if (!request.correlation) {
         throw std::invalid_argument ("raw mesh reply requires a request mailbox record");
     }
-    const auto port = _lane.run_sync ([this] {
-        std::lock_guard lifecycle_lock (_lifecycle_mutex);
-        return _port;
-    });
+    const auto port = _lane.run_sync ([this] { return _port; });
     if (!port)
         return false;
     std::vector<zlink::message_t> parts;
@@ -2057,10 +2017,7 @@ bool raw_mesh_node_owner_t::reply_failure (const service_mailbox_record_t &reque
     }
     if (!request.reply_token)
         return false;
-    const auto port = _lane.run_sync ([this] {
-        std::lock_guard lifecycle_lock (_lifecycle_mutex);
-        return _port;
-    });
+    const auto port = _lane.run_sync ([this] { return _port; });
     if (!port)
         return false;
     std::vector<zlink::message_t> parts;
@@ -2871,8 +2828,7 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
     const auto id = operation_id (local.lifecycle_generation, correlation);
     auto admitted = std::make_shared<task_completion_source_t<void>> ();
     if (!_operations->register_operation (
-          id, deadline, request_admission_completion (std::move (callback), admitted),
-          target_routing_id,
+          id, deadline, std::move (callback).with_admission (admitted), target_routing_id,
           mesh_request_metric_t (_request_metrics, mesh_request_surface_t::instance_spot), {},
           detail::current_wait_owner ())) {
         co_return false;

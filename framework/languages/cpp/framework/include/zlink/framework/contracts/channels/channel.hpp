@@ -677,12 +677,33 @@ class route_send_call_t
      * returned task with the public Framework result. */
     using submit_fn_t = std::function<task_t<void> (const std::string &, const metadata_map_t &)>;
 
-    route_send_call_t (std::string packet_name, submit_fn_t submit);
+    struct submission_t
+    {
+        virtual ~submission_t () = default;
+        virtual task_t<void> submit (const std::string &, const metadata_map_t &) = 0;
+        detail::submit_once_t once;
+    };
+
+    template <typename TSubmit> struct bound_submission_t final : submission_t
+    {
+        explicit bound_submission_t (TSubmit submit) : invoke (std::move (submit)) {}
+        task_t<void> submit (const std::string &packet, const metadata_map_t &metadata) override
+        {
+            return invoke (packet, metadata);
+        }
+        TSubmit invoke;
+    };
+
+    template <typename TSubmit>
+    route_send_call_t (std::string packet_name, TSubmit submit) :
+        _packet_name (std::move (packet_name)),
+        _submit (std::make_shared<bound_submission_t<TSubmit>> (std::move (submit)))
+    {
+    }
 
     std::string _packet_name;
     metadata_map_t _metadata;
-    submit_fn_t _submit;
-    std::shared_ptr<detail::submit_once_t> _submission = std::make_shared<detail::submit_once_t> ();
+    std::shared_ptr<submission_t> _submit;
 };
 
 namespace detail
@@ -815,16 +836,15 @@ class route_client_t
                                     TMessage message)
     {
         auto state = _state;
-        auto message_value = std::make_shared<TMessage> (std::move (message));
         return route_send_call_t (
           detail::message_name<TMessage> (),
           [state, router_channel_id = std::move (router_channel_id),
-           target_node_rid = std::move (target_node_rid),
-           message_value] (const std::string &packet_name,
-                           const route_send_call_t::metadata_map_t &metadata) -> task_t<void> {
-              auto encode_payload = [message_value] (serializer_registry_t &serializers) {
+           target_node_rid = std::move (target_node_rid), message_value = std::move (message)] (
+            const std::string &packet_name,
+            const route_send_call_t::metadata_map_t &metadata) -> task_t<void> {
+              auto encode_payload = [&message_value] (serializer_registry_t &serializers) {
                   return serializers.template get<TMessage> ().serialize_with_content_type (
-                    *message_value);
+                    message_value);
               };
               // Erased submit consumes this encoder before its first suspension.
               return submit_send_erased (state, router_channel_id, target_node_rid, packet_name,
