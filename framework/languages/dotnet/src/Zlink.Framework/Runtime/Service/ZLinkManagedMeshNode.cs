@@ -1041,7 +1041,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var replyParts = await RequestNativeDurableWireAsync(
                 target,
                 request.Actor.TargetNodeGeneration.Value,
-                encoded.Select(frame => (ReadOnlyMemory<byte>)frame).ToArray(),
+                ZLinkRawRouterServicePort.CreateMessages(
+                    encoded,
+                    static frame => Message.From(frame)
+                ),
                 _deadlineTimeProvider.GetTimestamp(),
                 timeout,
                 cancellationToken
@@ -1271,7 +1274,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var replyParts = await RequestNativeDurableWireAsync(
                 target,
                 0,
-                encoded.Select(frame => (ReadOnlyMemory<byte>)frame).ToArray(),
+                ZLinkRawRouterServicePort.CreateMessages(
+                    encoded,
+                    static frame => Message.From(frame)
+                ),
                 _deadlineTimeProvider.GetTimestamp(),
                 timeout,
                 cancellationToken
@@ -2189,30 +2195,38 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         );
         // Validate and encode before publishing the source pending operation.
         var head = ZLinkServiceWireCodec.EncodeInstanceSpotActivation(operation, !metadata.IsEmpty);
-        var wireParts = new List<ReadOnlyMemory<byte>>(3) { head };
-        if (!metadata.IsEmpty)
-            wireParts.Add(metadata);
-        wireParts.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
+        var requestWire = request
+            ? CreateApplicationWire(Message.From(head), parts, metadata)
+            : null;
+        var sendWire = request ? null : CreateStatefulWire(head, parts, metadata);
         PendingOperation? pending = null;
         if (request)
         {
-            CreateOperation(
-                MeshOperationKind.InstanceSpotRequest,
-                operationId,
-                out correlation,
-                out pending,
-                managedTimeout: effectiveTimeout,
-                requestAdmission: requestAdmission,
-                originalDeadlineUnixMs: deadlineUnixMs
-            );
+            try
+            {
+                CreateOperation(
+                    MeshOperationKind.InstanceSpotRequest,
+                    operationId,
+                    out correlation,
+                    out pending,
+                    managedTimeout: effectiveTimeout,
+                    requestAdmission: requestAdmission,
+                    originalDeadlineUnixMs: deadlineUnixMs
+                );
+            }
+            catch
+            {
+                DisposeParts(requestWire!);
+                throw;
+            }
         }
         var submit = pending is null
-            ? SubmitRoutedApplicationSend(peer!, wireParts)
+            ? SubmitRoutedApplicationSend(peer!, sendWire!)
             : SubmitNativeDurableRequest(
                 target.TargetNodeRid,
                 target.TargetNodeGeneration,
                 pending,
-                wireParts,
+                requestWire!,
                 requestAdmission,
                 (operation, result, replies) =>
                     CompleteNativeApplicationRequest(operation, result, replies)
@@ -3189,7 +3203,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             request.TargetNodeRid,
             request.TargetNodeGeneration,
             operation,
-            [head, payload]
+            [Message.From(head), Message.From(payload)]
         );
         if (submit != SubmitResult.Ok)
             CompleteManagedOperation(
@@ -4496,11 +4510,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     targetAuthority.OwnerLeaseGeneration
                 )
             );
-            var wire = new List<ReadOnlyMemory<byte>> { head };
-            if (requestParts is { Count: > 0 })
-                wire.Add(
-                    ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(requestParts)
-                );
+            IReadOnlyList<Message> wire = requestParts is { Count: > 0 }
+                ? CreateApplicationWire(Message.From(head), requestParts, default)
+                : [Message.From(head)];
             var submit = SubmitNativeDurableRequest(
                 targetNodeRid,
                 targetAuthority.TargetNodeGeneration,
@@ -4965,7 +4977,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var reply = await RequestNativeDurableWireAsync(
                 targetRid,
                 authority.TargetNodeGeneration,
-                CreateStatefulWire(head, parts, metadata),
+                CreateApplicationWire(Message.From(head), parts, metadata),
                 requestStarted,
                 timeout,
                 cancellationToken,
@@ -5005,6 +5017,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ArgumentNullException.ThrowIfNull(parts);
         if (parts.Count == 0)
             throw new ArgumentException("Application payload is required.", nameof(parts));
+        ZLinkApplicationPayloadEnvelopeCodec.ObserveEncoding("wire-list");
         var wire = new ReadOnlyMemory<byte>[metadata.IsEmpty ? 2 : 3];
         wire[0] = head;
         var payloadIndex = 1;
@@ -5059,7 +5072,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     targetNodeRid,
                     authority.TargetNodeGeneration,
                     operation,
-                    CreateStatefulWire(head, parts, metadata),
+                    CreateApplicationWire(Message.From(head), parts, metadata),
                     requestAdmission,
                     (pending, result, replies) =>
                         CompleteNativeApplicationRequest(pending, result, replies)
@@ -5360,7 +5373,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         actorRef.NodeRid,
                         authority.TargetNodeGeneration,
                         operation,
-                        CreateStatefulWire(head, parts, default),
+                        CreateApplicationWire(Message.From(head), parts, default),
                         requestAdmission,
                         (pending, result, replies) =>
                             CompleteNativeApplicationRequest(
@@ -5456,7 +5469,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RoutingId targetRid,
         ulong targetNodeGeneration,
         PendingOperation pending,
-        IReadOnlyList<ReadOnlyMemory<byte>> wire,
+        IReadOnlyList<Message> wire,
         ZLinkRequestAdmission? requestAdmission = null,
         Action<PendingOperation, RequestResult, IReadOnlyList<Message>>? complete = null
     )
@@ -5465,10 +5478,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             pending.Kind == MeshOperationKind.ActorJoin
                 ? CompleteNativeActorJoinRequest
                 : CompleteNativeInfrastructureRequest;
-        var pendingToken = pending.Token;
-        var lifetime = RunState(() => new NativeDurableRequestLifetime(this, targetRid));
-        if (
-            !RunInboundOperation(async () =>
+        NativeDurableRequestLifetime? lifetime = null;
+        var scheduled = false;
+        try
+        {
+            var pendingToken = pending.Token;
+            lifetime = RunState(() => new NativeDurableRequestLifetime(this, targetRid));
+            scheduled = RunInboundOperation(async () =>
             {
                 using (lifetime)
                     await CompleteNativeDurableRequestAsync(
@@ -5482,11 +5498,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                             requestAdmission
                         )
                         .ConfigureAwait(false);
-            })
-        )
+            });
+            if (!scheduled)
+                return SubmitResult.Terminated;
+        }
+        finally
         {
-            lifetime.Dispose();
-            return SubmitResult.Terminated;
+            if (!scheduled)
+            {
+                lifetime?.Dispose();
+                DisposeParts(wire);
+            }
         }
 
         Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: targetRid);
@@ -6167,11 +6189,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private static IReadOnlyList<Message> CloneParts(IReadOnlyList<Message> parts) =>
         ZLinkMessageParts.CopyAll(parts);
 
-    private static void DisposeParts(IReadOnlyList<Message> parts)
-    {
-        foreach (var part in parts)
-            part.Dispose();
-    }
+    private static void DisposeParts(IReadOnlyList<Message> parts) =>
+        ZLinkMessageParts.DisposeAll(parts);
 
     // One logical source consumes this node's router/monitor and owns its
     // deadlines and permits. The process pool transfers the physical receive
@@ -10632,17 +10651,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             )
         )
             return SubmitResult.NotFound;
-        var head = ZLinkServiceWireCodec.EncodeApplication(
-            command,
-            pending.OperationId.Low,
-            channelName,
-            !metadata.IsEmpty
-        );
         return SubmitNativeDurableRequest(
             targetRid,
             0,
             pending,
-            CreateStatefulWire(head, parts, metadata),
+            CreateApplicationWire(command, pending.OperationId.Low, channelName, parts, metadata),
             complete: (operation, result, replies) =>
                 CompleteNativeApplicationRequest(operation, result, replies)
         );
@@ -10710,13 +10723,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             var requestDeadline = _deadlineClock.Elapsed + timeout;
             var started = _deadlineTimeProvider.GetTimestamp();
             var operationId = NextStandaloneOperationId();
-            var wire = CreateStatefulWire(
-                ZLinkServiceWireCodec.EncodeApplication(
-                    ServiceWireConstants.Command.NodeRequest,
-                    operationId.Low,
-                    null,
-                    !metadata.IsEmpty
-                ),
+            var wire = CreateApplicationWire(
+                ServiceWireConstants.Command.NodeRequest,
+                operationId.Low,
+                null,
                 parts,
                 metadata
             );
@@ -10860,40 +10870,58 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             ? peer
             : throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
 
-    private static IReadOnlyList<Message> CreateApplicationWire(
+    internal static IReadOnlyList<Message> CreateApplicationWire(
         ServiceWireConstants.Command command,
         ulong correlation,
         string? channelName,
         IReadOnlyList<Message> parts,
         ReadOnlyMemory<byte> metadata
+    ) =>
+        CreateApplicationWire(
+            ZLinkServiceWireCodec.EncodeApplicationMessage(
+                command,
+                correlation,
+                channelName,
+                !metadata.IsEmpty
+            ),
+            parts,
+            metadata
+        );
+
+    private static IReadOnlyList<Message> CreateApplicationWire(
+        Message head,
+        IReadOnlyList<Message> parts,
+        ReadOnlyMemory<byte> metadata
     )
     {
-        ArgumentNullException.ThrowIfNull(parts);
-        if (parts.Count == 0)
-            throw new ArgumentException("Application payload is required.", nameof(parts));
-        var wire = new Message[metadata.IsEmpty ? 2 : 3];
         var created = 0;
+        Message[]? wire = null;
         try
         {
-            wire[created++] = Message.From(
-                ZLinkServiceWireCodec.EncodeApplication(
-                    command,
-                    correlation,
-                    channelName,
-                    !metadata.IsEmpty
-                )
-            );
+            ArgumentNullException.ThrowIfNull(parts);
+            if (parts.Count == 0)
+                throw new ArgumentException("Application payload is required.", nameof(parts));
+            ZLinkApplicationPayloadEnvelopeCodec.ObserveEncoding("wire-list");
+            wire = new Message[metadata.IsEmpty ? 2 : 3];
+            wire[created++] = head;
             if (!metadata.IsEmpty)
-                wire[created++] = Message.From(metadata);
-            wire[created++] = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(
+            {
+                wire[created] = Message.From(metadata);
+                created++;
+            }
+            wire[created] = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(
                 parts
             );
+            created++;
             return wire;
         }
         catch
         {
-            for (var index = 0; index < created; index++)
-                wire[index].Dispose();
+            if (created == 0)
+                head.Dispose();
+            else
+                for (var index = 0; index < created; index++)
+                    wire![index].Dispose();
             throw;
         }
     }
@@ -10952,30 +10980,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         var messages = ZLinkRawRouterServicePort.CreateMessages(wire);
         return SendDirectWireAsync(target, messages, cancellationToken);
-    }
-
-    internal ValueTask<IReadOnlyList<Message>> RequestDirectWireAsync(
-        RoutingId target,
-        IReadOnlyList<ReadOnlyMemory<byte>> wire,
-        TimeSpan timeout,
-        CancellationToken cancellationToken,
-        ZLinkServiceLiveness? admission = null,
-        ZLinkRequestAdmission? requestAdmission = null,
-        TimeSpan? absoluteDeadline = null,
-        MeshOperationId operationId = default
-    )
-    {
-        var messages = ZLinkRawRouterServicePort.CreateMessages(wire);
-        return RequestDirectWireAsync(
-            target,
-            messages,
-            timeout,
-            cancellationToken,
-            admission,
-            requestAdmission: requestAdmission,
-            absoluteDeadline: absoluteDeadline,
-            operationId: operationId
-        );
     }
 
     internal ValueTask<IReadOnlyList<Message>> RequestDirectWireAsync(
@@ -11275,21 +11279,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private ValueTask<IReadOnlyList<Message>> SubmitNativeWireAsync(
         RoutingId target,
-        IReadOnlyList<ReadOnlyMemory<byte>> wire,
+        IReadOnlyList<Message> wire,
         TimeSpan timeout,
         CancellationToken token,
         ZLinkServiceLiveness? admission = null,
         ZLinkRequestAdmission? requestAdmission = null
-    ) =>
-        SubmitNativeWireAsync(
-            target,
-            ZLinkRawRouterServicePort.CreateMessages(wire),
-            timeout,
-            out _,
-            token,
-            admission,
-            requestAdmission
-        );
+    ) => SubmitNativeWireAsync(target, wire, timeout, out _, token, admission, requestAdmission);
 
     internal ValueTask<IReadOnlyList<Message>> SubmitNativeWireAsync(
         RoutingId target,
@@ -11517,7 +11512,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private ValueTask<IReadOnlyList<Message>> RequestNativeDurableWireAsync(
         RoutingId target,
         ulong targetNodeGeneration,
-        IReadOnlyList<ReadOnlyMemory<byte>> wire,
+        IReadOnlyList<Message> wire,
         long started,
         TimeSpan timeout,
         CancellationToken cancellationToken,
@@ -11546,7 +11541,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private async ValueTask<TReply> RequestNativeDurableWireAsync<TReply>(
         RoutingId target,
         ulong targetNodeGeneration,
-        IReadOnlyList<ReadOnlyMemory<byte>> wire,
+        IReadOnlyList<Message> wire,
         long started,
         TimeSpan timeout,
         CancellationToken cancellationToken,
@@ -11559,6 +11554,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         NativeDurableRequestLifetime? suppliedLifetime = null
     )
     {
+        IReadOnlyList<Message>? ownedWire = wire;
         TReply reply = default!;
         Exception? failure = null;
         try
@@ -11617,14 +11613,26 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         Array.Empty<Message>()
                     )
                 );
+                var frames =
+                    Interlocked.Exchange(ref ownedWire, null)
+                    ?? throw new OperationCanceledException(token);
                 return await ZLinkDurableRequest
                     .RequestAsync(
-                        wire,
+                        frames,
                         pending.DeadlineStartTimestamp,
                         pending.DeadlineTimeout,
                         (frames, remaining, attemptToken) =>
                         {
-                            var peer = RequireDirectPeer(target, targetNodeGeneration);
+                            ZLinkMeshDirectPeer peer;
+                            try
+                            {
+                                peer = RequireDirectPeer(target, targetNodeGeneration);
+                            }
+                            catch
+                            {
+                                DisposeParts(frames);
+                                throw;
+                            }
                             return SubmitNativeWireAsync(
                                 peer.PhysicalRoutingId,
                                 frames,
@@ -11646,6 +11654,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             failure = error;
         }
+        finally
+        {
+            if (Interlocked.Exchange(ref ownedWire, null) is { } unsubmitted)
+                DisposeParts(unsubmitted);
+        }
         failure = receive(failure);
         if (failure is not null)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
@@ -11659,7 +11672,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RoutingId target,
         ulong targetNodeGeneration,
         PendingOperation pending,
-        IReadOnlyList<ReadOnlyMemory<byte>> wire,
+        IReadOnlyList<Message> wire,
         Action<PendingOperation, RequestResult, IReadOnlyList<Message>> complete,
         CancellationToken pendingToken,
         NativeDurableRequestLifetime? lifetime,
@@ -12103,7 +12116,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             throw;
         }
 
-        var submit = SubmitNativeDurableRequest(targetRid, targetNodeGeneration, pending, [head]);
+        var submit = SubmitNativeDurableRequest(
+            targetRid,
+            targetNodeGeneration,
+            pending,
+            [Message.From(head)]
+        );
         if (submit != SubmitResult.Ok)
         {
             if (TryRemoveOperation(correlation, out _))
