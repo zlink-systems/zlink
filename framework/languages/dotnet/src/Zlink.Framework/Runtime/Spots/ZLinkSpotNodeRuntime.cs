@@ -1067,13 +1067,15 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                             : ZLinkLocationWriteIntent.NewClaim
                     )
                     .ConfigureAwait(false);
-                if (claim.Status == ZLinkLocationWriteStatus.ReleaseWaitPending)
-                    return false;
                 if (claim.Status != ZLinkLocationWriteStatus.Stored)
-                    throw new ZLinkConfigurationException(
-                        $"MeshNode '{Registration.SpotNodeName}' could not "
-                            + $"claim its descriptor: {claim.Status}."
-                    );
+                {
+                    if (claim.Status == ZLinkLocationWriteStatus.RejectedConflict)
+                        throw new ZLinkConfigurationException(
+                            $"MeshNode '{Registration.SpotNodeName}' could not "
+                                + $"claim its descriptor: {claim.Status}."
+                        );
+                    return false;
+                }
                 UpdateStartupState(unclaimed with { StoreGeneration = claim.Generation });
             }
         }

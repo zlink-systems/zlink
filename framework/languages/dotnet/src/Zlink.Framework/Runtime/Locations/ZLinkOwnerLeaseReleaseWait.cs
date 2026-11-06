@@ -49,6 +49,15 @@ internal sealed class ZLinkOwnerLeaseReleaseWait(TimeProvider timeProvider)
             _observations.TryRemove(new KeyValuePair<string, Observation>(recordKey, observed));
     }
 
+    internal Observation? Capture(string recordKey) =>
+        _observations.TryGetValue(recordKey, out var observed) ? observed : null;
+
+    internal void ForgetIfUnchanged(string recordKey, Observation? observation)
+    {
+        if (observation is not null)
+            _observations.TryRemove(new KeyValuePair<string, Observation>(recordKey, observation));
+    }
+
     private Observation ObserveCore(string recordKey, ZLinkLocationOwnerToken? owner)
     {
         while (true)
@@ -70,5 +79,10 @@ internal sealed class ZLinkOwnerLeaseReleaseWait(TimeProvider timeProvider)
         }
     }
 
-    private sealed record Observation(ZLinkLocationOwnerToken? Owner, long Timestamp);
+    internal sealed class Observation(ZLinkLocationOwnerToken? owner, long timestamp)
+    {
+        internal ZLinkLocationOwnerToken? Owner { get; } = owner;
+
+        internal long Timestamp { get; } = timestamp;
+    }
 }

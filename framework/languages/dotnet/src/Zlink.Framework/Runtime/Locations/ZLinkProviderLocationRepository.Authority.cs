@@ -4505,6 +4505,7 @@ internal sealed partial class ZLinkProviderLocationRepository
     {
         const int MaximumProjectionReadAttempts = 8;
         var metaKey = AuthorityMetaKey(key);
+        var releaseWaitObservation = _ownerLeaseReleaseWait.Capture(key.Value);
         // The authority record is one opaque row (checklist C-2b): a single
         // read is already byte-atomic, so the old read-verify-retry loop
         // that reconciled a separately read payload key against this meta
@@ -4519,7 +4520,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             knownMeta = null;
             if (first is ZLinkStoreReadResult.Missing)
             {
-                _ownerLeaseReleaseWait.ForgetIfTokenMatches(key.Value, null);
+                _ownerLeaseReleaseWait.ForgetIfUnchanged(key.Value, releaseWaitObservation);
                 return null;
             }
             var found = ((ZLinkStoreReadResult.Found)first).Value;

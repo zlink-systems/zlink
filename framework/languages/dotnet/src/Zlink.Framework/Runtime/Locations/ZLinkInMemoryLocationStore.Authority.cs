@@ -81,11 +81,12 @@ internal sealed partial class ZLinkInMemoryLocationStore
     {
         ValidateAuthorityKey(key);
         cancellationToken.ThrowIfCancellationRequested();
+        var releaseWaitObservation = _ownerLeaseReleaseWait.Capture(key.Value);
         return _lane.RunAsync<ZLinkAuthorityReadResult>(() =>
         {
             if (!_authorities.TryGetValue(key.Value, out var snapshot))
             {
-                _ownerLeaseReleaseWait.ForgetIfTokenMatches(key.Value, null);
+                _ownerLeaseReleaseWait.ForgetIfUnchanged(key.Value, releaseWaitObservation);
                 return new ZLinkAuthorityReadResult.Missing(_time.GetUtcNow());
             }
             _ownerLeaseReleaseWait.ForgetIfTokenChanged(

@@ -597,6 +597,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
 
         var current = await _provider.ReadAsync(rowKey, cancellationToken).ConfigureAwait(false);
         ZLinkStoreCondition? predecessorOwnerCondition = null;
+        ZLinkLocationOwnerToken? predecessorOwnerToken = null;
         ZLinkLocationOwnerToken? releaseWaitToken = null;
         if (current is ZLinkStoreReadResult.Found found)
         {
@@ -655,6 +656,8 @@ internal sealed partial class ZLinkProviderLocationRepository(
                 )
                     return ZLinkLocationWriteResult.ReleaseWaitPending;
                 if (storedOwner != ownerId)
+                {
+                    predecessorOwnerToken = storedOwnerToken;
                     predecessorOwnerCondition = storedOwnerLease switch
                     {
                         ZLinkStoreReadResult.Found storedLease => new ZLinkStoreCondition.Version(
@@ -666,6 +669,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
                         ),
                         _ => throw new InvalidOperationException(),
                     };
+                }
             }
             if (intent == ZLinkLocationWriteIntent.Takeover && storedOwnerLive)
                 return ZLinkLocationWriteResult.IgnoredStale;
@@ -713,6 +717,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
                 current,
                 encodedDescriptor,
                 predecessorOwnerCondition,
+                predecessorOwnerToken,
                 cancellationToken
             )
             .ConfigureAwait(false);
@@ -758,6 +763,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
         ZLinkStoreReadResult predecessor,
         ReadOnlyMemory<byte> encodedDescriptor,
         ZLinkStoreCondition? predecessorOwnerCondition,
+        ZLinkLocationOwnerToken? predecessorOwnerToken,
         CancellationToken cancellationToken
     )
     {
@@ -860,6 +866,27 @@ internal sealed partial class ZLinkProviderLocationRepository(
                 .ConfigureAwait(false);
             if (!IsSameDescriptorPredecessor(predecessor, refreshedRow))
                 return ZLinkLocationWriteResult.IgnoredStale;
+
+            if (predecessorOwnerToken is { } predecessorToken)
+            {
+                var predecessorLeaseKey = OwnerKey(predecessorToken.OwnerId);
+                var refreshedPredecessorLease = await _provider
+                    .ReadAsync(predecessorLeaseKey, cancellationToken)
+                    .ConfigureAwait(false);
+                if (IsOwnerLeaseLive(refreshedPredecessorLease, predecessorToken))
+                    return ZLinkLocationWriteResult.RejectedConflict;
+                predecessorOwnerCondition = refreshedPredecessorLease switch
+                {
+                    ZLinkStoreReadResult.Found found => new ZLinkStoreCondition.Version(
+                        predecessorLeaseKey,
+                        found.Value.Version
+                    ),
+                    ZLinkStoreReadResult.Missing => new ZLinkStoreCondition.Missing(
+                        predecessorLeaseKey
+                    ),
+                    _ => throw new InvalidOperationException(),
+                };
+            }
 
             currentRow = refreshedRow;
         }

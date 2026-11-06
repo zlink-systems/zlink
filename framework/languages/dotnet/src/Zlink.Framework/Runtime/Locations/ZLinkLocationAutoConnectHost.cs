@@ -86,7 +86,8 @@ internal sealed class ZLinkLocationAutoConnectHost
     internal async ValueTask StartAsync(
         ZLinkFrameworkComponentState state,
         CancellationToken cancellationToken = default,
-        Action? published = null
+        Action? published = null,
+        Func<Exception, ValueTask>? startupFailure = null
     )
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
@@ -101,7 +102,10 @@ internal sealed class ZLinkLocationAutoConnectHost
                 return;
             if (!_runtime.IsOwnerAdmissionOpen)
             {
-                Interlocked.Exchange(ref _deferredStart, new DeferredStart(state, published));
+                Interlocked.Exchange(
+                    ref _deferredStart,
+                    new DeferredStart(state, published, startupFailure)
+                );
                 if (_runtime.IsOwnerAdmissionOpen)
                     ResumeDeferredDescriptorPublication();
                 return;
@@ -117,7 +121,7 @@ internal sealed class ZLinkLocationAutoConnectHost
                     {
                         Interlocked.Exchange(
                             ref _deferredStart,
-                            new DeferredStart(state, published)
+                            new DeferredStart(state, published, startupFailure)
                         );
                         return;
                     }
@@ -223,7 +227,10 @@ internal sealed class ZLinkLocationAutoConnectHost
                     "location-descriptor-publication",
                     startFailure
                 );
-                Interlocked.Exchange(ref _deferredStart, new DeferredStart(state, published));
+                Interlocked.Exchange(
+                    ref _deferredStart,
+                    new DeferredStart(state, published, startupFailure)
+                );
                 return;
             }
             published?.Invoke();
@@ -500,11 +507,39 @@ internal sealed class ZLinkLocationAutoConnectHost
     {
         try
         {
-            await StartAsync(deferred.State, CancellationToken.None, deferred.Published)
+            await StartAsync(
+                    deferred.State,
+                    CancellationToken.None,
+                    deferred.Published,
+                    deferred.StartupFailure
+                )
                 .ConfigureAwait(false);
         }
         catch (Exception exception)
         {
+            if (
+                exception is Zlink.Framework.Contracts.Errors.ZLinkConfigurationException
+                && deferred.StartupFailure is { } startupFailure
+            )
+            {
+                var failureHandling = startupFailure(exception);
+                deferred.State.ErrorSink.ReportRuntimeTaskException(
+                    "location-descriptor-publication",
+                    exception
+                );
+                try
+                {
+                    await failureHandling.ConfigureAwait(false);
+                }
+                catch (Exception failureHandlingException)
+                {
+                    deferred.State.ErrorSink.ReportRuntimeTaskException(
+                        "location-descriptor-publication-failure-handling",
+                        failureHandlingException
+                    );
+                }
+                return;
+            }
             if (
                 Volatile.Read(ref _disposed) == 0
                 && exception is not Zlink.Framework.Contracts.Errors.ZLinkConfigurationException
@@ -517,7 +552,11 @@ internal sealed class ZLinkLocationAutoConnectHost
         }
     }
 
-    private sealed record DeferredStart(ZLinkFrameworkComponentState State, Action? Published);
+    private sealed record DeferredStart(
+        ZLinkFrameworkComponentState State,
+        Action? Published,
+        Func<Exception, ValueTask>? StartupFailure
+    );
 
     private void AddLoop(
         IZLinkRuntimeFailureReporter errorSink,
