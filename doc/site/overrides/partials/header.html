@@ -1,7 +1,9 @@
 {#-
   mkdocs-material 9.7.6의 partials/header.html을 포크한다. 원본은 로고 아이콘만
   홈으로 링크하고 그 옆 사이트 이름 텍스트("ZLink")는 그냥 글자다. 텍스트를 눌러도
-  홈으로 가길 원해서, 그 한 줄만 <a>로 감쌌다 — 나머지는 원본과 동일하다.
+  홈으로 가길 원해서, 그 한 줄만 <a>로 감쌌다. 저장소 링크 앞에 제품 사이트(zlink.systems)로
+  돌아가는 링크를 하나 더했다. 주소는 mkdocs.yml의 extra.product_site가 로케일별로 정한다.
+  나머지는 원본과 동일하다.
   Material을 올릴 때는 새 버전의 partials/header.html과 diff를 떠서 반영한다.
 -#}
 {% set class = "md-header" %}
@@ -59,6 +61,11 @@
         {% include "partials/search.html" %}
       {% endif %}
     {% endif %}
+    {% set product_site = config.extra.product_site[config.theme.language] %}
+    <a href="{{ product_site }}" class="md-header__button md-icon zlink-product-site" title="zlink.systems" aria-label="zlink.systems">
+      {% include ".icons/material/web.svg" %}
+      <span class="zlink-product-site__label">zlink.systems</span>
+    </a>
     {% if config.repo_url %}
       <div class="md-header__source">
         {% include "partials/source.html" %}
