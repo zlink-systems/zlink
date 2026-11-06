@@ -1946,6 +1946,25 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     private static int ObservationCount(IZLinkLocationRepository repository) =>
         ReleaseWait(repository).Count;
 
+    private static async Task WaitForFixedRidObservationsAsync(
+        IZLinkLocationRepository repository,
+        FixedRidTrackingLocationStore firstMeshStore,
+        FixedRidTrackingLocationStore secondMeshStore
+    )
+    {
+        const int maximumYields = 100_000;
+        for (var attempt = 0; attempt < maximumYields; attempt++)
+        {
+            if (ObservationCount(repository) == 2)
+                break;
+            await Task.Yield();
+        }
+
+        Assert.Equal(2, ObservationCount(repository));
+        Assert.Equal(0, firstMeshStore.DescriptorWriteCount);
+        Assert.Equal(0, secondMeshStore.DescriptorWriteCount);
+    }
+
     private static ServiceProvider CreateFixedRidHostServices(
         ManualTimeProvider time,
         IZLinkLocationStore store,
@@ -4049,9 +4068,11 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             startupStore.BlockWrites = false;
             time.Advance(TimeSpan.FromSeconds(1));
             Assert.True(await locationRuntime.RenewOwnerLeaseOnceAsync());
-            Assert.Equal(2, ObservationCount(locationRuntime.Store));
-            Assert.Equal(0, firstMeshStore.DescriptorWriteCount);
-            Assert.Equal(0, secondMeshStore.DescriptorWriteCount);
+            await WaitForFixedRidObservationsAsync(
+                locationRuntime.Store,
+                firstMeshStore,
+                secondMeshStore
+            );
             Assert.Equal(ZLinkFrameworkRuntimeState.Preparing, host.Status.State);
 
             time.Advance(TimeSpan.FromTicks(fencingMargin.Ticks * 3));
