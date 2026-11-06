@@ -58,3 +58,13 @@ while IFS= read -r line; do
   esac
 done <<< "$body"
 printf 'PASS: issue body starts without whitespace and has no indented lines\n'
+
+if should_pause_merge_queue 'Nightly stress'; then
+  fail 'Nightly stress must not pause the merge queue'
+fi
+printf 'PASS: Nightly stress leaves the merge queue running\n'
+
+if ! should_pause_merge_queue 'Framework Node'; then
+  fail 'existing scheduled workflows must continue to pause the merge queue'
+fi
+printf 'PASS: existing scheduled workflows still pause the merge queue\n'

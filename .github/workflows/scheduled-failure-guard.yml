@@ -10,6 +10,7 @@ on:
       # rejects the trigger and every run ends in startup_failure.
       - 'Framework C\+\+ Verify'
       - Framework Java
+      - Nightly stress
       - Examples smoke
     types:
       - completed
@@ -52,7 +53,7 @@ jobs:
       # Recovery is manual after the cause is confirmed: run mergify queue unpause
       # or resume the queue from the Mergify dashboard. This workflow never unpauses.
       - name: Pause Mergify merge queue
-        if: env.MERGIFY_TOKEN != ''
+        if: ${{ env.MERGIFY_TOKEN != '' && steps.incident.outputs.pause_queue == 'true' }}
         env:
           ISSUE_URL: ${{ steps.incident.outputs.issue_url }}
         shell: bash
@@ -75,7 +76,7 @@ jobs:
           echo "Mergify merge queue paused. Reason includes ${ISSUE_URL}."
 
       - name: Warn that Mergify queue was not paused
-        if: env.MERGIFY_TOKEN == ''
+        if: ${{ env.MERGIFY_TOKEN == '' && steps.incident.outputs.pause_queue == 'true' }}
         env:
           ISSUE_URL: ${{ steps.incident.outputs.issue_url }}
         shell: bash
