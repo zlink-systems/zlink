@@ -51,6 +51,13 @@ final class ZLinkLocalActorCutoverAdmissionTest {
     private void publicLocalAdmissionSucceedsAfterCut(boolean request) throws Exception {
         SOURCE_HANDLERS.set(0);
         try (var host = ZLinkFrameworkRuntimeTestAccess.start(options())) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(host)
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(host)
+                            .toCompletableFuture()
+                            .get(WAIT_SECONDS, TimeUnit.SECONDS));
             host.actorManager()
                     .create(ACTOR, "player")
                     .submit()
@@ -335,6 +342,7 @@ final class ZLinkLocalActorCutoverAdmissionTest {
 
     private static DefaultZLinkFrameworkOptions options() {
         var options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(java.time.Duration.ofNanos(1));
         options.addLocationStore(new ZLinkInMemoryLocationStore());
         options.addRelocationStore(new InMemoryRelocationStore());
         var node = options.addRouteMesh("local-cutover");

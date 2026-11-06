@@ -49,6 +49,7 @@ final class ZLinkSameNodeJoinCommitTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         RecordingStore store = new RecordingStore();
         options.addLocationStore(store);
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.configureDispatch()
                 .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.ERRORS);
         var node = options.addRouteMesh("game");
@@ -62,6 +63,13 @@ final class ZLinkSameNodeJoinCommitTest {
         try (ZLinkFrameworkRuntime runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(
                         options, ZLinkSameNodeJoinBarrierTest.observeMeshJoins(records))) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS));
             runtime.spotManager()
                     .getOrCreate(TARGET, "room")
                     .submit()

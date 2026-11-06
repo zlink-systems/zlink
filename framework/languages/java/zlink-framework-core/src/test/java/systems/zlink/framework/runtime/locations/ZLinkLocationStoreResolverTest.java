@@ -26,8 +26,8 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityWriteRes
 import systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationIdentity;
 import systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationTerminal;
 import systems.zlink.framework.runtime.internal.locations.ZLinkCreationTerminalReadResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkDescriptorWriteIntent;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
@@ -270,7 +270,7 @@ class ZLinkLocationStoreResolverTest {
 
         @Override
         public CompletionStage<ZLinkLocationWriteResult> updateMeshNode(
-                ZLinkMeshNodeDescriptor descriptor, ZLinkLocationWriteIntent intent) {
+                ZLinkMeshNodeDescriptor descriptor, ZLinkDescriptorWriteIntent intent) {
             return unsupportedWrite();
         }
 

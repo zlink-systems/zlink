@@ -68,6 +68,7 @@ final class ZLinkSpotLeaveToEntryTest {
         roomLeft = new CountDownLatch(PLAYERS.size());
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.configureDispatch()
                 .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.ERRORS);
         var node = options.addRouteMesh("game");
@@ -79,6 +80,13 @@ final class ZLinkSpotLeaveToEntryTest {
         objects.addActorFactory(
                 "player", Player.class, Factory.class, factory -> factory.disableRelocation());
         try (ZLinkFrameworkRuntime runtime = ZLinkFrameworkRuntimeTestAccess.start(options)) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS));
             runtime.spotManager()
                     .getOrCreate(ROOM, "room")
                     .submit()

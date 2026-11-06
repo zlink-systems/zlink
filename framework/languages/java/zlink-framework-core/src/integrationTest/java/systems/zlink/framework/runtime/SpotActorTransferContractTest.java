@@ -65,7 +65,7 @@ final class SpotActorTransferContractTest {
         var relocations = new InMemoryRelocationStore();
         var sourceOptions = relocationOptions("join-source", locations, relocations, null);
         try (var source =
-                RuntimeTestSupport.startFramework(
+                RuntimeTestSupport.startFixedRidFramework(
                         sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
             var created =
                     assertInstanceOf(
@@ -82,7 +82,7 @@ final class SpotActorTransferContractTest {
                             relocations,
                             source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "game").endpoint());
             try (var target =
-                    RuntimeTestSupport.startFramework(
+                    RuntimeTestSupport.startFixedRidFramework(
                             targetOptions, new ZLinkJavaBackendAdapterFactory())) {
                 var room =
                         target.spotManager()
@@ -190,7 +190,8 @@ final class SpotActorTransferContractTest {
                 factory -> factory.disableRelocation());
 
         try (ZLinkFrameworkRuntime runtime =
-                RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
+                RuntimeTestSupport.startFixedRidFramework(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             runtime.spotManager()
                     .getOrCreate("target-room", "target")
                     .submit()

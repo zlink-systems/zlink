@@ -61,6 +61,7 @@ final class ZLinkDeferredActorJoinScopeTest {
         BulkActorFactory.completionStarts.put("actor-b", startedB);
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         var node = options.addRouteMesh("claim-join");
         node.listen("inproc://claim-deferred-join-" + System.nanoTime())
                 .setRoutingId(RoutingId.from("claim-deferred-join"));
@@ -76,6 +77,13 @@ final class ZLinkDeferredActorJoinScopeTest {
         try (ZLinkFrameworkRuntime runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(
                         options, new ZLinkJavaBackendAdapterFactory())) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS));
             try {
                 runtime.spotManager()
                         .getOrCreate(BULK_TARGET_SPOT_ID, "bulk-target")
@@ -263,6 +271,7 @@ final class ZLinkDeferredActorJoinScopeTest {
         BulkTargetSpot.reset();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         var node = options.addRouteMesh("bulk-join");
         node.listen("inproc://bulk-deferred-join-" + System.nanoTime())
                 .setRoutingId(RoutingId.from("bulk-deferred-join"));
@@ -279,6 +288,13 @@ final class ZLinkDeferredActorJoinScopeTest {
         try (ZLinkFrameworkRuntime runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(
                         options, new ZLinkJavaBackendAdapterFactory())) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS));
             runtime.spotManager()
                     .getOrCreate(BULK_TARGET_SPOT_ID, "bulk-target")
                     .submit()

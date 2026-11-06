@@ -63,7 +63,7 @@ final class SpotPreReadyMulticastTest {
         HeldSpot.reset(false);
         HeldSpot.failConfigure = true;
         try (ZLinkFrameworkRuntime runtime =
-                RuntimeTestSupport.startFramework(
+                RuntimeTestSupport.startFixedRidFramework(
                         options(new ZLinkInMemoryLocationStore()),
                         new ZLinkJavaBackendAdapterFactory())) {
             var creating = runtime.spotManager().create("HeldSpot").submit().toCompletableFuture();
@@ -77,7 +77,8 @@ final class SpotPreReadyMulticastTest {
         HeldSpot.reset(initialize);
         var options = options(new ZLinkInMemoryLocationStore());
         try (ZLinkFrameworkRuntime runtime =
-                RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
+                RuntimeTestSupport.startFixedRidFramework(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             var creating = runtime.spotManager().create("HeldSpot").submit().toCompletableFuture();
             assertTrue(HeldSpot.entered.await(WAIT_SECONDS, TimeUnit.SECONDS));
             List<Message> retained = List.of();
@@ -161,7 +162,7 @@ final class SpotPreReadyMulticastTest {
         HeldSpot.reset(true);
         var store = new HeldReadyStore();
         try (ZLinkFrameworkRuntime runtime =
-                RuntimeTestSupport.startFramework(
+                RuntimeTestSupport.startFixedRidFramework(
                         options(store), new ZLinkJavaBackendAdapterFactory())) {
             var creating = runtime.spotManager().create("HeldSpot").submit().toCompletableFuture();
             assertTrue(HeldSpot.entered.await(WAIT_SECONDS, TimeUnit.SECONDS));

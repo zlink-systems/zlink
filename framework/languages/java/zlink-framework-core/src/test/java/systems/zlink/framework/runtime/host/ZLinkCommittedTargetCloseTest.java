@@ -66,6 +66,7 @@ final class ZLinkCommittedTargetCloseTest {
                                 locations,
                                 relocations,
                                 null))) {
+            awaitReady(source);
             source.spotManager()
                     .getOrCreate("held-room", "room")
                     .submit()
@@ -92,6 +93,7 @@ final class ZLinkCommittedTargetCloseTest {
                                                                                         null);
                                                                                 return publicationRelease;
                                                                             })))) {
+                awaitReady(target);
                 try (var ready =
                         ZLinkRelocationObservationPublicTest.observe(
                                 target.routeMeshRuntime().observe(MESH, 8),
@@ -160,6 +162,7 @@ final class ZLinkCommittedTargetCloseTest {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(locations);
         options.addRelocationStore(relocations);
+        options.configureLocations().setOwnerLeaseFencingMargin(java.time.Duration.ofNanos(1));
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
         var node = options.addRouteMesh(MESH).listen("tcp://127.0.0.1:0").setRoutingId(rid);
         if (peer != null) node.peerConnections().connect(peer);
@@ -167,6 +170,18 @@ final class ZLinkCommittedTargetCloseTest {
                 .server()
                 .addSpotFactory("room", Room.class, factory -> factory.recreateOnRelocation());
         return options;
+    }
+
+    private static void awaitReady(ZLinkFrameworkRuntime runtime) throws Exception {
+        ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                .toCompletableFuture()
+                .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+        if (!runtime.isReady())
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                            .toCompletableFuture()
+                            .get(WAIT.toSeconds(), TimeUnit.SECONDS));
+        assertTrue(runtime.isReady());
     }
 
     public record Room(ZLinkSpotContext context) implements ZLinkSpot<ZLinkActor> {

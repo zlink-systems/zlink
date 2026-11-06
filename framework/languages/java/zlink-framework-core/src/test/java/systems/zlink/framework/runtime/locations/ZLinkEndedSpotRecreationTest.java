@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.atomic.AtomicLong;
 
 final class ZLinkEndedSpotRecreationTest {
     @ParameterizedTest
@@ -1544,6 +1545,76 @@ final class ZLinkEndedSpotRecreationTest {
         assertEquals(first, read(fixture, keys.get(0)).storeVersion());
     }
 
+    @org.junit.jupiter.api.RepeatedTest(100)
+    void endedUserSpotAndAllMembersStartTheirReleaseWaitTogether() throws Exception {
+        for (String backend : List.of("provider", "memory")) {
+            var monotonicNanos = new AtomicLong();
+            var fencingMargin = Duration.ofNanos(5);
+            ZLinkLocationRepository store =
+                    backend.equals("provider")
+                            ? new ZLinkProviderLocationRepository(
+                                    new ZLinkInMemoryProviderLocationStore(),
+                                    monotonicNanos::get,
+                                    fencingMargin)
+                            : new ZLinkInMemoryLocationStore(
+                                    Clock.systemUTC(), monotonicNanos::get, fencingMargin);
+            var fixture =
+                    fixture(
+                            store,
+                            ZLinkPlacementObjectKind.USER_SPOT,
+                            ZLinkServiceAuthorityPayloadCodec.State.READY,
+                            2,
+                            monotonicNanos,
+                            fencingMargin);
+            monotonicNanos.set(0);
+            var firstMember = endedMember(fixture, "wait-member-a", true);
+            var secondMember = endedMember(fixture, "wait-member-b", true);
+            long spotsBefore = oldSpotSlots(fixture);
+            long actorsBefore = oldSlots(fixture, true);
+            var firstBefore = read(fixture, firstMember.authorityKey());
+            var secondBefore = read(fixture, secondMember.authorityKey());
+            fixture.store.releaseOwnerLease(fixture.oldOwner).toCompletableFuture().join();
+
+            assertUnavailableAndUnchanged(fixture, new RelocationPolicy.Disabled());
+            assertEquals(
+                    firstBefore.storeVersion(),
+                    read(fixture, firstMember.authorityKey()).storeVersion());
+            assertEquals(
+                    secondBefore.storeVersion(),
+                    read(fixture, secondMember.authorityKey()).storeVersion());
+            assertEquals(spotsBefore, oldSpotSlots(fixture));
+            assertEquals(actorsBefore, oldSlots(fixture, true));
+
+            monotonicNanos.set(Duration.ofNanos(15).toNanos() - 1);
+            assertUnavailableAndUnchanged(fixture, new RelocationPolicy.Disabled());
+            assertEquals(
+                    firstBefore.storeVersion(),
+                    read(fixture, firstMember.authorityKey()).storeVersion());
+            assertEquals(
+                    secondBefore.storeVersion(),
+                    read(fixture, secondMember.authorityKey()).storeVersion());
+            assertEquals(spotsBefore, oldSpotSlots(fixture));
+            assertEquals(actorsBefore, oldSlots(fixture, true));
+
+            monotonicNanos.incrementAndGet();
+            reserveNewSpot(fixture);
+            assertInstanceOf(
+                    ZLinkAuthorityMissing.class,
+                    fixture.store
+                            .read(firstMember.authorityKey(), () -> false)
+                            .toCompletableFuture()
+                            .join());
+            assertInstanceOf(
+                    ZLinkAuthorityMissing.class,
+                    fixture.store
+                            .read(secondMember.authorityKey(), () -> false)
+                            .toCompletableFuture()
+                            .join());
+            assertEquals(0, oldSpotSlots(fixture));
+            assertEquals(0, oldSlots(fixture, true));
+        }
+    }
+
     private static ZLinkAuthoritySnapshot read(Fixture fixture, String key) {
         return (ZLinkAuthoritySnapshot)
                 fixture.store.read(key, () -> false).toCompletableFuture().join();
@@ -1994,11 +2065,57 @@ final class ZLinkEndedSpotRecreationTest {
         return fixture(store, kind, state, 1);
     }
 
+    private static void claimInitialDescriptor(
+            ZLinkLocationRepository store,
+            ZLinkMeshNodeDescriptor descriptor,
+            AtomicLong monotonicNanos,
+            Duration fencingMargin) {
+        if (monotonicNanos != null) {
+            var failure =
+                    assertThrows(
+                            RuntimeException.class,
+                            () ->
+                                    store.updateMeshNode(
+                                                    descriptor,
+                                                    systems.zlink.framework.runtime.internal
+                                                            .locations.ZLinkDescriptorWriteIntent
+                                                            .FixedRidNewClaim.FIXED_RID_NEW_CLAIM)
+                                            .toCompletableFuture()
+                                            .join());
+            while (failure instanceof CompletionException && failure.getCause() != null)
+                failure = (RuntimeException) failure.getCause();
+            assertEquals(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure).kind());
+            monotonicNanos.addAndGet(fencingMargin.multipliedBy(3).toNanos());
+        }
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                store.updateMeshNode(
+                                descriptor,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM)
+                        .toCompletableFuture()
+                        .join()
+                        .status());
+    }
+
     private static Fixture fixture(
             ZLinkLocationRepository store,
             ZLinkPlacementObjectKind kind,
             ZLinkServiceAuthorityPayloadCodec.State state,
             int actorLimit) {
+        return fixture(store, kind, state, actorLimit, null, null);
+    }
+
+    private static Fixture fixture(
+            ZLinkLocationRepository store,
+            ZLinkPlacementObjectKind kind,
+            ZLinkServiceAuthorityPayloadCodec.State state,
+            int actorLimit,
+            AtomicLong monotonicNanos,
+            Duration fencingMargin) {
         var oldOwner =
                 ((ZLinkOwnerLeaseClaimed)
                                 store.claimOwnerLease("old", Duration.ofMinutes(5))
@@ -2013,12 +2130,8 @@ final class ZLinkEndedSpotRecreationTest {
                         .token();
         var oldDescriptor = descriptor(oldOwner, kind, actorLimit);
         var newDescriptor = descriptor(newOwner, kind, 1);
-        store.updateMeshNode(oldDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
-                .toCompletableFuture()
-                .join();
-        store.updateMeshNode(newDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
-                .toCompletableFuture()
-                .join();
+        claimInitialDescriptor(store, oldDescriptor, monotonicNanos, fencingMargin);
+        claimInitialDescriptor(store, newDescriptor, monotonicNanos, fencingMargin);
         String key = ZLinkAuthorityKeyCodec.spot("ended-spot");
         var initial =
                 new Fixture(
