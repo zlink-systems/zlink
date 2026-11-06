@@ -740,42 +740,94 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             CancellationToken.None,
             ZLinkApplicationJobOrigin.Remote
         );
-        var poller = new ControlledReceivePoller { RespectTimeoutAfterWake = true };
+        var deadlineTime = new ControllableTimeProvider();
+        var poller = new ControlledReceivePoller { CaptureIdleWait = true };
+        poller.CanObserveIdleWait = () => poller.MonitorRegistered.Task.IsCompleted;
+        var idleWaitAtBarrier = new TaskCompletionSource<TimeSpan>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var targetIdleWaitAtBarrier = new TaskCompletionSource<TimeSpan>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var nextWaitAtBarrier = new TaskCompletionSource<TimeSpan>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        using var releaseIdleWait = new ManualResetEventSlim();
+        using var releaseNextWait = new ManualResetEventSlim();
+        var blockingWaitCount = 0;
+        poller.BlockingWaitObserved = timeout =>
+        {
+            switch (Interlocked.Increment(ref blockingWaitCount))
+            {
+                case 1:
+                    idleWaitAtBarrier.TrySetResult(timeout);
+                    break;
+                case 2:
+                    targetIdleWaitAtBarrier.TrySetResult(timeout);
+                    releaseIdleWait.Wait();
+                    break;
+                case 3:
+                    nextWaitAtBarrier.TrySetResult(timeout);
+                    releaseNextWait.Wait();
+                    break;
+            }
+        };
         var node = new ZLinkManagedMeshNode(
             context,
             "deadline-wake",
             applicationJobQueue: queue,
-            receivePollerFactory: () => poller
+            receivePollerFactory: () => poller,
+            deadlineTimeProvider: deadlineTime
         );
         node.SetRoutingId(RoutingId.From("deadline-wake"));
         node.Start();
         try
         {
-            await poller.FirstWait.Task.WaitAsync(CompletionBound);
+            await poller.MonitorRegistered.Task.WaitAsync(CompletionBound);
+            Assert.Equal(
+                Timeout.InfiniteTimeSpan,
+                await poller.IdleWait.Task.WaitAsync(CompletionBound)
+            );
+            Assert.Equal(
+                Timeout.InfiniteTimeSpan,
+                await idleWaitAtBarrier.Task.WaitAsync(CompletionBound)
+            );
+            // Drain any startup wake before establishing the measured idle wait.
+            node.SignalReceiveOwner();
+            Assert.Equal(
+                Timeout.InfiniteTimeSpan,
+                await targetIdleWaitAtBarrier.Task.WaitAsync(CompletionBound)
+            );
+            var deadline = TimeSpan.FromMilliseconds(10);
             Assert.True(
-                node.TryBeginOperation(
-                    MeshOperationKind.NodeRequest,
-                    TimeSpan.FromMilliseconds(10),
-                    out var operation
-                )
+                node.TryBeginOperation(MeshOperationKind.NodeRequest, deadline, out var operation)
             );
             var token = operation.Token;
             var expired = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously
             );
             using var registration = token.Register(() => expired.TrySetResult());
-            poller.AllowWait();
-            // The first wait cannot time out. A deadline registration must wake
-            // the owner, which then uses the 10 ms bound on its next rotation.
+            releaseIdleWait.Set();
+            var nextWait = await nextWaitAtBarrier.Task.WaitAsync(CompletionBound);
+            Assert.True(
+                nextWait > TimeSpan.Zero
+                    && nextWait != Timeout.InfiniteTimeSpan
+                    && nextWait <= deadline,
+                $"The next blocking wait must use a finite bound no greater than {deadline}; received {nextWait}."
+            );
+            Assert.False(token.IsCancellationRequested);
+            deadlineTime.AdvanceMonotonic(deadline);
+            // Queue the post-advance owner turn while its poller call is held.
+            node.SignalReceiveOwner();
+            releaseNextWait.Set();
             await expired.Task.WaitAsync(CompletionBound);
-            Assert.True(poller.SecondWait.Task.IsCompleted);
             Assert.Equal(0UL, queue.GetStatus().CapacityWaiters);
         }
         finally
         {
-            var shutdown = node.DisposeAsync();
-            poller.ReleaseWait();
-            await shutdown;
+            releaseIdleWait.Set();
+            releaseNextWait.Set();
+            await node.DisposeAsync();
         }
     }
 
@@ -1471,6 +1523,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         internal bool RespectTimeoutAfterWake { get; init; }
         internal bool CaptureIdleWait { get; init; }
         internal Func<bool>? CanObserveIdleWait { get; set; }
+        internal Action<TimeSpan>? BlockingWaitObserved { get; set; }
         internal readonly TaskCompletionSource MonitorRegistered = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -1503,9 +1556,12 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             if (CaptureIdleWait)
             {
                 // Zero-time turns apply startup registrations and pending wakes.
-                // Observe the first blocking wait, preserving even a finite deadline.
+                // Observe blocking waits after startup, including finite deadlines.
                 if (timeout != TimeSpan.Zero && (CanObserveIdleWait?.Invoke() ?? true))
+                {
                     IdleWait.TrySetResult(timeout);
+                    BlockingWaitObserved?.Invoke(timeout);
+                }
                 BeforeWait?.Invoke();
                 return _inner.Wait(destination, timeout);
             }
