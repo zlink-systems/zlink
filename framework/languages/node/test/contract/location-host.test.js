@@ -1214,6 +1214,63 @@ for (const storage of ['provider', 'in-memory']) {
     });
   }
 
+  test(`P1 stop-owned teardown retry uses the absolute shutdown deadline (${storage})`, async t => {
+    const scenario = await fixedRidRegressionScenario(t, storage);
+    const { host } = scenario.makeHost();
+    const firstDisposeEntered = deferredRegressionStep();
+    const releaseFirstDispose = deferredRegressionStep();
+    const retryDisposeEntered = deferredRegressionStep();
+    const releaseRetryDispose = deferredRegressionStep();
+    let contextDisposes = 0;
+    let stopping;
+    let shuttingDown;
+    try {
+      await host.start();
+      scenario.advance(15);
+      await renewFixedRidRegressionHost(host);
+      const disposeContext = host.context.dispose.bind(host.context);
+      host.context.dispose = async () => {
+        contextDisposes++;
+        if (contextDisposes === 1) {
+          firstDisposeEntered.resolve();
+          await releaseFirstDispose.promise;
+          throw new Error('context dispose failed once');
+        }
+        if (contextDisposes === 2) {
+          retryDisposeEntered.resolve();
+          await releaseRetryDispose.promise;
+        }
+        await disposeContext();
+      };
+
+      stopping = host.stop();
+      const stopResult = Promise.allSettled([stopping]);
+      await firstDisposeEntered.promise;
+      shuttingDown = host.shutdown({ deadlineMs: 50 });
+      const shutdownResult = Promise.allSettled([shuttingDown]);
+      releaseFirstDispose.resolve();
+      await retryDisposeEntered.promise;
+      scenario.advance(51);
+      releaseRetryDispose.resolve();
+
+      const [result] = await shutdownResult;
+      assert.equal(result.status, 'fulfilled', result.reason?.stack);
+      assert.deepEqual(result.value, {
+        outcome: framework.ZLinkFrameworkTerminationOutcome.ForceStopped,
+        reason: framework.ZLinkFrameworkTerminationReason.DeadlineExceeded
+      });
+      assert.deepEqual(host.status.terminationResult, result.value);
+      assert.equal((await stopResult)[0].status, 'rejected');
+      assert.equal(contextDisposes, 2);
+      assert.equal(host.executionState, undefined);
+    } finally {
+      releaseFirstDispose.resolve();
+      releaseRetryDispose.resolve();
+      await Promise.allSettled([stopping, shuttingDown]);
+      await host.stop();
+    }
+  });
+
   test(`P1 shutdown retry failure can be completed by a later shutdown (${storage})`, async t => {
     const scenario = await fixedRidRegressionScenario(t, storage);
     const calls = [];

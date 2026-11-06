@@ -1268,9 +1268,13 @@ export class ZLinkFrameworkRuntimeHost
       } catch (error) {
         return this.completeTermination({
           outcome: ZLinkFrameworkTerminationOutcome.ForceStopped,
-          reason: isDeadlineExceededError(shutdownSignal.reason ?? error)
-            ? ZLinkFrameworkTerminationReason.DeadlineExceeded
-            : ZLinkFrameworkTerminationReason.TeardownFailed
+          // A stop()-owned deadline controller can be replaced by the retry, so the
+          // absolute shutdown deadline also decides the reason.
+          reason:
+            isDeadlineExceededError(shutdownSignal.reason ?? error) ||
+            performance.now() >= deadlineAtMs
+              ? ZLinkFrameworkTerminationReason.DeadlineExceeded
+              : ZLinkFrameworkTerminationReason.TeardownFailed
         });
       }
     });
