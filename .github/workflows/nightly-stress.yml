@@ -148,7 +148,9 @@ jobs:
           CXX: clang++-19
           CFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
           CXXFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
-          LDFLAGS: -fsanitize=address,undefined
+          # The test executables link with --exclude-libs,ALL, which hides a static
+          # sanitizer runtime from the sanitized Core and binding DSOs; use the shared one.
+          LDFLAGS: -fsanitize=address,undefined -shared-libsan
         run: |
           set -euo pipefail
           # Deep template instantiation under the sanitizers needs more than the
@@ -166,6 +168,7 @@ jobs:
       - name: Run CTest suites and create sanitizer summary
         env:
           ASAN_SYMBOLIZER_PATH: /usr/lib/llvm-19/bin/llvm-symbolizer
+          LD_LIBRARY_PATH: /usr/lib/llvm-19/lib/clang/19/lib/linux
         run: |
           python3 scripts/ci/sanitizer-summary.py \
             --suite core "${GITHUB_WORKSPACE}/.artifacts/nightly-stress/core-asan-ubsan" \
