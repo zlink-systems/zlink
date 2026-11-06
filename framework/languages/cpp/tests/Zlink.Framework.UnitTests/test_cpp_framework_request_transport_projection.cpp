@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include <gtest/gtest.h>
 #include "allocation_counter.hpp"
+#include "creation_counter.hpp"
+#include "runtime/channels/channel_runtime.hpp"
+#include "runtime/locations/in_memory_location_store.hpp"
+#include <zlink/framework.hpp>
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime_failure_fixture.hpp"
 #include <cstdio>
@@ -8,6 +12,11 @@
 #include <atomic>
 #include <optional>
 #include <thread>
+namespace zlink::framework::detail::test_creation_probe
+{
+extern std::atomic<void (*) ()> node_admission_observer_fault;
+}
+
 namespace
 {
 namespace fw = zlink::framework;
@@ -29,8 +38,12 @@ struct request_receiver_mesh_t
                                  fw::detail::mesh_channel_registration_t{100, {}, true, true});
         return state;
     }
-    explicit request_receiver_mesh_t (const std::string &rid) : runtime (configure (rid))
+    explicit request_receiver_mesh_t (const std::string &rid,
+                                      std::shared_ptr<fw::location_repository_t> store = {}) :
+        runtime (configure (rid))
     {
+        if (store)
+            runtime.configure_user_spot_operations (std::move (store), {});
         runtime.start ().result ().value ();
     }
     ~request_receiver_mesh_t () { runtime.stop (); }
@@ -92,6 +105,65 @@ TEST (RequestCallAllocations, MeshReceiverNativeSubmitRejectionUsesRegistryDeliv
     EXPECT_EQ (conversions.load (), 1u);
 }
 
+struct capture_payload_t
+{
+    static constexpr const char *packet_name = "p";
+    int value = 42;
+};
+
+TEST (RequestCallAllocations, NodeAndChannelNameCaptureStorageBytes)
+{
+    namespace probe = fw::detail::test_creation_probe;
+    request_receiver_mesh_t source ("capture-source");
+    auto &raw = source.runtime.native_node ().transport ();
+    auto descriptor = raw.topology ().local_descriptor ();
+    const auto target = zlink::routing_id_t::from ("capture-target");
+    descriptor.node_routing_id = target.to_bytes ();
+    descriptor.advertised_endpoint = "tcp://127.0.0.1:1";
+    ASSERT_EQ (raw.admit_peer (descriptor, target.to_bytes (), std::chrono::steady_clock::now ()),
+               fw::runtime::mesh::peer_admission_result_t::admitted);
+    fw::serializer_registry_t serializers;
+    serializers.add<capture_payload_t> (
+      [] (const capture_payload_t &value) {
+          return fw::encoded_payload_t::from_string (std::to_string (value.value));
+      },
+      [] (const fw::encoded_payload_t &value) {
+          return capture_payload_t{std::stoi (value.to_string ())};
+      },
+      "x/y");
+    auto builder = fw::test::runtime_failure_builder ();
+    auto channel = fw::detail::channel_runtime_t::from (builder.message_bus ());
+    channel.bind_serializers (serializers);
+    channel.bind_mesh_node_transport (
+      "m", {}, [&] (const auto &rid, auto parts, auto timeout, auto receiver) {
+          source.runtime.request_node_reply (rid, std::move (parts).take_items (), timeout,
+                                             std::move (receiver));
+      });
+    channel.bind_mesh_channel_transport ("work", {}, [&] (auto, auto) {
+        return fw::request_task_t<reply_t> (fw::result_t<reply_t>::success (
+          reply_t::failure (fw::framework_error_kind_t::unavailable, "capture probe")));
+    });
+    auto client = builder.route_client (serializers);
+    for (const bool node : {true, false}) {
+        const auto captures = probe::request_capture_bytes.load ();
+        const auto values = probe::request_capture_value_bytes.load ();
+        const auto blocks = probe::request_block_bytes.load ();
+        const auto owners = probe::request_callback_owner_bytes.load ();
+        auto pending = (node ? client.request_to_node ("m", target, capture_payload_t{})
+                             : client.request_to_channel ("work", capture_payload_t{}))
+                         .async<capture_payload_t> ();
+        EXPECT_FALSE (pending.result ());
+        EXPECT_FALSE (fw::detail::request_task_access_t::physical_reply (pending).result ());
+        std::printf ("%s receiver captures=%zu values=%zu block=%zu callback-owner=%zu\n",
+                     node ? "node" : "channel-name",
+                     probe::request_capture_bytes.load () - captures,
+                     probe::request_capture_value_bytes.load () - values,
+                     probe::request_block_bytes.load () - blocks,
+                     probe::request_callback_owner_bytes.load () - owners);
+    }
+    source.runtime.stop ();
+}
+
 TEST (RequestCallAllocations, MeshReceiverDeadlineBeforeNativeStartDeliversOnce)
 {
     request_receiver_mesh_t source ("deadline-source");
@@ -128,6 +200,85 @@ TEST (RequestCallAllocations, MeshReceiverShutdownPendingRetainsDeliveryAfterPub
     source.runtime.stop ();
     EXPECT_EQ (physical.result ().error_kind (), fw::framework_error_kind_t::shutting_down);
     EXPECT_EQ (conversions.load (), 1u);
+}
+
+class held_mesh_nodes_t final : public fw::runtime::in_memory_location_repository_t
+{
+  public:
+    bool hold = false;
+    fw::task_completion_source_t<fw::location_page_t<fw::mesh_node_descriptor_t>> listed;
+    fw::task_t<fw::location_page_t<fw::mesh_node_descriptor_t>>
+    list_mesh_nodes (std::string mesh, fw::location_page_request_t page = {}) override
+    {
+        return hold ? listed.task ()
+                    : in_memory_location_repository_t::list_mesh_nodes (std::move (mesh),
+                                                                        std::move (page));
+    }
+};
+
+void unknown_node_observer_failure (bool shutdown, bool native_rejection = false)
+{
+    namespace probe = fw::detail::test_creation_probe;
+    auto store = std::make_shared<held_mesh_nodes_t> ();
+    request_receiver_mesh_t source (shutdown ? "unknown-shutdown" : "unknown-deadline", store);
+    store->hold = true;
+    const auto target = zlink::routing_id_t::from ("pending-classification");
+    std::atomic<unsigned> conversions{0};
+    auto pending = source.request (target, conversions);
+    auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+    EXPECT_FALSE (pending.admitted ().await_ready ());
+    if (native_rejection) {
+        auto &raw = source.runtime.native_node ().transport ();
+        auto descriptor = raw.topology ().local_descriptor ();
+        descriptor.node_routing_id = target.to_bytes ();
+        descriptor.advertised_endpoint = "tcp://127.0.0.1:1";
+        ASSERT_EQ (
+          raw.admit_peer (descriptor, target.to_bytes (), std::chrono::steady_clock::now ()),
+          fw::runtime::mesh::peer_admission_result_t::admitted);
+    } else
+        source.runtime.expect_peer (target, "tcp://127.0.0.1:1", 1, "default");
+    std::atomic<unsigned> public_results{0};
+    auto public_reply = fw::detail::request_task_access_t::public_reply (pending);
+    fw::detail::observe_task_terminal (public_reply, [&] (const auto &) { ++public_results; });
+    struct clear_fault_t
+    {
+        ~clear_fault_t () { probe::node_admission_observer_fault.store (nullptr); }
+    } clear_fault;
+    probe::node_admission_observer_fault.store (+[] { throw std::bad_alloc (); });
+    store->listed.complete (
+      fw::result_t<fw::location_page_t<fw::mesh_node_descriptor_t>>::success ({}));
+    EXPECT_FALSE (pending.result ());
+    // C1 already owns physical delivery, even when admission observation cannot be installed.
+    if (!native_rejection)
+        EXPECT_FALSE (physical.await_ready ());
+    if (shutdown || native_rejection)
+        source.runtime.stop ();
+    else
+        EXPECT_EQ (source.runtime.native_node ()
+                     .transport ()
+                     .expire_requests (std::chrono::steady_clock::now () + std::chrono::seconds (6))
+                     .result ()
+                     .value (),
+                   1u);
+    EXPECT_FALSE (physical.result ());
+    source.runtime.stop ();
+    EXPECT_EQ (conversions.load (), 1u);
+    EXPECT_EQ (public_results.load (), 1u);
+}
+
+TEST (RequestCallAllocations, UnknownNodeAdmissionObserverFailureAfterNativeRejectionDeliversOnce)
+{
+    unknown_node_observer_failure (false, true);
+}
+
+TEST (RequestCallAllocations, UnknownNodeAdmissionObserverFailureThenDeadlineDeliversOnce)
+{
+    unknown_node_observer_failure (false);
+}
+
+TEST (RequestCallAllocations, UnknownNodeAdmissionObserverFailureThenShutdownDeliversOnce)
+{
+    unknown_node_observer_failure (true);
 }
 
 TEST (RequestCallAllocations, MeshReceiverNormalReplyDeliversOnceAndIgnoresLaterExpiry)

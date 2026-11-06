@@ -1560,8 +1560,7 @@ try {
                       (void) submit_registered_request (
                         port, std::move (peer_observer), _operations, value.operation,
                         value.correlation, std::move (target_owner), std::move (wire), {}, deadline,
-                        value.admitted->task (), value.admitted, std::move (finish),
-                        std::move (receiver));
+                        value.admitted->task (), value.admitted, std::move (finish), receiver);
                   }
               }
           }
@@ -1569,8 +1568,10 @@ try {
               // An empty callback was consumed at C1 publication, even if
               // deadline reservation failed before registration returned.
               if (!callback)
-                  (void) _operations->fail (value.operation,
-                                            foundation::operation_terminal_t::transport_failed);
+                  deliver_request_terminal (_operations, value.operation,
+                                            foundation::operation_terminal_t::transport_failed,
+                                            detail::current_exception_result<zlink::message_t> (),
+                                            receiver);
               throw;
           }
           return std::optional<request_start_t>{std::move (value)};
@@ -2060,7 +2061,7 @@ raw_mesh_node_owner_t::prepare_local_operation_async (
 bool raw_mesh_node_owner_t::register_prepared_local_operation (
   const local_operation_reservation_t &reservation,
   foundation::operation_registry_t::clock_t::time_point deadline,
-  foundation::operation_registry_t::callback_t callback,
+  foundation::operation_registry_t::callback_t &&callback,
   mesh_request_surface_t request_surface)
 {
     if (!callback)
@@ -2314,7 +2315,7 @@ task_t<bool> raw_mesh_node_owner_t::request_to_actor (
   const protocol::actor_route_fence_t &target,
   const protocol::application_payload_t &application_payload,
   std::chrono::milliseconds timeout,
-  foundation::operation_registry_t::callback_t callback,
+  foundation::operation_registry_t::callback_t &&callback,
   std::optional<protocol::wire_operation_id_t> operation,
   std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source,
   std::optional<std::uint64_t> correlation,
@@ -2323,7 +2324,7 @@ task_t<bool> raw_mesh_node_owner_t::request_to_actor (
 {
     const auto deadline = capture_request_deadline (timeout);
     const auto local = _topology.local_descriptor ();
-    co_return co_await request_with_header (
+    return request_with_header (
       target_routing_id,
       [source_actor, target, local, operation, message_follow_hop_count,
        bound_session_source = std::move (bound_session_source)] (std::uint64_t correlation) {

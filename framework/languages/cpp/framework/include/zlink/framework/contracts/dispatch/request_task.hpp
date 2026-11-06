@@ -39,13 +39,18 @@ class request_capture_storage_t
     {
         capture_t *next;
         void (*destroy) (capture_t *) noexcept;
+        void (*release) (capture_t *) noexcept;
     };
-    template <typename T> struct stored_capture_t : capture_t
+    template <typename T, bool Callable> struct stored_capture_t : capture_t
     {
         explicit stored_capture_t (T value) :
             capture_t{nullptr,
                       [] (capture_t *capture) noexcept {
                           std::destroy_at (static_cast<stored_capture_t *> (capture));
+                      },
+                      [] (capture_t *capture) noexcept {
+                          if constexpr (Callable)
+                              static_cast<stored_capture_t *> (capture)->value.reset ();
                       }},
             value (std::move (value))
         {
@@ -62,7 +67,56 @@ class request_capture_storage_t
     };
 
   public:
-    request_capture_storage_t () = default;
+    explicit request_capture_storage_t (
+      void (*release_project) (request_capture_storage_t *) noexcept) :
+        _release_project (release_project)
+    {
+    }
+
+    // The allocator keeps the request block alive through control-block
+    // destruction and deallocation. Its memory is already in this request.
+    template <typename T> struct allocator_t
+    {
+        using value_type = T;
+        explicit allocator_t (std::shared_ptr<request_capture_storage_t> storage) :
+            storage (std::move (storage))
+        {
+        }
+        template <typename U> allocator_t (const allocator_t<U> &other) : storage (other.storage) {}
+        T *allocate (std::size_t count)
+        {
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+            test_creation_probe::request_callback_owner_bytes.fetch_add (count * sizeof (T),
+                                                                         std::memory_order_relaxed);
+#endif
+            return static_cast<T *> (storage->_resource.allocate (count * sizeof (T), alignof (T)));
+        }
+        void deallocate (T *, std::size_t) noexcept {}
+        template <typename U> bool operator== (const allocator_t<U> &other) const noexcept
+        {
+            return storage == other.storage;
+        }
+        std::shared_ptr<request_capture_storage_t> storage;
+    };
+    struct callback_lifetime_t
+    {
+        explicit callback_lifetime_t (request_capture_storage_t &storage) : storage (storage) {}
+        ~callback_lifetime_t ()
+        {
+            // Task handles retain results, not callbacks that will never run.
+            for (auto *capture = storage._captures; capture; capture = capture->next)
+                capture->release (capture);
+            storage._release_project (&storage);
+        }
+        request_capture_storage_t &storage;
+    };
+    template <typename TOwner>
+    static std::shared_ptr<TOwner> own_callbacks (const std::shared_ptr<TOwner> &storage)
+    {
+        auto lifetime = std::allocate_shared<callback_lifetime_t> (
+          allocator_t<callback_lifetime_t> (storage), *storage);
+        return {std::move (lifetime), storage.get ()};
+    }
     request_capture_storage_t (const request_capture_storage_t &) = delete;
     request_capture_storage_t &operator= (const request_capture_storage_t &) = delete;
     ~request_capture_storage_t ()
@@ -73,9 +127,15 @@ class request_capture_storage_t
             capture->destroy (capture);
         }
     }
-    template <typename T> auto *store (T value)
+    template <bool Callable = true, typename T> auto *store (T value)
     {
-        using stored_t = stored_capture_t<T>;
+        using stored_t = stored_capture_t<T, Callable>;
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+        test_creation_probe::request_capture_bytes.fetch_add (sizeof (stored_t),
+                                                              std::memory_order_relaxed);
+        test_creation_probe::request_capture_value_bytes.fetch_add (sizeof (T),
+                                                                    std::memory_order_relaxed);
+#endif
         auto *storage = _resource.allocate (sizeof (stored_t), alignof (stored_t));
         auto *capture = std::construct_at (static_cast<stored_t *> (storage), std::move (value));
         capture->next = _captures;
@@ -84,9 +144,10 @@ class request_capture_storage_t
     }
 
   private:
-    alignas (std::max_align_t) std::array<std::byte, 1024> _buffer;
+    alignas (std::max_align_t) std::array<std::byte, 640> _buffer;
     std::pmr::monotonic_buffer_resource _resource{_buffer.data (), _buffer.size ()};
     capture_t *_captures = nullptr;
+    void (*_release_project) (request_capture_storage_t *) noexcept;
 };
 
 // Copies retain the same operation's callable without cloning its captures.
@@ -162,7 +223,7 @@ template <typename... TArgs> class request_callback_t
     {
         if (!_storage)
             return std::make_shared<TValue> (std::move (value));
-        auto *stored = _storage->store (std::move (value));
+        auto *stored = _storage->store<false> (std::move (value));
         return std::shared_ptr<TValue> (_owner, std::addressof (*stored->value));
     }
 
@@ -586,6 +647,9 @@ struct request_task_access_t
         };
 
         explicit receiver_state_t (TProject project) :
+            request_capture_storage_t ([] (request_capture_storage_t *storage) noexcept {
+                static_cast<receiver_state_t *> (storage)->project.reset ();
+            }),
             admitted (this),
             reply (*this),
             physical (make_physical (*this)),
@@ -601,6 +665,9 @@ struct request_task_access_t
         }
         void operator() (const result_t<TInput> &input)
         {
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+            test_creation_probe::request_deliveries.fetch_add (1, std::memory_order_relaxed);
+#endif
             auto projected = [&] () -> result_t<T> {
                 try {
                     return (*project) (input);
@@ -632,6 +699,10 @@ struct request_task_access_t
     {
         using storage_t = receiver_state_t<T, TInput, std::decay_t<TProject>, Public>;
         auto storage = std::make_shared<storage_t> (std::forward<TProject> (project));
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+        test_creation_probe::request_block_bytes.fetch_add (sizeof (storage_t),
+                                                            std::memory_order_relaxed);
+#endif
         auto admitted =
           std::shared_ptr<task_completion_source_t<void>> (storage, &storage->admitted);
         auto reply = std::shared_ptr<task_shared_state_t<T>> (storage, &storage->reply);
@@ -640,9 +711,10 @@ struct request_task_access_t
             pending._physical_reply =
               task_t<T> (std::shared_ptr<task_shared_state_t<T>> (storage, &storage->physical));
         }
+        auto callbacks = request_capture_storage_t::own_callbacks (storage);
         request_receiver_t<TInput> receiver{
           admitted,
-          request_callback_t<const result_t<TInput> &>::from_storage (storage, storage.get (),
+          request_callback_t<const result_t<TInput> &>::from_storage (callbacks, storage.get (),
                                                                       storage.get ()),
           request_callback_t<std::exception_ptr> (
             reply,

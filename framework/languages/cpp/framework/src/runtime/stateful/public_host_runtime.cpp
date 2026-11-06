@@ -3178,7 +3178,7 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
                                       payload.value ());
         };
     }
-    const auto accepted = co_await _transport->request_to_actor (
+    auto submission = _transport->request_to_actor (
       zlink::routing_id_t::from (std::string (target.node_rid ().value ())).to_bytes (),
       std::nullopt,
       protocol::actor_route_fence_t{
@@ -3200,6 +3200,11 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
                 claimed);
           }}
         : mesh::raw_mesh_node_owner_t::physical_receiver_t{});
+    // C1 consumes the callback synchronously at publication. The binding/readiness
+    // producer now owns physical delivery even if admission later fails.
+    if (!complete_public)
+        operation.receiver = {};
+    const auto accepted = co_await submission;
     co_return submitted (accepted);
 }
 
@@ -8656,8 +8661,7 @@ std::chrono::steady_clock::time_point public_host_runtime_t::register_local_comp
     result->record.source_node_rid =
       zlink::routing_id_t::from (_options.mesh.descriptor.node_routing_id);
     const auto deadline = foundation::operation_registry_t::clock_t::now () + timeout;
-    const auto registered = _transport->register_prepared_local_operation (
-      reservation, deadline,
+    foundation::operation_registry_t::callback_t complete =
       [source, result, receiver = std::exchange (operation.receiver, {}),
        completion = std::move (completion),
        incomplete] (foundation::operation_terminal_t terminal,
@@ -8717,11 +8721,24 @@ std::chrono::steady_clock::time_point public_host_runtime_t::register_local_comp
                   receiver (decoded);
               source->complete (std::move (decoded));
           }
-      },
-      request_surface);
-    if (!registered)
-        throw framework_exception_t (framework_error_kind_t::shutting_down,
-                                     "Operation completion registry is closed");
+      };
+    try {
+        if (!_transport->register_prepared_local_operation (reservation, deadline,
+                                                            std::move (complete), request_surface))
+            throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                         "Operation completion registry is closed");
+    }
+    catch (...) {
+        // An unconsumed callback never acquired a C1 entry. Its physical
+        // receiver still needs the same terminal and capture retirement.
+        if (complete)
+            complete (foundation::operation_terminal_t::shutdown,
+                      result_t<zlink::message_t>::success ({}));
+        else
+            _transport->fail_local_operation (reservation.first,
+                                              foundation::operation_terminal_t::transport_failed);
+        throw;
+    }
     operation.id = reservation.first;
     operation.local_result = result;
     return deadline;

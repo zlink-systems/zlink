@@ -189,6 +189,70 @@ TEST (RequestCallAllocations, PhysicalProjectionReleasesConstCapturesWithTaskHan
     EXPECT_EQ (fw::detail::request_task_access_t::physical_reply (*pending).result ().value (), 42);
 }
 
+TEST (RequestCallAllocations, ThrowBeforeRegistrationReleasesUnusedProjectionWithHandlesRetained)
+{
+    std::weak_ptr<int> lifetime;
+    auto pending = [&] {
+        const auto marker = std::make_shared<int> (42);
+        lifetime = marker;
+        return fw::detail::request_task_access_t::receive_public<int, int> (
+          [&] (auto receiver) {
+              auto physical = receiver.template project<long> (
+                [marker] (const auto &) { return fw::result_t<int>::success (*marker); });
+              throw std::runtime_error ("before registration");
+          },
+          [marker] (const auto &) { return fw::result_t<int>::success (*marker); });
+    }();
+    auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+    auto public_reply = fw::detail::request_task_access_t::public_reply (pending);
+    EXPECT_FALSE (pending.result ());
+    EXPECT_FALSE (public_reply.result ());
+    EXPECT_FALSE (physical.result ());
+    EXPECT_TRUE (lifetime.expired ());
+}
+
+TEST (RequestCallAllocations, SubmissionExceptionKeepsEscapedPhysicalProjectionAlive)
+{
+    std::weak_ptr<int> lifetime;
+    std::optional<fw::detail::request_receiver_t<long>> terminal;
+    auto pending = [&] {
+        const auto marker = std::make_shared<int> (42);
+        lifetime = marker;
+        return fw::detail::request_task_access_t::receive_public<int> ([&] (auto receiver) {
+            terminal.emplace (receiver.template project<long> (
+              [marker] (const auto &) { return fw::result_t<int>::success (*marker); }));
+            throw std::runtime_error ("physical producer already owns receiver");
+        });
+    }();
+    EXPECT_FALSE (pending.result ());
+    EXPECT_FALSE (lifetime.expired ());
+    terminal->complete (fw::result_t<long>::success (0));
+    EXPECT_TRUE (lifetime.expired ());
+}
+
+TEST (RequestCallAllocations, LastCallbackOwnerReleasesUnusedProjectionWithPublicHandleRetained)
+{
+    std::weak_ptr<int> lifetime;
+    std::optional<fw::detail::request_receiver_t<long>> terminal;
+    auto pending = [&] {
+        const auto marker = std::make_shared<int> (42);
+        lifetime = marker;
+        return fw::detail::request_task_access_t::receive_public<int> ([&] (auto receiver) {
+            terminal.emplace (receiver.template project<long> (
+              [marker] (const auto &) { return fw::result_t<int>::success (*marker); }));
+        });
+    }();
+    terminal->admitted->complete (fw::result_t<void>::failure (
+      fw::framework_error_kind_t::unavailable, "no physical producer remains"));
+    EXPECT_FALSE (pending.result ());
+    EXPECT_FALSE (lifetime.expired ());
+    auto copy = *terminal;
+    terminal.reset ();
+    EXPECT_FALSE (lifetime.expired ());
+    copy = {};
+    EXPECT_TRUE (lifetime.expired ());
+}
+
 TEST (RequestCallAllocations, PreparedReceiverKeepsSeveralIndependentObservers)
 {
     fw::completion_owner_t owner;
