@@ -18,6 +18,14 @@ import java.util.List;
 import java.util.Set;
 
 public final class ChannelRegistration {
+    private final systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.PreparedNames
+            envelopeNames;
+
+    public systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.PreparedNames
+            envelopeNames() {
+        return envelopeNames;
+    }
+
     private final String name;
     private final ChannelKind kind;
     private final ClientServerState clientServer = new ClientServerState();
@@ -39,6 +47,9 @@ public final class ChannelRegistration {
 
     public ChannelRegistration(String name, ChannelKind kind) {
         this.name = name;
+        envelopeNames =
+                new systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.PreparedNames(
+                        name, null, null);
         this.kind = kind;
         clientConnections =
                 new RuntimeEndpointConnections(

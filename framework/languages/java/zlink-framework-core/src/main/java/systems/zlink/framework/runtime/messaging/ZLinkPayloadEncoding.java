@@ -25,12 +25,21 @@ public final class ZLinkPayloadEncoding {
 
     public static EncodedPayload encode(
             ZLinkMessageSerializer serializer, Object payload, String contentType) {
+        return encode(serializer, payload, contentType, null);
+    }
+
+    public static EncodedPayload encode(
+            ZLinkMessageSerializer serializer,
+            Object payload,
+            String contentType,
+            ZLinkChannelEnvelope.PreparedNames names) {
         var encoded = encodeMessage(serializer, payload, contentType);
         try {
             return new EncodedPayload(
                     encoded,
                     ZLinkPacketNames.resolve(payload),
-                    Objects.requireNonNull(contentType, "contentType"));
+                    Objects.requireNonNull(contentType, "contentType"),
+                    names);
         } catch (RuntimeException | Error failure) {
             encoded.close();
             throw failure;
@@ -80,7 +89,10 @@ public final class ZLinkPayloadEncoding {
     }
 
     public record EncodedPayload(
-            ZLinkFrameworkMultipartView payload, String packetName, String contentType) {
+            ZLinkFrameworkMultipartView payload,
+            String packetName,
+            String contentType,
+            ZLinkChannelEnvelope.PreparedNames names) {
         public EncodedPayload {
             Objects.requireNonNull(payload, "payload");
             Objects.requireNonNull(packetName, "packetName");

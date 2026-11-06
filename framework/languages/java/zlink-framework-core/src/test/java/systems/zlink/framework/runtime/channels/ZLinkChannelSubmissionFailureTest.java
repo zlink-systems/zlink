@@ -122,6 +122,8 @@ final class ZLinkChannelSubmissionFailureTest {
                                                         null,
                                                         ZLinkChannelContentTypeFrame
                                                                 .DEFAULT_CONTENT_TYPE,
+                                                        null,
+                                                        null,
                                                         null)
                                                 .submit(String.class)
                                                 .toCompletableFuture()
@@ -162,6 +164,8 @@ final class ZLinkChannelSubmissionFailureTest {
                                                         null,
                                                         ZLinkChannelContentTypeFrame
                                                                 .DEFAULT_CONTENT_TYPE,
+                                                        null,
+                                                        null,
                                                         null)
                                                 .submit(String.class)
                                                 .toCompletableFuture()
@@ -195,7 +199,11 @@ final class ZLinkChannelSubmissionFailureTest {
                                                         TIMEOUT,
                                                         ZLinkFrameworkMultipartView.owned(payload),
                                                         Optional.of("request"),
-                                                        TIMEOUT)
+                                                        TIMEOUT,
+                                                        "application/json",
+                                                        null,
+                                                        null,
+                                                        null)
                                                 .submit(String.class)
                                                 .toCompletableFuture()
                                                 .join());
@@ -230,7 +238,11 @@ final class ZLinkChannelSubmissionFailureTest {
                                                         TIMEOUT,
                                                         ZLinkFrameworkMultipartView.owned(payload),
                                                         Optional.of("request"),
-                                                        TIMEOUT)
+                                                        TIMEOUT,
+                                                        "application/json",
+                                                        null,
+                                                        null,
+                                                        null)
                                                 .submit(String.class)
                                                 .toCompletableFuture()
                                                 .join());

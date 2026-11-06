@@ -157,7 +157,7 @@ final class ZLinkChannelRuntimeTest {
                                 ZLinkHandlerActivator.reflection(),
                                 Runnable::run,
                                 List.of()),
-                        new ZLinkChannelDispatchReporter(errors),
+                        new ZLinkChannelDispatchReporter(errors, null),
                         errors.flow());
         dispatcher.dispatchRequest(
                 "orders",

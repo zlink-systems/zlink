@@ -234,6 +234,8 @@ final class RouteRequestCall implements ZLinkRequestCall {
     private final Optional<String> packetName;
     private final Duration timeout;
     private final String contentType;
+    private final ZLinkChannelEnvelope.PreparedNames channelNames;
+    private final ZLinkChannelEnvelope.PreparedNames names;
     private final ZLinkApplicationMetadata metadata;
 
     RouteRequestCall(
@@ -246,6 +248,8 @@ final class RouteRequestCall implements ZLinkRequestCall {
             Optional<String> packetName,
             Duration timeout,
             String contentType,
+            ZLinkChannelEnvelope.PreparedNames channelNames,
+            ZLinkChannelEnvelope.PreparedNames names,
             ZLinkApplicationMetadata metadata) {
         this(
                 runtime,
@@ -257,6 +261,8 @@ final class RouteRequestCall implements ZLinkRequestCall {
                 packetName,
                 timeout,
                 contentType,
+                channelNames,
+                names,
                 metadata,
                 new AtomicBoolean());
     }
@@ -271,6 +277,8 @@ final class RouteRequestCall implements ZLinkRequestCall {
             Optional<String> packetName,
             Duration timeout,
             String contentType,
+            ZLinkChannelEnvelope.PreparedNames channelNames,
+            ZLinkChannelEnvelope.PreparedNames names,
             ZLinkApplicationMetadata metadata,
             AtomicBoolean submitGate) {
         this.submitGate = submitGate;
@@ -283,6 +291,8 @@ final class RouteRequestCall implements ZLinkRequestCall {
         this.packetName = packetName;
         this.timeout = timeout;
         this.contentType = contentType;
+        this.channelNames = channelNames;
+        this.names = names;
         this.metadata = metadata;
     }
 
@@ -297,6 +307,8 @@ final class RouteRequestCall implements ZLinkRequestCall {
                 Optional.of(name),
                 timeout,
                 contentType,
+                channelNames,
+                names,
                 metadata,
                 submitGate);
     }
@@ -313,6 +325,8 @@ final class RouteRequestCall implements ZLinkRequestCall {
                 packetName,
                 timeout,
                 contentType,
+                channelNames,
+                names,
                 (metadata == null ? ZLinkApplicationMetadata.empty() : metadata).with(key, value),
                 submitGate);
     }
@@ -329,6 +343,8 @@ final class RouteRequestCall implements ZLinkRequestCall {
                 packetName,
                 timeout,
                 contentType,
+                channelNames,
+                names,
                 (metadata == null ? ZLinkApplicationMetadata.empty() : metadata).withAll(values),
                 submitGate);
     }
@@ -346,6 +362,8 @@ final class RouteRequestCall implements ZLinkRequestCall {
                 packetName,
                 value,
                 contentType,
+                channelNames,
+                names,
                 metadata,
                 submitGate);
     }
@@ -537,14 +555,16 @@ final class RouteRequestCall implements ZLinkRequestCall {
 
     private List<Message> requestParts(java.util.UUID operationId, Map<String, String> metadata) {
         List<Message> requestParts =
-                ZLinkChannelCallRuntime.envelopeParts(
+                runtime.registeredEnvelopeParts(
                         systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_REQUEST,
                         channelName,
                         packetName,
                         payload,
                         contentType,
                         metadata,
-                        operationId);
+                        operationId,
+                        channelNames,
+                        names);
         ZLinkMessageFlowTracer.TracePoint sent = runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
         if (sent != null) {
             sent.trace(
@@ -755,27 +775,9 @@ final class ChannelRequestCall implements ZLinkRequestCall {
     private final Optional<String> packetName;
     private final Duration timeout;
     private final String contentType;
+    private final ZLinkChannelEnvelope.PreparedNames channelNames;
+    private final ZLinkChannelEnvelope.PreparedNames names;
     private final ZLinkApplicationMetadata metadata;
-
-    ChannelRequestCall(
-            ZLinkChannelCallRuntime runtime,
-            String channelName,
-            ZLinkChannelSocketRegistry sockets,
-            Duration defaultTimeout,
-            ZLinkFrameworkMultipartView payload,
-            Optional<String> packetName,
-            Duration timeout) {
-        this(
-                runtime,
-                channelName,
-                sockets,
-                defaultTimeout,
-                payload,
-                packetName,
-                timeout,
-                ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE,
-                null);
-    }
 
     ChannelRequestCall(
             ZLinkChannelCallRuntime runtime,
@@ -786,6 +788,8 @@ final class ChannelRequestCall implements ZLinkRequestCall {
             Optional<String> packetName,
             Duration timeout,
             String contentType,
+            ZLinkChannelEnvelope.PreparedNames channelNames,
+            ZLinkChannelEnvelope.PreparedNames names,
             ZLinkApplicationMetadata metadata) {
         this(
                 runtime,
@@ -796,6 +800,8 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                 packetName,
                 timeout,
                 contentType,
+                channelNames,
+                names,
                 metadata,
                 new AtomicBoolean());
     }
@@ -809,6 +815,8 @@ final class ChannelRequestCall implements ZLinkRequestCall {
             Optional<String> packetName,
             Duration timeout,
             String contentType,
+            ZLinkChannelEnvelope.PreparedNames channelNames,
+            ZLinkChannelEnvelope.PreparedNames names,
             ZLinkApplicationMetadata metadata,
             AtomicBoolean submitGate) {
         this.submitGate = submitGate;
@@ -820,6 +828,8 @@ final class ChannelRequestCall implements ZLinkRequestCall {
         this.packetName = packetName;
         this.timeout = timeout;
         this.contentType = contentType;
+        this.channelNames = channelNames;
+        this.names = names;
         this.metadata = metadata;
     }
 
@@ -833,6 +843,8 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                 Optional.of(name),
                 timeout,
                 contentType,
+                channelNames,
+                names,
                 metadata,
                 submitGate);
     }
@@ -848,6 +860,8 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                 packetName,
                 timeout,
                 contentType,
+                channelNames,
+                names,
                 (metadata == null ? ZLinkApplicationMetadata.empty() : metadata).with(key, value),
                 submitGate);
     }
@@ -863,6 +877,8 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                 packetName,
                 timeout,
                 contentType,
+                channelNames,
+                names,
                 (metadata == null ? ZLinkApplicationMetadata.empty() : metadata).withAll(values),
                 submitGate);
     }
@@ -879,6 +895,8 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                 packetName,
                 value,
                 contentType,
+                channelNames,
+                names,
                 metadata,
                 submitGate);
     }
@@ -931,13 +949,16 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                 requestResult(ZLinkDispatchErrorSurface.CHANNEL, metric, started);
         String reqPacket = packetName.orElse(null);
         List<Message> requestParts =
-                ZLinkChannelCallRuntime.envelopeParts(
+                runtime.registeredEnvelopeParts(
                         ZLinkChannelEnvelope.KIND_REQUEST,
                         channelName,
                         packetName,
                         payload,
                         contentType,
-                        metadata == null ? Map.of() : metadata.values());
+                        metadata == null ? Map.of() : metadata.values(),
+                        ZLinkServiceOperationIds.next(),
+                        channelNames,
+                        names);
         result.whenComplete((ignored, error) -> ZLinkFrameworkMultipartView.closeAll(requestParts));
         try {
             Duration remaining = timeout;
@@ -1004,14 +1025,16 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                 requestResult(ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL, metric, started);
         var operationId = ZLinkServiceOperationIds.next();
         List<Message> parts =
-                ZLinkChannelCallRuntime.envelopeParts(
+                runtime.registeredEnvelopeParts(
                         systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_REQUEST,
                         channelName,
                         packetName,
                         payload,
                         contentType,
                         metadata.values(),
-                        operationId);
+                        operationId,
+                        channelNames,
+                        names);
         try {
             CompletionStage<ZLinkBackendReceived> operation =
                     runtime.requestChannel(

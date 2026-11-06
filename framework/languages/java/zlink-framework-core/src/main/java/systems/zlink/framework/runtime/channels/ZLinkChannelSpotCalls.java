@@ -16,6 +16,7 @@ import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.internal.spots.ZLinkInstanceSpotCallRuntime;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.spots.ZLinkSpotRequestCall;
 import systems.zlink.framework.spots.ZLinkSpotSendCall;
 
@@ -331,6 +332,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
     private final Optional<String> packetName;
     private final Duration timeout;
     private final String contentType;
+    private final ZLinkChannelEnvelope.PreparedNames channelNames;
+    private final ZLinkChannelEnvelope.PreparedNames names;
     private final boolean instanceIntent;
     private final String stableType;
     private final String selectedMesh;
@@ -345,35 +348,10 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
             String target,
             ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
-            Duration timeout) {
-        this(
-                runtime,
-                channelName,
-                callerMeshName,
-                resolver,
-                instanceSpots,
-                target,
-                payload,
-                packetName,
-                timeout,
-                ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE,
-                false,
-                null,
-                null,
-                ZLinkApplicationMetadata.empty());
-    }
-
-    RouteSpotRequestCall(
-            ZLinkChannelCallRuntime runtime,
-            String channelName,
-            String callerMeshName,
-            SpotTransportAddressResolver resolver,
-            Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots,
-            String target,
-            ZLinkFrameworkMultipartView payload,
-            Optional<String> packetName,
             Duration timeout,
             String contentType,
+            ZLinkChannelEnvelope.PreparedNames channelNames,
+            ZLinkChannelEnvelope.PreparedNames names,
             boolean instanceIntent,
             String stableType,
             String selectedMesh,
@@ -389,6 +367,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                 packetName,
                 timeout,
                 contentType,
+                channelNames,
+                names,
                 instanceIntent,
                 stableType,
                 selectedMesh,
@@ -407,6 +387,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
             Optional<String> packetName,
             Duration timeout,
             String contentType,
+            ZLinkChannelEnvelope.PreparedNames channelNames,
+            ZLinkChannelEnvelope.PreparedNames names,
             boolean instanceIntent,
             String stableType,
             String selectedMesh,
@@ -423,6 +405,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
         this.packetName = packetName;
         this.timeout = timeout;
         this.contentType = contentType;
+        this.channelNames = channelNames;
+        this.names = names;
         this.instanceIntent = instanceIntent;
         this.stableType = stableType;
         this.selectedMesh = selectedMesh;
@@ -441,6 +425,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                 Optional.of(packetName),
                 timeout,
                 contentType,
+                channelNames,
+                names,
                 instanceIntent,
                 stableType,
                 selectedMesh,
@@ -471,6 +457,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                 packetName,
                 timeout,
                 contentType,
+                channelNames,
+                names,
                 true,
                 value,
                 selectedMesh,
@@ -492,6 +480,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                 packetName,
                 timeout,
                 contentType,
+                channelNames,
+                names,
                 instanceIntent,
                 stableType,
                 SpotCallAddresses.requireText(value),
@@ -512,6 +502,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                 packetName,
                 timeout,
                 contentType,
+                channelNames,
+                names,
                 instanceIntent,
                 stableType,
                 selectedMesh,
@@ -532,6 +524,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                 packetName,
                 timeout,
                 contentType,
+                channelNames,
+                names,
                 instanceIntent,
                 stableType,
                 selectedMesh,
@@ -552,6 +546,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                 packetName,
                 timeout,
                 contentType,
+                channelNames,
+                names,
                 instanceIntent,
                 stableType,
                 selectedMesh,
@@ -702,14 +698,16 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
             SpotTransportAddress address, Class<TReply> replyType) {
         UUID operationId = ZLinkServiceOperationIds.next();
         List<Message> requestParts =
-                ZLinkChannelCallRuntime.envelopeParts(
+                runtime.registeredEnvelopeParts(
                         systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_REQUEST,
                         channelName,
                         packetName,
                         payload,
                         contentType,
                         metadata.values(),
-                        operationId);
+                        operationId,
+                        channelNames,
+                        names);
         return runtime.requestToSpot(
                         address.routerChannelId(),
                         address.targetNodeRid(),
