@@ -13,6 +13,7 @@
 #include "runtime/messaging/request_deadline.hpp"
 #include "runtime/timers/timer_runtime.hpp"
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/host_readiness.hpp"
 #include "../support/telemetry_observation.hpp"
 #include "../support/manual_internal_scheduler.hpp"
 #include <gtest/gtest.h>
@@ -1342,6 +1343,8 @@ bool wait_until (const std::function<bool ()> &condition,
     return true;
 }
 
+using zlink::framework::test::wait_for_serving;
+
 class scenario_client_t final : public zf::hosted_service_t
 {
   public:
@@ -1352,17 +1355,10 @@ class scenario_client_t final : public zf::hosted_service_t
 
     zf::task_t<void> start (zf::service_provider_t &services) override
     {
-        if (_scenario.at ("act") == "shutdownDuringClose"
-            || _scenario.at ("act") == "shutdownOnClosing"
-            || _scenario.at ("act") == "shutdownEntryClosing") {
-            // Let host startup finish before requesting its terminal result.
-            _worker = std::thread ([this, services] () mutable {
-                (void) wait_until ([&] { return _app->is_ready (); });
-                execute (services);
-            });
-        } else {
+        _worker = std::thread ([this, services] () mutable {
+            wait_for_serving (services);
             execute (services);
-        }
+        });
         co_return;
     }
 
@@ -2471,6 +2467,8 @@ nlohmann::json run_scenario (const nlohmann::json &scenario, std::string &failur
         options.configure_dispatch ().message_flow (zf::message_flow_log_mode_t::detailed);
         zf::detail::dispatch_options_access_t::set_observer_for_tests (
           options.configure_dispatch (), observe_diagnostics);
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (store);
         options.add_relocation_store (relocations);
         options.add_route_mesh (mesh_name)
@@ -3122,18 +3120,21 @@ class callback_cause_client_t final : public zf::hosted_service_t
     void stop () noexcept override {}
     zf::task_t<void> start (zf::service_provider_t &services) override
     {
-        if (_actor) {
-            verify (services.get_required<zf::actor_manager_t> ()
-                      .get_or_create (zf::actor_id_t ("callback-cause"), "failing")
-                      .async ()
-                      .result ());
-        } else {
-            verify (services.get_required<zf::spot_manager_t> ()
-                      .get_or_create (zf::spot_id_t ("callback-cause"), "failing")
-                      .async ()
-                      .result ());
-        }
-        _app.stop ();
+        _worker = std::jthread ([this, services] () mutable {
+            wait_for_serving (services);
+            if (_actor) {
+                verify (services.get_required<zf::actor_manager_t> ()
+                          .get_or_create (zf::actor_id_t ("callback-cause"), "failing")
+                          .async ()
+                          .result ());
+            } else {
+                verify (services.get_required<zf::spot_manager_t> ()
+                          .get_or_create (zf::spot_id_t ("callback-cause"), "failing")
+                          .async ()
+                          .result ());
+            }
+            _app.stop ();
+        });
         co_return;
     }
 
@@ -3155,6 +3156,7 @@ class callback_cause_client_t final : public zf::hosted_service_t
     }
     zf::app_t &_app;
     bool _actor;
+    std::jthread _worker;
 };
 
 TEST (LocalCallbackCause, PublicUserSpotOnCreatePreservesEmptyApplicationException)
@@ -3163,6 +3165,8 @@ TEST (LocalCallbackCause, PublicUserSpotOnCreatePreservesEmptyApplicationExcepti
     app.logging ().use_file ("callback-cause.flow").set_min_level (zf::log_level_t::debug);
     app.add_zlink_framework ([] (zf::zlink_framework_options_t &options) {
         options.configure_dispatch ().message_flow (zf::message_flow_log_mode_t::detailed);
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (std::make_shared<zf::runtime::in_memory_location_store_t> ());
         options.add_route_mesh ("callback-cause")
           .set_object_role (zf::object_role_t::server)
@@ -3183,6 +3187,8 @@ void verify_actor_callback_cause (bool factory_failure)
 {
     auto app = zf::app_t::create ();
     app.add_zlink_framework ([factory_failure] (zf::zlink_framework_options_t &options) {
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (std::make_shared<zf::runtime::in_memory_location_store_t> ());
         options.add_route_mesh ("callback-cause")
           .set_object_role (zf::object_role_t::server)

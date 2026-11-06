@@ -1975,6 +1975,7 @@ bool verify_fanout_snapshot_state_owner ()
     serializer_registry_t serializers;
     handler_registry_t handlers;
     runtime::in_memory_location_repository_t store;
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     runtime::location_runtime_t locations (store);
     channel_snapshot_t channel;
     channel.name = "state-owner";
@@ -7757,6 +7758,7 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
     };
 
     auto locations = std::make_shared<runtime::in_memory_location_repository_t> ();
+    locations->configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto source_owner =
       std::get<owner_lease_claimed_t> (
         locations->claim_owner_lease ("source-owner", 30s).result ().value ())

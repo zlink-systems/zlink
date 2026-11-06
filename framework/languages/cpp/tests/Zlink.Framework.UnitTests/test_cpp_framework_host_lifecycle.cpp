@@ -595,6 +595,8 @@ void configure_remote_actor_create_app (
 {
     app.add_zlink_framework ([location_store, routing_id = std::move (routing_id),
                               actor_target] (zlink::framework::zlink_framework_options_t &options) {
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (location_store);
         options.configure_locations ().polling_interval = std::chrono::milliseconds (10);
         auto mesh = options.add_route_mesh ("host-remote-actor-create-mesh");
@@ -1140,7 +1142,7 @@ bool verify_degraded_host_republishes_descriptor_after_owner_claim ()
     locations.owner_lease_renew_interval = std::chrono::milliseconds (10);
     locations.owner_lease_renew_timeout = renew_timeout;
     locations.owner_lease_ttl = std::chrono::seconds (3);
-    locations.owner_lease_fencing_margin = std::chrono::seconds (1);
+    locations.owner_lease_fencing_margin = std::chrono::milliseconds (1);
     locations.polling_interval = std::chrono::milliseconds (5);
     auto degraded_mesh = options.add_route_mesh ("degraded-location-host");
     degraded_mesh.channel_name ("degraded-object-channel").server ();
@@ -1200,6 +1202,8 @@ bool verify_deferred_framework_apply_preserves_hosted_service_order ()
     auto relocation_store =
       std::make_shared<zlink::framework::runtime::in_memory_relocation_store_t> ();
     auto &options = app.add_zlink_framework ();
+    options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+    options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
     options.add_location_store (location_store);
     options.add_relocation_store (relocation_store);
     auto mesh = options.add_route_mesh (std::string (mesh_name));
@@ -1358,32 +1362,34 @@ void configure_relocation_app (
   const std::shared_ptr<zlink::framework::runtime::in_memory_relocation_store_t> &relocation_store,
   std::string routing_id)
 {
-    app.add_zlink_framework (
-      [location_store, relocation_store,
-       routing_id = std::move (routing_id)] (zlink::framework::zlink_framework_options_t &options) {
-          options.configure_dispatch ().message_flow (
-            zlink::framework::message_flow_log_mode_t::normal);
-          options.add_location_store (location_store);
-          options.add_relocation_store (relocation_store);
-          options.configure_locations ().polling_interval = std::chrono::milliseconds (10);
-          auto mesh = options.add_route_mesh (host_relocation_mesh_name);
-          mesh.channel_name ("host-relocation-channel").server ();
-          mesh.set_object_role (zlink::framework::object_role_t::server)
-            .listen ("tcp://127.0.0.1:0")
-            .set_routing_id (zlink::routing_id_t::from (routing_id))
-            .add_spot_factory<relocation_ready_spot_t> (
-              "host-relocation-spot",
-              [] (zlink::framework::spot_context_t context) {
-                  return std::make_shared<relocation_ready_spot_t> (std::move (context));
-              },
-              [] (auto &factory) {
-                  factory.set_execution_mode (
-                    zlink::framework::user_spot_execution_mode_t::spot_wide);
-                  factory.set_relocation_coordination_mode (
-                    zlink::framework::spot_relocation_coordination_mode_t::application_signaled);
-                  factory.template preserve_state_with<relocation_ready_adapter_t> ();
-              });
-      });
+    app.add_zlink_framework ([location_store, relocation_store,
+                              routing_id = std::move (routing_id)] (
+                               zlink::framework::zlink_framework_options_t &options) {
+        options.configure_dispatch ().message_flow (
+          zlink::framework::message_flow_log_mode_t::normal);
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
+        options.add_location_store (location_store);
+        options.add_relocation_store (relocation_store);
+        options.configure_locations ().polling_interval = std::chrono::milliseconds (10);
+        auto mesh = options.add_route_mesh (host_relocation_mesh_name);
+        mesh.channel_name ("host-relocation-channel").server ();
+        mesh.set_object_role (zlink::framework::object_role_t::server)
+          .listen ("tcp://127.0.0.1:0")
+          .set_routing_id (zlink::routing_id_t::from (routing_id))
+          .add_spot_factory<relocation_ready_spot_t> (
+            "host-relocation-spot",
+            [] (zlink::framework::spot_context_t context) {
+                return std::make_shared<relocation_ready_spot_t> (std::move (context));
+            },
+            [] (auto &factory) {
+                factory.set_execution_mode (
+                  zlink::framework::user_spot_execution_mode_t::spot_wide);
+                factory.set_relocation_coordination_mode (
+                  zlink::framework::spot_relocation_coordination_mode_t::application_signaled);
+                factory.template preserve_state_with<relocation_ready_adapter_t> ();
+            });
+    });
 }
 
 class blocking_stop_service_t final : public zlink::framework::hosted_service_t
@@ -1494,7 +1500,7 @@ bool verify_degraded_host_blocks_and_resumes_relocation ()
     locations.owner_lease_renew_interval = std::chrono::milliseconds (10);
     locations.owner_lease_renew_timeout = std::chrono::milliseconds (50);
     locations.owner_lease_ttl = std::chrono::seconds (3);
-    locations.owner_lease_fencing_margin = std::chrono::seconds (1);
+    locations.owner_lease_fencing_margin = std::chrono::milliseconds (1);
     locations.polling_interval = std::chrono::milliseconds (5);
     auto degraded_mesh = options.add_route_mesh ("degraded-relocation-host");
     degraded_mesh.channel_name ("degraded-relocation-channel").server ();
@@ -1581,24 +1587,26 @@ void configure_retry_relocation_app (
   const std::shared_ptr<zlink::framework::runtime::in_memory_relocation_store_t> &relocation_store,
   std::string routing_id)
 {
-    app.add_zlink_framework (
-      [location_store, relocation_store,
-       routing_id = std::move (routing_id)] (zlink::framework::zlink_framework_options_t &options) {
-          options.add_location_store (location_store);
-          options.add_relocation_store (relocation_store);
-          options.configure_locations ().polling_interval = std::chrono::milliseconds (10);
-          auto mesh = options.add_route_mesh ("host-relocation-retry-mesh");
-          mesh.channel_name ("host-relocation-retry-channel").server ();
-          mesh.set_object_role (zlink::framework::object_role_t::server)
-            .listen ("tcp://127.0.0.1:0")
-            .set_routing_id (zlink::routing_id_t::from (routing_id))
-            .add_spot_factory<relocation_unit_spot_t> (
-              "relocation-unit",
-              [] (zlink::framework::spot_context_t context) {
-                  return std::make_shared<relocation_unit_spot_t> (std::move (context));
-              },
-              [] (auto &factory) { factory.recreate_on_relocation (); });
-      });
+    app.add_zlink_framework ([location_store, relocation_store,
+                              routing_id = std::move (routing_id)] (
+                               zlink::framework::zlink_framework_options_t &options) {
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
+        options.add_location_store (location_store);
+        options.add_relocation_store (relocation_store);
+        options.configure_locations ().polling_interval = std::chrono::milliseconds (10);
+        auto mesh = options.add_route_mesh ("host-relocation-retry-mesh");
+        mesh.channel_name ("host-relocation-retry-channel").server ();
+        mesh.set_object_role (zlink::framework::object_role_t::server)
+          .listen ("tcp://127.0.0.1:0")
+          .set_routing_id (zlink::routing_id_t::from (routing_id))
+          .add_spot_factory<relocation_unit_spot_t> (
+            "relocation-unit",
+            [] (zlink::framework::spot_context_t context) {
+                return std::make_shared<relocation_unit_spot_t> (std::move (context));
+            },
+            [] (auto &factory) { factory.recreate_on_relocation (); });
+    });
 }
 
 struct lone_host_relocation_t
@@ -1620,6 +1628,8 @@ relocate_lone_host (std::string routing_id, bool owns_unit, std::chrono::millise
     auto app = zlink::framework::app_t::create ();
     app.add_zlink_framework ([owns_unit, mesh_name, routing_id = std::move (routing_id)] (
                                zlink::framework::zlink_framework_options_t &options) {
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (
           std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
         options.add_relocation_store (
@@ -1784,6 +1794,8 @@ bool verify_mesh_discovery_stop_wakes_polling_waits ()
     {
         auto app = zlink::framework::app_t::create ();
         auto &options = app.add_zlink_framework ();
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (
           std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
         options.configure_locations ().polling_interval = std::chrono::hours (24);
@@ -2618,6 +2630,10 @@ bool verify_relocated_actor_follow_and_shutdown (bool aggregate = false,
             detail::dispatch_options_access_t::set_logger (
               options.configure_dispatch (),
               host->logging ().factory ().create ("relocation.flow"));
+            options.configure_locations ().owner_lease_renew_interval =
+              std::chrono::milliseconds (10);
+            options.configure_locations ().owner_lease_fencing_margin =
+              std::chrono::milliseconds (1);
             options.add_location_store (locations);
             options.add_relocation_store (relocations);
             options.configure_locations ().polling_interval = std::chrono::milliseconds (10);

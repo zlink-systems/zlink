@@ -191,6 +191,7 @@ class location_runtime_t
                                  std::string owner_id = make_owner_id ()) :
         _store (&store), _options (options), _owner_id (std::move (owner_id))
     {
+        _store->configure_reclaim_margin (_options.owner_lease_fencing_margin);
     }
 
     ~location_runtime_t () { stop (); }

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/location_reclaim_clock.hpp"
 #include "../support/manual_deadlines.hpp"
 #include "../support/telemetry_observation.hpp"
 #include "metric_test_reader.hpp"
@@ -196,6 +197,7 @@ static void verify_same_target_activation_order (
         fw::task_completion_source_t<void> release;
     };
     auto store = std::make_shared<held_reservation_t> ();
+    store->configure_reclaim_margin (std::chrono::milliseconds::zero ());
     store->hold_commit = ready_request;
     store->hold_terminal = close_during_terminal;
     const auto owner = std::get<fw::owner_lease_claimed_t> (
@@ -1090,6 +1092,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       fw::service_lifetime_t::singleton);
     auto store = std::make_shared<lookup_gate_store_t> ();
     auto lookup_entered = store->entered.get_future ();
+    options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+    options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
     options.add_location_store (store);
     options.add_relocation_store (std::make_shared<fw::runtime::in_memory_relocation_store_t> ());
     options.configure_locations ().polling_interval = 10ms;
@@ -1490,6 +1494,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ColdTypeClassificationUsesServingCap
         SCOPED_TRACE (test_case.name);
         auto app = fw::app_t::create ();
         auto &options = app.add_zlink_framework ();
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (std::make_shared<fw::runtime::in_memory_location_store_t> ());
         options.add_relocation_store (
           std::make_shared<fw::runtime::in_memory_relocation_store_t> ());
@@ -2207,6 +2213,9 @@ static void verify_ended_instance_intent (bool provider, bool disabled)
                    std::make_shared<rt::provider_location_repository_t> (*opaque))
                : std::static_pointer_cast<fw::location_repository_t> (
                    std::make_shared<rt::in_memory_location_repository_t> ());
+    store->configure_reclaim_margin (std::chrono::milliseconds::zero ());
+    fw::location_reclaim_test_access_t clock;
+    clock.bind (*store);
     const auto owner = std::get<fw::owner_lease_claimed_t> (
                          store->claim_owner_lease ("ended-instance-owner", 60s).result ().value ())
                          .token;
@@ -2263,6 +2272,8 @@ static void verify_ended_instance_intent (bool provider, bool disabled)
       store->release_owner_lease (owner).result ().value ()));
     auto app = fw::app_t::create ();
     auto &options = app.add_zlink_framework ();
+    options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+    options.configure_locations ().owner_lease_fencing_margin = 5s;
     options.add_location_store (opaque);
     options.add_relocation_store (std::make_shared<rt::in_memory_relocation_store_t> ());
     app.advanced ().services ().add_factory<fw::location_repository_t> (
@@ -2285,16 +2296,22 @@ static void verify_ended_instance_intent (bool provider, bool disabled)
           else
               factory.recreate_on_relocation ();
       });
+    auto startup_observed = std::make_shared<fw::task_completion_source_t<void>> ();
+    clock.bind (
+      *store, [startup_observed] { startup_observed->complete (fw::result_t<void>::success ()); });
     std::thread host ([&] { EXPECT_EQ (0, app.run (0, nullptr)); });
     auto cleanup =
       std::unique_ptr<fw::app_t, std::function<void (fw::app_t *)>> (&app, [&] (auto *) {
           app.stop ();
           host.join ();
       });
+    ASSERT_TRUE (startup_observed->task ().result_for (5s));
+    clock.advance (15s);
     const auto until = std::chrono::steady_clock::now () + 5s;
     while (!app.is_ready () && std::chrono::steady_clock::now () < until)
         std::this_thread::yield ();
     ASSERT_TRUE (app.is_ready ());
+    clock.bind (*store);
     auto services = app.advanced ().services ().build_provider ();
     auto &client = services.get_required<fw::route_client_t> ();
     (void) services.get_required<fw::spot_manager_t> ().find ("ended-room").result ();
@@ -2316,6 +2333,19 @@ static void verify_ended_instance_intent (bool provider, bool disabled)
                          .result ();
     EXPECT_FALSE (wrong);
     EXPECT_EQ (fw::framework_error_kind_t::type_mismatch, wrong.error_kind ());
+    const auto waiting = client.request_to_spot ("ended-room", traced_request_t{3})
+                           .instance_spot ()
+                           .in_mesh ("ignored-on-existing-id")
+                           .timeout (3s)
+                           .async<traced_reply_t> ()
+                           .result ();
+    EXPECT_FALSE (waiting);
+    EXPECT_EQ (fw::framework_error_kind_t::unavailable, waiting.error_kind ());
+    const auto during_wait = std::get<fw::authority_snapshot_t> (
+      store->read_authority (rt::spot_authority_key ("ended-room")).result ().value ());
+    EXPECT_EQ (before.store_version, during_wait.store_version);
+    EXPECT_EQ (0, factories);
+    clock.advance (15s);
     const auto result = client.request_to_spot ("ended-room", traced_request_t{3})
                           .instance_spot ()
                           .in_mesh ("ignored-on-existing-id")
@@ -2381,6 +2411,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, StoredActivationMismatchPreservesAut
                                std::make_shared<rt::provider_location_repository_t> (*opaque))
                            : std::static_pointer_cast<fw::location_repository_t> (
                                std::make_shared<rt::in_memory_location_repository_t> ());
+                store->configure_reclaim_margin (std::chrono::milliseconds::zero ());
                 const auto owner =
                   std::get<fw::owner_lease_claimed_t> (
                     store->claim_owner_lease ("stored-owner", 60s).result ().value ())
@@ -2596,6 +2627,7 @@ TEST (CppFrameworkInstanceSpotActivation, StartupReleasesPreviousLifecycleBefore
     namespace host = rt::host;
     auto provider = std::make_shared<rt::in_memory_location_store_t> ();
     auto store = std::make_shared<rt::provider_location_repository_t> (*provider);
+    store->configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto owner = std::get<fw::owner_lease_claimed_t> (
                          store->claim_owner_lease ("startup-owner", 60s).result ().value ())
                          .token;
@@ -2725,6 +2757,7 @@ static void verify_ready_recovery_root_deletion (bool local_available)
         fw::task_completion_source_t<void> release;
     };
     auto store = std::make_shared<held_read_t> ();
+    store->configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto owner = std::get<fw::owner_lease_claimed_t> (
                          store->claim_owner_lease ("owner", 60s).result ().value ())
                          .token;
@@ -2990,6 +3023,7 @@ static void verify_activation_failure_terminal (bool local,
                    std::make_shared<rt::provider_location_repository_t> (*opaque))
                : std::static_pointer_cast<fw::location_repository_t> (
                    std::make_shared<rt::in_memory_location_repository_t> ());
+    store->configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto owner = std::get<fw::owner_lease_claimed_t> (
                          store->claim_owner_lease ("terminal-owner", 60s).result ().value ())
                          .token;

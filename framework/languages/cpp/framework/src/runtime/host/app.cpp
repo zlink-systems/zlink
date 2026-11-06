@@ -6,6 +6,7 @@
 #include "runtime/actors/actor_client.hpp"
 #include "runtime/execution/task_result.hpp"
 #include "runtime/timers/async_delay.hpp"
+#include "runtime/host/app_test_access.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/channels/channel_host_service.hpp"
 #include "runtime/channels/channel_runtime.hpp"
@@ -337,7 +338,15 @@ class app_state_t
     static task_t<void> enter_serving_after_publication (std::shared_ptr<app_state_access_t> access,
                                                          task_t<bool> published)
     {
-        if (co_await published) {
+        const auto result = co_await runtime::await_result (std::move (published));
+        if (!result) {
+            std::shared_lock lock (access->mutex);
+            if (auto *state = access->state)
+                state->runtime_state.store (framework_runtime_state_t::error,
+                                            std::memory_order_release);
+            (void) result.value ();
+        }
+        if (result.value ()) {
             std::shared_lock lock (access->mutex);
             if (auto *state = access->state) {
                 auto expected = framework_runtime_state_t::preparing;
@@ -1388,6 +1397,16 @@ app_t::app_t () : _state (std::make_unique<detail::app_state_t> ())
           return std::shared_ptr<detail::delay_owner_t> (owner, [] (auto *) noexcept {});
       },
       service_lifetime_t::singleton);
+}
+
+task_t<bool> detail::app_test_access_t::startup_publication (app_t &app)
+{
+    return app._state->startup_publication ();
+}
+
+const std::atomic_bool &detail::app_test_access_t::stop_requested (app_t &app)
+{
+    return app._state->stop_requested;
 }
 
 app_t::~app_t ()
@@ -3373,15 +3392,23 @@ try {
         _state->teardown_complete = false;
     }
     std::vector<hosted_service_t *> started;
+    task_t<void> startup_publication (result_t<void>::success ());
     try {
         runtime::install_host_context_hooks ();
         runtime::configure_handler_coroutine_executor (
           _state->framework_options ? _state->framework_options->handler_coroutine_workers () : 0,
           completion_dispatcher);
         _state->start_hosted_services (provider, started);
-        (void) detail::app_state_t::enter_serving_after_publication (
+        startup_publication = detail::app_state_t::enter_serving_after_publication (
           _state->status_access, _state->startup_publication ());
         while (!_state->stop_requested.load (std::memory_order_acquire)) {
+            if (startup_publication.await_ready () && !startup_publication.result ()) {
+                std::unique_lock lock (_state->termination_operation.mutex);
+                if (!_state->termination_operation.started) {
+                    lock.unlock ();
+                    (void) shutdown ();
+                }
+            }
             _state->delays.reap_completed ();
             if (g_stop_signal_requested != 0) {
                 g_stop_signal_requested = 0;
@@ -3415,6 +3442,8 @@ try {
         _state->teardown_complete = true;
     }
     _state->termination_teardown_changed.notify_all ();
+    if (startup_publication.await_ready ())
+        startup_publication.result ().value ();
     _state->runtime_state.store (framework_runtime_state_t::stopped, std::memory_order_release);
     _state->monitoring->runtime_failures->rethrow_if_failed ();
     return 0;
@@ -4613,7 +4642,9 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
             waiters = std::move (state.termination_operation.waiters);
             state.termination_operation.waiters.clear ();
         }
-        state.runtime_state.store (framework_runtime_state_t::stopped, std::memory_order_release);
+        auto expected = framework_runtime_state_t::draining;
+        (void) state.runtime_state.compare_exchange_strong (
+          expected, framework_runtime_state_t::stopped, std::memory_order_acq_rel);
     }
     for (auto &waiter : waiters) {
         waiter->complete (terminal);

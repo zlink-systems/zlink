@@ -793,6 +793,7 @@ void verify_route_internal_packets_precede_application_dispatch ()
       std::unique_ptr<location_repository_t> (owned_store.release ()));
     services.add_singleton<runtime::location_runtime_t> (
       std::make_unique<runtime::location_runtime_t> (location_store));
+    location_store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     register_mesh_location_resolvers (services);
     auto provider = services.build_provider ();
     auto &actor_gateway = provider.get_required<actor_gateway_runtime_t> ();
@@ -1077,6 +1078,7 @@ void verify_actor_route_resolver_preserves_unavailable ()
       std::unique_ptr<location_repository_t> (owned_store.release ()));
     services.add_singleton<runtime::location_runtime_t> (
       std::make_unique<runtime::location_runtime_t> (store));
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     register_mesh_location_resolvers (services);
     auto provider = services.build_provider ();
     provider.get_required<runtime::location_runtime_t> ().start (*registration->routing_id);
@@ -1219,6 +1221,7 @@ void verify_server_descriptor_publishes_framework_entry_spot_without_application
       std::unique_ptr<zlink::framework::location_repository_t> (owned_store.release ()));
     services.add_singleton<zlink::framework::runtime::location_runtime_t> (
       std::make_unique<zlink::framework::runtime::location_runtime_t> (store));
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     register_mesh_location_resolvers (services);
     auto provider = services.build_provider ();
     provider.get_required<zlink::framework::runtime::location_runtime_t> ().start (
@@ -1253,6 +1256,7 @@ void verify_descriptor_retire_order_and_pre_seal_rollback ()
       std::unique_ptr<zlink::framework::location_repository_t> (owned_store.release ()));
     services.add_singleton<zlink::framework::runtime::location_runtime_t> (
       std::make_unique<zlink::framework::runtime::location_runtime_t> (store));
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     register_mesh_location_resolvers (services);
     auto provider = services.build_provider ();
     provider.get_required<zlink::framework::runtime::location_runtime_t> ().start (
@@ -1401,6 +1405,7 @@ void verify_local_node_submit_bridge ()
       std::unique_ptr<zlink::framework::location_repository_t> (owned_store.release ()));
     services.add_singleton<zlink::framework::runtime::location_runtime_t> (
       std::make_unique<zlink::framework::runtime::location_runtime_t> (location_store));
+    location_store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     register_mesh_location_resolvers (services);
     auto provider = services.build_provider ();
     // The MeshNode publishes its descriptor under an owner lease, so the
@@ -1567,6 +1572,7 @@ void verify_direct_target_falls_through_absent_location_store_entry ()
       std::unique_ptr<zlink::framework::location_repository_t> (owned_store.release ()));
     services.add_singleton<zlink::framework::runtime::location_runtime_t> (
       std::make_unique<zlink::framework::runtime::location_runtime_t> (location_store));
+    location_store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     register_mesh_location_resolvers (services);
     auto provider = services.build_provider ();
     provider.get_required<zlink::framework::runtime::location_runtime_t> ().start (
@@ -1629,6 +1635,7 @@ void verify_request_to_never_admitted_target_reports_not_found ()
       std::unique_ptr<zlink::framework::location_repository_t> (owned_store.release ()));
     services.add_singleton<zlink::framework::runtime::location_runtime_t> (
       std::make_unique<zlink::framework::runtime::location_runtime_t> (location_store));
+    location_store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     register_mesh_location_resolvers (services);
     auto provider = services.build_provider ();
     provider.get_required<zlink::framework::runtime::location_runtime_t> ().start (
@@ -2693,6 +2700,7 @@ void verify_accepted_handler_push_after_host_seal (bool shutdown)
       std::unique_ptr<location_repository_t> (owned_store.release ()));
     services.add_singleton<runtime::location_runtime_t> (
       std::make_unique<runtime::location_runtime_t> (store));
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     register_mesh_location_resolvers (services);
     auto provider = services.build_provider ();
     auto &locations = provider.get_required<runtime::location_runtime_t> ();

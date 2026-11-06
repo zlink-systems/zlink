@@ -56,8 +56,13 @@ bool verify_none (bool registered)
 {
     auto app = app_t::create ();
     app.add_zlink_framework ([registered] (zlink_framework_options_t &options) {
-        if (registered)
+        if (registered) {
+            options.configure_locations ().owner_lease_renew_interval =
+              std::chrono::milliseconds (10);
+            options.configure_locations ().owner_lease_fencing_margin =
+              std::chrono::milliseconds (1);
             options.add_location_store (std::make_shared<runtime::in_memory_location_store_t> ());
+        }
         auto mesh = options.add_route_mesh ("optional-store")
                       .set_object_role (object_role_t::none)
                       .set_routing_id (zlink::routing_id_t::from ("optional-store-node"))

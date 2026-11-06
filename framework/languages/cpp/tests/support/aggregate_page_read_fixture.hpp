@@ -65,6 +65,7 @@ void aggregate_page_read_keeps_source_version_until_commit (location_store_t &st
     namespace stateful = zlink::framework::runtime::stateful;
     paused_aggregate_page_store_t provider (store);
     provider_location_repository_t repository (provider);
+    repository.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto make_target = [&] (const std::string &id) {
         const auto claim = repository.claim_owner_lease (id, 30s).result ().value ();
         const auto token = std::get<owner_lease_claimed_t> (claim).token;

@@ -332,6 +332,11 @@ class counting_location_repository_t final
     : public zlink::framework::runtime::in_memory_location_repository_t
 {
   public:
+    counting_location_repository_t ()
+    {
+        configure_reclaim_margin (std::chrono::milliseconds::zero ());
+    }
+
     zlink::framework::task_t<zlink::framework::object_reserve_result_t>
     reserve (zlink::framework::object_reserve_request_t request,
              std::stop_token cancellation = {}) override
@@ -2379,6 +2384,7 @@ void verify_public_host_route_fence_reads_store_without_second_cache (bool relea
 {
     using namespace zlink::framework;
     auto store = std::make_shared<runtime::in_memory_location_repository_t> ();
+    store->configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto owner = std::get<owner_lease_claimed_t> (
                          store->claim_owner_lease ("route-cache-owner", 5s).result ().value ())
                          .token;
@@ -2479,6 +2485,7 @@ void verify_entry_spot_identity_claim_is_global_and_fenced ()
 {
     using namespace zlink::framework;
     runtime::in_memory_location_repository_t store;
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto first_owner = std::get<owner_lease_claimed_t> (
                                store.claim_owner_lease ("entry-owner-a", 15s).result ().value ())
                                .token;
@@ -2751,6 +2758,7 @@ void verify_creation_terminal_operation_isolation ()
 {
     using namespace zlink::framework;
     auto store = std::make_shared<zlink::framework::runtime::in_memory_location_repository_t> ();
+    store->configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto claimed = std::get<owner_lease_claimed_t> (
       store->claim_owner_lease ("terminal-owner", std::chrono::seconds (15)).result ().value ());
     mesh_node_descriptor_t target{
@@ -2802,6 +2810,7 @@ void verify_typed_capacity_retry_uses_second_candidate ()
 {
     using namespace zlink::framework;
     auto store = std::make_shared<zlink::framework::runtime::in_memory_location_repository_t> ();
+    store->configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto first_owner = std::get<owner_lease_claimed_t> (
                                store->claim_owner_lease ("capacity-first", 15s).result ().value ())
                                .token;
@@ -5502,6 +5511,7 @@ void verify_memory_accepted_record_authority ()
     using namespace zlink::framework;
     {
         runtime::in_memory_location_repository_t lease_store;
+        lease_store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
         runtime::location_runtime_t leases (lease_store, {}, "observed-owner");
         leases.start (zlink::routing_id_t::from ("observed-node"));
         const auto original_lease = leases.current_owner_observation ();
@@ -5744,6 +5754,7 @@ void verify_location_store_accepted_record_authority ()
 {
     using namespace zlink::framework;
     runtime::in_memory_location_repository_t store;
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto source_owner = std::get<owner_lease_claimed_t> (
                                 store.claim_owner_lease ("source-owner", 15s).result ().value ())
                                 .token;
@@ -7352,6 +7363,7 @@ void verify_aggregate_saved_request_terminal_identity ()
     const protocol::relocation_coordinator_fence_t coordinator{"source-owner", 1, {'s'}, 1, "v1"};
     const protocol::request_source_fence_t source{"source-owner", 1, {'s'}, 1};
     auto store = std::make_shared<zlink::framework::runtime::in_memory_location_repository_t> ();
+    store->configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto owner = std::get<zlink::framework::owner_lease_claimed_t> (
                          store->claim_owner_lease (source.owner_id, 15s).result ().value ())
                          .token;
