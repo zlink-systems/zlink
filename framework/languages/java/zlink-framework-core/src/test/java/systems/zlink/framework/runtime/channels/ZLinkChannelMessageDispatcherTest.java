@@ -127,7 +127,7 @@ final class ZLinkChannelMessageDispatcherTest {
                         new ZLinkDispatchOptionsRegistration(),
                         ZLinkHandlerActivator.reflection(),
                         Runnable::run);
-        var reporter = new ZLinkChannelDispatchReporter(errors);
+        var reporter = new ZLinkChannelDispatchReporter(errors, null);
         var invoker = invoker(activations, List.of());
         var client = new ZLinkChannelMessageDispatcher(registry, invoker, reporter, errors.flow());
         var mesh =
@@ -191,7 +191,7 @@ final class ZLinkChannelMessageDispatcherTest {
         var errors =
                 new ZLinkDispatchErrorReporter(
                         new ZLinkDispatchOptionsRegistration(), activations, Runnable::run);
-        var reporter = new ZLinkChannelDispatchReporter(errors);
+        var reporter = new ZLinkChannelDispatchReporter(errors, null);
         var invoker = invoker(activations, List.of(WaitingFilter.class));
         var client = new ZLinkChannelMessageDispatcher(registry, invoker, reporter, errors.flow());
         var mesh =
@@ -241,7 +241,7 @@ final class ZLinkChannelMessageDispatcherTest {
         var options = new ZLinkDispatchOptionsRegistration();
         options.messageFlow(ZLinkMessageFlowLogMode.NORMAL);
         var errors = new ZLinkDispatchErrorReporter(options, activations, Runnable::run);
-        var reporter = new ZLinkChannelDispatchReporter(errors);
+        var reporter = new ZLinkChannelDispatchReporter(errors, null);
         var invoker = invoker(activations, List.of());
         var client = new ZLinkChannelMessageDispatcher(registry, invoker, reporter, errors.flow());
         var mesh =
@@ -376,7 +376,7 @@ final class ZLinkChannelMessageDispatcherTest {
                 new ZLinkChannelMessageDispatcher(
                         registry,
                         invoker(activations, List.of()),
-                        new ZLinkChannelDispatchReporter(errors),
+                        new ZLinkChannelDispatchReporter(errors, null),
                         errors.flow());
         try {
             publish(dispatcher, "first");
@@ -473,7 +473,8 @@ final class ZLinkChannelMessageDispatcherTest {
                                             java.util.List.of())));
                 }
                 registry.sealClosingAdmission();
-                ZLinkChannelDispatchReporter reporter = new ZLinkChannelDispatchReporter(errors);
+                ZLinkChannelDispatchReporter reporter =
+                        new ZLinkChannelDispatchReporter(errors, null);
                 ZLinkChannelMessageDispatcher client =
                         new ZLinkChannelMessageDispatcher(
                                 registry, invoker(), reporter, errors.flow());
@@ -624,7 +625,7 @@ final class ZLinkChannelMessageDispatcherTest {
                                             java.util.List.of())));
                 }
             }
-            ZLinkChannelDispatchReporter reporter = new ZLinkChannelDispatchReporter(errors);
+            ZLinkChannelDispatchReporter reporter = new ZLinkChannelDispatchReporter(errors, null);
             ZLinkChannelMessageDispatcher client =
                     new ZLinkChannelMessageDispatcher(registry, invoker(), reporter, errors.flow());
             ZLinkChannelRouteDispatcher mesh =
@@ -862,7 +863,7 @@ final class ZLinkChannelMessageDispatcherTest {
                     new ZLinkChannelMessageDispatcher(
                             registry,
                             invoker,
-                            new ZLinkChannelDispatchReporter(errors),
+                            new ZLinkChannelDispatchReporter(errors, null),
                             errors.flow());
             ZLinkBackendReceived received = receivedWithFailingReply();
 
@@ -910,7 +911,7 @@ final class ZLinkChannelMessageDispatcherTest {
                             null,
                             registry,
                             invoker,
-                            new ZLinkChannelDispatchReporter(errors),
+                            new ZLinkChannelDispatchReporter(errors, null),
                             errors.flow(),
                             null,
                             ignored -> null);
@@ -954,7 +955,7 @@ final class ZLinkChannelMessageDispatcherTest {
                             null,
                             registry,
                             invoker(),
-                            new ZLinkChannelDispatchReporter(errors),
+                            new ZLinkChannelDispatchReporter(errors, null),
                             errors.flow(),
                             null,
                             ignored -> null);

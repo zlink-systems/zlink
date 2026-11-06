@@ -70,6 +70,8 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
 
     private static final String NODE_NAMESPACE = "";
 
+    private final systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration
+            framework;
     private final ZLinkChannelHandlerInvoker invoker;
     private final ReplySender replies;
     private final String meshName;
@@ -126,7 +128,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
             ReplySender replies,
             ZLinkMeshDrainCoordinator drains) {
         Objects.requireNonNull(mesh, "mesh");
-        Objects.requireNonNull(framework, "framework");
+        this.framework = Objects.requireNonNull(framework, "framework");
         this.meshName = mesh.meshName();
         this.messageMetrics = ZLinkMeshMessageMetrics.forMesh(meshName);
         this.drains = drains;
@@ -149,6 +151,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
         namespaces.put(
                 NODE_NAMESPACE,
                 routeNamespace(
+                        mesh.envelopeNames(),
                         mesh.nodeHandlers(),
                         framework.handlerExecutor(),
                         framework.suspendHandlerInvokers()));
@@ -158,6 +161,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                 namespaces.put(
                                         name,
                                         channelNamespace(
+                                                mesh.channelEnvelopeNames(name),
                                                 name,
                                                 handlers,
                                                 mesh.channelHandlerGroups()
@@ -649,7 +653,16 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                         if (error == null) {
                                             try {
                                                 replyAndClose(
-                                                        record, token, replyParts(envelope, reply));
+                                                        record,
+                                                        token,
+                                                        ZLinkChannelDispatchReporter.replyParts(
+                                                                envelope,
+                                                                reply,
+                                                                namespace.channelNames,
+                                                                route != null
+                                                                        ? route.envelopeNames()
+                                                                        : channel.envelopeNames(),
+                                                                framework.codecs()));
                                                 traceFlow(
                                                         ZLinkMessageFlowOutcome.REPLIED,
                                                         record,
@@ -756,19 +769,6 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                 ZLinkFrameworkErrorReply.create(envelope, kind, cause.getMessage(), Map.of()));
     }
 
-    /**
-     * Successful request reply parts: a kind-2 envelope echoing the request identifiers when the
-     * request arrived as a shared envelope, else the legacy raw single-part reply.
-     */
-    private static List<Message> replyParts(
-            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header envelope,
-            Message reply) {
-        if (envelope == null) {
-            return List.of(reply);
-        }
-        return ZLinkChannelEnvelope.encode(ZLinkChannelEnvelope.reply(envelope), reply);
-    }
-
     private void replyAndClose(
             ZLinkMeshDispatchRecord record, ReplyToken token, List<Message> parts) {
         try {
@@ -860,10 +860,11 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
     }
 
     private static Namespace routeNamespace(
+            ZLinkChannelEnvelope.PreparedNames channelNames,
             List<MeshNodeRegistration.DispatchHandler> handlers,
             Executor executor,
             List<ZLinkSuspendInvocationAdapter> suspendInvokers) {
-        Namespace namespace = new Namespace(executor);
+        Namespace namespace = new Namespace(executor, channelNames);
         for (MeshNodeRegistration.DispatchHandler handler : handlers) {
             String packetName = ZLinkPacketNames.resolve(handler.messageType());
             if (handler.request()) {
@@ -892,13 +893,14 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static Namespace channelNamespace(
+            ZLinkChannelEnvelope.PreparedNames channelNames,
             String channelName,
             List<MeshNodeRegistration.DispatchHandler> handlers,
             List<String> handlerGroups,
             ZLinkScannedHandlerCatalog scannedHandlers,
             Executor executor,
             List<ZLinkSuspendInvocationAdapter> suspendInvokers) {
-        Namespace namespace = new Namespace(executor);
+        Namespace namespace = new Namespace(executor, channelNames);
         Set<String> groups =
                 handlerGroups.isEmpty() ? Set.of(channelName) : Set.copyOf(handlerGroups);
         for (ZLinkScannedHandler handler :
@@ -994,7 +996,10 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                 new HashMap<>();
         private final ZLinkSerialExecutionQueue queue;
 
-        Namespace(Executor executor) {
+        private final ZLinkChannelEnvelope.PreparedNames channelNames;
+
+        Namespace(Executor executor, ZLinkChannelEnvelope.PreparedNames channelNames) {
+            this.channelNames = channelNames;
             queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic());
         }
     }

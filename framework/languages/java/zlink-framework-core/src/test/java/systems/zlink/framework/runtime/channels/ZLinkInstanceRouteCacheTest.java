@@ -168,7 +168,15 @@ final class ZLinkInstanceRouteCacheTest {
                                         "spot",
                                         payload,
                                         Optional.of("Probe"),
-                                        Duration.ofSeconds(1));
+                                        Duration.ofSeconds(1),
+                                        "application/json",
+                                        null,
+                                        null,
+                                        false,
+                                        null,
+                                        null,
+                                        systems.zlink.framework.runtime.messaging
+                                                .ZLinkApplicationMetadata.empty());
                         submitted =
                                 (instance ? call.instanceSpot("room") : call).submit(String.class);
                     } else {

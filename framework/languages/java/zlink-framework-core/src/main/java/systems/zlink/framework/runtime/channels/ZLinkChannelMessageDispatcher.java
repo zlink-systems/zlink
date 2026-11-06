@@ -478,13 +478,17 @@ final class ZLinkChannelMessageDispatcher {
                                                                                 error);
                                                                     } else {
                                                                         try {
-                                                                            ZLinkChannelDispatchReporter
-                                                                                    .replyPayloadAndClose(
+                                                                            errors
+                                                                                    .replyRegisteredPayloadAndClose(
                                                                                             router,
                                                                                             received,
                                                                                             packet
                                                                                                     .header(),
-                                                                                            reply);
+                                                                                            reply,
+                                                                                            registration
+                                                                                                    .channelEnvelopeNames(),
+                                                                                            registration
+                                                                                                    .envelopeNames());
                                                                             traceFlow(
                                                                                     ZLinkMessageFlowOutcome
                                                                                             .REPLIED,

@@ -71,7 +71,15 @@ final class ZLinkChannelSpotCallsOwnershipTest {
                             "spot",
                             payload,
                             Optional.of("Packet"),
-                            Duration.ofSeconds(1));
+                            Duration.ofSeconds(1),
+                            "application/json",
+                            null,
+                            null,
+                            false,
+                            null,
+                            null,
+                            systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata
+                                    .empty());
 
             try {
                 assertThrows(
