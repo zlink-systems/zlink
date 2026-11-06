@@ -4,9 +4,6 @@ on:
   schedule:
     - cron: "0 19 * * *"
   workflow_dispatch:
-  # TEMPORARY: remove before merge (pre-merge verification of #3833).
-  push:
-    branches: [ci/3833-nightly-stress]
 
 permissions:
   contents: read
@@ -104,14 +101,18 @@ jobs:
             --x-install-root="${VCPKG_INSTALLED_DIR}" \
             --clean-after-build
 
+      # gcc's UBSan null check flags thread_local accesses (allocation counters,
+      # the current lane pointer) as null loads and stores while the tests pass;
+      # -fno-sanitize=null drops that noise and ASan still faults real null
+      # dereferences.
       - name: Build ASan and UBSan Core
         env:
           CC: gcc
           CXX: g++
           # Core's ENABLE_UBSAN adds clang-only checks; take UBSan from the shared flags.
-          CFLAGS: -fsanitize=undefined -fno-omit-frame-pointer
-          CXXFLAGS: -fsanitize=undefined -fno-omit-frame-pointer
-          LDFLAGS: -fsanitize=undefined
+          CFLAGS: -fsanitize=undefined -fno-sanitize=null -fno-omit-frame-pointer
+          CXXFLAGS: -fsanitize=undefined -fno-sanitize=null -fno-omit-frame-pointer
+          LDFLAGS: -fsanitize=undefined -fno-sanitize=null
         run: |
           set -euo pipefail
           core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)"
@@ -133,9 +134,9 @@ jobs:
         env:
           CC: gcc
           CXX: g++
-          CFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
-          CXXFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
-          LDFLAGS: -fsanitize=address,undefined
+          CFLAGS: -fsanitize=address,undefined -fno-sanitize=null -fno-omit-frame-pointer
+          CXXFLAGS: -fsanitize=address,undefined -fno-sanitize=null -fno-omit-frame-pointer
+          LDFLAGS: -fsanitize=address,undefined -fno-sanitize=null
           ZLINK_BINDING_BUILD_JOBS: ${{ vars.ZLINK_CPP_BUILD_PARALLEL || '2' }}
         run: |
           set -euo pipefail
@@ -150,9 +151,9 @@ jobs:
         env:
           CC: gcc
           CXX: g++
-          CFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
-          CXXFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
-          LDFLAGS: -fsanitize=address,undefined
+          CFLAGS: -fsanitize=address,undefined -fno-sanitize=null -fno-omit-frame-pointer
+          CXXFLAGS: -fsanitize=address,undefined -fno-sanitize=null -fno-omit-frame-pointer
+          LDFLAGS: -fsanitize=address,undefined -fno-sanitize=null
         run: |
           set -euo pipefail
           cmake --preset linux-ninja-release \
@@ -180,3 +181,12 @@ jobs:
           name: nightly-stress-sanitizer-summary
           path: ${{ runner.temp }}/sanitizer-summary.json
           if-no-files-found: ignore
+
+      # A self-hosted runner keeps its workspace between jobs, and these
+      # sanitizer builds take about 140 GB of it.
+      - name: Remove sanitizer build trees
+        if: always()
+        run: |
+          rm -rf \
+            "${GITHUB_WORKSPACE}/.artifacts/nightly-stress" \
+            "${GITHUB_WORKSPACE}/framework/languages/cpp/build/linux-ninja-release"
