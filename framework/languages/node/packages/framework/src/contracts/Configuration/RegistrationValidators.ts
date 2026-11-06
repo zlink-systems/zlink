@@ -123,6 +123,9 @@ function validateLocationRegistration(registration: ZLinkFrameworkRegistration):
     throw new ZLinkConfigurationException('Location Store must implement read, write, and scan.');
   }
   const options = { ...zlinkDefaultLocationOptions, ...locations.options };
+  if (typeof options.storeOutageRetention !== 'boolean') {
+    throw new ZLinkConfigurationException('storeOutageRetention must be a boolean.');
+  }
   for (const [name, value] of Object.entries({
     ownerLeaseRenewIntervalMs: options.ownerLeaseRenewIntervalMs,
     ownerLeaseTtlMs: options.ownerLeaseTtlMs,
