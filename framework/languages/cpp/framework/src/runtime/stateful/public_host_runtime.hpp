@@ -862,7 +862,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     request_to_node (const zlink::routing_id_t &target,
                      std::vector<zlink::message_t> parts,
                      std::chrono::milliseconds timeout,
-                     foundation::operation_registry_t::callback_t completion,
+                     foundation::operation_registry_t::callback_t &&completion,
                      std::shared_ptr<task_completion_source_t<void>> admitted = {});
     result_t<receive_record_t> decode_operation_record (call_id_t operation,
                                                         operation_kind_t kind,
