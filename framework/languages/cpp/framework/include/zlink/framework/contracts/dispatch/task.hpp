@@ -1430,6 +1430,10 @@ void observe_task_terminal (task_t<T> &task, TCallback &&callback)
 {
     if (const auto *ready = task._state.inline_result ()) {
         auto invoke = std::forward<TCallback> (callback);
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+        if (auto fault = test_creation_probe::task_terminal_context_fault.exchange (nullptr))
+            fault ();
+#endif
         const auto ambient = capture_ambient_context ();
         [&] () noexcept {
             const auto ambient_guard = enter_ambient_context (ambient);

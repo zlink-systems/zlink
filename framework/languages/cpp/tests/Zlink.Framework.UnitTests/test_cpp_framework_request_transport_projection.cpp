@@ -6,6 +6,7 @@
 #include "runtime/locations/in_memory_location_store.hpp"
 #include <zlink/framework.hpp>
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime_failure_fixture.hpp"
 #include <cstdio>
 #include <array>
@@ -15,6 +16,14 @@
 namespace zlink::framework::detail::test_creation_probe
 {
 extern std::atomic<void (*) ()> node_admission_observer_fault;
+}
+
+namespace zlink::framework::runtime::mesh
+{
+struct raw_mesh_node_owner_test_access_t
+{
+    static void close_registry (raw_mesh_node_owner_t &owner) { owner._operations->shutdown (); }
+};
 }
 
 namespace
@@ -279,6 +288,60 @@ TEST (RequestCallAllocations, UnknownNodeAdmissionObserverFailureThenDeadlineDel
 TEST (RequestCallAllocations, UnknownNodeAdmissionObserverFailureThenShutdownDeliversOnce)
 {
     unknown_node_observer_failure (true);
+}
+
+TEST (RequestCallAllocations,
+      UnknownNodeAdmissionObserverSnapshotFailureAfterRegistryCloseDeliversOnce)
+{
+    namespace probe = fw::detail::test_creation_probe;
+    const auto deliveries = probe::request_deliveries.load ();
+    auto store = std::make_shared<held_mesh_nodes_t> ();
+    request_receiver_mesh_t source ("unknown-observer-snapshot", store);
+    store->hold = true;
+    const auto target = zlink::routing_id_t::from ("closed-registry-classification");
+    std::atomic<unsigned> conversions{0};
+    auto pending = source.request (target, conversions);
+    auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+    EXPECT_FALSE (pending.admitted ().await_ready ());
+
+    fw::runtime::mesh::raw_mesh_node_owner_test_access_t::close_registry (
+      source.runtime.native_node ().transport ());
+    std::atomic<unsigned> public_results{0};
+    auto public_reply = fw::detail::request_task_access_t::public_reply (pending);
+    fw::detail::observe_task_terminal (public_reply, [&] (const auto &) { ++public_results; });
+    struct clear_fault_t
+    {
+        ~clear_fault_t ()
+        {
+            zlink::framework::detail::test_creation_probe::node_admission_observer_context_fault
+              .store (nullptr);
+            zlink::framework::detail::test_creation_probe::task_terminal_context_fault.store (
+              nullptr);
+        }
+    } clear_fault;
+    probe::node_admission_observer_context_fault.store (+[] { throw std::bad_alloc (); });
+    store->listed.complete (
+      fw::result_t<fw::location_page_t<fw::mesh_node_descriptor_t>>::success ({}));
+
+    const auto public_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (!pending.await_ready () && std::chrono::steady_clock::now () < public_deadline)
+        std::this_thread::yield ();
+    ASSERT_TRUE (pending.await_ready ());
+    EXPECT_FALSE (pending.result ());
+    EXPECT_EQ (probe::node_admission_observer_context_fault.load (), nullptr);
+    EXPECT_EQ (probe::task_terminal_context_fault.load (), nullptr);
+
+    const auto physical_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (!physical.await_ready () && std::chrono::steady_clock::now () < physical_deadline)
+        std::this_thread::yield ();
+    const auto physical_ready = physical.await_ready ();
+    EXPECT_TRUE (physical_ready);
+    if (physical_ready)
+        EXPECT_FALSE (physical.result ());
+    source.runtime.stop ();
+    EXPECT_EQ (probe::request_deliveries.load () - deliveries, 1u);
+    EXPECT_EQ (conversions.load (), 1u);
+    EXPECT_EQ (public_results.load (), 1u);
 }
 
 TEST (RequestCallAllocations, MeshReceiverNormalReplyDeliversOnceAndIgnoresLaterExpiry)

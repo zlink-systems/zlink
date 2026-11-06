@@ -47,6 +47,7 @@
 namespace zlink::framework::detail::test_creation_probe
 {
 std::atomic<void (*) ()> node_admission_observer_fault{nullptr};
+std::atomic<void (*) ()> node_admission_observer_context_fault{nullptr};
 }
 #endif
 
@@ -4458,21 +4459,26 @@ void mesh_node_runtime_t::submit_node_request_reply (const zlink::routing_id_t &
         if (auto fault = test_creation_probe::node_admission_observer_fault.exchange (nullptr))
             fault ();
 #endif
-        observe_task_terminal (
-          submission, [admitted = receiver.admitted, completion = std::move (completion)] (
-                        const result_t<zlink::submit_result_t> &submitted) mutable {
-              if (submitted && submitted.value () == zlink::submit_result_t::ok) {
-                  admitted->complete (result_t<void>::success ());
-                  return;
-              }
-              const auto failure = submitted
-                                     ? node_submission_failure (submitted.value ()).exception ()
-                                     : submitted.exception ();
-              admitted->complete (result_access_t::failure<void> (failure));
-              if (completion)
-                  completion (runtime::foundation::operation_terminal_t::transport_failed,
-                              result_access_t::failure<zlink::message_t> (failure));
-          });
+        auto submission_observer = [admitted = receiver.admitted, completion] (
+                                     const result_t<zlink::submit_result_t> &submitted) mutable {
+            if (submitted && submitted.value () == zlink::submit_result_t::ok) {
+                admitted->complete (result_t<void>::success ());
+                return;
+            }
+            const auto failure = submitted
+                                   ? node_submission_failure (submitted.value ()).exception ()
+                                   : submitted.exception ();
+            admitted->complete (result_access_t::failure<void> (failure));
+            if (completion)
+                completion (runtime::foundation::operation_terminal_t::transport_failed,
+                            result_access_t::failure<zlink::message_t> (failure));
+        };
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+        if (auto fault =
+              test_creation_probe::node_admission_observer_context_fault.exchange (nullptr))
+            test_creation_probe::task_terminal_context_fault.store (fault);
+#endif
+        observe_task_terminal (submission, std::move (submission_observer));
     }
     catch (...) {
         const auto failure = std::current_exception ();

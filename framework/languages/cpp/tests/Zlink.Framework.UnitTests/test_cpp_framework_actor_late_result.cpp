@@ -646,6 +646,42 @@ TEST_F (local_actor_receiver_t, RejectedLocalRegistrationDeliversPhysicalFailure
     EXPECT_EQ (public_results.load (), 1u);
 }
 
+TEST_F (local_actor_receiver_t, LocalCompletionSinkConstructionFailureDeliversPhysicalFailureOnce)
+{
+    namespace probe = fw::detail::test_creation_probe;
+    const auto deliveries = probe::request_deliveries.load ();
+    struct clear_fault_t
+    {
+        ~clear_fault_t ()
+        {
+            zlink::framework::detail::test_creation_probe::local_completion_sink_fault.store (
+              nullptr);
+        }
+    } clear_fault;
+    probe::local_completion_sink_fault.store (+[] { throw std::bad_alloc (); });
+
+    auto pending = client->request (fw::actor_id_t ("actor"), std::string ("request"))
+                     .timeout (5s)
+                     .async<std::string> ();
+    auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+    const auto public_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!pending.await_ready () && std::chrono::steady_clock::now () < public_deadline)
+        std::this_thread::yield ();
+    ASSERT_TRUE (pending.await_ready ());
+    EXPECT_FALSE (pending.result ());
+
+    const auto physical_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!physical.await_ready () && std::chrono::steady_clock::now () < physical_deadline)
+        std::this_thread::yield ();
+    const auto physical_ready = physical.await_ready ();
+    EXPECT_TRUE (physical_ready);
+    if (physical_ready)
+        EXPECT_FALSE (physical.result ());
+    runtime->stop ();
+    EXPECT_EQ (probe::request_deliveries.load () - deliveries, 1u);
+    EXPECT_EQ (probe::local_completion_sink_fault.load (), nullptr);
+}
+
 // Each request selects the old cache entry before the serializer runs. Replacing
 // that entry in the serializer gives a deterministic selection/submission boundary.
 TEST_F (local_actor_receiver_t, SubmitNotConnectedInvalidatesOnlyTheUsedFenceAndReresolves)

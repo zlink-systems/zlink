@@ -9,6 +9,7 @@
 #include "runtime/locations/spot_address_resolvers.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include <zlink/framework.hpp>
 #include <thread>
@@ -23,6 +24,21 @@
 #include <string>
 #include <span>
 #include <variant>
+
+namespace zlink::framework::runtime::host
+{
+struct public_host_runtime_test_access_t
+{
+    static void register_local_actor_request (
+      public_host_runtime_t &host,
+      pending_operation_t &operation,
+      const mesh::raw_mesh_node_owner_t::local_operation_reservation_t &reservation)
+    {
+        (void) host.register_local_completion (operation, reservation, std::chrono::seconds (5), {},
+                                               {}, mesh_request_surface_t::actor);
+    }
+};
+}
 
 #if defined(ZLINK_TEST_COUNT_REPLY_NOTIFICATIONS)
 namespace
@@ -163,6 +179,57 @@ TEST (RequestCallAllocations, PreparedReceiverAndCodecCapturesUseOneOwnershipBlo
     pending.reset ();
     EXPECT_TRUE (ownership.expired ());
     std::printf ("prepared request ownership allocations=%zu\n", allocation.total);
+}
+
+TEST (RequestCallAllocations, LocalActorRequestCompletionRegistrationDoesNotExceedBaselineHeapCalls)
+{
+    using host_t = fw::runtime::host::public_host_runtime_t;
+    using operation_t = fw::runtime::host::pending_operation_t;
+    using parts_reply_t = fw::result_t<parts_t>;
+
+    fw::runtime::host::host_options_t options;
+    options.mesh = fw::test::runtime_failure_options (options.mesh);
+    options.mesh.descriptor = {"request-allocation",
+                               {'r'},
+                               1,
+                               1,
+                               "tcp://127.0.0.1:0",
+                               {{"actor", 100}},
+                               fw::runtime::mesh::service_node_state_t::preparing};
+    options.mesh.descriptor.lifecycle_generation = 1;
+    auto host = std::make_shared<host_t> (std::move (options));
+    host->start ();
+
+    const auto prepared = host->transport ().prepare_local_operation_async ().result ();
+    ASSERT_TRUE (prepared);
+    ASSERT_TRUE (prepared.value ());
+    operation_t operation;
+    std::optional<fw::request_task_t<parts_reply_t>> pending;
+    const auto sample = sample_allocations ([&] {
+        pending.emplace (fw::detail::request_task_access_t::receive_public<parts_reply_t> (
+          [&operation] (auto receiver) {
+              operation.receiver = [receiver] (const auto &) mutable {
+                  receiver.complete (fw::result_t<parts_reply_t>::success (parts_reply_t::failure (
+                    fw::framework_error_kind_t::unavailable, "allocation probe terminal")));
+              };
+          }));
+        fw::runtime::host::public_host_runtime_test_access_t::register_local_actor_request (
+          *host, operation, *prepared.value ());
+    });
+    print_allocation_sizes ("local Actor request completion registration", sample);
+    // 5ecae5de8b used eight heap calls for this measured local Actor path.
+    EXPECT_LE (sample.total, 8u) << sample.diagnostics;
+    EXPECT_FALSE (operation.receiver);
+
+    EXPECT_TRUE (host->transport ().fail_local_operation (
+      prepared.value ()->first, fw::runtime::foundation::operation_terminal_t::transport_failed));
+    const auto terminal_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (!pending->await_ready () && std::chrono::steady_clock::now () < terminal_deadline)
+        std::this_thread::yield ();
+    ASSERT_TRUE (pending->await_ready ());
+    ASSERT_TRUE (pending->result ());
+    EXPECT_FALSE (pending->result ().value ());
+    host->close ();
 }
 
 TEST (RequestCallAllocations, PhysicalProjectionReleasesConstCapturesWithTaskHandlesRetained)

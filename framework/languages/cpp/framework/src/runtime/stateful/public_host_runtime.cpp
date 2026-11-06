@@ -7,6 +7,9 @@
 #include "runtime/diagnostics/session_binding_diagnostics.hpp"
 
 #include "runtime/stateful/public_host_runtime.hpp"
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+#include <zlink/framework/detail/test_creation_probe.hpp>
+#endif
 #include <cassert>
 #include <array>
 #include <span>
@@ -51,11 +54,99 @@
 #include <type_traits>
 #include <utility>
 
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+namespace zlink::framework::detail::test_creation_probe
+{
+std::atomic<void (*) ()> local_completion_sink_fault{nullptr};
+}
+#endif
+
 namespace zlink::framework::runtime::host
 {
 
 namespace
 {
+struct local_completion_sink_t
+{
+    local_completion_sink_t (
+      std::shared_ptr<task_completion_source_t<operation_completion_t>> source,
+      std::shared_ptr<operation_completion_t> result,
+      spot_request_completion_t completion,
+      std::function<void ()> incomplete) :
+        source (std::move (source)),
+        result (std::move (result)),
+        completion (std::move (completion)),
+        incomplete (std::move (incomplete))
+    {
+    }
+
+    void operator() (foundation::operation_terminal_t terminal,
+                     ::zlink::framework::result_t<zlink::message_t> completion_payload)
+    {
+        auto payload = std::move (completion_payload.value ());
+        std::string terminal_message;
+        if (terminal == foundation::operation_terminal_t::completed && payload.size () != 0) {
+            try {
+                result->parts = protocol::decode_application_parts (std::move (payload));
+            }
+            catch (const protocol::service_wire_error_t &error) {
+                terminal = foundation::operation_terminal_t::transport_failed;
+                terminal_message = error.what ();
+            }
+        }
+        if (terminal != foundation::operation_terminal_t::completed && terminal_message.empty ())
+            terminal_message = "Local operation did not complete";
+        if (terminal != foundation::operation_terminal_t::completed && incomplete) {
+            try {
+                incomplete ();
+            }
+            catch (const std::exception &error) {
+                terminal_message += ": rollback failed: ";
+                terminal_message += error.what ();
+            }
+            catch (...) {
+                terminal_message += ": rollback failed with an unknown exception";
+            }
+        }
+        if (completion) {
+            auto decoded =
+              terminal == foundation::operation_terminal_t::completed
+                ? result_t<std::vector<zlink::message_t>>::success (std::move (result->parts))
+              : terminal == foundation::operation_terminal_t::shutdown
+                ? detail::boundary_failure<std::vector<zlink::message_t>> (
+                    detail::boundary_error_t::shutdown, terminal_message)
+              : terminal == foundation::operation_terminal_t::timed_out
+                ? detail::boundary_failure<std::vector<zlink::message_t>> (
+                    detail::boundary_error_t::timed_out, terminal_message)
+                : result_t<std::vector<zlink::message_t>>::failure (
+                    framework_error_kind_t::internal_failure, terminal_message);
+            completion (terminal, std::move (decoded));
+        } else {
+            auto decoded = terminal == foundation::operation_terminal_t::completed
+                             ? result_t<operation_completion_t>::success (std::move (*result))
+                           : terminal == foundation::operation_terminal_t::shutdown
+                             ? detail::boundary_failure<operation_completion_t> (
+                                 detail::boundary_error_t::shutdown, terminal_message)
+                           : terminal == foundation::operation_terminal_t::timed_out
+                             ? detail::boundary_failure<operation_completion_t> (
+                                 detail::boundary_error_t::timed_out, terminal_message)
+                             : result_t<operation_completion_t>::failure (
+                                 framework_error_kind_t::internal_failure, terminal_message);
+            // This callback owns the registry claim for every local terminal.
+            // Reply tokens retain no receiver after registration.
+            if (receiver)
+                receiver (decoded);
+            source->complete (std::move (decoded));
+        }
+    }
+
+    std::shared_ptr<task_completion_source_t<operation_completion_t>> source;
+    std::shared_ptr<operation_completion_t> result;
+    spot_request_completion_t completion;
+    std::function<void ()> incomplete;
+    std::function<void (const result_t<operation_completion_t> &)> receiver;
+};
+
 // Both immediate and suspended publication share the same terminal cleanup.
 template <typename Start>
 task_t<zlink::submit_result_t> finish_local_enqueue (mesh::raw_mesh_node_owner_t &transport,
@@ -8661,68 +8752,23 @@ std::chrono::steady_clock::time_point public_host_runtime_t::register_local_comp
     result->record.source_node_rid =
       zlink::routing_id_t::from (_options.mesh.descriptor.node_routing_id);
     const auto deadline = foundation::operation_registry_t::clock_t::now () + timeout;
-    foundation::operation_registry_t::callback_t complete =
-      [source, result, receiver = std::exchange (operation.receiver, {}),
-       completion = std::move (completion),
-       incomplete] (foundation::operation_terminal_t terminal,
-                    ::zlink::framework::result_t<zlink::message_t> completion_payload) mutable {
-          auto payload = std::move (completion_payload.value ());
-          std::string terminal_message;
-          if (terminal == foundation::operation_terminal_t::completed && payload.size () != 0) {
-              try {
-                  result->parts = protocol::decode_application_parts (std::move (payload));
-              }
-              catch (const protocol::service_wire_error_t &error) {
-                  terminal = foundation::operation_terminal_t::transport_failed;
-                  terminal_message = error.what ();
-              }
-          }
-          if (terminal != foundation::operation_terminal_t::completed && terminal_message.empty ())
-              terminal_message = "Local operation did not complete";
-          if (terminal != foundation::operation_terminal_t::completed && incomplete) {
-              try {
-                  incomplete ();
-              }
-              catch (const std::exception &error) {
-                  terminal_message += ": rollback failed: ";
-                  terminal_message += error.what ();
-              }
-              catch (...) {
-                  terminal_message += ": rollback failed with an unknown exception";
-              }
-          }
-          if (completion) {
-              auto decoded =
-                terminal == foundation::operation_terminal_t::completed
-                  ? result_t<std::vector<zlink::message_t>>::success (std::move (result->parts))
-                : terminal == foundation::operation_terminal_t::shutdown
-                  ? detail::boundary_failure<std::vector<zlink::message_t>> (
-                      detail::boundary_error_t::shutdown, terminal_message)
-                : terminal == foundation::operation_terminal_t::timed_out
-                  ? detail::boundary_failure<std::vector<zlink::message_t>> (
-                      detail::boundary_error_t::timed_out, terminal_message)
-                  : result_t<std::vector<zlink::message_t>>::failure (
-                      framework_error_kind_t::internal_failure, terminal_message);
-              completion (terminal, std::move (decoded));
-          } else {
-              auto decoded = terminal == foundation::operation_terminal_t::completed
-                               ? result_t<operation_completion_t>::success (std::move (*result))
-                             : terminal == foundation::operation_terminal_t::shutdown
-                               ? detail::boundary_failure<operation_completion_t> (
-                                   detail::boundary_error_t::shutdown, terminal_message)
-                             : terminal == foundation::operation_terminal_t::timed_out
-                               ? detail::boundary_failure<operation_completion_t> (
-                                   detail::boundary_error_t::timed_out, terminal_message)
-                               : result_t<operation_completion_t>::failure (
-                                   framework_error_kind_t::internal_failure, terminal_message);
-              // This callback owns the registry claim for every local terminal.
-              // Reply tokens retain no receiver after registration.
-              if (receiver)
-                  receiver (decoded);
-              source->complete (std::move (decoded));
-          }
-      };
+    foundation::operation_registry_t::callback_t complete;
     try {
+        auto sink = std::make_shared<local_completion_sink_t> (
+          source, result, std::move (completion), std::move (incomplete));
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+        if (auto fault =
+              ::zlink::framework::detail::test_creation_probe::local_completion_sink_fault
+                .exchange (nullptr))
+            fault ();
+#endif
+        sink->receiver = std::exchange (operation.receiver, {});
+        complete = foundation::operation_registry_t::callback_t{
+          std::move (sink),
+          [] (local_completion_sink_t &selected, foundation::operation_terminal_t terminal,
+              ::zlink::framework::result_t<zlink::message_t> payload) {
+              selected (terminal, std::move (payload));
+          }};
         if (!_transport->register_prepared_local_operation (reservation, deadline,
                                                             std::move (complete), request_surface))
             throw framework_exception_t (framework_error_kind_t::shutting_down,
