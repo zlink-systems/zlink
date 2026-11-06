@@ -1060,6 +1060,64 @@ for (const storage of ['provider', 'in-memory']) {
 }
 
 for (const storage of ['provider', 'in-memory']) {
+  test(`P1 Serving recovery reclaims its previous owner row (${storage})`, async t => {
+    const scenario = await fixedRidRegressionScenario(t, storage);
+    const calls = [];
+    const { host } = scenario.makeHost(calls);
+    const states = [];
+    const observation = new AbortController();
+    const shutdown = host.shutdown.bind(host);
+    let shutdownCalls = 0;
+    let observed;
+    host.shutdown = (...args) => {
+      shutdownCalls++;
+      return shutdown(...args);
+    };
+    try {
+      await host.start();
+      scenario.advance(15);
+      await renewFixedRidRegressionHost(host);
+      assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
+      const runtime = host.locationOwner.currentRuntime;
+      const previousOwner = runtime.currentOwnerToken;
+      const [previousDescriptor] = (await scenario.store.listMeshNodes('play')).items;
+      assert.ok(previousOwner);
+      assert.ok(previousDescriptor);
+      assert.equal(previousDescriptor.ownerId, previousOwner.ownerId);
+      assert.equal(previousDescriptor.leaseGeneration, previousOwner.leaseGeneration);
+
+      observed = (async () => {
+        for await (const { status } of host.observe(observation.signal)) {
+          if (states.at(-1) !== status.state) states.push(status.state);
+        }
+      })();
+      scenario.advance(60_001);
+      scenario.advanceStore(60_001);
+      await renewFixedRidRegressionHost(host);
+      observation.abort();
+      await observed;
+
+      const currentOwner = runtime.currentOwnerToken;
+      const [descriptor] = (await scenario.store.listMeshNodes('play')).items;
+      assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
+      assert.ok(currentOwner);
+      assert.equal(currentOwner.ownerId, previousOwner.ownerId);
+      assert.notEqual(currentOwner.leaseGeneration, previousOwner.leaseGeneration);
+      assert.ok(descriptor);
+      assert.equal(descriptor.ownerId, currentOwner.ownerId);
+      assert.equal(descriptor.leaseGeneration, currentOwner.leaseGeneration);
+      assert.ok(states.includes(framework.ZLinkFrameworkRuntimeState.Serving));
+      assert.equal(states.includes(framework.ZLinkFrameworkRuntimeState.Error), false);
+      assert.equal(shutdownCalls, 0);
+    } finally {
+      observation.abort();
+      await observed;
+      await host.stop();
+    }
+  });
+}
+
+for (const storage of ['provider', 'in-memory']) {
   test(`P1 recovery restores Missing immediately and rejects an invalid foreign row (${storage})`, async t => {
     const scenario = await fixedRidRegressionScenario(t, storage);
     const { host } = scenario.makeHost();
@@ -1141,7 +1199,10 @@ for (const storage of ['provider', 'in-memory']) {
         assert.equal(attempts, fails ? 2 : 1);
         assert.equal(calls.filter(call => call === 'spot:dispose').length, 1);
         assert.equal(calls.filter(call => call === 'context:dispose').length, 1);
-        assert.equal(storeDisposes, scenario.provider ? 1 : 0);
+        assert.equal(
+          storeDisposes,
+          scenario.provider ? (fails && retry !== 'none' ? 2 : 1) : 0
+        ); // #3923: a retried teardown disposes stores again
         assert.equal(host.executionState, undefined);
         if (fails) {
           await host.start();
@@ -1487,6 +1548,36 @@ async function publishRegressionWeight(host, meshName, weight) {
   }
 }
 
+test('P1 shutdown disposes an owned store when context disposal fails', async t => {
+  const scenario = await fixedRidRegressionScenario(t, 'provider');
+  const { host } = scenario.makeHost();
+  let contextDisposes = 0;
+  let storeDisposes = 0;
+  scenario.provider.dispose = async () => {
+    storeDisposes++;
+  };
+  try {
+    await host.start();
+    scenario.advance(15);
+    await renewFixedRidRegressionHost(host);
+    const disposeContext = host.context.dispose.bind(host.context);
+    host.context.dispose = async () => {
+      contextDisposes++;
+      if (contextDisposes === 1) throw new Error('context dispose failed once');
+      await disposeContext();
+    };
+
+    assert.deepEqual(await host.shutdown(), {
+      outcome: framework.ZLinkFrameworkTerminationOutcome.ForceStopped,
+      reason: framework.ZLinkFrameworkTerminationReason.TeardownFailed
+    });
+    assert.equal(contextDisposes, 1);
+    assert.equal(storeDisposes, 1);
+  } finally {
+    await host.stop();
+  }
+});
+
 async function renewFixedRidRegressionHost(host) {
   const recovery = waitForNextHostOwnerRecovery(host);
   assert.equal(await host.locationOwner.currentRuntime.renewOwnerLeaseOnce(), true);
@@ -1522,6 +1613,9 @@ async function fixedRidRegressionScenario(t, storage) {
     store,
     advance(milliseconds) {
       monotonicMs += milliseconds;
+    },
+    advanceStore(milliseconds) {
+      storeNow += milliseconds;
     },
     makeHost(
       calls = [],

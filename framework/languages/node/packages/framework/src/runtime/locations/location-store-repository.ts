@@ -5003,13 +5003,16 @@ function canTakeOverStoredLocation(
     // fences concurrent stale writes while the next owner lease is checked.
     return true;
   }
+  const recovery = intent === ZLinkInternalMeshNodeWriteIntent.RecoveryClaim;
   if (
     intent !== ZLinkLocationWriteIntent.NewClaim &&
-    intent !== ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+    intent !== ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim &&
+    !recovery
   ) {
     return false;
   }
-  if (liveLeaseGeneration === undefined) return true;
+  // Recovery replaces only this owner's row from an earlier lease generation.
+  if (liveLeaseGeneration === undefined) return !recovery;
   return (
     currentOwnerId === nextOwnerId &&
     currentLeaseGeneration !== nextLeaseGeneration &&

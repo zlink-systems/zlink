@@ -1664,16 +1664,20 @@ function canTakeOver(
     // next owner's lease still fence concurrent stale writes.
     return true;
   }
+  const recovery = intent === ZLinkInternalMeshNodeWriteIntent.RecoveryClaim;
   if (
     intent !== ZLinkLocationWriteIntent.NewClaim &&
-    intent !== ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+    intent !== ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim &&
+    !recovery
   ) {
     return false;
   }
   const ownerGone =
     currentLease === undefined || currentLease.leaseExpiresAt.getTime() <= now.getTime();
-  if (ownerGone) return true;
+  // Recovery replaces only this owner's row from an earlier lease generation.
+  if (ownerGone && !recovery) return true;
   return (
+    currentLease !== undefined &&
     currentOwnerId === nextOwnerId &&
     currentLeaseGeneration !== nextLeaseGeneration &&
     currentLease.token.leaseGeneration === nextLeaseGeneration
