@@ -55,6 +55,7 @@ final class ZLinkRelocationObservationPublicTest {
                 var source =
                         ZLinkFrameworkRuntimeTestAccess.start(
                                 options("source-bound", locations, relocations, null))) {
+            awaitReady(source);
             source.spotManager()
                     .getOrCreate("room", "room")
                     .submit()
@@ -82,6 +83,7 @@ final class ZLinkRelocationObservationPublicTest {
             var gatewayOptions = new DefaultZLinkFrameworkOptions();
             gatewayOptions.addLocationStore(locations);
             gatewayOptions.addRelocationStore(relocations);
+            gatewayOptions.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
             gatewayOptions.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             var gatewayMesh =
                     gatewayOptions
@@ -106,8 +108,15 @@ final class ZLinkRelocationObservationPublicTest {
                     var targetReady =
                             observe(
                                     target.routeMeshRuntime().observe(MESH, 8),
+                                    s -> s.isReady() && s.readyPeerCount() > 0);
+                    var gatewayReady =
+                            observe(
+                                    gateway.routeMeshRuntime().observe(MESH, 8),
                                     s -> s.isReady() && s.readyPeerCount() > 0)) {
+                awaitReady(target);
+                awaitReady(gateway);
                 targetReady.result.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                gatewayReady.result.get(WAIT.toSeconds(), TimeUnit.SECONDS);
                 var address =
                         URI.create(
                                 gateway.listenerStatus(ZLinkListenerKind.STREAM, "gateway")
@@ -184,6 +193,7 @@ final class ZLinkRelocationObservationPublicTest {
         var sourceOptions = options("vacate-source", locations, relocations, null);
         sourceOptions.registration().meshNodes().getFirst().setSpotCapacity(3);
         try (var source = ZLinkFrameworkRuntimeTestAccess.start(sourceOptions)) {
+            awaitReady(source);
             for (String room : java.util.List.of("room-1", "room-2", "room-3")) {
                 source.spotManager()
                         .getOrCreate(room, "room")
@@ -217,6 +227,7 @@ final class ZLinkRelocationObservationPublicTest {
                             observe(
                                     target.routeMeshRuntime().observe(MESH, 8),
                                     status -> status.isReady() && status.readyPeerCount() > 0)) {
+                awaitReady(target);
                 ready.result.get(WAIT.toSeconds(), TimeUnit.SECONDS);
                 for (String room : java.util.List.of("room-4", "room-5", "room-6")) {
                     target.spotManager()
@@ -293,6 +304,7 @@ final class ZLinkRelocationObservationPublicTest {
                                 .acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
                                 .toCompletableFuture()
                                 .get(WAIT.toSeconds(), TimeUnit.SECONDS)) {
+            awaitReady(source);
             source.spotManager()
                     .getOrCreate("room", "room")
                     .submit()
@@ -322,6 +334,7 @@ final class ZLinkRelocationObservationPublicTest {
                                     s ->
                                             s.state() == ZLinkFrameworkRuntimeState.RELOCATED
                                                     && s.safeToShutdown())) {
+                awaitReady(target);
                 readySource.result.get(WAIT.toSeconds(), TimeUnit.SECONDS);
                 readyTarget.result.get(WAIT.toSeconds(), TimeUnit.SECONDS);
                 var result =
@@ -375,6 +388,7 @@ final class ZLinkRelocationObservationPublicTest {
                                 new ZLinkInMemoryLocationStore(),
                                 new InMemoryRelocationStore(),
                                 null))) {
+            awaitReady(runtime);
             var first =
                     runtime.spotManager()
                             .getOrCreate("room", "room")
@@ -450,6 +464,7 @@ final class ZLinkRelocationObservationPublicTest {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(locations);
         options.addRelocationStore(relocations);
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
         options.configureLocations().setRouteCacheMaxAge(Duration.ZERO);
         options.configureLocations().setMessageFollowDuration(Duration.ofSeconds(5));
@@ -467,6 +482,16 @@ final class ZLinkRelocationObservationPublicTest {
                 f -> f.preserveStateWith(PlayerState.class));
         objects.addSpotFactory("room", Room.class, f -> f.recreateOnRelocation());
         return options;
+    }
+
+    private static void awaitReady(ZLinkFrameworkRuntime runtime) {
+        ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime).toCompletableFuture().join();
+        if (!runtime.isReady())
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                            .toCompletableFuture()
+                            .join());
+        assertTrue(runtime.isReady());
     }
 
     static <T> Observation<T> observe(

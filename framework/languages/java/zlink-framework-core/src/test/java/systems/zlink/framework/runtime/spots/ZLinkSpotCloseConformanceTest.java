@@ -97,6 +97,7 @@ final class ZLinkSpotCloseConformanceTest {
         resetStatics();
         String spotId = "version-close-" + UUID.randomUUID();
         var options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         var original = (ZLinkLocationRepository) new ZLinkInMemoryLocationStore();
         options.addLocationStore((ZLinkLocationStore) original);
         options.addRouteMesh("close-mesh")
@@ -289,6 +290,7 @@ final class ZLinkSpotCloseConformanceTest {
         resetStatics();
         String spotId = "empty-close-" + UUID.randomUUID();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.configureDispatch()
                 .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
         options.addLocationStore(store);
@@ -297,9 +299,7 @@ final class ZLinkSpotCloseConformanceTest {
         var objects = node.objects().server();
         objects.addEntrySpot(EntrySpot.class);
         objects.addSpotFactory(SPOT_TYPE, CloseSpot.class, factory -> factory.disableRelocation());
-        ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
-                        options, new ZLinkJavaBackendAdapterFactory());
+        ZLinkFrameworkRuntime runtime = startReady(options);
         try {
             SpotRef created = create(runtime, spotId);
             SpotRef ref =
@@ -333,6 +333,7 @@ final class ZLinkSpotCloseConformanceTest {
         String spotId = "close-race-" + UUID.randomUUID();
         FaultStore store = new FaultStore(new ZLinkInMemoryLocationStore(), spotId);
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.addLocationStore(store);
         var node = options.addRouteMesh("close-mesh");
         node.listen("inproc://spot-close-" + UUID.randomUUID())
@@ -346,9 +347,7 @@ final class ZLinkSpotCloseConformanceTest {
                 PlayerFactory.class,
                 factory -> factory.disableRelocation());
 
-        try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
-                        options, new ZLinkJavaBackendAdapterFactory())) {
+        try (ZLinkFrameworkRuntime runtime = startReady(options)) {
             SpotRef ref = create(runtime, spotId);
             store.holdNextAuthorityRead.set(true);
             CompletableFuture<Boolean> closing = closeStage(runtime, ref);
@@ -369,6 +368,7 @@ final class ZLinkSpotCloseConformanceTest {
         resetStatics();
         String spotId = "deadline-" + UUID.randomUUID();
         var options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.setDefaultRequestTimeout(Duration.ofSeconds(7));
         options.addLocationStore(new ZLinkInMemoryLocationStore());
         options.addRouteMesh("close-mesh")
@@ -377,9 +377,7 @@ final class ZLinkSpotCloseConformanceTest {
                 .objects()
                 .server()
                 .addSpotFactory(SPOT_TYPE, CloseSpot.class, factory -> factory.disableRelocation());
-        try (var runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
-                        options, new ZLinkJavaBackendAdapterFactory())) {
+        try (var runtime = startReady(options)) {
             var ref = create(runtime, spotId);
             var before = java.time.Instant.ofEpochMilli(System.currentTimeMillis());
             assertTrue(closeStage(runtime, ref).get(WAIT_SECONDS, TimeUnit.SECONDS));
@@ -400,6 +398,7 @@ final class ZLinkSpotCloseConformanceTest {
         String spotId = "draining-" + UUID.randomUUID();
         FaultStore store = new FaultStore(new ZLinkInMemoryLocationStore(), spotId);
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.addLocationStore(store);
         var node = options.addRouteMesh("close-mesh");
         node.listen("inproc://spot-close-" + UUID.randomUUID())
@@ -408,9 +407,7 @@ final class ZLinkSpotCloseConformanceTest {
         objects.addEntrySpot(EntrySpot.class);
         objects.addSpotFactory(SPOT_TYPE, CloseSpot.class, factory -> factory.disableRelocation());
 
-        try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
-                        options, new ZLinkJavaBackendAdapterFactory())) {
+        try (ZLinkFrameworkRuntime runtime = startReady(options)) {
             create(runtime, spotId);
             CompletableFuture<Reply> accepted = request(runtime, spotId);
             handlerEntered.get(WAIT_SECONDS, TimeUnit.SECONDS);
@@ -448,6 +445,7 @@ final class ZLinkSpotCloseConformanceTest {
         handlerBlock = new CompletableFuture<>();
         String spotId = "draining-error-" + UUID.randomUUID();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.addLocationStore(new ZLinkInMemoryLocationStore());
         var node = options.addRouteMesh("close-mesh");
         node.listen("inproc://spot-close-" + UUID.randomUUID())
@@ -456,9 +454,7 @@ final class ZLinkSpotCloseConformanceTest {
         objects.addEntrySpot(EntrySpot.class);
         objects.addSpotFactory(SPOT_TYPE, CloseSpot.class, factory -> factory.disableRelocation());
 
-        try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
-                        options, new ZLinkJavaBackendAdapterFactory())) {
+        try (ZLinkFrameworkRuntime runtime = startReady(options)) {
             create(runtime, spotId);
             CompletableFuture<Reply> accepted = request(runtime, spotId);
             handlerEntered.get(WAIT_SECONDS, TimeUnit.SECONDS);
@@ -568,6 +564,7 @@ final class ZLinkSpotCloseConformanceTest {
         String spotId = "close-" + UUID.randomUUID();
         FaultStore store = new FaultStore(new ZLinkInMemoryLocationStore(), spotId);
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.addLocationStore(store);
         String meshName = "close-mesh";
         var node = options.addRouteMesh(meshName);
@@ -585,9 +582,7 @@ final class ZLinkSpotCloseConformanceTest {
         ZLinkLocationRepository repository = new ZLinkProviderLocationRepository(store);
         Outcome outcome = new Outcome();
 
-        try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
-                        options, new ZLinkJavaBackendAdapterFactory())) {
+        try (ZLinkFrameworkRuntime runtime = startReady(options)) {
             String authority = given.path("authority").asText();
             SpotRef ref;
             if ("Missing".equals(authority)) {
@@ -817,6 +812,26 @@ final class ZLinkSpotCloseConformanceTest {
                         .toCompletableFuture()
                         .get(WAIT_SECONDS, TimeUnit.SECONDS);
         return created.spot();
+    }
+
+    private static ZLinkFrameworkRuntime startReady(DefaultZLinkFrameworkOptions options)
+            throws Exception {
+        ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory());
+        try {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                            .toCompletableFuture()
+                            .get(WAIT_SECONDS, TimeUnit.SECONDS));
+            return runtime;
+        } catch (Exception | Error failure) {
+            runtime.close();
+            throw failure;
+        }
     }
 
     private static CompletableFuture<Boolean> closeStage(

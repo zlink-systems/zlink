@@ -65,6 +65,7 @@ final class InstanceIntentAuthorityFollowTest {
         var backend = new Backend(scenario);
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.addRelocationStore(new InMemoryRelocationStore());
         options.addRouteMesh("mesh")
                 .listen("inproc://" + spotId)
@@ -81,6 +82,11 @@ final class InstanceIntentAuthorityFollowTest {
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
+            if (!runtime.isReady())
+                ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS);
+            assertTrue(runtime.isReady());
             if (!scenario.path("authority").asText().equals("Missing")) {
                 assertEquals(
                         new Echo("seed"),

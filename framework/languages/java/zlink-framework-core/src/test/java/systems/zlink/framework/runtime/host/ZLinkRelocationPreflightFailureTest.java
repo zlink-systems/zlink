@@ -80,6 +80,7 @@ final class ZLinkRelocationPreflightFailureTest {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(store);
         options.addRelocationStore(new InMemoryRelocationStore());
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.addRouteMesh("preflight")
                 .listen("inproc://preflight-" + UUID.randomUUID())
                 .setRoutingId(RoutingId.from("preflight-source"))
@@ -106,6 +107,11 @@ final class ZLinkRelocationPreflightFailureTest {
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
+            if (!runtime.isReady())
+                assertTrue(
+                        ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                                .toCompletableFuture()
+                                .join());
             assertTrue(runtime.isReady());
             // An empty host ends Relocated/None without a target search (spec 05 §5.1), so the
             // host owns one User Spot to make the store preflight run.

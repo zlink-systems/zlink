@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -23,6 +24,7 @@ import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
@@ -40,6 +42,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkUserSpotExistingCapacityTest {
@@ -97,7 +100,15 @@ final class ZLinkUserSpotExistingCapacityTest {
         FACTORY_CALLS.set(0);
         var clock = new MutableClock();
         var store = new ReleaseConflictStore(clock);
-        try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(options(store))) {
+        var monotonicNanos = new AtomicLong();
+        var fencingMargin = Duration.ofNanos(1);
+        var options = options(store);
+        options.configureLocations().setOwnerLeaseFencingMargin(fencingMargin);
+        var runtimeStores =
+                ZLinkRegisteredLocationStores.fromUnified(
+                        new ZLinkProviderLocationRepository(
+                                store, monotonicNanos::get, fencingMargin));
+        try (var runtime = start(options, runtimeStores)) {
             runtime.spotManager()
                     .getOrCreate("occupied-room", "room")
                     .submit()
@@ -223,6 +234,18 @@ final class ZLinkUserSpotExistingCapacityTest {
                             .get(5, TimeUnit.SECONDS));
             clock.advance(Duration.ofSeconds(2));
             store.armed.set(capacityConditionConflict);
+            var firstRequest =
+                    runtime.spotManager()
+                            .getOrCreate("expired-room", "room")
+                            .submit()
+                            .toCompletableFuture();
+            var waitFailure =
+                    assertThrows(
+                            ExecutionException.class, () -> firstRequest.get(5, TimeUnit.SECONDS));
+            assertEquals(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    assertInstanceOf(ZLinkFrameworkException.class, waitFailure.getCause()).kind());
+            monotonicNanos.addAndGet(fencingMargin.multipliedBy(3).toNanos());
             var requested =
                     runtime.spotManager()
                             .getOrCreate("expired-room", "room")
@@ -258,6 +281,12 @@ final class ZLinkUserSpotExistingCapacityTest {
             assertEquals(0, released.capacity().spots().reserved());
             assertEquals(1, FACTORY_CALLS.get());
         }
+    }
+
+    @RepeatedTest(100)
+    void expiredReadyOwnerWaitsBeforeCapacityReleaseAcrossCasOutcomes() throws Exception {
+        expiredReadyOwnerIsReleasedBeforeCapacityFailure(false);
+        expiredReadyOwnerIsReleasedBeforeCapacityFailure(true);
     }
 
     @ParameterizedTest
@@ -362,6 +391,17 @@ final class ZLinkUserSpotExistingCapacityTest {
                 .server()
                 .addSpotFactory("room", Room.class, factory -> factory.disableRelocation());
         return options;
+    }
+
+    private static systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime start(
+            DefaultZLinkFrameworkOptions options, ZLinkRegisteredLocationStores stores) {
+        return ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                options,
+                new systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory(),
+                systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
+                        .reflection(),
+                null,
+                new ZLinkFrameworkRuntimeTestAccess.Construction().locationStores(stores));
     }
 
     private static final class MutableClock extends Clock {

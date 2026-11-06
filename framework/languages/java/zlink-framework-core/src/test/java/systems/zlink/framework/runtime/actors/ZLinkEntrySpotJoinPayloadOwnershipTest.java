@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.actors;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -63,6 +64,7 @@ final class ZLinkEntrySpotJoinPayloadOwnershipTest {
         PLAYER_CONTEXT.set(null);
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         var node = options.addRouteMesh("entry-join");
         node.listen("inproc://entry-join-" + UUID.randomUUID())
                 .setRoutingId(RoutingId.from("entry-join-" + UUID.randomUUID()));
@@ -77,6 +79,13 @@ final class ZLinkEntrySpotJoinPayloadOwnershipTest {
         try (ZLinkFrameworkRuntime runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(
                         options, new ZLinkJavaBackendAdapterFactory())) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                            .toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS));
             assertInstanceOf(
                     ZLinkActorCreateResult.Created.class,
                     runtime.actorManager()
@@ -159,6 +168,7 @@ final class ZLinkEntrySpotJoinPayloadOwnershipTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         var store = new ZLinkInMemoryLocationStore();
         options.addLocationStore(store);
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         var node = options.addRouteMesh("entry-join");
         node.listen("inproc://resolved-join-" + UUID.randomUUID())
                 .setRoutingId(RoutingId.from("resolved-join"));
@@ -174,6 +184,13 @@ final class ZLinkEntrySpotJoinPayloadOwnershipTest {
         try (ZLinkFrameworkRuntime runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(
                         options, new ZLinkJavaBackendAdapterFactory())) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                            .toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS));
             runtime.actorManager()
                     .create(ACTOR_ID, "player")
                     .submit()

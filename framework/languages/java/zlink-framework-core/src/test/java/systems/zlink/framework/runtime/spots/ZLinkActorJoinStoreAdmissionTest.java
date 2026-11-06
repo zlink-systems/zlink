@@ -50,6 +50,7 @@ final class ZLinkActorJoinStoreAdmissionTest {
     void localJoinAcceptedOnSpotLifecycleLaneCompletesAfterHostBeginsDraining() throws Exception {
         var options =
                 new systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.addLocationStore(
                 new systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore());
         var node = options.addRouteMesh("drain-join");
@@ -66,6 +67,15 @@ final class ZLinkActorJoinStoreAdmissionTest {
                         options,
                         new systems.zlink.framework.runtime.binding
                                 .ZLinkJavaBackendAdapterFactory())) {
+            systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.startupCompletion(
+                            framework)
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+            assertTrue(
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess
+                            .renewOwnerLeaseOnce(framework)
+                            .toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS));
             framework
                     .spotManager()
                     .getOrCreate("drain-room-a", "drain-room")

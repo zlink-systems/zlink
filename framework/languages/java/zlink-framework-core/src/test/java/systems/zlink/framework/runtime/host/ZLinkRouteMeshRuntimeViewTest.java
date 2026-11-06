@@ -726,7 +726,16 @@ final class ZLinkRouteMeshRuntimeViewTest {
     }
 
     private static ZLinkFrameworkRuntime start(DefaultZLinkFrameworkOptions options) {
-        return ZLinkFrameworkRuntimeTestAccess.start(options, new ZLinkJavaBackendAdapterFactory());
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
+        var runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory());
+        ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime).toCompletableFuture().join();
+        if (options.registration().locations().enabled())
+            ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                    .toCompletableFuture()
+                    .join();
+        return runtime;
     }
 
     private static RoutingId rid(String prefix) {

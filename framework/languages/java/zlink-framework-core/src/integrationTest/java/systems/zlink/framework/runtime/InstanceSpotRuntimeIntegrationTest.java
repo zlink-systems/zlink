@@ -88,10 +88,10 @@ final class InstanceSpotRuntimeIntegrationTest {
         sourceNode.objects().server().addEntrySpot(SourceEntrySpot.class);
 
         try (ZLinkFrameworkRuntime target =
-                        RuntimeTestSupport.startFramework(
+                        RuntimeTestSupport.startFixedRidFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory());
                 ZLinkFrameworkRuntime source =
-                        RuntimeTestSupport.startFramework(
+                        RuntimeTestSupport.startFixedRidFramework(
                                 sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
             SourceEntrySpot.request.set(new Request("echo-" + suffix));
             awaitPeersReady(
@@ -149,10 +149,10 @@ final class InstanceSpotRuntimeIntegrationTest {
         sourceNode.objects().server().addEntrySpot(SourceEntrySpot.class);
 
         try (ZLinkFrameworkRuntime target =
-                        RuntimeTestSupport.startFramework(
+                        RuntimeTestSupport.startFixedRidFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory());
                 ZLinkFrameworkRuntime source =
-                        RuntimeTestSupport.startFramework(
+                        RuntimeTestSupport.startFixedRidFramework(
                                 sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
             try {
                 SourceEntrySpot.request.set(new Request(spotId));
@@ -478,9 +478,9 @@ final class InstanceSpotRuntimeIntegrationTest {
         FlowDiagnosticCapture requestFlowCapture =
                 retainedBoundary ? new FlowDiagnosticCapture() : null;
         try (ZLinkFrameworkRuntime target =
-                        RuntimeTestSupport.startFramework(targetOptions, backend);
+                        RuntimeTestSupport.startFixedRidFramework(targetOptions, backend);
                 ZLinkFrameworkRuntime source =
-                        RuntimeTestSupport.startFramework(
+                        RuntimeTestSupport.startFixedRidFramework(
                                 sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
             SourceEntrySpot.request.set(new Request(spotId));
             awaitPeersReady(
@@ -1469,10 +1469,10 @@ final class InstanceSpotRuntimeIntegrationTest {
         sourceNode.objects().server().addEntrySpot(SourceEntrySpot.class);
 
         try (ZLinkFrameworkRuntime target =
-                        RuntimeTestSupport.startFramework(
+                        RuntimeTestSupport.startFixedRidFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory());
                 ZLinkFrameworkRuntime source =
-                        RuntimeTestSupport.startFramework(
+                        RuntimeTestSupport.startFixedRidFramework(
                                 sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
             try {
                 SourceEntrySpot.request.set(new Request(spotId));
@@ -1581,10 +1581,10 @@ final class InstanceSpotRuntimeIntegrationTest {
         sourceNode.objects().server().addEntrySpot(IdleSourceEntrySpot.class);
 
         try (ZLinkFrameworkRuntime target =
-                        RuntimeTestSupport.startFramework(
+                        RuntimeTestSupport.startFixedRidFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory());
                 ZLinkFrameworkRuntime source =
-                        RuntimeTestSupport.startFramework(
+                        RuntimeTestSupport.startFixedRidFramework(
                                 sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
             IdleSourceEntrySpot.request.set(new Request(spotId));
             awaitPeersReady(

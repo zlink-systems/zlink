@@ -50,7 +50,7 @@ final class ZLinkBoundActorReturnTest {
         var locations = new ZLinkInMemoryLocationStore();
         var relocations = new InMemoryRelocationStore();
         try (var zoneBHost =
-                new Bounded(
+                readyHost(
                         ZLinkFrameworkRuntimeTestAccess.start(
                                 options("zone-b", locations, relocations, null)))) {
             var zoneB = zoneBHost.runtime();
@@ -76,7 +76,7 @@ final class ZLinkBoundActorReturnTest {
                     .setPlacementWeight(0);
             var endpointB = zoneB.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
             try (var zoneAHost =
-                            new Bounded(
+                            readyHost(
                                     ZLinkFrameworkRuntimeTestAccess.start(
                                             options("zone-a", locations, relocations, endpointB)));
                     var zoneAReady =
@@ -96,6 +96,7 @@ final class ZLinkBoundActorReturnTest {
                 var gatewayOptions = new DefaultZLinkFrameworkOptions();
                 gatewayOptions.addLocationStore(locations);
                 gatewayOptions.addRelocationStore(relocations);
+                gatewayOptions.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
                 gatewayOptions.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
                 var gatewayMesh =
                         gatewayOptions
@@ -110,7 +111,13 @@ final class ZLinkBoundActorReturnTest {
                 streamOptions.enableActorDispatch();
                 streamOptions.registerSession(BoundSession.class);
                 try (var gatewayHost =
-                        new Bounded(ZLinkFrameworkRuntimeTestAccess.start(gatewayOptions))) {
+                                readyHost(ZLinkFrameworkRuntimeTestAccess.start(gatewayOptions));
+                        var gatewayReady =
+                                observe(
+                                        gatewayHost.runtime().routeMeshRuntime().observe(MESH, 8),
+                                        status ->
+                                                status.isReady() && status.readyPeerCount() > 0)) {
+                    gatewayReady.result.get(WAIT.toSeconds(), TimeUnit.SECONDS);
                     var gateway = gatewayHost.runtime();
                     var address =
                             URI.create(
@@ -166,7 +173,7 @@ final class ZLinkBoundActorReturnTest {
         var dropped = new java.util.concurrent.atomic.AtomicInteger();
         var backend = droppingActorLeftBackend(dropped, firstLeft, secondLeft);
         try (var sourceHost =
-                new Bounded(
+                readyHost(
                         ZLinkFrameworkRuntimeTestAccess.start(
                                 options("repeat-b", locations, relocations, null), backend))) {
             var source = sourceHost.runtime();
@@ -188,7 +195,7 @@ final class ZLinkBoundActorReturnTest {
                     .setPlacementWeight(0);
             var endpoint = source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
             try (var targetHost =
-                            new Bounded(
+                            readyHost(
                                     ZLinkFrameworkRuntimeTestAccess.start(
                                             options("repeat-a", locations, relocations, endpoint),
                                             backend));
@@ -338,7 +345,7 @@ final class ZLinkBoundActorReturnTest {
                                     return result;
                                 });
         try (var sourceHost =
-                new Bounded(
+                readyHost(
                         ZLinkFrameworkRuntimeTestAccess.start(
                                 options("cleanup-source", sourceStore, relocations, null)))) {
             var source = sourceHost.runtime();
@@ -360,7 +367,7 @@ final class ZLinkBoundActorReturnTest {
                     .setPlacementWeight(0);
             var endpoint = source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
             try (var targetHost =
-                            new Bounded(
+                            readyHost(
                                     ZLinkFrameworkRuntimeTestAccess.start(
                                             options(
                                                     "cleanup-target",
@@ -432,7 +439,7 @@ final class ZLinkBoundActorReturnTest {
         var locations = new ZLinkInMemoryLocationStore();
         var relocations = new InMemoryRelocationStore();
         try (var host =
-                new Bounded(
+                readyHost(
                         ZLinkFrameworkRuntimeTestAccess.start(
                                 options("stale-follow", locations, relocations, null)))) {
             var runtime =
@@ -509,12 +516,38 @@ final class ZLinkBoundActorReturnTest {
      * waiting forever on the shutdown of a host the failure left in Error.
      */
     private record Bounded(ZLinkFrameworkRuntime runtime) implements AutoCloseable {
+        private Bounded {
+            try {
+                ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                        .toCompletableFuture()
+                        .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+            } catch (Exception failure) {
+                throw new AssertionError("host startup did not complete", failure);
+            }
+        }
+
         @Override
         public void close() throws Exception {
             runtime.shutdown(WAIT)
                     .toCompletableFuture()
                     .get(2 * WAIT.toSeconds(), TimeUnit.SECONDS);
             runtime.close();
+        }
+    }
+
+    private static Bounded readyHost(ZLinkFrameworkRuntime runtime) {
+        var host = new Bounded(runtime);
+        try {
+            if (!runtime.isReady()) {
+                assertTrue(
+                        ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                                .toCompletableFuture()
+                                .get(WAIT.toSeconds(), TimeUnit.SECONDS));
+            }
+            assertTrue(runtime.isReady());
+            return host;
+        } catch (Exception failure) {
+            throw new AssertionError("host startup did not become ready", failure);
         }
     }
 
@@ -543,6 +576,7 @@ final class ZLinkBoundActorReturnTest {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(locations);
         options.addRelocationStore(relocations);
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
         options.configureLocations().setRouteCacheMaxAge(Duration.ZERO);
         // Longer than the test: only the commit may retire the first stay's record.
