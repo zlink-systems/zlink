@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Diagnostics;
 
 namespace Zlink.Framework.Runtime.Messaging;
 
@@ -9,6 +10,18 @@ internal interface IZLinkApplicationPayloadSized
 
 internal static class ZLinkMessageParts
 {
+#if DEBUG
+    internal static readonly AsyncLocal<Action<Message>?> DisposingObserver = new();
+#endif
+
+    [Conditional("DEBUG")]
+    private static void ObserveDisposing(Message part)
+    {
+#if DEBUG
+        DisposingObserver.Value?.Invoke(part);
+#endif
+    }
+
     public static IReadOnlyList<Message> Create(Message header, Message body)
     {
         // Hot path: most envelopes are exactly header + body. Keep this as a
@@ -19,7 +32,11 @@ internal static class ZLinkMessageParts
     public static void DisposeAll(IReadOnlyList<Message> parts)
     {
         for (var index = 0; index < parts.Count; index++)
-            parts[index].Dispose();
+        {
+            var part = parts[index];
+            ObserveDisposing(part);
+            part.Dispose();
+        }
     }
 
     public static IReadOnlyList<Message> CopyAll(IReadOnlyList<Message> parts)

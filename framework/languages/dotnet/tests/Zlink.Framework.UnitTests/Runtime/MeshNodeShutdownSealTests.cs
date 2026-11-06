@@ -721,7 +721,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         ) =>
             Node.RequestDirectWireAsync(
                 _target,
-                new ReadOnlyMemory<byte>[] { "request"u8.ToArray() },
+                new Message[] { Message.From("request") },
                 timeout,
                 token,
                 requestAdmission: requestAdmission

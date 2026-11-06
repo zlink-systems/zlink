@@ -6,103 +6,113 @@ internal static class ZLinkDurableRequest
     private static readonly Task CancellationOnly = new TaskCompletionSource().Task;
 
     internal static async ValueTask<TReply> RequestAsync<TReply>(
-        IReadOnlyList<ReadOnlyMemory<byte>> wire,
+        IReadOnlyList<Message> wire,
         long startTimestamp,
         TimeSpan timeout,
-        Func<
-            IReadOnlyList<ReadOnlyMemory<byte>>,
-            TimeSpan,
-            CancellationToken,
-            ValueTask<TReply>
-        > submit,
+        Func<IReadOnlyList<Message>, TimeSpan, CancellationToken, ValueTask<TReply>> submit,
         CancellationToken cancellationToken,
         Func<ZLinkPeerRouteObservation> observeRoute,
         TimeProvider? timeProvider = null,
         Task? terminal = null
     )
     {
-        timeProvider ??= TimeProvider.System;
-        ConnectionAttempt? baseline = null;
-        var waiting = false;
-        string? endpoint = null;
-        while (true)
+        var transferred = false;
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var remaining = timeout - timeProvider.GetElapsedTime(startTimestamp);
-            if (remaining <= TimeSpan.Zero)
+            timeProvider ??= TimeProvider.System;
+            ConnectionAttempt? baseline = null;
+            var waiting = false;
+            string? endpoint = null;
+            while (true)
             {
-                // The entry's owner confirms expiration. A consumed stage budget
-                // prevents another submit but does not independently take terminal authority.
-                if (terminal is not null)
+                cancellationToken.ThrowIfCancellationRequested();
+                var remaining = timeout - timeProvider.GetElapsedTime(startTimestamp);
+                if (remaining <= TimeSpan.Zero)
                 {
-                    await terminal.ConfigureAwait(false);
-                    // Only the original entry can settle the caller; stop this producer.
-                    throw new OperationCanceledException(cancellationToken);
-                }
-                else if (cancellationToken.CanBeCanceled)
-                    await CancellationOnly.WaitAsync(cancellationToken).ConfigureAwait(false);
-                throw Exhausted();
-            }
-            var route = observeRoute();
-            var attempt = route.Attempt;
-            // Ready observations do not scan attempts. Only an already waiting
-            // request needs the retained endpoint's failure history after recovery.
-            if (waiting && route.ReadyGeneration != 0 && route.Attempts is not null)
-            {
-                attempt = null;
-                foreach (var row in route.Attempts)
-                    if (string.Equals(row.Endpoint, endpoint, StringComparison.Ordinal))
+                    // The entry's owner confirms expiration. A consumed stage budget
+                    // prevents another submit but does not independently take terminal authority.
+                    if (terminal is not null)
                     {
-                        attempt = row;
-                        break;
+                        await terminal.ConfigureAwait(false);
+                        // Only the original entry can settle the caller; stop this producer.
+                        throw new OperationCanceledException(cancellationToken);
                     }
-            }
-            // Compare retained failure tokens before accepting a recovered route.
-            if (waiting)
-            {
-                if (baseline is { } previous)
+                    else if (cancellationToken.CanBeCanceled)
+                        await CancellationOnly.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    throw Exhausted();
+                }
+                var route = observeRoute();
+                var attempt = route.Attempt;
+                // Ready observations do not scan attempts. Only an already waiting
+                // request needs the retained endpoint's failure history after recovery.
+                if (waiting && route.ReadyGeneration != 0 && route.Attempts is not null)
                 {
-                    if (
-                        attempt is not { } current
-                        || current.IntentId != previous.IntentId
-                        || current.LastFailureId != previous.LastFailureId
-                    )
+                    attempt = null;
+                    foreach (var row in route.Attempts)
+                        if (string.Equals(row.Endpoint, endpoint, StringComparison.Ordinal))
+                        {
+                            attempt = row;
+                            break;
+                        }
+                }
+                // Compare retained failure tokens before accepting a recovered route.
+                if (waiting)
+                {
+                    if (baseline is { } previous)
+                    {
+                        if (
+                            attempt is not { } current
+                            || current.IntentId != previous.IntentId
+                            || current.LastFailureId != previous.LastFailureId
+                        )
+                            throw new ZlinkSubmitException(
+                                ZlinkSubmitException.ErrorCode.NotConnected
+                            );
+                    }
+                    else if (attempt is { LastFailureId: not 0 })
                         throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
                 }
-                else if (attempt is { LastFailureId: not 0 })
-                    throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
-            }
-            if (route.ReadyGeneration == 0)
-            {
-                if (
-                    route.SelectedGeneration == 0
-                    && route.Attempt is { State: ConnectionAttemptState.AttemptFailed }
-                )
-                    throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
-                baseline ??= attempt;
-                endpoint ??= route.Endpoint ?? attempt?.Endpoint;
-                waiting = true;
-                try
+                if (route.ReadyGeneration == 0)
                 {
-                    var wait = route.Changed.WaitAsync(cancellationToken);
-                    if (terminal is null)
-                        await wait.ConfigureAwait(false);
-                    else
+                    if (
+                        route.SelectedGeneration == 0
+                        && route.Attempt is { State: ConnectionAttemptState.AttemptFailed }
+                    )
+                        throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
+                    baseline ??= attempt;
+                    endpoint ??= route.Endpoint ?? attempt?.Endpoint;
+                    waiting = true;
+                    try
                     {
-                        var ready = await Task.WhenAny(wait, terminal).ConfigureAwait(false);
-                        await ready.ConfigureAwait(false);
-                        if (ReferenceEquals(ready, terminal))
-                            throw new OperationCanceledException(cancellationToken);
+                        var wait = route.Changed.WaitAsync(cancellationToken);
+                        if (terminal is null)
+                            await wait.ConfigureAwait(false);
+                        else
+                        {
+                            var ready = await Task.WhenAny(wait, terminal).ConfigureAwait(false);
+                            await ready.ConfigureAwait(false);
+                            if (ReferenceEquals(ready, terminal))
+                                throw new OperationCanceledException(cancellationToken);
+                        }
                     }
+                    catch (OperationCanceledException)
+                    {
+                        await Task.CompletedTask.ConfigureAwait(
+                            ConfigureAwaitOptions.ForceYielding
+                        );
+                        throw;
+                    }
+                    continue;
                 }
-                catch (OperationCanceledException)
-                {
-                    await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
-                    throw;
-                }
-                continue;
+                // The submit callback owns the list even when it throws synchronously.
+                transferred = true;
+                return await submit(wire, remaining, cancellationToken).ConfigureAwait(false);
             }
-            return await submit(wire, remaining, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (!transferred)
+                ZLinkMessageParts.DisposeAll(wire);
         }
     }
 
