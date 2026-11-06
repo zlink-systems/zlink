@@ -3,6 +3,8 @@ const test = require('node:test');
 const { Injectable, Module, Scope } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const nestjs = require('../../packages/nestjs/dist');
+const framework = require('../../packages/framework/dist');
+const { fixedRidHostClock, finishFixedRidHostStartup } = require('../helpers/fixed-rid-host-clock');
 
 function deferred() {
   let resolve;
@@ -29,7 +31,8 @@ function pendingApplications(serial) {
 }
 
 for (const outcome of ['ready', 'rejected', 'initialize-error', 'commit-error']) {
-  test(`Logical Multicast before Ready: ${outcome}`, { timeout: 15000 }, async () => {
+  test(`Logical Multicast before Ready: ${outcome}`, { timeout: 15000 }, async (t) => {
+    const hostClock = fixedRidHostClock(t);
     const entered = deferred();
     const release = deferred();
     const commitEntered = deferred();
@@ -76,7 +79,9 @@ for (const outcome of ['ready', 'rejected', 'initialize-error', 'commit-error'])
     Injectable({ scope: Scope.TRANSIENT })(Room);
     Injectable({ scope: Scope.TRANSIENT })(Subscription);
     Injectable({ scope: Scope.TRANSIENT })(Tick);
-    const builder = nestjs.zlinkFramework().options({ locations: { useInMemoryStores: true } });
+    const builder = nestjs.zlinkFramework().options({
+      locations: { useInMemoryStores: true, options: { ownerLeaseFencingMarginMs: 1 } }
+    });
     const mesh = builder
       .addRouteMesh('pre-ready')
       .listen('tcp://127.0.0.1:0')
@@ -96,6 +101,11 @@ for (const outcome of ['ready', 'rejected', 'initialize-error', 'commit-error'])
       abortOnError: false
     });
     const runtime = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME);
+    await finishFixedRidHostStartup(
+      runtime,
+      hostClock,
+      framework.ZLinkFrameworkRuntimeState.Preparing
+    );
     const spots = app.get(nestjs.ZLINK_SPOT_MANAGER);
     const publisher = app.get(nestjs.ZLINK_SPOT_PUBLISHER_CLIENT);
     const store = spots.options.coordinator.options.store;

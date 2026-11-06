@@ -248,7 +248,9 @@ test('spot auto-connect uses the concrete endpoint resolved by the started MeshN
 
 test('spot auto-connect derives RouteMesh candidates from live MeshNode descriptors', async () => {
   const store = new internal.ZLinkInMemoryLocationStore(
-    () => new Date(Date.UTC(2026, 6, 3, 0, 0, 0))
+    () => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)),
+    undefined,
+    0
   );
   const remoteOwner = await store.claimOwnerLease('owner-b', 30_000);
   assert.equal(remoteOwner.kind, 'claimed');

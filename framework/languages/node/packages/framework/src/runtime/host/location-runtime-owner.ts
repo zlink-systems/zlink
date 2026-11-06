@@ -23,6 +23,7 @@ export interface ZLinkLocationRuntimeOwnerOptions {
   readonly runtimeEventPublisher: ZLinkRuntimeEventPublisher;
   readonly fallbackNodeRid: RoutingId;
   readonly metrics: import('../diagnostics').ZLinkRuntimeMetrics;
+  readonly monotonicNowMs?: () => number;
   readonly rewriteAuthorityPayloadForOwner?: import('../locations').ZLinkLocationRuntimeOptions['rewriteAuthorityPayloadForOwner'];
 }
 
@@ -36,13 +37,16 @@ export class ZLinkLocationRuntimeOwner {
   runtime?: ZLinkLocationRuntime;
   private lifecycle?: ZLinkLocationLifecycle;
   private events?: ZLinkLocationEventSink;
+  private readonly monotonicNowMs: () => number;
   private leaseTrackerState?: {
     readonly stores: ZLinkLocationRuntimeStores;
     readonly tracker: ZLinkOwnerLeaseTracker;
   };
   private spotRouteInvalidator?: (spotId: RoutingId) => void;
 
-  constructor(private readonly options: ZLinkLocationRuntimeOwnerOptions) {}
+  constructor(private readonly options: ZLinkLocationRuntimeOwnerOptions) {
+    this.monotonicNowMs = options.monotonicNowMs ?? (() => performance.now());
+  }
 
   get currentStores(): ZLinkLocationRuntimeStores | undefined {
     return this.stores;
@@ -91,6 +95,7 @@ export class ZLinkLocationRuntimeOwner {
       options: this.options.registration.locations.options,
       events: this.ensureEvents(),
       leaseTracker: this.leaseTracker(stores),
+      monotonicNowMs: this.monotonicNowMs,
       metrics: this.options.metrics,
       meshNames: [...this.options.registration.spotNodes.keys()],
       leaseScopes: [
@@ -248,7 +253,13 @@ export class ZLinkLocationRuntimeOwner {
     const locations = this.options.registration.locations;
     if (locations.useInMemoryStores) {
       const provider = new ZLinkInMemoryProviderLocationStore();
-      const store = new ZLinkLocationStoreRepository(provider, undefined, this.options.metrics);
+      const store = new ZLinkLocationStoreRepository(
+        provider,
+        undefined,
+        this.options.metrics,
+        this.monotonicNowMs,
+        locations.options.ownerLeaseFencingMarginMs
+      );
       return {
         locationStore: store,
         authorityStore: store,
@@ -263,7 +274,13 @@ export class ZLinkLocationRuntimeOwner {
     }
     const provider = locations.storeInstance;
     if (provider !== undefined) {
-      const store = new ZLinkLocationStoreRepository(provider, undefined, this.options.metrics);
+      const store = new ZLinkLocationStoreRepository(
+        provider,
+        undefined,
+        this.options.metrics,
+        this.monotonicNowMs,
+        locations.options.ownerLeaseFencingMarginMs
+      );
       return {
         locationStore: store,
         authorityStore: store,
@@ -291,7 +308,8 @@ export class ZLinkLocationRuntimeOwner {
     }
     const tracker = new ZLinkOwnerLeaseTracker({
       store: stores.ownerLeaseStore,
-      options: this.options.registration.locations.options
+      options: this.options.registration.locations.options,
+      monotonicNowMs: this.monotonicNowMs
     });
     this.leaseTrackerState = { stores, tracker };
     return tracker;

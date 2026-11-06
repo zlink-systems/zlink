@@ -81,6 +81,75 @@ test('in-memory location store issues generations and fences owner writes', asyn
   assert.equal((await store.readOwnerLease('owner-b')).kind, 'missing');
 });
 
+test('in-memory MeshNode NEW_CLAIM waits from its first Missing descriptor observation', async () => {
+  const storeNow = Date.UTC(2026, 6, 3, 0, 0, 0);
+  let monotonicMs = 0;
+  const store = new internal.ZLinkInMemoryLocationStore(
+    () => new Date(storeNow),
+    () => monotonicMs,
+    5
+  );
+  const lease = await store.claimOwnerLease('fixed-mesh-owner', 30_000);
+  assert.equal(lease.kind, 'claimed');
+  if (lease.kind !== 'claimed') throw new Error('Fixed MeshNode owner lease claim failed');
+  const descriptor = {
+    meshName: 'play',
+    rid: rid('fixed-node'),
+    lifecycleGeneration: 1n,
+    descriptorRevision: 1n,
+    endpoint: 'tcp://fixed-node',
+    objectRole: framework.ZLinkObjectRole.Server,
+    placementWeight: 100,
+    populationCapacity: {
+      actors: { active: 0, reserved: 0, limit: 1 },
+      spots: { active: 0, reserved: 0, limit: 1 },
+      spotTypes: []
+    },
+    activationConcurrency: { active: 0, limit: 1 },
+    channelWeights: {},
+    applicationVersion: 1n,
+    spotTypes: [],
+    objectCapabilities: [],
+    state: framework.ZLinkFrameworkRuntimeState.Preparing,
+    securityIdentity: 'fixed-node',
+    ownerId: lease.token.ownerId,
+    leaseGeneration: lease.token.leaseGeneration,
+    updatedAt: new Date(storeNow)
+  };
+  const claim = () => store.updateMeshNode(
+    descriptor,
+    locationWrites.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+  );
+
+  const unavailable = {
+    name: 'ZLinkFrameworkException',
+    kind: framework.ZLinkFrameworkErrorKind.Unavailable,
+    message: 'Fixed RID claim is waiting for the previous owner lease release delay.'
+  };
+  await assert.rejects(claim(), unavailable);
+  assert.equal(store.ownerLeaseReleaseDelayForTesting.observationCountForTesting, 1);
+  assert.equal((await store.listMeshNodes('play')).items.length, 0);
+
+  monotonicMs = 7;
+  assert.equal(
+    (
+      await store.updateMeshNode(
+        descriptor,
+        locationWrites.ZLinkLocationWriteIntent.Renew
+      )
+    ).status,
+    locationWrites.ZLinkLocationWriteStatus.IgnoredStale
+  );
+  monotonicMs = 14;
+  await assert.rejects(claim(), unavailable);
+  assert.equal(store.ownerLeaseReleaseDelayForTesting.observationCountForTesting, 1);
+  assert.equal((await store.listMeshNodes('play')).items.length, 0);
+
+  monotonicMs = 15;
+  assert.equal((await claim()).status, locationWrites.ZLinkLocationWriteStatus.Stored);
+  assert.equal((await store.listMeshNodes('play')).items.length, 1);
+});
+
 test('in-memory location store lists filters pages and bumps change stamps', async () => {
   const store = new internal.ZLinkInMemoryLocationStore(
     () => new Date(Date.UTC(2026, 6, 3, 0, 0, 0))
@@ -292,7 +361,12 @@ test('in-memory location store matches the formal operation trace for core write
 
 test('in-memory exact MeshNode descriptor and Actor transfer stores enforce their fences', async () => {
   let nowMs = Date.UTC(2026, 6, 3, 0, 0, 0);
-  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(nowMs));
+  let monotonicMs = 0;
+  const store = new internal.ZLinkInMemoryLocationStore(
+    () => new Date(nowMs),
+    () => monotonicMs,
+    5
+  );
   const meshLease = await store.claimOwnerLease('mesh-owner-a', 30_000);
   const descriptor = {
     meshName: 'game',
@@ -344,9 +418,17 @@ test('in-memory exact MeshNode descriptor and Actor transfer stores enforce thei
       { name: 'RangeError', message: 'MeshNode object capacity is invalid.' }
     );
   }
+  await assert.rejects(
+    store.updateMeshNode(
+      descriptor,
+      locationWrites.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+    ),
+    { kind: framework.ZLinkFrameworkErrorKind.Unavailable }
+  );
+  monotonicMs = 15;
   const descriptorClaim = await store.updateMeshNode(
     descriptor,
-    locationWrites.ZLinkLocationWriteIntent.NewClaim
+    locationWrites.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
   );
   assert.equal(descriptorClaim.status, locationWrites.ZLinkLocationWriteStatus.Stored);
   assert.deepEqual((await store.listMeshNodes('game')).items, [
@@ -373,23 +455,32 @@ test('in-memory exact MeshNode descriptor and Actor transfer stores enforce thei
       ownerId: 'mesh-owner-b',
       leaseGeneration: otherLease.token.leaseGeneration
     },
-    locationWrites.ZLinkLocationWriteIntent.NewClaim
+    locationWrites.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
   );
   assert.equal(
     conflictingRidClaim.status,
     locationWrites.ZLinkLocationWriteStatus.RejectedConflict
   );
+  const conflictingEntryDescriptor = {
+    ...descriptor,
+    rid: rid('game-c'),
+    lifecycleGeneration: 8n,
+    descriptorRevision: 1n,
+    endpoint: 'tcp://10.0.0.2:7300',
+    ownerId: 'mesh-owner-b',
+    leaseGeneration: otherLease.token.leaseGeneration
+  };
+  await assert.rejects(
+    store.updateMeshNode(
+      conflictingEntryDescriptor,
+      locationWrites.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+    ),
+    { kind: framework.ZLinkFrameworkErrorKind.Unavailable }
+  );
+  monotonicMs = 30;
   const conflictingEntryIdentity = await store.updateMeshNode(
-    {
-      ...descriptor,
-      rid: rid('game-b'),
-      lifecycleGeneration: 8n,
-      descriptorRevision: 1n,
-      endpoint: 'tcp://10.0.0.2:7300',
-      ownerId: 'mesh-owner-b',
-      leaseGeneration: otherLease.token.leaseGeneration
-    },
-    locationWrites.ZLinkLocationWriteIntent.NewClaim
+    conflictingEntryDescriptor,
+    locationWrites.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
   );
   assert.equal(
     conflictingEntryIdentity.status,
@@ -400,19 +491,28 @@ test('in-memory exact MeshNode descriptor and Actor transfer stores enforce thei
     await store.removeMeshNode({ meshName: 'game', rid: rid('game-a') }, meshLease.token),
     locationWrites.ZLinkLocationWriteStatus.Stored
   );
+  const replacement = {
+    ...descriptor,
+    rid: rid('game-b'),
+    lifecycleGeneration: 8n,
+    descriptorRevision: 1n,
+    endpoint: 'tcp://10.0.0.2:7300',
+    ownerId: 'mesh-owner-b',
+    leaseGeneration: otherLease.token.leaseGeneration
+  };
+  await assert.rejects(
+    store.updateMeshNode(
+      replacement,
+      locationWrites.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+    ),
+    { kind: framework.ZLinkFrameworkErrorKind.Unavailable }
+  );
+  monotonicMs = 45;
   assert.equal(
     (
       await store.updateMeshNode(
-        {
-          ...descriptor,
-          rid: rid('game-b'),
-          lifecycleGeneration: 8n,
-          descriptorRevision: 1n,
-          endpoint: 'tcp://10.0.0.2:7300',
-          ownerId: 'mesh-owner-b',
-          leaseGeneration: otherLease.token.leaseGeneration
-        },
-        locationWrites.ZLinkLocationWriteIntent.NewClaim
+        replacement,
+        locationWrites.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
       )
     ).status,
     locationWrites.ZLinkLocationWriteStatus.Stored
@@ -513,9 +613,13 @@ test('Framework-issued Entry Spot IDs are lowercase UUID v4 identities', () => {
 
 test('provider repository confirms a repeated MeshNode NewClaim whose first response was lost', async () => {
   const now = () => new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
+  let monotonicMs = 0;
   const store = new internal.ZLinkLocationStoreRepository(
     new internal.ZLinkInMemoryProviderLocationStore(now),
-    now
+    now,
+    undefined,
+    () => monotonicMs,
+    5
   );
   const lease = await store.claimOwnerLease('mesh-owner', 30_000);
   const other = await store.claimOwnerLease('other-owner', 30_000);
@@ -544,9 +648,17 @@ test('provider repository confirms a repeated MeshNode NewClaim whose first resp
     leaseGeneration: lease.token.leaseGeneration,
     updatedAt: new Date(1_000)
   };
+  await assert.rejects(
+    store.updateMeshNode(
+      descriptor,
+      locationWrites.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+    ),
+    { kind: framework.ZLinkFrameworkErrorKind.Unavailable }
+  );
+  monotonicMs = 15;
   const first = await store.updateMeshNode(
     descriptor,
-    locationWrites.ZLinkLocationWriteIntent.NewClaim
+    locationWrites.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
   );
   assert.equal(first.status, locationWrites.ZLinkLocationWriteStatus.Stored);
 
@@ -554,7 +666,7 @@ test('provider repository confirms a repeated MeshNode NewClaim whose first resp
   // stamps a new write time on every attempt (location runtime §10).
   const retry = await store.updateMeshNode(
     { ...descriptor, updatedAt: new Date(2_000) },
-    locationWrites.ZLinkLocationWriteIntent.NewClaim
+    locationWrites.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
   );
   assert.equal(retry.status, locationWrites.ZLinkLocationWriteStatus.Stored);
   assert.notEqual(retry.generation, 0n);
@@ -565,13 +677,14 @@ test('provider repository confirms a repeated MeshNode NewClaim whose first resp
       ownerId: 'other-owner',
       leaseGeneration: other.token.leaseGeneration
     },
-    locationWrites.ZLinkLocationWriteIntent.NewClaim
+    locationWrites.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
   );
   assert.equal(foreign.status, locationWrites.ZLinkLocationWriteStatus.RejectedConflict);
 });
 
 test('provider repository confirms a MeshNode descriptor write whose response was lost', async () => {
   const now = () => new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
+  let monotonicMs = 0;
   const inner = new internal.ZLinkInMemoryProviderLocationStore(now);
   let loseNextMeshWrite = false;
   const provider = {
@@ -589,37 +702,52 @@ test('provider repository confirms a MeshNode descriptor write whose response wa
       return result;
     }
   };
-  const store = new internal.ZLinkLocationStoreRepository(provider, now);
+  const store = new internal.ZLinkLocationStoreRepository(
+    provider,
+    now,
+    undefined,
+    () => monotonicMs,
+    5
+  );
   const lease = await store.claimOwnerLease('mesh-owner', 30_000);
+  const descriptor = {
+    meshName: 'game',
+    rid: rid('lost-response'),
+    lifecycleGeneration: 7n,
+    descriptorRevision: 1n,
+    endpoint: 'tcp://10.0.0.1:7300',
+    objectRole: framework.ZLinkObjectRole.Server,
+    entrySpotId: 'game-entry-123e4567-e89b-42d3-a456-426614174000',
+    placementWeight: 100,
+    populationCapacity: {
+      actors: { active: 0, reserved: 0, limit: 100 },
+      spots: { active: 0, reserved: 0, limit: 100 },
+      spotTypes: []
+    },
+    activationConcurrency: { active: 0, limit: 100 },
+    channelWeights: { game: 100 },
+    applicationVersion: 1n,
+    spotTypes: [],
+    objectCapabilities: [],
+    state: framework.ZLinkFrameworkRuntimeState.Preparing,
+    securityIdentity: 'plaintext',
+    ownerId: 'mesh-owner',
+    leaseGeneration: lease.token.leaseGeneration,
+    updatedAt: new Date(1_000)
+  };
+  await assert.rejects(
+    store.updateMeshNode(
+      descriptor,
+      locationWrites.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+    ),
+    { kind: framework.ZLinkFrameworkErrorKind.Unavailable }
+  );
+  monotonicMs = 15;
   loseNextMeshWrite = true;
 
   const claim = await store.updateMeshNode(
-    {
-      meshName: 'game',
-      rid: rid('lost-response'),
-      lifecycleGeneration: 7n,
-      descriptorRevision: 1n,
-      endpoint: 'tcp://10.0.0.1:7300',
-      objectRole: framework.ZLinkObjectRole.Server,
-      entrySpotId: 'game-entry-123e4567-e89b-42d3-a456-426614174000',
-      placementWeight: 100,
-      populationCapacity: {
-        actors: { active: 0, reserved: 0, limit: 100 },
-        spots: { active: 0, reserved: 0, limit: 100 },
-        spotTypes: []
-      },
-      activationConcurrency: { active: 0, limit: 100 },
-      channelWeights: { game: 100 },
-      applicationVersion: 1n,
-      spotTypes: [],
-      objectCapabilities: [],
-      state: framework.ZLinkFrameworkRuntimeState.Preparing,
-      securityIdentity: 'plaintext',
-      ownerId: 'mesh-owner',
-      leaseGeneration: lease.token.leaseGeneration,
-      updatedAt: new Date(1_000)
-    },
-    locationWrites.ZLinkLocationWriteIntent.NewClaim
+    descriptor,
+    locationWrites.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
   );
 
   assert.equal(loseNextMeshWrite, false);

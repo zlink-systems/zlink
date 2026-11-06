@@ -136,7 +136,7 @@ test('descriptor publication accepts a lease renewal between read and commit', a
       return inner.write(request, signal);
     }
   };
-  repository = new frameworkInternal.ZLinkLocationStoreRepository(provider);
+  repository = testLocationRepository(provider);
   owner = await repository.claimOwnerLease('descriptor-renew-owner', 60_000);
   assert.equal(owner.kind, 'claimed');
   const target = {
@@ -450,6 +450,8 @@ test('redis Location Store persists and validates a 10,100-participant inventory
 });
 
 test('redis-backed descriptor NewClaim reports an active owner conflict', async (t) => {
+  let monotonicMs = 0;
+  t.mock.method(performance, 'now', () => monotonicMs);
   const fixture = await redisFixture(t);
   if (fixture === undefined) return;
   const prefix = testPrefix('descriptor-claim-conflict');
@@ -457,7 +459,7 @@ test('redis-backed descriptor NewClaim reports an active owner conflict', async 
     url: fixture.url,
     keyPrefix: prefix
   });
-  const repository = new frameworkInternal.ZLinkLocationStoreRepository(provider);
+  const repository = testLocationRepository(provider, () => monotonicMs, 1);
 
   try {
     const first = await repository.claimOwnerLease('first-owner', 15_000);
@@ -470,10 +472,18 @@ test('redis-backed descriptor NewClaim reports an active owner conflict', async 
       nodeLifecycleGeneration: 1n,
       owner: first.token
     }, 1);
+    await assert.rejects(
+      repository.updateMeshNode(
+        descriptor,
+        frameworkInternal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+      ),
+      error => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+    );
+    monotonicMs = 3;
     assert.equal(
       (await repository.updateMeshNode(
         descriptor,
-        frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+        frameworkInternal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
       )).status,
       frameworkInternal.ZLinkLocationWriteStatus.Stored
     );
@@ -487,16 +497,24 @@ test('redis-backed descriptor NewClaim reports an active owner conflict', async 
     assert.equal(
       (await repository.updateMeshNode(
         replacement,
-        frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+        frameworkInternal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
       )).status,
       frameworkInternal.ZLinkLocationWriteStatus.RejectedConflict
     );
     assert.equal((await repository.listMeshNodes('game')).items[0].ownerId, first.token.ownerId);
     assert.equal(await repository.releaseOwnerLease(first.token), 'released');
+    await assert.rejects(
+      repository.updateMeshNode(
+        replacement,
+        frameworkInternal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+      ),
+      (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+    );
+    monotonicMs = 6;
     assert.equal(
       (await repository.updateMeshNode(
         replacement,
-        frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+        frameworkInternal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
       )).status,
       frameworkInternal.ZLinkLocationWriteStatus.Stored
     );
@@ -519,8 +537,8 @@ test('redis-backed aggregate prepare commit and abort converge across repository
     url: fixture.url,
     keyPrefix: prefix
   });
-  const source = new frameworkInternal.ZLinkLocationStoreRepository(providerA);
-  const recovery = new frameworkInternal.ZLinkLocationStoreRepository(providerB);
+  const source = testLocationRepository(providerA);
+  const recovery = testLocationRepository(providerB);
 
   try {
     const sourceOwner = await source.claimOwnerLease('source-owner', 60_000);
@@ -769,8 +787,8 @@ test('aggregate committer accepts an unchanged target owner lease after renewal'
       return inner.write(request, signal);
     }
   };
-  const source = new frameworkInternal.ZLinkLocationStoreRepository(provider);
-  targetRepository = new frameworkInternal.ZLinkLocationStoreRepository(provider);
+  const source = testLocationRepository(provider);
+  targetRepository = testLocationRepository(provider);
   const sourceOwner = await source.claimOwnerLease('heartbeat-source-owner', 60_000);
   targetOwner = await targetRepository.claimOwnerLease('heartbeat-target-owner', 60_000);
   assert.equal(sourceOwner.kind, 'claimed');
@@ -902,8 +920,8 @@ test('aggregate commit accepts an unchanged target owner lease after renewal', a
       return inner.write(request, signal);
     }
   };
-  const source = new frameworkInternal.ZLinkLocationStoreRepository(provider);
-  targetRepository = new frameworkInternal.ZLinkLocationStoreRepository(provider);
+  const source = testLocationRepository(provider);
+  targetRepository = testLocationRepository(provider);
   const sourceOwner = await source.claimOwnerLease('commit-heartbeat-source-owner', 60_000);
   targetOwner = await targetRepository.claimOwnerLease('commit-heartbeat-target-owner', 60_000);
   assert.equal(sourceOwner.kind, 'claimed');
@@ -958,8 +976,8 @@ test('aggregate commit accepts an unchanged target owner lease after renewal', a
 
 test('in-memory aggregate prepare, commit, and abort converge across repository instances', async () => {
   const provider = new frameworkInternal.ZLinkInMemoryProviderLocationStore();
-  const source = new frameworkInternal.ZLinkLocationStoreRepository(provider);
-  const recovery = new frameworkInternal.ZLinkLocationStoreRepository(provider);
+  const source = testLocationRepository(provider);
+  const recovery = testLocationRepository(provider);
   const sourceOwner = await source.claimOwnerLease('memory-source-owner', 60_000);
   const targetOwner = await recovery.claimOwnerLease('memory-target-owner', 60_000);
   assert.equal(sourceOwner.kind, 'claimed');
@@ -1128,7 +1146,7 @@ test('redis-backed repository writes the golden canonical authority allocation e
   assert.ok(vector);
   const prefix = testPrefix('golden-conformance');
   const store = new redisLocations.ZLinkRedisLocationStore({ url: fixture.url, keyPrefix: prefix });
-  const repository = new frameworkInternal.ZLinkLocationStoreRepository(store);
+  const repository = testLocationRepository(store);
   try {
     const owner = await repository.claimOwnerLease('owner-a', 60_000);
     assert.equal(owner.kind, 'claimed');
@@ -1250,7 +1268,7 @@ test('redis-backed repository completes Actor creation from a canonical authorit
   if (fixture === undefined) return;
   const prefix = testPrefix('canonical-creation-completion');
   const store = new redisLocations.ZLinkRedisLocationStore({ url: fixture.url, keyPrefix: prefix });
-  const repository = new frameworkInternal.ZLinkLocationStoreRepository(store);
+  const repository = testLocationRepository(store);
   try {
     const owner = await repository.claimOwnerLease('owner-a', 60_000);
     assert.equal(owner.kind, 'claimed');
@@ -1368,6 +1386,9 @@ test('redis-backed repository completes Actor creation from a canonical authorit
 
 for (const liveMember of [false, true]) {
   test(`redis-backed ended User Spot re-creation ${liveMember ? 'keeps a live member' : 'releases ended-owner members'}`, async (t) => {
+    let monotonicMs = 0;
+    let descriptorMonotonicMs = 0;
+    t.mock.method(performance, 'now', () => monotonicMs);
     const fixture = await redisFixture(t);
     if (fixture === undefined) return;
     const {
@@ -1378,7 +1399,12 @@ for (const liveMember of [false, true]) {
     } = require('../../packages/framework/dist/runtime/actors/actor-authority-payload-codec');
     const prefix = testPrefix(`ended-spot-members-${liveMember}`);
     const store = new redisLocations.ZLinkRedisLocationStore({ url: fixture.url, keyPrefix: prefix });
-    const repository = new frameworkInternal.ZLinkLocationStoreRepository(store);
+    const repository = testLocationRepository(store, () => monotonicMs, 5_000);
+    const descriptorRepository = testLocationRepository(
+      store,
+      () => descriptorMonotonicMs,
+      1
+    );
     try {
       const publish = async (ownerId, nodeRid) => {
         const claimed = await repository.claimOwnerLease(ownerId, 60_000);
@@ -1401,10 +1427,18 @@ for (const liveMember of [false, true]) {
             limit: 1
           }
         ];
-        assert.equal(
-          (await repository.updateMeshNode(
+        await assert.rejects(
+          descriptorRepository.updateMeshNode(
             descriptor,
-            frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+            frameworkInternal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+          ),
+          error => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+        );
+        descriptorMonotonicMs += 3;
+        assert.equal(
+          (await descriptorRepository.updateMeshNode(
+            descriptor,
+            frameworkInternal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
           )).status,
           frameworkInternal.ZLinkLocationWriteStatus.Stored
         );
@@ -1501,12 +1535,30 @@ for (const liveMember of [false, true]) {
           error => error instanceof framework.ZLinkFrameworkException
             && error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
         );
+        monotonicMs = 15_000;
+        await assert.rejects(
+          repository.reserve(spotRequest(next)),
+          error => error instanceof framework.ZLinkFrameworkException
+            && error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+        );
         const retained = await repository.readAuthority(encodeAuthorityKey('user_spot', spotId));
         assert.equal(retained.kind, 'snapshot');
         assert.equal(retained.storeVersion.value, spot.ready.storeVersion.value);
         assert.equal((await repository.readAuthority(memberKey)).kind, 'snapshot');
         return;
       }
+      await assert.rejects(
+        repository.reserve(spotRequest(next)),
+        error => error instanceof framework.ZLinkFrameworkException
+          && error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+      );
+      monotonicMs = 14_999;
+      await assert.rejects(
+        repository.reserve(spotRequest(next)),
+        error => error instanceof framework.ZLinkFrameworkException
+          && error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+      );
+      monotonicMs = 15_000;
       const recreated = await repository.reserve(spotRequest(next));
       assert.equal(recreated.kind, 'reserved');
       assert.ok(recreated.creating.objectGeneration > spot.ready.objectGeneration);
@@ -1529,7 +1581,7 @@ test('redis-backed production repository writes the golden canonical descriptor 
   ), 'utf8'));
   const prefix = testPrefix('golden-descriptor-conformance');
   const store = new redisLocations.ZLinkRedisLocationStore({ url: fixture.url, keyPrefix: prefix });
-  const repository = new frameworkInternal.ZLinkLocationStoreRepository(store);
+  const repository = testLocationRepository(store);
   try {
     const owner = await repository.claimOwnerLease('owner-a', 60_000);
     assert.equal(owner.kind, 'claimed');
@@ -1586,7 +1638,7 @@ test('redis-backed production repository rejects an authority envelope without r
   if (fixture === undefined) return;
   const prefix = testPrefix('record-version');
   const store = new redisLocations.ZLinkRedisLocationStore({ url: fixture.url, keyPrefix: prefix });
-  const repository = new frameworkInternal.ZLinkLocationStoreRepository(store);
+  const repository = testLocationRepository(store);
   const authorityKey = encodeAuthorityKey('actor', 'legacy-record');
   try {
     const written = await store.write({
@@ -1839,6 +1891,20 @@ async function cleanup(client, prefix) {
   } while (cursorValue !== '0');
 }
 
+function testLocationRepository(
+  store,
+  monotonicNowMs = () => performance.now(),
+  ownerLeaseFencingMarginMs = 0
+) {
+  return new frameworkInternal.ZLinkLocationStoreRepository(
+    store,
+    () => new Date(),
+    undefined,
+    monotonicNowMs,
+    ownerLeaseFencingMarginMs
+  );
+}
+
 function testPrefix(scope) {
   return `zlink:opaque:${scope}:${process.pid}:${Date.now()}`;
 }
@@ -1880,7 +1946,7 @@ test('aggregate capacity contention rebuilds final commit beyond 64 conflicts', 
       return inner.write(request, signal);
     }
   };
-  const repository = new frameworkInternal.ZLinkLocationStoreRepository(provider);
+  const repository = testLocationRepository(provider);
   const sourceOwner = await repository.claimOwnerLease('1304-source', 60_000);
   const targetOwner = await repository.claimOwnerLease('1304-target', 60_000);
   assert.equal(sourceOwner.kind, 'claimed');
@@ -1940,7 +2006,7 @@ test('immediately resolved capacity Conflict terminates at the original operatio
       return inner.write(...a);
     }
   };
-  const repository = new frameworkInternal.ZLinkLocationStoreRepository(provider);
+  const repository = testLocationRepository(provider);
   const owner = await repository.claimOwnerLease('1304-deadline-negative', 1000);
   const target = {
     meshName: '1304-deadline',
@@ -2006,7 +2072,7 @@ test('immediately resolved reservation Abort Conflict terminates at the original
       return inner.write(...a);
     }
   };
-  const repository = new frameworkInternal.ZLinkLocationStoreRepository(provider);
+  const repository = testLocationRepository(provider);
   const owner = await repository.claimOwnerLease('1304-deadline-negative', 1000);
   const target = {
     meshName: '1304-deadline',

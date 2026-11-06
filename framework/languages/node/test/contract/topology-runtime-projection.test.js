@@ -1063,7 +1063,9 @@ test('Shutdown stops new relocation units and waits only for admitted work to co
       return { kind: 'drained' };
     }
   });
-  host.stop = async () => {
+  const disposeContext = host.context.dispose.bind(host.context);
+  host.context.dispose = async () => {
+    await disposeContext();
     events.push('shutdown:stop');
   };
 
@@ -1138,7 +1140,10 @@ test('application shutdown hook tears down without implicitly relocating', async
       throw new Error('shutdown hook must not relocate');
     }
   });
-  host.stop = async () => {
+  await host.start();
+  const disposeContext = host.context.dispose.bind(host.context);
+  host.context.dispose = async () => {
+    await disposeContext();
     stopped++;
   };
 
@@ -1189,7 +1194,10 @@ test('Shutdown deadline includes final owned resource cleanup', async (t) => {
   const { host } = createTopologyHost({
     registration: internal.createFrameworkRegistration()
   });
-  host.stop = async () => {
+  await host.start();
+  const disposeContext = host.context.dispose.bind(host.context);
+  host.context.dispose = async () => {
+    await disposeContext();
     nowMs += 51;
   };
   const result = await host.shutdown({ deadlineMs: 50 });

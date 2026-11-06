@@ -1,7 +1,9 @@
 const { Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const n = require('../../../packages/nestjs/dist');
+const framework = require('../../../packages/framework/dist');
 const c = require('../../../packages/stream-connector/dist');
+const { fixedRidHostClock, finishFixedRidHostStartup } = require('../../helpers/fixed-rid-host-clock');
 let spots;
 class Lobby {}
 class SessionFactory {
@@ -26,7 +28,10 @@ class SessionFactory {
   }
 }
 async function main() {
-  const b = n.zlinkFramework().options({ locations: { useInMemoryStores: true } });
+  const hostClock = fixedRidHostClock();
+  const b = n.zlinkFramework().options({
+    locations: { useInMemoryStores: true, options: { ownerLeaseFencingMarginMs: 1 } }
+  });
   b.configureDispatch().messageFlow('normal');
   b.addRouteMesh('lobby-mesh')
     .listen('tcp://127.0.0.1:0')
@@ -44,6 +49,11 @@ async function main() {
   });
   let client;
   try {
+    await finishFixedRidHostStartup(
+      app.get(n.ZLINK_FRAMEWORK_RUNTIME),
+      hostClock,
+      framework.ZLinkFrameworkRuntimeState.Preparing
+    );
     console.log('HOST READY');
     spots = app.get(n.ZLINK_SPOT_MANAGER);
     const { endpoint } = app.get(n.ZLINK_FRAMEWORK_RUNTIME).getListenerStatus('stream', 'gateway');

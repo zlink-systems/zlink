@@ -24,7 +24,7 @@ export const zlinkRuntimeDefaultLocationOptions: Readonly<
   ZLinkLocationOptionValues & { readonly listPageSize: number }
 > = {
   ownerLeaseRenewIntervalMs: 5000,
-  ownerLeaseTtlMs: 15000,
+  ownerLeaseTtlMs: 30000,
   pollingIntervalMs: 1000,
   listPageSize: 100,
   storeFailureGraceMs: 30000,
