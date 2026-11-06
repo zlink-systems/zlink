@@ -137,7 +137,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 ```
 
 - `hotpath_gate` (callgrind instructions per message, ±5%) is registered only when valgrind
-  is found. Without it, the report says "gate not run" and it does not count as green. Only
+  is found and the build is not a sanitizer build. When it is not registered, the report says "gate not run" and it does not count as green. Only
   a supervisor updates `core/tests/perf/hotpath_reference.json` (`--update-reference`), and an
   intended cost increase is recorded in the decision log with its reason.
 - The release comparison of §7 runs during release preparation (the per-change obligation is

@@ -18,6 +18,24 @@ public sealed class ZLinkLocationOptions
     /// as stale everywhere.</summary>
     public TimeSpan OwnerLeaseTtl { get; set; } = TimeSpan.FromSeconds(15);
 
+    private bool _storeOutageRetention;
+    private bool _storeOutageRetentionFrozen;
+
+    /// <summary>Retain eligible execution through the derived store-outage cutoff.
+    /// Defaults to false and cannot change after Location startup.</summary>
+    public bool StoreOutageRetention
+    {
+        get => _storeOutageRetention;
+        set
+        {
+            if (_storeOutageRetentionFrozen)
+                throw new InvalidOperationException("StoreOutageRetention is startup-only.");
+            _storeOutageRetention = value;
+        }
+    }
+
+    internal void FreezeStoreOutageRetention() => _storeOutageRetentionFrozen = true;
+
     /// <summary>Store re-read period when the store has no watch support.
     /// Also bounds the staleness of the local owner lease snapshot.</summary>
     public TimeSpan PollingInterval { get; set; } = TimeSpan.FromSeconds(1);

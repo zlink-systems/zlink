@@ -11,6 +11,7 @@ const { createClient } = require('redis');
 const { logs } = require('@opentelemetry/api-logs');
 const { LoggerProvider, SimpleLogRecordProcessor } = require('@opentelemetry/sdk-logs');
 const fs = require('node:fs');
+const { fixedRidHostClock, finishFixedRidHostStartup } = require('../helpers/fixed-rid-host-clock');
 
 if (process.env.ZLINK_TEST_FLOW_FILE) {
   const flow = fs.createWriteStream(process.env.ZLINK_TEST_FLOW_FILE);
@@ -44,6 +45,7 @@ for (const remoteIngress of [false, true]) {
     `Entry Actor replays its rejected Join reply after ${remoteIngress ? 'relay' : 'native'} ingress`,
     { timeout: 60_000 },
     async (t) => {
+      const hostClock = fixedRidHostClock(t);
       const redis = createClient({ url: redisUrl, socket: { reconnectStrategy: false } });
       redis.on('error', () => {});
       try {
@@ -147,6 +149,7 @@ for (const remoteIngress of [false, true]) {
       async function start(role) {
         const builder = n.zlinkFramework();
         builder.configureDispatch().messageFlow('normal');
+        builder.configureLocations().ownerLeaseFencingMarginMs(1);
         builder.addLocationStore(
           new locations.ZLinkRedisLocationStore({ url: redisUrl, keyPrefix: `${prefix}loc` })
         );
@@ -174,6 +177,11 @@ for (const remoteIngress of [false, true]) {
           abortOnError: false
         });
         apps.push(app);
+        await finishFixedRidHostStartup(
+          app.get(n.ZLINK_FRAMEWORK_RUNTIME),
+          hostClock,
+          f.ZLinkFrameworkRuntimeState.Preparing
+        );
         return app;
       }
       async function ready(app, peers) {

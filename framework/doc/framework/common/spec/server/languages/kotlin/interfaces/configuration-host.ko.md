@@ -72,6 +72,8 @@ public interface systems.zlink.framework.locations.ZLinkLocationOptions {
  public abstract void setOwnerLeaseRenewInterval(java.time.Duration);
  public abstract java.time.Duration ownerLeaseTtl();
  public abstract void setOwnerLeaseTtl(java.time.Duration);
+ public abstract boolean storeOutageRetention();
+ public abstract void setStoreOutageRetention(boolean);
  public abstract java.time.Duration pollingInterval();
  public abstract void setPollingInterval(java.time.Duration);
  public abstract java.time.Duration storeFailureGrace();
@@ -116,6 +118,10 @@ public interface systems.zlink.framework.configuration.ZLinkStreamSocketConfig {
  public abstract void setMaxMessageSize(long);
 }
 ```
+
+`ownerLeaseTtl` 기본값은 30초다. `storeOutageRetention`은 startup-only bool option이며 기본값은 `false`다.
+보존 활성 조건·`false`의 admission 한도·domain 동일 설정 요구는
+[Location runtime §5.1](../../../05-location-relocation/01-location-runtime.ko.md#51-짧은-장애의-보존과-재참여)을 따른다.
 
 Core HWM과 application job queue 구성은 `options.configureInboundDispatch()`가 반환하는
 `ZLinkInboundDispatchOptions`에서 직접 설정한다. `configureDispatch { ... }`는 diagnostics DSL이며

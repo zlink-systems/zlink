@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const framework = require('../../packages/framework/dist/internal');
+const { ZLinkFrameworkExecutionState } = require('../../packages/framework/dist/runtime/execution');
 
 test('Shutdown awaits Draining publication then runs callbacks and cleanup without a polling wait', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -20,10 +21,14 @@ test('Shutdown awaits Draining publication then runs callbacks and cleanup witho
       events.push('publish');
       return await new Promise(resolve => { publish = resolve; });
     },
-    async cleanupOwner() { events.push('owner-cleanup'); }
+    async cleanupOwner() { events.push('owner-cleanup'); },
+    async stop() {}
   };
   host.setSpotManager({ async drainForShutdown() { events.push('spot-callbacks-and-cleanup'); } });
-  host.stop = async () => { events.push('stop'); };
+  host.executionState = new ZLinkFrameworkExecutionState({
+    getCoreHwmBudgetSnapshot() { return undefined; },
+    async dispose() { events.push('stop'); }
+  });
 
   const shutdown = host.shutdown({ deadlineMs: 500 });
   await new Promise(resolve => setImmediate(resolve));
@@ -58,10 +63,14 @@ for (const failure of ['publication-false', 'publication-throw', 'owner-cleanup'
       async cleanupOwner() {
         cleanups++;
         throw cause;
-      }
+      },
+      async stop() {}
     };
     host.setSpotManager({ async drainForShutdown() {} });
-    host.stop = async () => { stops++; };
+    host.executionState = new ZLinkFrameworkExecutionState({
+      getCoreHwmBudgetSnapshot() { return undefined; },
+      async dispose() { stops++; }
+    });
     const operation = failure === 'owner-cleanup' ? 'cleanupOwnerForDrain' : 'publishHostDraining';
     const original = host[operation].bind(host);
     t.mock.method(host, operation, async (...args) => {

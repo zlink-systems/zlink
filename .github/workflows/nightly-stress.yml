@@ -182,6 +182,17 @@ jobs:
           path: ${{ runner.temp }}/sanitizer-summary.json
           if-no-files-found: ignore
 
+      # The summary names failing tests only; the CTest log and JUnit file carry
+      # each test's first sanitizer stack.
+      - name: Upload sanitizer test logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: nightly-stress-sanitizer-logs
+          path: ${{ runner.temp }}/sanitizer-logs
+          if-no-files-found: ignore
+          retention-days: 14
+
       # A self-hosted runner keeps its workspace between jobs, and these
       # sanitizer builds take about 140 GB of it.
       - name: Remove sanitizer build trees

@@ -9,6 +9,7 @@ export interface ZLinkActorMembership {
 export interface ZLinkLocationOptionValues {
   readonly ownerLeaseRenewIntervalMs: number;
   readonly ownerLeaseTtlMs: number;
+  readonly storeOutageRetention: boolean;
   readonly pollingIntervalMs: number;
   readonly storeFailureGraceMs: number;
   readonly ownerLeaseFencingMarginMs: number;

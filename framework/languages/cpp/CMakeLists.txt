@@ -2135,6 +2135,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_use_zlink_gtest_main(test_cpp_framework_maintenance_failure)
   target_include_directories(test_cpp_framework_maintenance_failure PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_sources(test_cpp_framework_maintenance_failure PRIVATE
+    tests/support/allocation_counter.cpp)
   add_zlink_framework_test(
     test_cpp_framework_relocation_seal_contract
     tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp
@@ -2625,7 +2627,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
         RESOURCE_LOCK zlink_cpp_heavy_runtime)
   endforeach()
   find_program(ZLINK_FRAMEWORK_CPP_VALGRIND_EXECUTABLE NAMES valgrind)
-  if(ZLINK_FRAMEWORK_CPP_VALGRIND_EXECUTABLE)
+  string(FIND "${CMAKE_CXX_FLAGS}" "-fsanitize=" zlink_framework_cpp_sanitizer_flag)
+  if(ZLINK_FRAMEWORK_CPP_VALGRIND_EXECUTABLE
+      AND zlink_framework_cpp_sanitizer_flag EQUAL -1)
     zlink_framework_cpp_add_test(
       NAME test_cpp_framework_local_handoff_lifetime_memcheck
       COMMAND "${ZLINK_FRAMEWORK_CPP_VALGRIND_EXECUTABLE}"

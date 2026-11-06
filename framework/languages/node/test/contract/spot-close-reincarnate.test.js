@@ -94,7 +94,13 @@ test('opaque provider Reincarnate batches both generation counters and fences re
       return await inner.write(request, signal);
     }
   };
-  const store = new framework.ZLinkLocationStoreRepository(provider, () => now);
+  const store = new framework.ZLinkLocationStoreRepository(
+    provider,
+    () => now,
+    undefined,
+    undefined,
+    0
+  );
   const lease = await store.claimOwnerLease('owner', 30_000);
   assert.equal(lease.kind, 'claimed');
   ownerToken = lease.token;

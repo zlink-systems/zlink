@@ -6,6 +6,7 @@ const protobuf = require('../../packages/framework-codec-protobuf/dist/server/fr
 const { Injectable, Module, Scope } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const nestjs = require('../../packages/nestjs/dist');
+const { fixedRidHostClock, finishFixedRidHostStartup } = require('../helpers/fixed-rid-host-clock');
 const {
   ZLinkRuntimeTaskErrorSink,
   ZLinkRuntimeTaskRunner
@@ -15,7 +16,8 @@ const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
   new AbortController().signal
 );
 
-test('Public User Spot creation exposes its generation as bigint', async () => {
+test('Public User Spot creation exposes its generation as bigint', async (t) => {
+  const hostClock = fixedRidHostClock(t);
   let contextGeneration;
   class GenerationSpot {
     async onInitialize() {
@@ -24,6 +26,7 @@ test('Public User Spot creation exposes its generation as bigint', async () => {
   }
   Injectable({ scope: Scope.TRANSIENT })(GenerationSpot);
   const builder = nestjs.zlinkFramework().options({ locations: { useInMemoryStores: true } });
+  builder.configureLocations().ownerLeaseFencingMarginMs(1);
   builder
     .addRouteMesh('generation-boundary-public')
     .listen('tcp://127.0.0.1:0')
@@ -42,6 +45,11 @@ test('Public User Spot creation exposes its generation as bigint', async () => {
     abortOnError: false
   });
   try {
+    await finishFixedRidHostStartup(
+      app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME),
+      hostClock,
+      framework.ZLinkFrameworkRuntimeState.Preparing
+    );
     const spots = app.get(nestjs.ZLINK_SPOT_MANAGER);
     const created = await spots
       .create('generation-boundary')

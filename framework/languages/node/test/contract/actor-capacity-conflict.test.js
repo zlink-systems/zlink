@@ -6,8 +6,10 @@ const { Injectable, Module, Scope } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const { ZLinkInMemoryProviderLocationStore } = require('../../packages/framework/dist/internal');
 const nestjs = require('../../packages/nestjs/dist');
+const { fixedRidHostClock, finishFixedRidHostStartup } = require('../helpers/fixed-rid-host-clock');
 
-test('64 concurrent Actors rebuild shared capacity without repeating factory or callback', async () => {
+test('64 concurrent Actors rebuild shared capacity without repeating factory or callback', async (t) => {
+  const hostClock = fixedRidHostClock(t);
   const actorCount = 64;
   let factories = 0;
   let callbacks = 0;
@@ -27,6 +29,7 @@ test('64 concurrent Actors rebuild shared capacity without repeating factory or 
   Injectable({ scope: Scope.TRANSIENT })(EntrySpot);
   const provider = new ZLinkInMemoryProviderLocationStore();
   const builder = nestjs.zlinkFramework().addLocationStore(provider);
+  builder.configureLocations().ownerLeaseFencingMarginMs(1);
   builder.addRouteMesh('capacity-conflict')
     .listen('tcp://127.0.0.1:0')
     .routingId('1304-capacity-node')
@@ -39,6 +42,11 @@ test('64 concurrent Actors rebuild shared capacity without repeating factory or 
     logger: false, abortOnError: false
   });
   try {
+    await finishFixedRidHostStartup(
+      app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME),
+      hostClock,
+      require('../../packages/framework/dist').ZLinkFrameworkRuntimeState.Preparing
+    );
     const actors = app.get(nestjs.ZLINK_ACTOR_MANAGER);
     const results = await Promise.all(Array.from({ length: actorCount }, (_, index) =>
       actors.getOrCreate(`capacity-${index}`, 'player')

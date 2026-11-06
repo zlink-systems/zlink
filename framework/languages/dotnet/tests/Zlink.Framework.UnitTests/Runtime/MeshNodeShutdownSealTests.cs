@@ -196,6 +196,13 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     [Fact]
     public async Task RequestTerminal_TakesWithoutEnteringTheOperationLane()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshNodeShutdownSealTests),
+                nameof(RequestTerminal_TakesWithoutEnteringTheOperationLane)
+            )
+        )
+            return;
         await using var lane = new ZLinkStateLane();
         await using var fixture = new NativeDeadlineRequest(operationLane: lane);
         await fixture.Ready.WaitAsync(TimeSpan.FromSeconds(5));
@@ -231,6 +238,13 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     [Fact]
     public async Task RequestDeadline_IncludesTimeWaitingForTheOperationOwner()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshNodeShutdownSealTests),
+                nameof(RequestDeadline_IncludesTimeWaitingForTheOperationOwner)
+            )
+        )
+            return;
         var clock = new OperationDeadlineClock();
         await using var lane = new ZLinkStateLane();
         await using var fixture = new NativeDeadlineRequest(clock, lane);
@@ -342,6 +356,13 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     [Fact]
     public async Task RequestIndex_DoesNotEnterOwnerBeforeNextVisit()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshNodeShutdownSealTests),
+                nameof(RequestIndex_DoesNotEnterOwnerBeforeNextVisit)
+            )
+        )
+            return;
         await using var lane = new ZLinkStateLane();
         await using var fixture = new NativeDeadlineRequest(operationLane: lane);
         await fixture.Ready.WaitAsync(TimeSpan.FromSeconds(5));
@@ -442,6 +463,13 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     [Fact]
     public async Task RequestIndex_ThousandExpiriesUseOneManagementTurn()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshNodeShutdownSealTests),
+                nameof(RequestIndex_ThousandExpiriesUseOneManagementTurn)
+            )
+        )
+            return;
         const int requestCount = 1000;
         var clock = new OperationDeadlineClock();
         await using var lane = new ZLinkStateLane();
@@ -513,6 +541,13 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     [Fact]
     public async Task RequestShutdown_CompletesManagedCallersBeforeDispatcherDrain()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshNodeShutdownSealTests),
+                nameof(RequestShutdown_CompletesManagedCallersBeforeDispatcherDrain)
+            )
+        )
+            return;
         await using var fixture = new NativeDeadlineRequest();
         await fixture.Ready.WaitAsync(TimeSpan.FromSeconds(5));
         var pending = fixture.Request(TimeSpan.FromMinutes(1)).AsTask();
@@ -721,7 +756,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         ) =>
             Node.RequestDirectWireAsync(
                 _target,
-                new ReadOnlyMemory<byte>[] { "request"u8.ToArray() },
+                new Message[] { Message.From("request") },
                 timeout,
                 token,
                 requestAdmission: requestAdmission
@@ -930,6 +965,13 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     [Fact]
     public async Task Canonical_prepare_registers_original_entry_before_readiness_and_owner_expiry()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshNodeShutdownSealTests),
+                nameof(Canonical_prepare_registers_original_entry_before_readiness_and_owner_expiry)
+            )
+        )
+            return;
         var clock = new OperationDeadlineClock();
         await using var native = Systems.Zlink.Zlink.CreateContext();
         var context = new CanonicalRequestContext(native);
@@ -1059,6 +1101,13 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         bool expireOwner
     )
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshNodeShutdownSealTests),
+                nameof(Canonical_prepare_late_physical_reply_keeps_original_cancel_and_shared_ready)
+            )
+        )
+            return;
         var stages = new ConcurrentBag<Activity>();
         using var listener = new ActivityListener
         {
@@ -1182,6 +1231,15 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     [Fact]
     public async Task Canonical_prepare_observes_completed_physical_reply_before_chunk_call_returns()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshNodeShutdownSealTests),
+                nameof(
+                    Canonical_prepare_observes_completed_physical_reply_before_chunk_call_returns
+                )
+            )
+        )
+            return;
         using var gate = new ChunkReturnGate();
         await using var fixture = new CanonicalPhysicalRequest(gate);
         await fixture.MakeReadyAsync();
@@ -1225,6 +1283,13 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
     [Fact]
     public async Task Canonical_prepare_withheld_physical_reply_hits_original_native_deadline()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshNodeShutdownSealTests),
+                nameof(Canonical_prepare_withheld_physical_reply_hits_original_native_deadline)
+            )
+        )
+            return;
         using var gate = new ChunkReturnGate();
         await using var fixture = new CanonicalPhysicalRequest(gate);
         await fixture.MakeReadyAsync();

@@ -92,6 +92,8 @@ public interface ZLinkLocationOptions {
  void setOwnerLeaseRenewInterval(Duration value);
  Duration ownerLeaseTtl();
  void setOwnerLeaseTtl(Duration value);
+ boolean storeOutageRetention();
+ void setStoreOutageRetention(boolean value);
  Duration pollingInterval();
  void setPollingInterval(Duration value);
  Duration storeFailureGrace();
@@ -247,6 +249,10 @@ public interface FanoutChannelBuilder {
  FanoutChannelBuilder addHandlerGroup(String groupName);
 }
 ```
+
+`ownerLeaseTtl` 기본값은 30초다. `storeOutageRetention`은 startup-only bool option이며 기본값은 `false`다.
+보존 활성 조건·`false`의 admission 한도·domain 동일 설정 요구는
+[Location runtime §5.1](../../../05-location-relocation/01-location-runtime.ko.md#51-짧은-장애의-보존과-재참여)을 따른다.
 
 `configureInboundDispatch()`가 반환하는 `ZLinkInboundDispatchOptions`의 `coreHwmMemoryLimitBytes`,
 `coreHwmBudgetBytes`, `coreHwmProfile`은 Core에 전달한다. Core와 job queue profile은 기본값
@@ -602,6 +608,8 @@ public interface systems.zlink.framework.locations.ZLinkLocationOptions {
  public abstract void setOwnerLeaseRenewInterval(java.time.Duration);
  public abstract java.time.Duration ownerLeaseTtl();
  public abstract void setOwnerLeaseTtl(java.time.Duration);
+ public abstract boolean storeOutageRetention();
+ public abstract void setStoreOutageRetention(boolean);
  public abstract java.time.Duration pollingInterval();
  public abstract void setPollingInterval(java.time.Duration);
  public abstract java.time.Duration storeFailureGrace();

@@ -22,7 +22,7 @@ const scenario = join(__dirname, 'fixtures/telemetry-worker-case.cjs');
 const hostPath = join(root, 'packages/framework/src/runtime/host/index.ts');
 const hostSource = ts.createSourceFile(hostPath, readFileSync(hostPath, 'utf8'), ts.ScriptTarget.Latest, true);
 const hostClass = hostSource.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'ZLinkFrameworkRuntimeHost');
-const stopMethod = hostClass.members.find(node => node.name?.getText(hostSource) === 'stop');
+const stopMethods = hostClass.members.filter(node => ['stop', 'teardownRuntime', 'teardown'].includes(node.name?.getText(hostSource)));
 const timeoutConstant = hostSource.statements.find(node => ts.isVariableStatement(node)
   && node.declarationList.declarations.some(value => value.name.getText(hostSource) === 'DEFAULT_HOST_CONTROL_TIMEOUT_MS'));
 const errorsPath = join(root, 'packages/framework/src/contracts/Errors/ZLinkFrameworkException.ts');
@@ -33,9 +33,12 @@ const stopOutput = join(runDir, 'host-stop-source.cjs');
 writeFileSync(stopOutput, ts.transpileModule(`
 const { ZLinkFrameworkException, ZLinkFrameworkErrorKind } = require(${JSON.stringify(errorsOutput)});
 const { retireTelemetryLease } = require(${JSON.stringify(join(moduleDir, 'message-flow-delivery.js'))});
+const { RuntimeDisposal } = require(${JSON.stringify(join(root, 'packages/framework/dist/runtime/disposal.js'))});
+const { ZLinkFrameworkTerminationOutcome, ZLinkFrameworkTerminationReason } = require(${JSON.stringify(join(root, 'packages/framework/dist/contracts/RouteMesh/RuntimeTopology.js'))});
+const { ZLinkFrameworkRuntimeState } = require(${JSON.stringify(join(root, 'packages/framework/dist/contracts/Locations/Rows.js'))});
 ${timeoutConstant.getText(hostSource)}
-class HostStopSourceProof { ${stopMethod.getText(hostSource)} }
-module.exports = HostStopSourceProof.prototype.stop;
+class HostStopSourceProof { ${stopMethods.map(method => method.getText(hostSource)).join('\n')} }
+module.exports = HostStopSourceProof;
 `, { compilerOptions }).outputText);
 
 for (const mode of ['bootstrap', 'none', 'main-only', 'logger', 'trace', 'both', 'false-enabled', 'registered-noop',

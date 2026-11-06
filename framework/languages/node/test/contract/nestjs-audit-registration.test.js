@@ -10,8 +10,10 @@ const integration = require('../../packages/framework/dist/internal');
 const nestjs = require('../../packages/nestjs/dist');
 const connector = require('../../packages/stream-connector/dist');
 const { createBrowserSafeStreamApp } = require('./helpers/browser-safe-stream-app');
+const { fixedRidHostClock, finishFixedRidHostStartup } = require('../helpers/fixed-rid-host-clock');
 
-test('Nest fresh Spot creation preserves constructor failure', async () => {
+test('Nest fresh Spot creation preserves constructor failure', async (t) => {
+  const hostClock = fixedRidHostClock(t);
   const failure = new Error('fresh Spot constructor failed');
   let instances = 0;
   class FailingSpot {
@@ -22,6 +24,7 @@ test('Nest fresh Spot creation preserves constructor failure', async () => {
   const options = nestjs
     .zlinkFramework()
     .addLocationStore(new integration.ZLinkInMemoryProviderLocationStore());
+  options.configureLocations().ownerLeaseFencingMarginMs(1);
   const mesh = options
     .addRouteMesh('nest-audit-fresh')
     .listen('tcp://127.0.0.1:*')
@@ -40,6 +43,11 @@ test('Nest fresh Spot creation preserves constructor failure', async () => {
     abortOnError: false
   });
   try {
+    await finishFixedRidHostStartup(
+      app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME),
+      hostClock,
+      framework.ZLinkFrameworkRuntimeState.Preparing
+    );
     await assert.rejects(
       app
         .get(nestjs.ZLINK_SPOT_MANAGER)
@@ -53,7 +61,8 @@ test('Nest fresh Spot creation preserves constructor failure', async () => {
   }
 });
 
-test('Nest fresh Spot creation uses its owning module private dependencies', async () => {
+test('Nest fresh Spot creation uses its owning module private dependencies', async (t) => {
+  const hostClock = fixedRidHostClock(t);
   class PrivateDependency {}
   const created = [];
   class OwnedSpot {
@@ -67,6 +76,7 @@ test('Nest fresh Spot creation uses its owning module private dependencies', asy
   const options = nestjs
     .zlinkFramework()
     .addLocationStore(new integration.ZLinkInMemoryProviderLocationStore());
+  options.configureLocations().ownerLeaseFencingMarginMs(1);
   const mesh = options
     .addRouteMesh('nest-audit-owner')
     .listen('tcp://127.0.0.1:*')
@@ -83,6 +93,11 @@ test('Nest fresh Spot creation uses its owning module private dependencies', asy
     abortOnError: false
   });
   try {
+    await finishFixedRidHostStartup(
+      app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME),
+      hostClock,
+      framework.ZLinkFrameworkRuntimeState.Preparing
+    );
     const manager = app.get(nestjs.ZLINK_SPOT_MANAGER);
     await manager.create(OwnedSpot.name).inMesh('nest-audit-owner').submit();
     await manager.create(OwnedSpot.name).inMesh('nest-audit-owner').submit();
@@ -188,7 +203,8 @@ test('Framework rejects duplicate Relocation Store registration', () => {
   );
 });
 
-test('Nest Actor decorators dispatch selected methods through public Actor client', async () => {
+test('Nest Actor decorators dispatch selected methods through public Actor client', async (t) => {
+  const hostClock = fixedRidHostClock(t);
   const calls = [];
   let roomId;
   let joinedRoom;
@@ -302,6 +318,7 @@ test('Nest Actor decorators dispatch selected methods through public Actor clien
   const options = nestjs
     .zlinkFramework()
     .addLocationStore(new integration.ZLinkInMemoryProviderLocationStore());
+  options.configureLocations().ownerLeaseFencingMarginMs(1);
   const mesh = options
     .addRouteMesh('nest-audit-method')
     .listen('tcp://127.0.0.1:*')
@@ -323,6 +340,11 @@ test('Nest Actor decorators dispatch selected methods through public Actor clien
     abortOnError: false
   });
   try {
+    await finishFixedRidHostStartup(
+      app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME),
+      hostClock,
+      framework.ZLinkFrameworkRuntimeState.Preparing
+    );
     const room = await app
       .get(nestjs.ZLINK_SPOT_MANAGER)
       .create(RoomSpot.name)
