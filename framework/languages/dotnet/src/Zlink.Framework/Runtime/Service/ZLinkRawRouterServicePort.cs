@@ -192,14 +192,18 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposeTask) is not null, this);
     }
 
-    internal static Message[] CreateMessages(IReadOnlyList<ReadOnlyMemory<byte>> parts)
+    internal static Message[] CreateMessages(IReadOnlyList<ReadOnlyMemory<byte>> parts) =>
+        CreateMessages(parts, static part => Message.From(part));
+
+    internal static Message[] CreateMessages<T>(IReadOnlyList<T> parts, Func<T, Message> create)
     {
+        ZLinkApplicationPayloadEnvelopeCodec.ObserveEncoding("wire-list");
         var messages = new Message[parts.Count];
         var created = 0;
         try
         {
             for (; created < parts.Count; created++)
-                messages[created] = Message.From(parts[created]);
+                messages[created] = create(parts[created]);
             return messages;
         }
         catch
