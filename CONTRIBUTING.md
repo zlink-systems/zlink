@@ -102,6 +102,20 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   against the shared `libzlink` (`core/tests/README.md`, "Interface Boundary").
 - No test estimates timing with `sleep`. A new test is repeated five times before it counts
   as green.
+- **A test that depends on elapsed time uses a controllable clock instead of the real clock.**
+  Tests that check deadlines, timeouts, periods, or expiry advance time directly through the
+  runtime's clock injection point (for example .NET `TimeProvider` or the Node `monotonicNowMs`
+  option). Do not wait for a condition by polling a real-clock deadline with short sleeps. An
+  unavoidable bounded wait only bounds failure diagnosis; it is never a synchronization mechanism.
+- **Never assume two clocks are the same.** Wall-clock and monotonic time, or a test-injected clock
+  and a runtime-internal clock, can advance differently. Do not judge one clock's deadline by
+  elapsed time measured on another.
+- **Trace or log delivery is not idleness.** Arrival of a trace or log line is no evidence that
+  work has finished or a queue is empty. Decide idleness and completion from completion or state
+  events observable through the public API.
+- A one-worker run and a sanitizer (ASan and UBSan) run execute nightly on main
+  (`.github/workflows/nightly-stress.yml`). Failures found there are treated as defects that
+  parallel, real-clock runs exposed only rarely, and a passing rerun does not close them.
 - Known load flakes: `test_single_lane_flow_snapshot_accounting` (rare immediate failure in
   the parallel suite, judged by one standalone rerun) and C++ binding test exit 86/134 right
   after a relink (one rerun).

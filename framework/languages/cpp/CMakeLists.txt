@@ -2993,16 +2993,21 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     target_link_options(test_cpp_framework_raw_send_sync PRIVATE "LINKER:--wrap=pthread_mutex_lock")
     # Compile the real codec here so wrapping observes its libc calls with both
     # static and shared Framework packages, as in the DI synchronization probe.
-    add_zlink_framework_test(
-      test_cpp_framework_envelope_key_cost
-      tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_key_cost.cpp
-      "framework-unit;framework-regression;messaging;resource")
-    target_use_zlink_gtest_main(test_cpp_framework_envelope_key_cost)
-    target_sources(test_cpp_framework_envelope_key_cost PRIVATE
-      framework/src/runtime/messaging/envelope_codec.cpp)
-    target_include_directories(test_cpp_framework_envelope_key_cost PRIVATE
-      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
-    target_link_options(test_cpp_framework_envelope_key_cost PRIVATE "LINKER:--wrap=strlen")
+    # A sanitizer build cannot hide __wrap_strlen from the sanitizer runtime, and
+    # its instrumentation changes the libc call counts this test pins.
+    string(FIND "${CMAKE_CXX_FLAGS}" "-fsanitize=" zlink_framework_cpp_sanitizer_flag)
+    if(zlink_framework_cpp_sanitizer_flag EQUAL -1)
+      add_zlink_framework_test(
+        test_cpp_framework_envelope_key_cost
+        tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_key_cost.cpp
+        "framework-unit;framework-regression;messaging;resource")
+      target_use_zlink_gtest_main(test_cpp_framework_envelope_key_cost)
+      target_sources(test_cpp_framework_envelope_key_cost PRIVATE
+        framework/src/runtime/messaging/envelope_codec.cpp)
+      target_include_directories(test_cpp_framework_envelope_key_cost PRIVATE
+        ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+      target_link_options(test_cpp_framework_envelope_key_cost PRIVATE "LINKER:--wrap=strlen")
+    endif()
   endif()
   target_sources(test_cpp_framework_completion_allocations PRIVATE
     tests/support/allocation_counter.cpp)

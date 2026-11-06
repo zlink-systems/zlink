@@ -47,6 +47,11 @@ on:
         required: false
         type: boolean
         default: false
+      single_worker:
+        description: Run tests with one worker for the nightly stress workflow.
+        required: false
+        type: boolean
+        default: false
       queue_checks_only:
         description: Run the checks used to admit a pull request to the merge queue.
         required: false
@@ -95,7 +100,7 @@ jobs:
     # ["self-hosted","linux","x64"]) moves this job to a self-hosted runner;
     # without it the job stays on the GitHub-hosted image. Mergify branches,
     # manual runs and main cache warming never run untrusted fork code.
-    runs-on: ${{ inputs.skip_tests && (vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04') || vars.ZLINK_CPP_LINUX_RUNNER && fromJSON(vars.ZLINK_CPP_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    runs-on: ${{ inputs.single_worker && 'ubuntu-24.04' || inputs.skip_tests && (vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04') || vars.ZLINK_CPP_LINUX_RUNNER && fromJSON(vars.ZLINK_CPP_LINUX_RUNNER) || 'ubuntu-24.04' }}
     steps:
       - name: Confirm unchanged language
         if: ${{ inputs.skip_tests }}
@@ -261,17 +266,23 @@ jobs:
       - name: Run Framework C++ unit and contract tests
         if: ${{ !inputs.skip_tests }}
         working-directory: framework/languages/cpp
+        env:
+          ZLINK_SINGLE_WORKER: ${{ inputs.single_worker }}
         run: |
           # No test is excluded. sample_parity and layout_contract were once
           # believed to fail on main; they pass, and both read only the source
           # tree, so BUILD_SAMPLES=OFF above does not change their result.
-          ctest --preset linux-ninja-release \
+          parallel_args=()
+          if [[ "${ZLINK_SINGLE_WORKER}" == "true" ]]; then
+            parallel_args=(--parallel 1)
+          fi
+          ctest --preset linux-ninja-release "${parallel_args[@]}" \
             -L '^(unit|contract)$'
 
   framework-cpp-windows:
     name: win-x64 / Framework C++ unit and contract tests
     # Windows runs on schedule, manual and release runs; queue batches and queue checks use Linux only.
-    if: ${{ !inputs.skip_tests && !inputs.queue_checks_only && !startsWith(github.ref_name, 'mergify/merge-queue/') }}
+    if: ${{ !inputs.skip_tests && !inputs.single_worker && !inputs.queue_checks_only && !startsWith(github.ref_name, 'mergify/merge-queue/') }}
     # Same rule as the Linux job, with its own variable.
     runs-on: ${{ vars.ZLINK_CPP_WINDOWS_RUNNER && fromJSON(vars.ZLINK_CPP_WINDOWS_RUNNER) || 'windows-2022' }}
     env:
