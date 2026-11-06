@@ -3969,6 +3969,121 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     }
 
     [Fact]
+    public async Task LeaseDeferredStartupObservesEveryFixedRidMeshBeforeReleaseWait()
+    {
+        const string firstMeshName = "play-a";
+        const string secondMeshName = "play-b";
+        var firstRid = RoutingId.From("fixed-rid-mesh-a");
+        var secondRid = RoutingId.From("fixed-rid-mesh-b");
+        var time = new ManualTimeProvider();
+        var backingStore = new ZLinkInMemoryProviderLocationStore(time);
+        var seedRepository = new ZLinkProviderLocationRepository(backingStore, time);
+        var previousOwner = await ClaimAsync(
+            seedRepository,
+            "fixed-rid-multi-previous-owner",
+            TimeSpan.FromSeconds(1)
+        );
+        await PublishAsync(
+            seedRepository,
+            Descriptor("fixed-rid-mesh-a", previousOwner) with
+            {
+                MeshName = firstMeshName,
+                Rid = firstRid,
+                ObjectRole = ZLinkMeshNodeObjectRole.Client,
+                State = ZLinkFrameworkRuntimeState.Serving,
+            },
+            ZLinkLocationWriteIntent.NewClaim
+        );
+        await PublishAsync(
+            seedRepository,
+            Descriptor("fixed-rid-mesh-b", previousOwner) with
+            {
+                MeshName = secondMeshName,
+                Rid = secondRid,
+                ObjectRole = ZLinkMeshNodeObjectRole.Client,
+                State = ZLinkFrameworkRuntimeState.Serving,
+            },
+            ZLinkLocationWriteIntent.NewClaim
+        );
+        var fencingMargin = TimeSpan.FromMilliseconds(10);
+        var startupStore = new ApplyThenThrowLocationStore(backingStore) { BlockWrites = true };
+        var firstMeshStore = new FixedRidTrackingLocationStore(
+            startupStore,
+            ZLinkProviderLocationRepository.MeshKey(firstMeshName, firstRid)
+        );
+        var secondMeshStore = new FixedRidTrackingLocationStore(
+            firstMeshStore,
+            ZLinkProviderLocationRepository.MeshKey(secondMeshName, secondRid)
+        );
+        var services = new ServiceCollection();
+        services.AddZLinkFramework(options =>
+        {
+            options.UseTestTimeProvider(time);
+            options.AddLocationStore(secondMeshStore);
+            options.ConfigureLocations().PollingInterval = TimeSpan.FromDays(1);
+            options.ConfigureLocations().OwnerLeaseFencingMargin = fencingMargin;
+            options
+                .AddRouteMesh(firstMeshName)
+                .Listen("tcp://127.0.0.1:0")
+                .SetRoutingId(firstRid)
+                .Objects()
+                .Client();
+            options
+                .AddRouteMesh(secondMeshName)
+                .Listen("tcp://127.0.0.1:0")
+                .SetRoutingId(secondRid)
+                .Objects()
+                .Client();
+        });
+        await using var serviceProvider = services.BuildServiceProvider();
+        var hosted = FrameworkHostedService(serviceProvider);
+        try
+        {
+            await hosted.StartAsync(CancellationToken.None);
+            var locationRuntime = serviceProvider.GetRequiredService<ZLinkLocationRuntime>();
+            var host = serviceProvider.GetRequiredService<IZLinkFrameworkRuntime>();
+            Assert.False(locationRuntime.IsOwnerAdmissionOpen);
+            Assert.Equal(ZLinkFrameworkRuntimeState.Preparing, host.Status.State);
+            Assert.Equal(0, ObservationCount(locationRuntime.Store));
+
+            startupStore.BlockWrites = false;
+            time.Advance(TimeSpan.FromSeconds(1));
+            Assert.True(await locationRuntime.RenewOwnerLeaseOnceAsync());
+            Assert.Equal(2, ObservationCount(locationRuntime.Store));
+            Assert.Equal(0, firstMeshStore.DescriptorWriteCount);
+            Assert.Equal(0, secondMeshStore.DescriptorWriteCount);
+            Assert.Equal(ZLinkFrameworkRuntimeState.Preparing, host.Status.State);
+
+            time.Advance(TimeSpan.FromTicks(fencingMargin.Ticks * 3));
+            Assert.True(await locationRuntime.RenewOwnerLeaseOnceAsync());
+            await Task.WhenAll(
+                    firstMeshStore.SecondDescriptorWritten,
+                    secondMeshStore.SecondDescriptorWritten
+                )
+                .WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(2, firstMeshStore.DescriptorWriteCount);
+            Assert.Equal(2, secondMeshStore.DescriptorWriteCount);
+            var firstDescriptor = Assert.Single(
+                (await seedRepository.ListMeshNodesAsync(firstMeshName, default)).Items
+            );
+            var secondDescriptor = Assert.Single(
+                (await seedRepository.ListMeshNodesAsync(secondMeshName, default)).Items
+            );
+            Assert.Equal(ZLinkFrameworkRuntimeState.Serving, firstDescriptor.State);
+            Assert.Equal(ZLinkFrameworkRuntimeState.Serving, secondDescriptor.State);
+            Assert.Equal(locationRuntime.OwnerToken.OwnerId, firstDescriptor.OwnerId);
+            Assert.Equal(locationRuntime.OwnerToken.OwnerId, secondDescriptor.OwnerId);
+            Assert.Equal(ZLinkFrameworkRuntimeState.Serving, host.Status.State);
+            await hosted.StopAsync(CancellationToken.None);
+        }
+        finally
+        {
+            await hosted.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task FixedRidClaimRaceMakesRejectedHostTerminal()
     {
         const string meshName = "play";

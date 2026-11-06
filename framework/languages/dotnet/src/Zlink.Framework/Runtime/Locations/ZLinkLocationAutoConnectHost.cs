@@ -116,15 +116,18 @@ internal sealed class ZLinkLocationAutoConnectHost
             // lease is held, before their descriptors are published.
             try
             {
+                var ownerBoundStarted = true;
                 foreach (var node in state.SpotNodes.Values)
                     if (!await node.StartOwnerBoundAsync().ConfigureAwait(false))
-                    {
-                        Interlocked.Exchange(
-                            ref _deferredStart,
-                            new DeferredStart(state, published, startupFailure)
-                        );
-                        return;
-                    }
+                        ownerBoundStarted = false;
+                if (!ownerBoundStarted)
+                {
+                    Interlocked.Exchange(
+                        ref _deferredStart,
+                        new DeferredStart(state, published, startupFailure)
+                    );
+                    return;
+                }
                 var registration = state.Registration;
                 if (
                     registration.Channels.Values.Any(static channel =>
