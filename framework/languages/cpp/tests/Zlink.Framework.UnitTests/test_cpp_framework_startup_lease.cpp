@@ -147,7 +147,8 @@ class held_lease_repository_t final : public runtime::in_memory_location_reposit
         }
         if (mesh_status != location_write_status_t::stored)
             co_return location_write_result_t{mesh_status, 0, {}};
-        const auto first = intent == location_write_intent_t::new_claim;
+        const auto first = intent == location_write_intent_t::new_claim
+                           || intent == location_write_intent_t::fixed_rid_new_claim;
         if (first) {
             std::call_once (_requested, [&] { descriptor_requested.set_value (); });
             co_await release_descriptor.task ();
@@ -245,6 +246,8 @@ class runtime_probe_t final : public hosted_service_t
 void configure (app_t &app, const std::shared_ptr<held_lease_repository_t> &store, bool mesh = true)
 {
     auto &options = app.add_zlink_framework ();
+    options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+    options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
     // Use the repository port so claim rejection and pending responses are controlled
     // directly; the production Location runtime and descriptor publishers run unchanged.
     app.advanced ().services ().add_factory<location_repository_t> (

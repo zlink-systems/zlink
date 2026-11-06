@@ -543,6 +543,7 @@ struct mesh_node_host_service_test_access_t
     {
         service._location_store = std::move (store);
         service._location_runtime = &runtime;
+        service._location_store->configure_reclaim_margin (std::chrono::milliseconds::zero ());
         mesh_node_descriptor_t descriptor;
         descriptor.mesh_name = "publication-mesh";
         descriptor.rid = zlink::routing_id_t::from ("local");
@@ -1509,10 +1510,13 @@ TEST (ZLinkFrameworkLocationRuntime, AdmissionSnapshotPreservesStrictExpiryAndRe
 TEST (ZLinkFrameworkLocationRuntime, RejectsLeaseTimeoutLongerThanFencedRenewalWindow)
 {
     location_options_t options;
+    options.owner_lease_ttl = std::chrono::seconds (15);
     options.owner_lease_renew_interval = std::chrono::seconds (1);
     options.owner_lease_renew_timeout = std::chrono::seconds (8);
     EXPECT_THROW (zlink::framework::detail::validate_location_options (options),
                   zlink::framework::framework_exception_t);
+    options.owner_lease_ttl = std::chrono::seconds (30);
+    EXPECT_NO_THROW (zlink::framework::detail::validate_location_options (options));
     EXPECT_NO_THROW (zlink::framework::detail::validate_location_options (location_options_t{}));
 }
 
@@ -2576,6 +2580,7 @@ void check_auto_loop_ready (bool later, bool recovery)
     options.owner_lease_ttl = std::chrono::hours (3);
     options.polling_interval = std::chrono::hours (1);
     location_runtime_t runtime (store, options, "local-owner");
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     runtime.start (zlink::routing_id_t::from ("local"));
     live_location_reader_t reader (store, options);
     store_location_resolvers_t cache (store);
@@ -2608,6 +2613,7 @@ void check_provider_auto_loop (bool hold_route)
     ASSERT_EQ (1u, executor->live_worker_count ());
     auto_connect_probe_store_t provider;
     provider_location_repository_t store (provider);
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     location_options_t options;
     options.owner_lease_renew_interval = std::chrono::hours (1);
     options.owner_lease_ttl = std::chrono::hours (3);
@@ -2628,6 +2634,7 @@ void check_provider_auto_loop (bool hold_route)
       location_write_status_t::stored,
       store.update_mesh_node (peer, location_write_intent_t::new_claim).result ().value ().status);
     location_runtime_t runtime (store, options, "local-owner");
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     runtime.start (zlink::routing_id_t::from ("local"));
     live_location_reader_t reader (store, options);
     store_location_resolvers_t cache (store);

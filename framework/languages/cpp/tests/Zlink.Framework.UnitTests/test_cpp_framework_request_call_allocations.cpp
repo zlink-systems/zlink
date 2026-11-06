@@ -1411,6 +1411,10 @@ TEST (RequestCallAllocations, AppClassifiedNodeFailureAddsNoTransportReplyState)
     } target_host, source_host;
     const auto target = zlink::routing_id_t::from ("allocation-client");
     auto &target_options = target_host.app.add_zlink_framework ();
+    target_options.configure_locations ().owner_lease_renew_interval =
+      std::chrono::milliseconds (10);
+    target_options.configure_locations ().owner_lease_fencing_margin =
+      std::chrono::milliseconds (1);
     target_options.add_location_store (
       std::make_shared<fw::runtime::in_memory_location_store_t> ());
     target_options.add_route_mesh ("m")

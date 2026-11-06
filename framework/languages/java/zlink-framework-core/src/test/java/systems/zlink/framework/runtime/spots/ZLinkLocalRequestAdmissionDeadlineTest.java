@@ -57,6 +57,7 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
     private void verifyDeadline(boolean actor, boolean direct) throws Exception {
         handled.set(0);
         var options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.configureDispatch()
                 .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
         options.registration().inboundDispatch().setMaxQueuedApplicationJobs(1);
@@ -73,6 +74,7 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
         try (var runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(
                         options, new ZLinkJavaBackendAdapterFactory())) {
+            awaitFixedRidRetry(runtime);
             runtime.spotManager()
                     .getOrCreate("room-a", "room")
                     .submit()
@@ -489,6 +491,7 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
 
     private DefaultZLinkFrameworkOptions admissionOptions() {
         var options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.registration().inboundDispatch().setMaxQueuedApplicationJobs(1);
         options.configureDispatch()
                 .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
@@ -507,6 +510,7 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
 
     private void createLocalTargets(
             systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime runtime) throws Exception {
+        awaitFixedRidRetry(runtime);
         runtime.spotManager()
                 .getOrCreate("room-a", "room")
                 .submit()
@@ -517,6 +521,17 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
                 .submit()
                 .toCompletableFuture()
                 .get(5, TimeUnit.SECONDS);
+    }
+
+    private void awaitFixedRidRetry(
+            systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime runtime) throws Exception {
+        ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                .toCompletableFuture()
+                .get(5, TimeUnit.SECONDS);
+        assertTrue(
+                ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS));
     }
 
     private ZLinkRequestStage<String> submitLocal(

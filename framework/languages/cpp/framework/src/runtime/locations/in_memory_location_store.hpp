@@ -69,19 +69,33 @@ class in_memory_location_repository_t : public location_repository_t
                   location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
 
             if (found != _mesh_nodes.end ()
-                && (intent == location_write_intent_t::new_claim
+                && ((intent == location_write_intent_t::new_claim
+                     || intent == location_write_intent_t::fixed_rid_new_claim)
                     || intent == location_write_intent_t::renew)
-                && same_mesh_node_descriptor (found->second, descriptor))
+                && same_mesh_node_descriptor (found->second, descriptor)) {
+                retain_reclaim_observation ("mesh:" + key);
                 return completed (location_write_result_t::stored (
                   static_cast<std::int64_t> (found->second.descriptor_revision),
                   found->second.updated_at));
+            }
 
-            if (intent == location_write_intent_t::new_claim) {
-                if (found != _mesh_nodes.end ()
-                    && owner_token_is_live (
-                      {found->second.owner_id, found->second.lease_generation}, now))
+            if ((intent == location_write_intent_t::new_claim
+                 || intent == location_write_intent_t::fixed_rid_new_claim)) {
+                const location_owner_token_t previous =
+                  found == _mesh_nodes.end ()
+                    ? location_owner_token_t{}
+                    : location_owner_token_t{found->second.owner_id,
+                                             found->second.lease_generation};
+                const bool live =
+                  found != _mesh_nodes.end () && owner_token_is_live (previous, now);
+                const bool elapsed = intent != location_write_intent_t::fixed_rid_new_claim
+                                     || reclaim_wait_elapsed ("mesh:" + key, previous, live);
+                if (live)
                     return completed (
                       location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
+                if (!elapsed)
+                    return completed (
+                      location_write_result_t{location_write_status_t::waiting, 0, {}});
             } else if (intent == location_write_intent_t::renew) {
                 if (found == _mesh_nodes.end () || found->second.owner_id != descriptor.owner_id
                     || found->second.lease_generation != descriptor.lease_generation
@@ -107,6 +121,7 @@ class in_memory_location_repository_t : public location_repository_t
                                     ? std::optional<mesh_node_descriptor_t>{}
                                     : std::make_optional (found->second);
             _mesh_nodes[key] = descriptor;
+            retain_reclaim_observation ("mesh:" + key);
             publish_entry_spot_id (previous, descriptor, key);
             return completed (location_write_result_t::stored (
               static_cast<std::int64_t> (descriptor.descriptor_revision), now));
@@ -119,11 +134,17 @@ class in_memory_location_repository_t : public location_repository_t
         return _lane
           .run ([&] {
               const auto found = _mesh_nodes.find (mesh_node_key (key.mesh_name, key.rid));
-              if (found == _mesh_nodes.end () || found->second.owner_id != owner.owner_id
+              if (found == _mesh_nodes.end ()) {
+                  remove_reclaim_observation ("mesh:" + mesh_node_key (key.mesh_name, key.rid),
+                                              owner);
+                  return completed (location_write_status_t::ignored_stale);
+              }
+              if (found->second.owner_id != owner.owner_id
                   || found->second.lease_generation != owner.lease_generation)
                   return completed (location_write_status_t::ignored_stale);
               remove_entry_spot_id_claim (found->second, mesh_node_key (key.mesh_name, key.rid));
               _mesh_nodes.erase (found);
+              remove_reclaim_observation ("mesh:" + mesh_node_key (key.mesh_name, key.rid), owner);
               return completed (location_write_status_t::stored);
           })
           .get ();
@@ -462,6 +483,9 @@ class in_memory_location_repository_t : public location_repository_t
         return _lane.run_task ([this, key = std::move (key)] () mutable {
             const auto now = clock_t::now ();
             const auto found = _authorities.find (key.value);
+            retain_reclaim_observation (key.value, found == _authorities.end ()
+                                                     ? std::nullopt
+                                                     : std::optional{found->second.owner});
             if (found == _authorities.end ())
                 return completed (authority_read_result_t{authority_missing_t{now}});
             auto snapshot = found->second;
@@ -492,6 +516,8 @@ class in_memory_location_repository_t : public location_repository_t
             auto found = _authorities.find (key.value);
             if (found == _authorities.end ()
                 || found->second.store_version != expected_store_version) {
+                if (found == _authorities.end ())
+                    retain_reclaim_observation (key.value);
                 authority_read_result_t current =
                   found == _authorities.end () ? authority_read_result_t{authority_missing_t{now}}
                                                : authority_read_result_t{found->second};
@@ -530,6 +556,7 @@ class in_memory_location_repository_t : public location_repository_t
                 const auto store_version = next_store_version ();
                 apply_capacity_bundle (_active_by_placement, found->second.allocation.target,
                                        found->second.allocation.capacity_bundle, false);
+                remove_reclaim_observation (key.value, found->second.owner);
                 _authorities.erase (found);
                 return completed (
                   authority_compare_exchange_result_t{authority_deleted_t{store_version, now}});
@@ -836,6 +863,9 @@ class in_memory_location_repository_t : public location_repository_t
                           object_reserve_conflict_t{authority_missing_t{now}}});
                 }
                 auto authority = _authorities.find (key);
+                retain_reclaim_observation (key, authority != _authorities.end ()
+                                                   ? std::optional{authority->second.owner}
+                                                   : std::nullopt);
                 if (authority != _authorities.end ()
                     && !authority_matches_creation_type (authority->second, request))
                     return completed (
@@ -1363,8 +1393,10 @@ class in_memory_location_repository_t : public location_repository_t
             return false;
         const auto &target = snapshot.allocation.target;
         const bool owner_live = owner_token_is_live (snapshot.owner, now);
-        if (active && owner_live)
+        if (active && owner_live) {
+            reclaim_wait_elapsed (key, snapshot.owner, true);
             return false;
+        }
         std::vector<std::string> members;
         if (authority_mutation_locked_on_lane (key)) {
             if (active)
@@ -1393,7 +1425,6 @@ class in_memory_location_repository_t : public location_repository_t
                     || spot->stable_type != request->intent.stable_type)
                     throw framework_exception_t (framework_error_kind_t::unavailable,
                                                  "User Spot is not steady Ready");
-                members = ended_spot_members_on_lane (key, snapshot, spot->spot_id, now);
             } else if (snapshot.allocation.object_kind == placement_object_kind_t::instance_spot) {
                 const auto spot = decode_instance_spot_authority_payload (snapshot.payload);
                 if (!spot || spot->state != instance_spot_authority_state_t::ready
@@ -1403,6 +1434,12 @@ class in_memory_location_repository_t : public location_repository_t
                                                  "Instance Spot is not steady Ready");
             }
         }
+        const bool wait_elapsed = !active || reclaim_wait_elapsed (key, snapshot.owner, false);
+        if (active && snapshot.allocation.object_kind == placement_object_kind_t::user_spot)
+            members = ended_spot_members_on_lane (key, snapshot, request->key.global_id, now);
+        if (!wait_elapsed)
+            throw framework_exception_t (framework_error_kind_t::unavailable,
+                                         "Owner lease release observation is still waiting");
         const auto descriptor = _mesh_nodes.find (
           mesh_node_key (target.mesh_name, std::string (target.node_rid.value ())));
         if (owner_live && descriptor != _mesh_nodes.end ()
@@ -1419,12 +1456,14 @@ class in_memory_location_repository_t : public location_repository_t
             reservation->second.status = reservation_status_t::aborted;
         }
         _authorities.erase (key);
+        retain_reclaim_observation (key);
         _object_types.erase (key);
         for (const auto &member_key : members) {
             const auto member = _authorities.find (member_key);
             apply_capacity_bundle (_active_by_placement, member->second.allocation.target,
                                    member->second.allocation.capacity_bundle, false);
             _authorities.erase (member);
+            retain_reclaim_observation (member_key);
             _object_types.erase (member_key);
         }
         return true;
@@ -1437,7 +1476,7 @@ class in_memory_location_repository_t : public location_repository_t
     std::vector<std::string> ended_spot_members_on_lane (const std::string &spot_key,
                                                          const authority_snapshot_t &spot,
                                                          const std::string &spot_id,
-                                                         clock_t::time_point now) const
+                                                         clock_t::time_point now)
     {
         const auto node = [] (const object_creation_target_t &target) {
             return mesh_node_key (target.mesh_name, std::string (target.node_rid.value ()));
@@ -1447,6 +1486,7 @@ class in_memory_location_repository_t : public location_repository_t
                                          "descriptor:" + node (spot.allocation.target),
                                          "capacity:" + node (spot.allocation.target)};
         std::vector<std::string> members;
+        bool wait_elapsed = true;
         for (const auto &[member_key, authority] : _authorities) {
             const auto member = decode_direct_actor_authority_payload (authority.payload);
             if (!member || member->current_spot_kind != actor_authority_spot_kind_t::user
@@ -1459,7 +1499,10 @@ class in_memory_location_repository_t : public location_repository_t
                 throw framework_exception_t (
                   framework_error_kind_t::unavailable,
                   "User Spot still has a relocating or unactivated member");
-            if (owner_token_is_live (authority.owner, now))
+            const bool live = owner_token_is_live (authority.owner, now);
+            if (!reclaim_wait_elapsed (member_key, authority.owner, live))
+                wait_elapsed = false;
+            if (live)
                 throw framework_exception_t (
                   framework_error_kind_t::unavailable,
                   "User Spot still has a member with a live owner lease");
@@ -1469,6 +1512,9 @@ class in_memory_location_repository_t : public location_repository_t
             batch_keys.insert ("owner:" + authority.owner.owner_id);
             batch_keys.insert ("capacity:" + node (authority.allocation.target));
         }
+        if (!wait_elapsed)
+            throw framework_exception_t (framework_error_kind_t::unavailable,
+                                         "Member owner lease release observation is still waiting");
         if (batch_keys.size () > location_store_limits::write_keys)
             throw framework_exception_t (
               framework_error_kind_t::unavailable,

@@ -17,7 +17,7 @@ public abstract class ZLinkLocationStoreTestAdapter implements ZLinkLocationRepo
 
     @Override
     public CompletionStage<ZLinkLocationWriteResult> updateMeshNode(
-            ZLinkMeshNodeDescriptor value, ZLinkLocationWriteIntent intent) {
+            ZLinkMeshNodeDescriptor value, ZLinkDescriptorWriteIntent intent) {
         return unsupported();
     }
 

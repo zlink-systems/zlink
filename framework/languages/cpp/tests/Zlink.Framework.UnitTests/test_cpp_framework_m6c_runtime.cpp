@@ -369,6 +369,8 @@ void configure_host_relocation_app (
       [location_store, relocation_store,
        routing_id = std::move (routing_id)] (
         zlink::framework::zlink_framework_options_t &options) {
+          options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+          options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
           options.add_location_store (location_store);
           options.add_relocation_store (relocation_store);
           options.configure_locations ().polling_interval =

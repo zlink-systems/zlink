@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.host;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -18,7 +19,9 @@ import systems.zlink.framework.monitoring.ZLinkMeshNodeSnapshot;
 import systems.zlink.framework.monitoring.ZLinkTopologyState;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
@@ -41,6 +44,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Consumes {@code framework/runtime/conformance/route-mesh-placement-v1.json}: RouteMesh placement
@@ -89,7 +93,8 @@ final class ZLinkRouteMeshPlacementConformanceTest {
         locations.setOwnerLeaseRenewInterval(millis(lease, "renewIntervalMs"));
         locations.setOwnerLeaseRenewTimeout(millis(lease, "renewTimeoutMs"));
         locations.setOwnerLeaseTtl(millis(lease, "ttlMs"));
-        locations.setOwnerLeaseFencingMargin(millis(lease, "fencingMarginMs"));
+        Duration fencingMargin = millis(lease, "fencingMarginMs");
+        locations.setOwnerLeaseFencingMargin(fencingMargin);
         for (JsonNode node : scenario.path("meshNodes")) {
             String meshName = node.path("meshName").asText();
             assertEquals("disabled", node.path("spotRelocation").asText(), name + ":" + meshName);
@@ -124,11 +129,27 @@ final class ZLinkRouteMeshPlacementConformanceTest {
             }
         }
 
+        var monotonicNanos = new AtomicLong();
+        var registeredStores =
+                ZLinkRegisteredLocationStores.fromUnified(
+                        new ZLinkProviderLocationRepository(
+                                store, monotonicNanos::get, fencingMargin));
         try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
-                        options, new ZLinkJavaBackendAdapterFactory())) {
+                ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                        options,
+                        new ZLinkJavaBackendAdapterFactory(),
+                        systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
+                                .reflection(),
+                        null,
+                        new ZLinkFrameworkRuntimeTestAccess.Construction()
+                                .locationStores(registeredStores))) {
             List<CompletableFuture<?>> held = new ArrayList<>();
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime).toCompletableFuture().join();
+            monotonicNanos.set(fencingMargin.multipliedBy(3).toNanos());
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                            .toCompletableFuture()
+                            .join());
             String lastActorId = null;
             String lastSpotId = null;
             int objectIndex = 0;

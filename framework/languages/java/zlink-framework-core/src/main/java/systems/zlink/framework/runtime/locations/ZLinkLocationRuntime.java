@@ -34,6 +34,7 @@ import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 public final class ZLinkLocationRuntime implements AutoCloseable {
+    static final LongSupplier SYSTEM_MONOTONIC_NANOS = System::nanoTime;
     private final ZLinkRegisteredLocationStores stores;
     private final String ownerId;
     private java.util.List<Map<String, String>> metricScopes = java.util.List.of();
@@ -202,13 +203,52 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                 heartbeatInterval,
                 ownerLeaseRenewTimeout,
                 ownerLeaseFencingMargin,
-                System::nanoTime,
-                Executors.newSingleThreadScheduledExecutor(
-                        task -> {
-                            Thread thread = new Thread(task, "zlink-location-owner-lease");
-                            thread.setDaemon(true);
-                            return thread;
-                        }));
+                SYSTEM_MONOTONIC_NANOS);
+    }
+
+    ZLinkLocationRuntime(
+            ZLinkRegisteredLocationStores stores,
+            Duration ownerLeaseTtl,
+            Duration heartbeatInterval,
+            Duration ownerLeaseRenewTimeout,
+            Duration ownerLeaseFencingMargin,
+            LongSupplier monotonicNow) {
+        this(
+                stores,
+                UUID.randomUUID().toString().replace("-", ""),
+                ownerLeaseTtl,
+                heartbeatInterval,
+                ownerLeaseRenewTimeout,
+                ownerLeaseFencingMargin,
+                monotonicNow);
+    }
+
+    ZLinkLocationRuntime(
+            ZLinkRegisteredLocationStores stores,
+            String ownerId,
+            Duration ownerLeaseTtl,
+            Duration heartbeatInterval,
+            Duration ownerLeaseRenewTimeout,
+            Duration ownerLeaseFencingMargin,
+            LongSupplier monotonicNow) {
+        this(
+                stores,
+                ownerId,
+                ownerLeaseTtl,
+                heartbeatInterval,
+                ownerLeaseRenewTimeout,
+                ownerLeaseFencingMargin,
+                monotonicNow,
+                newHeartbeatExecutor());
+    }
+
+    private static ScheduledExecutorService newHeartbeatExecutor() {
+        return Executors.newSingleThreadScheduledExecutor(
+                task -> {
+                    Thread thread = new Thread(task, "zlink-location-owner-lease");
+                    thread.setDaemon(true);
+                    return thread;
+                });
     }
 
     ZLinkLocationRuntime(

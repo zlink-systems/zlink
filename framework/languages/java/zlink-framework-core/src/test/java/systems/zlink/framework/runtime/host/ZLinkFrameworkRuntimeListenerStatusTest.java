@@ -46,6 +46,7 @@ final class ZLinkFrameworkRuntimeListenerStatusTest {
     @ValueSource(strings = {"*", "0"})
     void routerListenerStatusPublishesTheBoundPort(String port) {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(java.time.Duration.ofNanos(1));
         options.addRouteMesh("listener-mesh")
                 .listen("tcp://127.0.0.1:" + port)
                 .setRoutingId(RoutingId.from("listener-status-mesh"));
@@ -189,6 +190,7 @@ final class ZLinkFrameworkRuntimeListenerStatusTest {
 
     private static DefaultZLinkFrameworkOptions options() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(java.time.Duration.ofNanos(1));
         options.addRouteMesh("listener-mesh")
                 .listen("tcp://127.0.0.1:0")
                 .setRoutingId(RoutingId.from("listener-status-mesh"));

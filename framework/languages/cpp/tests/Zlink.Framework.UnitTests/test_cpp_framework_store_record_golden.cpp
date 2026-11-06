@@ -478,6 +478,7 @@ int main ()
 
         in_memory_location_store_t store;
         provider_location_repository_t repository (store);
+        repository.configure_reclaim_margin (std::chrono::milliseconds::zero ());
 
         // provider_location_repository_t's private owner-generation counter
         // key (framework/src/runtime/locations/provider_location_repository
@@ -543,6 +544,7 @@ int main ()
 
         in_memory_location_store_t store;
         provider_location_repository_t repository (store);
+        repository.configure_reclaim_margin (std::chrono::milliseconds::zero ());
 
         // Pre-seed the owner-lease counter (provider-private, same as the
         // owner-lease block above) to reach the golden's leaseGeneration "5"

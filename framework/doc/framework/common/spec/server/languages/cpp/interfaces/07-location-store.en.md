@@ -30,7 +30,7 @@ namespace zlink::framework {
 
 struct location_options_t {
  std::chrono::milliseconds owner_lease_renew_interval{5000};
- std::chrono::milliseconds owner_lease_ttl{15000};
+ std::chrono::milliseconds owner_lease_ttl{30000};
  std::chrono::milliseconds polling_interval{1000};
  std::chrono::milliseconds store_failure_grace{30000};
  std::chrono::milliseconds owner_lease_fencing_margin{5000};

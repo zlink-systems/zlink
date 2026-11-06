@@ -22,6 +22,7 @@ import systems.zlink.framework.spots.ZLinkActorCreateResponse;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -41,6 +42,7 @@ final class ZLinkConcurrentActorCreationCapacityTest {
         var store = new SharedCapacityStore();
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(store);
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         var node = options.addRouteMesh("1304-java");
         node.listen("inproc://1304-java-" + System.nanoTime())
                 .setRoutingId(RoutingId.from("1304-java"));
@@ -49,6 +51,13 @@ final class ZLinkConcurrentActorCreationCapacityTest {
         objects.addActorFactory(
                 "1304-player", Player.class, Factory.class, factory -> factory.disableRelocation());
         try (ZLinkFrameworkRuntime runtime = ZLinkFrameworkRuntimeTestAccess.start(options)) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                            .toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS));
             List<CompletableFuture<ZLinkActorCreateResult>> results = new ArrayList<>();
             for (int session = 0; session < SESSION_COUNT; session++) {
                 results.add(
@@ -78,6 +87,7 @@ final class ZLinkConcurrentActorCreationCapacityTest {
         var store = new SharedCapacityStore(true);
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(store);
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         var node = options.addRouteMesh("1304-java");
         node.listen("inproc://1304-java-" + System.nanoTime())
                 .setRoutingId(RoutingId.from("1304-java"));
@@ -86,6 +96,13 @@ final class ZLinkConcurrentActorCreationCapacityTest {
         objects.addActorFactory(
                 "1304-player", Player.class, Factory.class, factory -> factory.disableRelocation());
         try (ZLinkFrameworkRuntime runtime = ZLinkFrameworkRuntimeTestAccess.start(options)) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                            .toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS));
             assertInstanceOf(
                     ZLinkActorCreateResult.Created.class,
                     runtime.actorManager()

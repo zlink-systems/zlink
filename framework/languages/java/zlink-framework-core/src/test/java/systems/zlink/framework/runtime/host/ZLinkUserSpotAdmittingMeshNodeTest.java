@@ -33,6 +33,7 @@ final class ZLinkUserSpotAdmittingMeshNodeTest {
         RoutingId lobbyRid = RoutingId.from("admit-lobby-" + suffix);
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.addRouteMesh("game")
                 .listen("inproc://admit-game-" + suffix)
                 .setRoutingId(gameRid)
@@ -49,6 +50,13 @@ final class ZLinkUserSpotAdmittingMeshNodeTest {
         try (ZLinkFrameworkRuntime runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(
                         options, new ZLinkJavaBackendAdapterFactory())) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(10, TimeUnit.SECONDS);
+            if (!runtime.isReady())
+                ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                        .toCompletableFuture()
+                        .get(10, TimeUnit.SECONDS);
             String spotId = "admit-room-" + suffix;
             SpotRef spot =
                     runtime.spotManager()

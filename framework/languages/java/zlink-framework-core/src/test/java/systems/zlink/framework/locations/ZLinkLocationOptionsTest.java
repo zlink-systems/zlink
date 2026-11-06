@@ -3,6 +3,7 @@ package systems.zlink.framework.locations;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.InvocationTargetException;
@@ -38,10 +39,11 @@ final class ZLinkLocationOptionsTest {
         }
     }
 
-    @Test
+    @RepeatedTest(100)
     void objectRoutingAndRelocationDefaultsMatchTheExactContract() {
         ZLinkLocationOptions options = new ZLinkLocationOptions();
 
+        assertEquals(Duration.ofSeconds(30), options.ownerLeaseTtl());
         assertEquals(Duration.ofSeconds(15), options.routeCacheMaxAge());
         assertEquals(Duration.ofSeconds(30), options.messageFollowDuration());
         assertEquals(64, options.maxActiveOutboundRelocations());

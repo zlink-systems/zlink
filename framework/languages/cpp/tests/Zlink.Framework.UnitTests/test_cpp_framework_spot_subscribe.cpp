@@ -637,6 +637,10 @@ TEST (SpotSubscriptionMembership, EntryActivationRejectsUnjoinedChannelBeforeHos
         app.logging ().use_file ("spot-membership.flow").set_min_level (fw::log_level_t::debug);
         app.add_zlink_framework ([&] (fw::zlink_framework_options_t &options) {
             options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::detailed);
+            options.configure_locations ().owner_lease_renew_interval =
+              std::chrono::milliseconds (10);
+            options.configure_locations ().owner_lease_fencing_margin =
+              std::chrono::milliseconds (1);
             options.add_location_store (
               std::make_shared<fw::runtime::in_memory_location_store_t> ());
             auto mesh = options.add_route_mesh ("membership");

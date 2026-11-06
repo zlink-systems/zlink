@@ -17,6 +17,8 @@ inline constexpr std::uint64_t relocation_chunk_wire_limit_bytes = 67108864;
 
 namespace detail
 {
+inline constexpr std::chrono::milliseconds default_owner_lease_fencing_margin{5000};
+
 /* The one default for session_relocation_seal_timeout. Internal option structs
  * read it here instead of from a location_options_t{} temporary, which MSVC
  * 19.44 fails to compile in some translation units (C1001). */
@@ -26,10 +28,11 @@ inline constexpr std::chrono::milliseconds default_session_relocation_seal_timeo
 struct location_options_t
 {
     std::chrono::milliseconds owner_lease_renew_interval{5000};
-    std::chrono::milliseconds owner_lease_ttl{15000};
+    std::chrono::milliseconds owner_lease_ttl{30000};
     std::chrono::milliseconds polling_interval{1000};
     std::chrono::milliseconds store_failure_grace{30000};
-    std::chrono::milliseconds owner_lease_fencing_margin{5000};
+    std::chrono::milliseconds owner_lease_fencing_margin{
+      detail::default_owner_lease_fencing_margin};
     std::chrono::milliseconds owner_lease_renew_timeout{3000};
     std::chrono::milliseconds route_cache_max_age{15000};
     std::chrono::milliseconds message_follow_duration{30000};
