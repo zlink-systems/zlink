@@ -17,6 +17,7 @@ import systems.zlink.framework.locationprovider.ZLinkStoreKey;
 import systems.zlink.framework.locationprovider.ZLinkStoreMissingCondition;
 import systems.zlink.framework.locationprovider.ZLinkStorePut;
 import systems.zlink.framework.locationprovider.ZLinkStoreReadFound;
+import systems.zlink.framework.locationprovider.ZLinkStoreReadMissing;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanCursor;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanExpired;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanPageResult;
@@ -143,7 +144,7 @@ final class ZLinkProviderDescriptorRepository {
     }
 
     CompletionStage<ZLinkLocationWriteResult> updateMeshNode(
-            ZLinkMeshNodeDescriptor descriptor, ZLinkLocationWriteIntent intent) {
+            ZLinkMeshNodeDescriptor descriptor, ZLinkDescriptorWriteIntent intent) {
         Objects.requireNonNull(descriptor, FIELD_DESCRIPTOR);
         return update(
                 meshKey(descriptor.meshName(), descriptor.rid()),
@@ -156,6 +157,11 @@ final class ZLinkProviderDescriptorRepository {
                 value -> encodeMeshNodeRecord(value.descriptor()),
                 ZLinkProviderDescriptorRepository::decodeMesh,
                 ZLinkProviderDescriptorRepository::sameImmutableMesh);
+    }
+
+    CompletionStage<ZLinkLocationWriteResult> updateMeshNode(
+            ZLinkMeshNodeDescriptor descriptor, ZLinkLocationWriteIntent intent) {
+        return updateMeshNode(descriptor, (ZLinkDescriptorWriteIntent) intent);
     }
 
     CompletionStage<ZLinkLocationWriteStatus> removeMeshNode(
@@ -285,15 +291,14 @@ final class ZLinkProviderDescriptorRepository {
             long lifecycleGeneration,
             long descriptorRevision,
             T descriptor,
-            ZLinkLocationWriteIntent intent,
+            ZLinkDescriptorWriteIntent intent,
             Function<StoredDescriptor<T>, byte[]> encode,
             Function<byte[], StoredDescriptor<T>> decode,
             BiPredicate<T, T> immutableFieldsEqual) {
         Objects.requireNonNull(intent, "intent");
         String waitKey = ZLinkOwnerLeaseWaitTracker.descriptorRecordKey(rowKey.value());
         boolean fixedRidClaim =
-                descriptor instanceof ZLinkMeshNodeDescriptor
-                        && intent == ZLinkLocationWriteIntent.NEW_CLAIM;
+                descriptor instanceof ZLinkMeshNodeDescriptor && intent.isFixedRidNewClaim();
         ZLinkStoreKey leaseKey = ownerKey(ownerId);
         return provider.read(leaseKey, active())
                 .thenCompose(
@@ -306,6 +311,17 @@ final class ZLinkProviderDescriptorRepository {
                             return provider.read(rowKey, active())
                                     .thenCompose(
                                             current -> {
+                                                if (fixedRidClaim
+                                                        && current instanceof ZLinkStoreReadMissing
+                                                        && ownerLeaseWait.shouldWait(
+                                                                waitKey,
+                                                                new ZLinkLocationOwnerToken(
+                                                                        ownerId, leaseGeneration),
+                                                                true)) {
+                                                    throw new ZLinkFrameworkException(
+                                                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                                            "Previous MeshNode owner lease is within its release wait");
+                                                }
                                                 long generation = 1;
                                                 ZLinkStoreCondition rowCondition;
                                                 if (current instanceof ZLinkStoreReadFound found) {
@@ -331,9 +347,7 @@ final class ZLinkProviderDescriptorRepository {
                                                                     && immutableFieldsEqual.test(
                                                                             stored, descriptor);
                                                     if (!renew) {
-                                                        if ((intent
-                                                                                == ZLinkLocationWriteIntent
-                                                                                        .NEW_CLAIM
+                                                        if ((intent.isNewClaim()
                                                                         || (stored
                                                                                         instanceof
                                                                                         ZLinkMeshNodeDescriptor
@@ -382,9 +396,8 @@ final class ZLinkProviderDescriptorRepository {
                                                                                                     waitKey,
                                                                                                     previousOwnerToken,
                                                                                                     false);
-                                                                                if (intent
-                                                                                        != ZLinkLocationWriteIntent
-                                                                                                .NEW_CLAIM) {
+                                                                                if (!intent
+                                                                                        .isNewClaim()) {
                                                                                     return completed(
                                                                                             ZLinkLocationWriteResult
                                                                                                     .ignoredStale());
@@ -449,7 +462,8 @@ final class ZLinkProviderDescriptorRepository {
                                                                     rowKey,
                                                                     found.value().version());
                                                 } else {
-                                                    ownerLeaseWait.clear(waitKey);
+                                                    if (!fixedRidClaim)
+                                                        ownerLeaseWait.clear(waitKey);
                                                     if (intent == ZLinkLocationWriteIntent.RENEW) {
                                                         return completed(
                                                                 ZLinkLocationWriteResult

@@ -40,7 +40,8 @@ final class SpotShutdownExecutionTest {
                 .addSpotFactory("target", Target.class, factory -> factory.disableRelocation())
                 .addSpotFactory("source", Source.class, factory -> factory.disableRelocation());
         var runtime =
-                RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory());
+                RuntimeTestSupport.startFixedRidFramework(
+                        options, new ZLinkJavaBackendAdapterFactory());
         CompletableFuture<ZLinkFrameworkTerminationResult> shutdown = null;
         ZLinkFrameworkTerminationResult result;
         boolean returned = false;

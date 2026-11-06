@@ -45,6 +45,7 @@ final class ZLinkRelocationPublicationFailureTest {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(store);
         options.addRelocationStore(new InMemoryRelocationStore());
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         for (String mesh : MESHES) {
             options.addRouteMesh(mesh)
                     .listen("tcp://127.0.0.1:0")
@@ -54,6 +55,10 @@ final class ZLinkRelocationPublicationFailureTest {
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
                     .toCompletableFuture()
                     .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                            .toCompletableFuture()
+                            .join());
             assertEquals(2, store.descriptors().size());
             store.armed.set(true);
             var relocation =

@@ -52,7 +52,7 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
 
     @Override
     public CompletionStage<ZLinkLocationWriteResult> updateMeshNode(
-            ZLinkMeshNodeDescriptor descriptor, ZLinkLocationWriteIntent intent) {
+            ZLinkMeshNodeDescriptor descriptor, ZLinkDescriptorWriteIntent intent) {
         return observeStore(
                 LocationOperation.COMPARE_EXCHANGE,
                 () ->

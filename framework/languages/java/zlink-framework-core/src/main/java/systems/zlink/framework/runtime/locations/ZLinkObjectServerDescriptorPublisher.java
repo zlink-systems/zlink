@@ -55,22 +55,30 @@ public final class ZLinkObjectServerDescriptorPublisher {
         long leaseGeneration = owner.leaseGeneration();
         Claim current = claim.get();
         boolean sameLease = current != null && current.leaseGeneration() == leaseGeneration;
-        ZLinkLocationWriteIntent intent =
-                sameLease && current.confirmed()
-                        ? ZLinkLocationWriteIntent.RENEW
-                        : ZLinkLocationWriteIntent.NEW_CLAIM;
+        boolean renewal = sameLease && current.confirmed();
         // Location runtime §10: a claim whose result is unknown is sent again as the same claim.
         List<ZLinkMeshNodeDescriptor> descriptors =
                 sameLease && !current.confirmed()
                         ? current.descriptors()
                         : descriptors(owner, state);
-        Claim attempt =
-                intent == ZLinkLocationWriteIntent.NEW_CLAIM
-                        ? new Claim(leaseGeneration, descriptors, false)
-                        : current;
+        Claim attempt = renewal ? current : new Claim(leaseGeneration, descriptors, false);
         claim.compareAndSet(current, attempt);
         List<CompletionStage<?>> writes = new ArrayList<>();
         for (ZLinkMeshNodeDescriptor descriptor : descriptors) {
+            ZLinkDescriptorWriteIntent intent =
+                    renewal
+                            ? ZLinkLocationWriteIntent.RENEW
+                            : registration.meshNodes().stream()
+                                            .filter(
+                                                    candidate ->
+                                                            candidate
+                                                                    .meshName()
+                                                                    .equals(descriptor.meshName()))
+                                            .anyMatch(MeshNodeRegistration::hasExplicitRoutingId)
+                                    ? systems.zlink.framework.runtime.internal.locations
+                                            .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                            .FIXED_RID_NEW_CLAIM
+                                    : ZLinkLocationWriteIntent.NEW_CLAIM;
             writes.add(
                     CompletableFuture.completedFuture(null)
                             .thenCompose(

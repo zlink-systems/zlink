@@ -270,6 +270,10 @@ public final class ZLinkFrameworkRuntimeTestAccess {
         return runtime.startupCompletion();
     }
 
+    public static ZLinkFrameworkRuntimeState state(ZLinkFrameworkRuntime runtime) {
+        return runtime.state();
+    }
+
     public static ZLinkChannelRuntime channels(ZLinkFrameworkRuntime runtime) {
         return runtime.channels;
     }

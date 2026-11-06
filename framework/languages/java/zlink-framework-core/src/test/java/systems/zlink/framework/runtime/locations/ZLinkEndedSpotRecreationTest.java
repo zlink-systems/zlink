@@ -1563,7 +1563,10 @@ final class ZLinkEndedSpotRecreationTest {
                             store,
                             ZLinkPlacementObjectKind.USER_SPOT,
                             ZLinkServiceAuthorityPayloadCodec.State.READY,
-                            2);
+                            2,
+                            monotonicNanos,
+                            fencingMargin);
+            monotonicNanos.set(0);
             var firstMember = endedMember(fixture, "wait-member-a", true);
             var secondMember = endedMember(fixture, "wait-member-b", true);
             long spotsBefore = oldSpotSlots(fixture);
@@ -2062,11 +2065,57 @@ final class ZLinkEndedSpotRecreationTest {
         return fixture(store, kind, state, 1);
     }
 
+    private static void claimInitialDescriptor(
+            ZLinkLocationRepository store,
+            ZLinkMeshNodeDescriptor descriptor,
+            AtomicLong monotonicNanos,
+            Duration fencingMargin) {
+        if (monotonicNanos != null) {
+            var failure =
+                    assertThrows(
+                            RuntimeException.class,
+                            () ->
+                                    store.updateMeshNode(
+                                                    descriptor,
+                                                    systems.zlink.framework.runtime.internal
+                                                            .locations.ZLinkDescriptorWriteIntent
+                                                            .FixedRidNewClaim.FIXED_RID_NEW_CLAIM)
+                                            .toCompletableFuture()
+                                            .join());
+            while (failure instanceof CompletionException && failure.getCause() != null)
+                failure = (RuntimeException) failure.getCause();
+            assertEquals(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure).kind());
+            monotonicNanos.addAndGet(fencingMargin.multipliedBy(3).toNanos());
+        }
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                store.updateMeshNode(
+                                descriptor,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM)
+                        .toCompletableFuture()
+                        .join()
+                        .status());
+    }
+
     private static Fixture fixture(
             ZLinkLocationRepository store,
             ZLinkPlacementObjectKind kind,
             ZLinkServiceAuthorityPayloadCodec.State state,
             int actorLimit) {
+        return fixture(store, kind, state, actorLimit, null, null);
+    }
+
+    private static Fixture fixture(
+            ZLinkLocationRepository store,
+            ZLinkPlacementObjectKind kind,
+            ZLinkServiceAuthorityPayloadCodec.State state,
+            int actorLimit,
+            AtomicLong monotonicNanos,
+            Duration fencingMargin) {
         var oldOwner =
                 ((ZLinkOwnerLeaseClaimed)
                                 store.claimOwnerLease("old", Duration.ofMinutes(5))
@@ -2081,12 +2130,8 @@ final class ZLinkEndedSpotRecreationTest {
                         .token();
         var oldDescriptor = descriptor(oldOwner, kind, actorLimit);
         var newDescriptor = descriptor(newOwner, kind, 1);
-        store.updateMeshNode(oldDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
-                .toCompletableFuture()
-                .join();
-        store.updateMeshNode(newDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
-                .toCompletableFuture()
-                .join();
+        claimInitialDescriptor(store, oldDescriptor, monotonicNanos, fencingMargin);
+        claimInitialDescriptor(store, newDescriptor, monotonicNanos, fencingMargin);
         String key = ZLinkAuthorityKeyCodec.spot("ended-spot");
         var initial =
                 new Fixture(

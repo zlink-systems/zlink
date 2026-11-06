@@ -220,12 +220,17 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:5280/players/p1/profile'
 
 - **`ZLinkConfigurationException: MeshNode descriptor publication failed
   [mesh=game, status=REJECTED_CONFLICT]`, or the profile call keeps
-  returning `503 one-way route is not connected`.** After a forced stop, the
+  returning `503 one-way route is not connected`.** The tutorial uses a Fixed
+  RID. A normal shutdown removes its MeshNode descriptor, so the next start
+  waits for three owner lease fencing margins after first observing the
+  descriptor as Missing (15 seconds by default). The host stays Preparing and
+  retries publication on each owner lease renewal. After a forced stop, the
   previous owner lease can remain valid for up to 30 seconds
   ([default owner lease TTL](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#L709-L716)).
-  Wait for it to expire, then start the Server again; a failed start does not
-  retry. To restart immediately, stop earlier tutorial processes and clear
-  only the `zlink-tutorial-java:` keys with the command below. Leave other
+  Wait for it to expire before starting the Server; after the first invalid
+  lease observation, the same wait applies. To reset tutorial data, stop
+  earlier tutorial processes and clear only the `zlink-tutorial-java:` keys
+  with the command below. This does not bypass the wait. Leave other
   languages' tutorial keys (`zlink-tutorial-dotnet:`, etc.) intact.
 
   ```bash

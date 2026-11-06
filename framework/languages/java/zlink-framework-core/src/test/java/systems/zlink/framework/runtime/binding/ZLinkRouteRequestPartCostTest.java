@@ -144,6 +144,9 @@ public final class ZLinkRouteRequestPartCostTest {
     private static void exercise(Path recordingPath) throws Exception {
         var targetOptions = new DefaultZLinkFrameworkOptions();
         targetOptions
+                .configureLocations()
+                .setOwnerLeaseFencingMargin(java.time.Duration.ofNanos(1));
+        targetOptions
                 .addRouteMesh(MESH)
                 .listen("tcp://127.0.0.1:0")
                 .setRoutingId(TARGET)
@@ -151,6 +154,9 @@ public final class ZLinkRouteRequestPartCostTest {
         try (var target = ZLinkFrameworkRuntimeTestAccess.start(targetOptions)) {
             String endpoint = target.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
             var sourceOptions = new DefaultZLinkFrameworkOptions();
+            sourceOptions
+                    .configureLocations()
+                    .setOwnerLeaseFencingMargin(java.time.Duration.ofNanos(1));
             sourceOptions
                     .addRouteMesh(MESH)
                     .listen("tcp://127.0.0.1:0")

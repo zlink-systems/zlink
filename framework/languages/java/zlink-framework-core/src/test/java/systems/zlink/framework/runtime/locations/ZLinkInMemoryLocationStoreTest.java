@@ -921,7 +921,7 @@ class ZLinkInMemoryLocationStoreTest {
                                 first.entrySpotId(),
                                 new ZLinkActivationConcurrency(
                                         0, first.activationConcurrency().limit() + 1));
-        if (intent == ZLinkLocationWriteIntent.NEW_CLAIM) {
+        if (intent.isNewClaim()) {
             assertEquals(
                     ZLinkLocationWriteStatus.REJECTED_CONFLICT,
                     store.updateMeshNode(changed, intent).toCompletableFuture().get().status());
@@ -1107,9 +1107,21 @@ class ZLinkInMemoryLocationStoreTest {
                                         .get())
                         .token();
         var oldDescriptor = meshNodeDescriptor(oldOwner, 1, "tcp://127.0.0.1:6000");
+        assertUnavailable(
+                () ->
+                        store.updateMeshNode(
+                                oldDescriptor,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM));
+        monotonicNanos.addAndGet(3);
         assertEquals(
                 ZLinkLocationWriteStatus.STORED,
-                store.updateMeshNode(oldDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                store.updateMeshNode(
+                                oldDescriptor,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM)
                         .toCompletableFuture()
                         .get()
                         .status());
@@ -1126,7 +1138,12 @@ class ZLinkInMemoryLocationStoreTest {
         var replacement = meshNodeDescriptor(nextOwner, 2, "tcp://127.0.0.1:6001");
 
         assertUnavailable(
-                () -> store.updateMeshNode(replacement, ZLinkLocationWriteIntent.NEW_CLAIM));
+                () ->
+                        store.updateMeshNode(
+                                replacement,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM));
         var retained =
                 store.listMeshNodes("mesh", ZLinkPageRequest.firstPage())
                         .toCompletableFuture()
@@ -1136,11 +1153,108 @@ class ZLinkInMemoryLocationStoreTest {
         assertEquals(oldOwner.ownerId(), retained.ownerId());
         monotonicNanos.addAndGet(2);
         assertUnavailable(
-                () -> store.updateMeshNode(replacement, ZLinkLocationWriteIntent.NEW_CLAIM));
+                () ->
+                        store.updateMeshNode(
+                                replacement,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM));
         monotonicNanos.incrementAndGet();
         assertEquals(
                 ZLinkLocationWriteStatus.STORED,
-                store.updateMeshNode(replacement, ZLinkLocationWriteIntent.NEW_CLAIM)
+                store.updateMeshNode(
+                                replacement,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+    }
+
+    @RepeatedTest(100)
+    void fixedRidClaimWaitsThreeMarginsAfterNormalRemovalLeavesDescriptorMissing()
+            throws Exception {
+        var monotonicNanos = new AtomicLong();
+        Duration margin = Duration.ofNanos(1);
+        var store =
+                new ZLinkInMemoryLocationStore(
+                        Clock.fixed(NOW, ZoneOffset.UTC), monotonicNanos::get, margin);
+        var oldOwner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                store.claimOwnerLease("fixed-rid-clean-old", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var oldDescriptor = meshNodeDescriptor(oldOwner, 1, "tcp://127.0.0.1:6000");
+
+        assertUnavailable(
+                () ->
+                        store.updateMeshNode(
+                                oldDescriptor,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM));
+        monotonicNanos.addAndGet(margin.multipliedBy(3).toNanos());
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                store.updateMeshNode(
+                                oldDescriptor,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                store.removeMeshNode(new ZLinkMeshNodeDescriptorKey("mesh", NODE_A), oldOwner)
+                        .toCompletableFuture()
+                        .get());
+        assertEquals(
+                ZLinkOwnerLeaseReleaseResult.RELEASED,
+                store.releaseOwnerLease(oldOwner).toCompletableFuture().get());
+
+        var nextOwner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                store.claimOwnerLease("fixed-rid-clean-next", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var replacement = meshNodeDescriptor(nextOwner, 2, "tcp://127.0.0.1:6001");
+        assertUnavailable(
+                () ->
+                        store.updateMeshNode(
+                                replacement,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM));
+        assertEquals(
+                0,
+                store.listMeshNodes("mesh", ZLinkPageRequest.firstPage())
+                        .toCompletableFuture()
+                        .get()
+                        .items()
+                        .size());
+
+        monotonicNanos.addAndGet(margin.multipliedBy(3).toNanos() - 1);
+        assertUnavailable(
+                () ->
+                        store.updateMeshNode(
+                                replacement,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM));
+        monotonicNanos.incrementAndGet();
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                store.updateMeshNode(
+                                replacement,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM)
                         .toCompletableFuture()
                         .get()
                         .status());

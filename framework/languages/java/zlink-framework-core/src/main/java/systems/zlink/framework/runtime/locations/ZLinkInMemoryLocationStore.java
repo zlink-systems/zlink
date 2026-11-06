@@ -29,6 +29,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServe
 import systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationIdentity;
 import systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationTerminal;
 import systems.zlink.framework.runtime.internal.locations.ZLinkCreationTerminalReadResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkDescriptorWriteIntent;
 import systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptorKey;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
@@ -258,7 +259,7 @@ public final class ZLinkInMemoryLocationStore
 
     @Override
     public CompletionStage<ZLinkLocationWriteResult> updateMeshNode(
-            ZLinkMeshNodeDescriptor descriptor, ZLinkLocationWriteIntent intent) {
+            ZLinkMeshNodeDescriptor descriptor, ZLinkDescriptorWriteIntent intent) {
         Objects.requireNonNull(descriptor, "descriptor");
         Objects.requireNonNull(intent, "intent");
         return inStateLane(
@@ -275,10 +276,18 @@ public final class ZLinkInMemoryLocationStore
                                             descriptor.meshName(), descriptor.rid()));
                     String waitKey = ZLinkOwnerLeaseWaitTracker.descriptorRecordKey(key);
                     ZLinkMeshNodeDescriptor current = meshNodes.rows.get(key);
-                    if (current == null) ownerLeaseWait.clear(waitKey);
+                    boolean fixedRidClaim = intent.isFixedRidNewClaim();
+                    boolean newClaim = intent.isNewClaim();
+                    if (current == null) {
+                        if (fixedRidClaim && ownerLeaseWait.shouldWait(waitKey, owner, true)) {
+                            throw new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                    "Previous MeshNode owner lease is within its release wait");
+                        }
+                        if (!fixedRidClaim) ownerLeaseWait.clear(waitKey);
+                    }
                     if (current != null
-                            && (intent == ZLinkLocationWriteIntent.NEW_CLAIM
-                                    || intent == ZLinkLocationWriteIntent.RENEW)
+                            && (newClaim || intent == ZLinkLocationWriteIntent.RENEW)
                             && hasSameDescriptorFields(current, descriptor)) {
                         ownerLeaseWait.clear(waitKey);
                         return completed(
@@ -295,15 +304,14 @@ public final class ZLinkInMemoryLocationStore
                         entrySpotClaims.remove(entryAuthorityKey);
                         entryClaim = null;
                     }
-                    if ((intent == ZLinkLocationWriteIntent.NEW_CLAIM
-                                    || intent == ZLinkLocationWriteIntent.TAKEOVER)
+                    if ((newClaim || intent == ZLinkLocationWriteIntent.TAKEOVER)
                             && ((entryClaim != null && !entryClaim.matches(key, descriptor))
                                     || (entryAuthorityKey != null
                                             && authority.containsAuthorityOnLane(
                                                     entryAuthorityKey)))) {
                         return completed(ZLinkLocationWriteResult.rejectedConflict());
                     }
-                    if (intent == ZLinkLocationWriteIntent.NEW_CLAIM && current != null) {
+                    if (newClaim && current != null) {
                         var previousOwner =
                                 new ZLinkLocationOwnerToken(
                                         current.ownerId(), current.leaseGeneration());

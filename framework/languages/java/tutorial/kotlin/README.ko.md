@@ -167,11 +167,15 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:5380/players/p1/profile'
 
 - **`ZLinkConfigurationException: MeshNode descriptor publication failed [mesh=game,
   status=REJECTED_CONFLICT]`, 또는 프로필 호출이 계속 `503 one-way route is not
-  connected`를 낸다.** 강제 종료 후 이전 owner lease는 최대 30초 동안 유효할 수 있다
+  connected`를 낸다.** 튜토리얼은 Fixed RID를 사용한다. 정상 종료는 MeshNode
+  descriptor를 삭제하므로 다시 시작하면 Missing을 처음 관찰한 뒤 owner lease fencing
+  margin의 3배(기본 15초) 동안 host가 Preparing에 머문다. renew 주기마다 게시를 다시
+  시도하고 대기가 끝난 뒤 Ready가 된다. 강제 종료 후 이전 owner lease는 최대 30초 동안 유효할 수 있다
   ([owner lease TTL 기본값](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#L709-L716)).
-  만료될 때까지 기다린 뒤 Server를 다시 실행한다. 시작에 실패한 process는 자동으로
-  재시도하지 않는다. 즉시 다시 시작하려면 이전 tutorial process를 종료하고 아래 명령으로
-  `zlink-tutorial-kotlin:` 키만 삭제한다. 다른 언어의 tutorial 키는 지우지 않는다.
+  만료된 뒤 Server를 시작한다. lease가 무효임을 처음 관찰한 뒤에도 같은 대기를 거치며,
+  host는 renew 주기마다 claim을 다시 시도한다. tutorial 데이터를 초기화하려면 이전
+  tutorial process를 종료하고 아래 명령으로 `zlink-tutorial-kotlin:` 키만 삭제한다. 이
+  작업도 대기를 건너뛰지는 않는다. 다른 언어의 tutorial 키는 지우지 않는다.
 
   ```bash
   redis-cli --scan --pattern 'zlink-tutorial-kotlin:*' | xargs -r redis-cli del

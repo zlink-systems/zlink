@@ -1144,6 +1144,7 @@ final class EntrySpotActorDispatchTests {
 
     private static ZLinkFrameworkRuntime startRuntime(TestBackend backend, boolean protobuf) {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.setDefaultRequestTimeout(Duration.ofSeconds(1));
         options.addHandlersFromPackageOf(EntrySpotActorDispatchTests.class);
         if (protobuf) {
@@ -1173,7 +1174,9 @@ final class EntrySpotActorDispatchTests {
                         ProbeActor.class,
                         ProbeActorFactory.class,
                         factory -> factory.disableRelocation());
-        return ZLinkFrameworkRuntimeTestAccess.start(options, backend);
+        ZLinkFrameworkRuntime runtime = ZLinkFrameworkRuntimeTestAccess.start(options, backend);
+        ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime).toCompletableFuture().join();
+        return runtime;
     }
 
     private static ZLinkActorRuntime messageFollowSourceRuntime() {

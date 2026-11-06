@@ -31,6 +31,7 @@ final class ZLinkUnansweredDescriptorPublicationTest {
     @CsvSource({"READ, true", "WRITE, true", "CONFIRM, true", "WRITE, false"})
     void unansweredPublicationEndsPreparingAtRenewTimeoutAndRetries(
             Phase phase, boolean lateSuccess) throws Exception {
+        var descriptorClock = new AtomicLong();
         var store = new PendingStore(phase);
         var renewTimeout = Duration.ofSeconds(3);
         var options = new DefaultZLinkFrameworkOptions();
@@ -38,21 +39,25 @@ final class ZLinkUnansweredDescriptorPublicationTest {
         options.configureLocations().setOwnerLeaseTtl(Duration.ofHours(1));
         options.configureLocations().setOwnerLeaseRenewInterval(Duration.ofMinutes(10));
         options.configureLocations().setOwnerLeaseRenewTimeout(renewTimeout);
-        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofSeconds(1));
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.addRouteMesh("game")
                 .listen("inproc://unanswered-" + UUID.randomUUID())
                 .setRoutingId(RoutingId.from("unanswered"));
         var scheduler = new PublicationScheduler(renewTimeout, store);
         var clock = new AtomicLong(System.nanoTime());
+        Duration fencingMargin = Duration.ofNanos(1);
+        var locations =
+                ZLinkRegisteredLocationStores.fromUnified(
+                        new ZLinkProviderLocationRepository(
+                                store, descriptorClock::get, fencingMargin));
         var runtime =
                 new ZLinkLocationRuntime(
-                        ZLinkRegisteredLocationStores.fromUnified(
-                                new ZLinkProviderLocationRepository(store)),
+                        locations,
                         "unanswered",
                         Duration.ofHours(1),
                         Duration.ofMinutes(10),
                         renewTimeout,
-                        Duration.ofSeconds(1),
+                        fencingMargin,
                         clock::get,
                         scheduler,
                         new ZLinkStateLane());
@@ -64,22 +69,54 @@ final class ZLinkUnansweredDescriptorPublicationTest {
                                 .reflection(),
                         null,
                         new ZLinkFrameworkRuntimeTestAccess.Construction()
-                                .locationRuntime(runtime))) {
+                                .locationRuntime(runtime)
+                                .locationStores(locations))) {
             // The claim is held before startup continues. Observe the publication deadline
             // at its scheduler boundary rather than assuming the claim completes startup inline.
             try {
+                store.claimRequested.get(renewTimeout.toNanos(), TimeUnit.NANOSECONDS);
                 store.releaseClaim();
                 var startup =
                         ZLinkFrameworkRuntimeTestAccess.startupCompletion(host)
                                 .toCompletableFuture();
-                var deadline =
-                        scheduler.publicationDeadline.get(
-                                renewTimeout.toNanos(), TimeUnit.NANOSECONDS);
+                startup.get(renewTimeout.toNanos(), TimeUnit.NANOSECONDS);
+                store.descriptorReadObserved.get(renewTimeout.toNanos(), TimeUnit.NANOSECONDS);
+                runtime.renewOwnerLeaseOnce()
+                        .toCompletableFuture()
+                        .get(renewTimeout.toNanos(), TimeUnit.NANOSECONDS);
+                String descriptorKey = "mesh-node\0game\0" + RoutingId.from("unanswered").toHex();
+                assertEquals(0, store.targetDescriptorWrites.get());
+                assertEquals(ZLinkFrameworkRuntimeState.PREPARING, host.status().state());
+                assertFalse(host.isReady());
+                store.blocking = true;
+                descriptorClock.set(fencingMargin.multipliedBy(3).toNanos());
+                var pendingPublication = runtime.renewOwnerLeaseOnce().toCompletableFuture();
+                ZLinkLocationFirstHeartbeatTest.ScheduledTask<?> deadline;
+                try {
+                    deadline =
+                            scheduler.publicationDeadline.get(
+                                    renewTimeout.toNanos(), TimeUnit.NANOSECONDS);
+                } catch (java.util.concurrent.TimeoutException failure) {
+                    throw new AssertionError(
+                            "publication boundary missing: phase="
+                                    + phase
+                                    + " blocked="
+                                    + store.blocked
+                                    + " descriptorReads="
+                                    + store.descriptorReads
+                                    + " descriptorWrites="
+                                    + store.descriptorWrites
+                                    + " startupDone="
+                                    + startup.isDone()
+                                    + " retryDone="
+                                    + pendingPublication.isDone(),
+                            failure);
+                }
                 assertTrue(store.blocked, "fixture must reach the selected Store boundary");
-                assertFalse(startup.isDone());
+                assertFalse(pendingPublication.isDone());
                 // Advance only recorded deadlines; no sleep or elapsed-time assertion.
                 deadline.run();
-                startup.get(renewTimeout.toNanos(), TimeUnit.NANOSECONDS);
+                pendingPublication.get(renewTimeout.toNanos(), TimeUnit.NANOSECONDS);
                 assertEquals(renewTimeout.toNanos(), deadline.getDelay(TimeUnit.NANOSECONDS));
                 assertEquals(ZLinkFrameworkRuntimeState.PREPARING, host.status().state());
                 assertFalse(host.isReady());
@@ -87,8 +124,8 @@ final class ZLinkUnansweredDescriptorPublicationTest {
                 assertFalse(store.pending.isDone(), "timeout must preserve the Store operation");
                 assertFalse(store.cancellation.isCancellationRequested());
 
-                int requests = store.descriptorRequests;
                 store.blocking = false;
+                int requests = store.descriptorRequests;
                 assertTrue(runtime.renewOwnerLeaseOnce().toCompletableFuture().join());
                 assertTrue(store.descriptorRequests > requests, "the next renew must republish");
                 assertEquals(ZLinkFrameworkRuntimeState.SERVING, host.status().state());
@@ -152,16 +189,23 @@ final class ZLinkUnansweredDescriptorPublicationTest {
     private static final class PendingStore implements ZLinkLocationStore {
         final ZLinkInMemoryProviderLocationStore inner = new ZLinkInMemoryProviderLocationStore();
         final CompletableFuture<ZLinkStoreWriteResult> claim = new CompletableFuture<>();
+        final CompletableFuture<Void> claimRequested = new CompletableFuture<>();
+        final CompletableFuture<Void> descriptorReadObserved = new CompletableFuture<>();
         final CompletableFuture<Object> pending = new CompletableFuture<>();
         final Phase phase;
+        final java.util.concurrent.atomic.AtomicInteger targetDescriptorWrites =
+                new java.util.concurrent.atomic.AtomicInteger();
         ZLinkStoreWriteRequest claimRequest;
         ZLinkStoreWriteRequest pendingWrite;
         ZLinkStoreKey pendingRead;
         ZLinkStoreCancellation cancellation;
-        boolean blocking = true;
+        boolean blocking;
         boolean blocked;
         boolean confirming;
+        boolean descriptorWriteAttempted;
         int descriptorRequests;
+        int descriptorReads;
+        int descriptorWrites;
 
         PendingStore(Phase phase) {
             this.phase = phase;
@@ -176,10 +220,13 @@ final class ZLinkUnansweredDescriptorPublicationTest {
                                 // Select the canonical MeshNode key without parsing payload bytes.
                                 if (key.value().startsWith("mesh-node\0")) {
                                     descriptorRequests++;
+                                    descriptorReads++;
+                                    descriptorReadObserved.complete(null);
                                     if (blocking
                                             && !blocked
                                             && (phase == Phase.CONFIRM && confirming
-                                                    || phase == Phase.READ)) {
+                                                    || phase == Phase.READ
+                                                            && descriptorWriteAttempted)) {
                                         blocked = true;
                                         pendingRead = key;
                                         this.cancellation = cancellation;
@@ -196,11 +243,18 @@ final class ZLinkUnansweredDescriptorPublicationTest {
                 ZLinkStoreWriteRequest request, ZLinkStoreCancellation cancellation) {
             if (claimRequest == null) {
                 claimRequest = request;
+                claimRequested.complete(null);
                 return claim;
             }
             if (request.mutations().getFirst() instanceof ZLinkStorePut put
                     && put.key().value().startsWith("mesh-node\0")) {
+                if (put.key()
+                        .value()
+                        .equals("mesh-node\0game\0" + RoutingId.from("unanswered").toHex()))
+                    targetDescriptorWrites.incrementAndGet();
+                descriptorWriteAttempted = true;
                 descriptorRequests++;
+                descriptorWrites++;
                 if (blocking && !blocked && phase != Phase.READ) {
                     if (phase == Phase.CONFIRM) {
                         confirming = true;

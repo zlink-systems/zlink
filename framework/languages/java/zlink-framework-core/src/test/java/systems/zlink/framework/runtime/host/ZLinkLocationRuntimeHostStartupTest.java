@@ -26,6 +26,7 @@ import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
+import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
 import systems.zlink.framework.spots.ZLinkSpotContext;
@@ -43,6 +44,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
 
 final class ZLinkLocationRuntimeHostStartupTest {
@@ -121,7 +123,8 @@ final class ZLinkLocationRuntimeHostStartupTest {
         options.configureLocations().setOwnerLeaseTtl(Duration.ofSeconds(1));
         options.configureLocations().setOwnerLeaseRenewInterval(Duration.ofMillis(20));
         options.configureLocations().setOwnerLeaseRenewTimeout(Duration.ofMillis(10));
-        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofMillis(700));
+        Duration fencingMargin = Duration.ofMillis(700);
+        options.configureLocations().setOwnerLeaseFencingMargin(fencingMargin);
         var mesh =
                 options.addRouteMesh("game")
                         .listen("inproc://owner-admission-" + UUID.randomUUID())
@@ -138,9 +141,26 @@ final class ZLinkLocationRuntimeHostStartupTest {
                         ProbeActorFactory.class,
                         factory -> factory.disableRelocation());
 
+        var monotonicNanos = new AtomicLong();
+        var locationStores =
+                ZLinkRegisteredLocationStores.fromUnified(
+                        new ZLinkProviderLocationRepository(
+                                store, monotonicNanos::get, fencingMargin));
         try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
-                        options, new ZLinkJavaBackendAdapterFactory())) {
+                ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                        options,
+                        new ZLinkJavaBackendAdapterFactory(),
+                        systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
+                                .reflection(),
+                        null,
+                        new ZLinkFrameworkRuntimeTestAccess.Construction()
+                                .locationStores(locationStores))) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime).toCompletableFuture().join();
+            monotonicNanos.set(fencingMargin.multipliedBy(3).toNanos());
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                            .toCompletableFuture()
+                            .join());
             await(runtime::isReady, Duration.ofSeconds(2));
             runtime.spotManager()
                     .getOrCreate("probe", "probe")

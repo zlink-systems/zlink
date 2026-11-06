@@ -201,10 +201,36 @@ final class ZLinkEndedInstanceIntentTest {
                         owner.ownerId(),
                         owner.leaseGeneration(),
                         Instant.now());
-        repository
-                .updateMeshNode(descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
-                .toCompletableFuture()
-                .join();
+        var initialClaimWait =
+                assertThrows(
+                        java.util.concurrent.CompletionException.class,
+                        () ->
+                                repository
+                                        .updateMeshNode(
+                                                descriptor,
+                                                systems.zlink.framework.runtime.internal.locations
+                                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                                        .FIXED_RID_NEW_CLAIM)
+                                        .toCompletableFuture()
+                                        .join());
+        assertEquals(
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                assertInstanceOf(
+                                systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                                initialClaimWait.getCause())
+                        .kind());
+        monotonicNanos.addAndGet(fencingMargin.multipliedBy(3).toNanos());
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                repository
+                        .updateMeshNode(
+                                descriptor,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM)
+                        .toCompletableFuture()
+                        .join()
+                        .status());
         String key = ZLinkAuthorityKeyCodec.spot("ended-instance-spot");
         var reservation =
                 ((ZLinkObjectReserved)
@@ -302,6 +328,11 @@ final class ZLinkEndedInstanceIntentTest {
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
                     .toCompletableFuture()
                     .get(10, TimeUnit.SECONDS);
+            monotonicNanos.addAndGet(fencingMargin.multipliedBy(3).toNanos());
+            ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                    .toCompletableFuture()
+                    .get(10, TimeUnit.SECONDS);
+            assertTrue(runtime.isReady());
             var sourceOptions = new DefaultZLinkFrameworkOptions();
             sourceOptions
                     .configureDispatch()
@@ -346,6 +377,13 @@ final class ZLinkEndedInstanceIntentTest {
                     ZLinkFrameworkRuntimeTestAccess.startupCompletion(client)
                             .toCompletableFuture()
                             .get(10, TimeUnit.SECONDS);
+                if (client != null) {
+                    monotonicNanos.addAndGet(fencingMargin.multipliedBy(3).toNanos());
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(client)
+                            .toCompletableFuture()
+                            .get(10, TimeUnit.SECONDS);
+                    assertTrue(client.isReady());
+                }
                 if (client != null) awaitTargetPeer(client);
                 if (kind == ZLinkPlacementObjectKind.USER_SPOT) {
                     observeReleaseWait(

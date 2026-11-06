@@ -159,11 +159,26 @@ class ZLinkProviderDescriptorRepositoryTest {
                                         .toCompletableFuture()
                                         .get())
                         .token();
+        assertThrows(
+                ExecutionException.class,
+                () ->
+                        descriptors
+                                .updateMeshNode(
+                                        descriptor(expiredOwner, 1),
+                                        systems.zlink.framework.runtime.internal.locations
+                                                .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                                .FIXED_RID_NEW_CLAIM)
+                                .toCompletableFuture()
+                                .get());
+        monotonicNanos.addAndGet(3);
         assertEquals(
                 ZLinkLocationWriteStatus.STORED,
                 descriptors
                         .updateMeshNode(
-                                descriptor(expiredOwner, 1), ZLinkLocationWriteIntent.NEW_CLAIM)
+                                descriptor(expiredOwner, 1),
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM)
                         .toCompletableFuture()
                         .get()
                         .status());
@@ -183,7 +198,9 @@ class ZLinkProviderDescriptorRepositoryTest {
                         () ->
                                 descriptors
                                         .updateMeshNode(
-                                                replacement, ZLinkLocationWriteIntent.NEW_CLAIM)
+                                                replacement,
+                                                ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                                        .FIXED_RID_NEW_CLAIM)
                                         .toCompletableFuture()
                                         .get());
         assertEquals(
@@ -351,7 +368,7 @@ class ZLinkProviderDescriptorRepositoryTest {
                         .getFirst());
 
         assertEquals(
-                intent == ZLinkLocationWriteIntent.NEW_CLAIM
+                intent.isNewClaim()
                         ? ZLinkLocationWriteStatus.REJECTED_CONFLICT
                         : ZLinkLocationWriteStatus.IGNORED_STALE,
                 descriptors
@@ -360,7 +377,7 @@ class ZLinkProviderDescriptorRepositoryTest {
                         .get()
                         .status());
         assertEquals(
-                intent == ZLinkLocationWriteIntent.NEW_CLAIM
+                intent.isNewClaim()
                         ? ZLinkLocationWriteStatus.REJECTED_CONFLICT
                         : ZLinkLocationWriteStatus.IGNORED_STALE,
                 descriptors
