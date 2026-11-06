@@ -161,7 +161,8 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/.github/workflows/framework-cpp-system-toolchain.cmake" \
             -DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF \
             -DZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=OFF
-          cmake --build --preset linux-ninja-release --parallel "${BUILD_PARALLEL}"
+          # Keep going so one run lists every target that fails under the sanitizers.
+          cmake --build --preset linux-ninja-release --parallel "${BUILD_PARALLEL}" -- -k 0
 
       - name: Run CTest suites and create sanitizer summary
         run: |
