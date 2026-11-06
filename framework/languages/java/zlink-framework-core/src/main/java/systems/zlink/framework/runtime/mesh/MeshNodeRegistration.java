@@ -55,6 +55,14 @@ import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
+    private final systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.PreparedNames
+            envelopeNames;
+
+    public systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.PreparedNames
+            envelopeNames() {
+        return envelopeNames;
+    }
+
     private final String meshName;
     private final Map<String, Channel> channels = new LinkedHashMap<>();
     private final List<Peer> peers = new ArrayList<>();
@@ -94,6 +102,9 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
 
     public MeshNodeRegistration(String meshName, String bindHost, String advertiseHost) {
         this.meshName = requireText(meshName, "mesh name");
+        envelopeNames =
+                new systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.PreparedNames(
+                        meshName, null, null);
         this.bindHost = requireText(bindHost, "bind host");
         this.advertiseHost = advertiseHost;
     }
@@ -166,6 +177,12 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
 
     public String entrySpotId() {
         return inRoutingIdStateLane(this::ensureEntrySpotIdCore);
+    }
+
+    public systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.PreparedNames
+            channelEnvelopeNames(String name) {
+        Channel channel = channels.get(name);
+        return channel == null ? null : channel.envelopeNames;
     }
 
     public List<String> channelNames() {
@@ -956,6 +973,8 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
                     ZLinkMeshChannelClientBuilder,
                     ZLinkMeshChannelServerBuilder {
         private final String name;
+        private final systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.PreparedNames
+                envelopeNames;
         private final List<String> handlerGroups = new ArrayList<>();
         private final List<DispatchHandler> handlers = new ArrayList<>();
         private int weight = 100;
@@ -964,6 +983,9 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
 
         private Channel(String name) {
             this.name = name;
+            envelopeNames =
+                    new systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
+                            .PreparedNames(name, null, null);
         }
 
         @Override

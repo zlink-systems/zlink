@@ -175,7 +175,15 @@ final class ZLinkChannelSpotTerminalTest {
                                 "spot",
                                 payload,
                                 Optional.of("Request"),
-                                Duration.ofSeconds(1));
+                                Duration.ofSeconds(1),
+                                "application/json",
+                                null,
+                                null,
+                                false,
+                                null,
+                                null,
+                                systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata
+                                        .empty());
                 result = (instance ? call.instanceSpot() : call).submit(String.class);
             } else {
                 var call =

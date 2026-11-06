@@ -4,6 +4,7 @@ import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker.PreparedMethod;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.PreparedNames;
 
 import java.lang.reflect.Method;
 import java.util.Collection;
@@ -14,7 +15,9 @@ record ChannelRouteRequestHandlerRegistration(
         Class<?> requestType,
         Class<?> replyType,
         String packetName,
-        PreparedMethod invocation) {
+        PreparedMethod invocation,
+        PreparedNames envelopeNames,
+        PreparedNames channelEnvelopeNames) {
     ChannelRouteRequestHandlerRegistration(
             Class<?> handlerType,
             Method method,
@@ -28,11 +31,9 @@ record ChannelRouteRequestHandlerRegistration(
                 replyType,
                 packetName,
                 ZLinkHandlerMethodInvoker.prepareChannel(
-                        handlerType,
-                        method,
-                        requestType,
-                        ZLinkRouteMessageContext.class,
-                        invokers));
+                        handlerType, method, requestType, ZLinkRouteMessageContext.class, invokers),
+                new PreparedNames(null, packetName, null),
+                null);
     }
 
     ChannelRouteRequestHandlerRegistration(
@@ -49,8 +50,25 @@ record ChannelRouteRequestHandlerRegistration(
         this(handlerType, null, requestType, replyType, packetName, List.of());
     }
 
+    ChannelRouteRequestHandlerRegistration withChannelNames(PreparedNames channelNames) {
+        return new ChannelRouteRequestHandlerRegistration(
+                handlerType,
+                requestType,
+                replyType,
+                packetName,
+                invocation,
+                envelopeNames,
+                channelNames);
+    }
+
     ChannelRouteRequestHandlerRegistration withPacketName(String packetName) {
         return new ChannelRouteRequestHandlerRegistration(
-                handlerType, requestType, replyType, packetName, invocation);
+                handlerType,
+                requestType,
+                replyType,
+                packetName,
+                invocation,
+                new PreparedNames(null, packetName, null),
+                channelEnvelopeNames);
     }
 }

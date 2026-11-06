@@ -420,6 +420,28 @@ final class ZLinkChannelCallRuntime {
      * header, payload]} with content type, application metadata and the ambient flow pair carried
      * as header fields. A call without a packet name stays a bare single-part payload.
      */
+    List<Message> registeredEnvelopeParts(
+            int kind,
+            String channelName,
+            Optional<String> packetName,
+            ZLinkFrameworkMultipartView payload,
+            String contentType,
+            Map<String, String> metadata,
+            UUID operationId,
+            ZLinkChannelEnvelope.PreparedNames channelNames,
+            ZLinkChannelEnvelope.PreparedNames names) {
+        return envelopeParts(
+                kind,
+                channelName,
+                packetName.orElse(null),
+                payload,
+                contentType,
+                metadata,
+                operationId,
+                channelNames,
+                names);
+    }
+
     static List<Message> envelopeParts(
             int kind,
             String channelName,
@@ -476,6 +498,28 @@ final class ZLinkChannelCallRuntime {
             String contentType,
             Map<String, String> metadata,
             UUID operationId) {
+        return envelopeParts(
+                kind,
+                channelName,
+                packetName,
+                payload,
+                contentType,
+                metadata,
+                operationId,
+                null,
+                null);
+    }
+
+    private static List<Message> envelopeParts(
+            int kind,
+            String channelName,
+            String packetName,
+            ZLinkFrameworkMultipartView payload,
+            String contentType,
+            Map<String, String> metadata,
+            UUID operationId,
+            ZLinkChannelEnvelope.PreparedNames channelNames,
+            ZLinkChannelEnvelope.PreparedNames names) {
         if (packetName == null) {
             return payload;
         }
@@ -489,6 +533,9 @@ final class ZLinkChannelCallRuntime {
                         metadata,
                         ZLinkFlowContext.current(),
                         operationId),
-                payload);
+                payload,
+                channelNames,
+                names,
+                names);
     }
 }

@@ -354,6 +354,10 @@ final class ZLinkChannelSubmitTurnTest {
                     DEFAULT_TIMEOUT,
                     ZLinkFrameworkMultipartView.owned(Message.from("request")),
                     Optional.of("packet"),
+                    null,
+                    "application/json",
+                    null,
+                    null,
                     null);
         }
 
