@@ -8,6 +8,7 @@ const { logs } = require('@opentelemetry/api-logs');
 const { LoggerProvider } = require('@opentelemetry/sdk-logs');
 const framework = require('../../../packages/framework/dist');
 const nestjs = require('../../../packages/nestjs/dist');
+const { fixedRidHostClock, finishFixedRidHostStartup } = require('../../helpers/fixed-rid-host-clock');
 
 const mode = process.argv[2];
 const provider = new LoggerProvider({
@@ -110,7 +111,10 @@ for (const type of [TargetSpot, SourceSpot]) Injectable({ scope: Scope.TRANSIENT
 nestjs.zlinkSpotPacketHandler({ packetName: 'Hold', spot: () => TargetSpot })(HoldHandler);
 
 async function main() {
-  const builder = nestjs.zlinkFramework().options({ locations: { useInMemoryStores: true } });
+  const hostClock = fixedRidHostClock();
+  const builder = nestjs.zlinkFramework().options({
+    locations: { useInMemoryStores: true, options: { ownerLeaseFencingMarginMs: 1 } }
+  });
   builder.configureDispatch().messageFlow('normal');
   builder
     .addRouteMesh('shutdown-execution')
@@ -130,6 +134,11 @@ async function main() {
     abortOnError: false
   });
   const runtime = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME);
+  await finishFixedRidHostStartup(
+    runtime,
+    hostClock,
+    framework.ZLinkFrameworkRuntimeState.Preparing
+  );
   const spots = app.get(nestjs.ZLINK_SPOT_MANAGER);
   if (mode !== 'seal')
     targetId = (await spots.create('target').inMesh('shutdown-execution').submit()).spot.spotId;

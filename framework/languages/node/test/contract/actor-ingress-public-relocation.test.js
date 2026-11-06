@@ -9,6 +9,8 @@ const n = require('../../packages/nestjs/dist');
 const locations = require('../../packages/framework-locations-redis/dist');
 const connector = require('../../packages/stream-connector/dist');
 const telemetry = require('./helpers/telemetry-log-capture');
+const framework = require('../../packages/framework/dist');
+const { fixedRidHostClock, finishFixedRidHostStartup } = require('../helpers/fixed-rid-host-clock');
 function deferred() {
   let resolve;
   const promise = new Promise((done) => {
@@ -49,6 +51,7 @@ test(
   'public relocation transfers queued sends, requests and physical disconnect to the current Spot',
   { timeout: 30000 },
   async (t) => {
+    const hostClock = fixedRidHostClock(t);
     const probe = createClient({ url: redisUrl, socket: { reconnectStrategy: false } });
     probe.on('error', () => {});
     try {
@@ -180,6 +183,7 @@ test(
     async function start(role, peer) {
       const builder = n.zlinkFramework();
       builder.configureDispatch().messageFlow('normal');
+      builder.configureLocations().ownerLeaseFencingMarginMs(1);
       builder.addLocationStore(
         new locations.ZLinkRedisLocationStore({
           url: redisUrl,
@@ -231,6 +235,11 @@ test(
         abortOnError: false
       });
       apps.push(app);
+      await finishFixedRidHostStartup(
+        app.get(n.ZLINK_FRAMEWORK_RUNTIME),
+        hostClock,
+        framework.ZLinkFrameworkRuntimeState.Preparing
+      );
       return app;
     }
     await telemetry.observed();

@@ -226,6 +226,10 @@ test('Location owner lease timing follows the TTL fencing relationship', () => {
   assert.equal(registration.locations.options.ownerLeaseRenewIntervalMs, 5_000);
 });
 
+test('Location owner lease TTL defaults to 30 seconds', () => {
+  assert.equal(framework.zlinkDefaultLocationOptions.ownerLeaseTtlMs, 30_000);
+});
+
 test('RouteMesh channel registration rejects duplicate or mixed roles', () => {
   for (const build of [
     () => framework.createFrameworkOptions((builder) => {

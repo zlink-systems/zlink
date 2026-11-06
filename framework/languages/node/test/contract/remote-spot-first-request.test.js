@@ -10,13 +10,15 @@ const {
   ZLinkInMemoryProviderLocationStore
 } = require('../../packages/framework/dist/runtime/locations/in-memory-provider-location-store');
 const telemetry = require('./helpers/telemetry-log-capture');
+const { fixedRidHostClock, finishFixedRidHostStartup } = require('../helpers/fixed-rid-host-clock');
 
 class FirstRequest {}
 
 test(
   'new ready host gets Existing Spot and sends its first remote request once',
   { timeout: 15000 },
-  async () => {
+  async (t) => {
+    const hostClock = fixedRidHostClock(t);
     const store = new ZLinkInMemoryProviderLocationStore();
     const mesh = `first-${randomUUID()}`;
     const apps = [];
@@ -43,6 +45,7 @@ test(
     async function start(role) {
       const builder = n.zlinkFramework().addLocationStore(store);
       builder.configureDispatch().messageFlow('normal');
+      builder.configureLocations().ownerLeaseFencingMarginMs(1);
       builder
         .addRouteMesh(mesh)
         .listen('tcp://127.0.0.1:0')
@@ -60,6 +63,11 @@ test(
         abortOnError: false
       });
       apps.push(app);
+      await finishFixedRidHostStartup(
+        app.get(n.ZLINK_FRAMEWORK_RUNTIME),
+        hostClock,
+        framework.ZLinkFrameworkRuntimeState.Preparing
+      );
       return app;
     }
     try {

@@ -12,38 +12,57 @@ async function liveUserSpotAuthority(store, meshName, spotId, objectGeneration) 
   assert.equal(owner.kind, 'claimed');
   const nodeRid = zlink.RoutingId.from(`membership-node:${spotId}`);
   const target = { meshName, nodeRid, nodeLifecycleGeneration: 1n, owner: owner.token };
-  assert.equal(
-    (
-      await store.updateMeshNode(
-        {
-          meshName,
-          rid: nodeRid,
-          lifecycleGeneration: 1n,
-          descriptorRevision: 1n,
-          endpoint: 'tcp://127.0.0.1:1',
-          objectRole: framework.ZLinkObjectRole.Server,
-          placementWeight: 1,
-          populationCapacity: {
-            actors: { active: 0, reserved: 0, limit: 1 },
-            spots: { active: 0, reserved: 0, limit: 1 },
-            spotTypes: []
-          },
-          activationConcurrency: { active: 0, limit: 1 },
-          channelWeights: {},
-          applicationVersion: 1n,
-          spotTypes: [],
-          objectCapabilities: [],
-          state: framework.ZLinkFrameworkRuntimeState.Serving,
-          securityIdentity: 'test',
-          ownerId,
-          leaseGeneration: owner.token.leaseGeneration,
-          updatedAt: new Date(0)
-        },
-        framework.ZLinkLocationWriteIntent.NewClaim
-      )
-    ).status,
-    framework.ZLinkLocationWriteStatus.Stored
-  );
+  const descriptor = {
+    meshName,
+    rid: nodeRid,
+    lifecycleGeneration: 1n,
+    descriptorRevision: 1n,
+    endpoint: 'tcp://127.0.0.1:1',
+    objectRole: framework.ZLinkObjectRole.Server,
+    placementWeight: 1,
+    populationCapacity: {
+      actors: { active: 0, reserved: 0, limit: 1 },
+      spots: { active: 0, reserved: 0, limit: 1 },
+      spotTypes: []
+    },
+    activationConcurrency: { active: 0, limit: 1 },
+    channelWeights: {},
+    applicationVersion: 1n,
+    spotTypes: [],
+    objectCapabilities: [],
+    state: framework.ZLinkFrameworkRuntimeState.Serving,
+    securityIdentity: 'test',
+    ownerId,
+    leaseGeneration: owner.token.leaseGeneration,
+    updatedAt: new Date(0)
+  };
+  const releaseDelay = store.ownerLeaseReleaseDelayForTesting;
+  let monotonicMs = 0;
+  const originalNow = performance.now;
+  if (releaseDelay.delayMs > 0) performance.now = () => monotonicMs;
+  try {
+    if (releaseDelay.delayMs > 0) {
+      await assert.rejects(
+        store.updateMeshNode(
+          descriptor,
+          framework.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+        ),
+        error => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+      );
+      monotonicMs = releaseDelay.delayMs;
+    }
+    assert.equal(
+      (
+        await store.updateMeshNode(
+          descriptor,
+          framework.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+        )
+      ).status,
+      framework.ZLinkLocationWriteStatus.Stored
+    );
+  } finally {
+    if (releaseDelay.delayMs > 0) performance.now = originalNow;
+  }
   const key = { kind: 'user_spot', globalId: spotId };
   // Allocate preceding incarnations through the provider counter, without private state writes.
   for (let generation = 1n; generation <= objectGeneration; ++generation) {

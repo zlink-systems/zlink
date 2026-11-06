@@ -6,6 +6,7 @@ const nestjs = require('../../packages/nestjs/dist');
 const integration = require('../../packages/framework/dist/nest-integration');
 const { ZLinkNodeBackendAdapterFactory } = require('../../packages/framework/dist/runtime/backend/node/node-backend-adapter-factory');
 const { ReceiveKind } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
+const { fixedRidHostClock, finishFixedRidHostStartup } = require('../helpers/fixed-rid-host-clock');
 
 // The node quiescence owner is shared with Close. Cold activation preparation is
 // a separate gate, so the queued case observes that owner without invoking Close.
@@ -16,12 +17,15 @@ async function settled(promise) {
   return done;
 }
 
-test('Close does not wait for the first terminal of an activated message that has not started', async () => {
+test('Close does not wait for the first terminal of an activated message that has not started', async (t) => {
+  const hostClock = fixedRidHostClock(t);
   const captured = deferred();
   const release = deferred();
   class Ping {}
   class Room {}
-  const builder = nestjs.zlinkFramework().options({ locations: { useInMemoryStores: true } });
+  const builder = nestjs.zlinkFramework().options({
+    locations: { useInMemoryStores: true, options: { ownerLeaseFencingMarginMs: 1 } }
+  });
   builder.addRelocationStore(new MemoryRelocationStore());
   builder
     .addRouteMesh('first-terminal')
@@ -94,6 +98,11 @@ test('Close does not wait for the first terminal of an activated message that ha
   const errors = [];
   try {
     await host.start();
+    await finishFixedRidHostStartup(
+      host,
+      hostClock,
+      framework.ZLinkFrameworkRuntimeState.Preparing
+    );
     const request = outbound.requestToSpot('room-1', new Ping()).instanceSpot('Room').submit();
     let requestSettled = false;
     void request.then(() => { requestSettled = true; }, () => { requestSettled = true; });
@@ -144,7 +153,8 @@ function deferred() {
 }
 
 
-test('Close waits for the first terminal record of a started activated message', async () => {
+test('Close waits for the first terminal record of a started activated message', async (t) => {
+  const hostClock = fixedRidHostClock(t);
   const entered = deferred();
   const release = deferred();
   class Ping {}
@@ -160,7 +170,9 @@ test('Close waits for the first terminal record of a started activated message',
       this.context.handlers.addPacket(PingHandler);
     }
   }
-  const builder = nestjs.zlinkFramework().options({ locations: { useInMemoryStores: true } });
+  const builder = nestjs.zlinkFramework().options({
+    locations: { useInMemoryStores: true, options: { ownerLeaseFencingMarginMs: 1 } }
+  });
   builder.addRelocationStore(new MemoryRelocationStore());
   builder
     .addRouteMesh('first-terminal')
@@ -194,6 +206,11 @@ test('Close waits for the first terminal record of a started activated message',
   const errors = [];
   try {
     await host.start();
+    await finishFixedRidHostStartup(
+      host,
+      hostClock,
+      framework.ZLinkFrameworkRuntimeState.Preparing
+    );
     request = outbound.requestToSpot('room-1', new Ping()).instanceSpot('Room').submit();
     void request.catch(() => {});
     await Promise.race([

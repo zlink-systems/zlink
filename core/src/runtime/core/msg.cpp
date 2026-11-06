@@ -195,6 +195,24 @@ int zlink::msg_t::init_buffer (const void *buf_, size_t size_)
     return 0;
 }
 
+bool zlink::msg_t::release_content (content_t *content_, bool lmsg_owner_, int refs_, bool shared_)
+{
+    if (shared_ && content_->refcnt.sub (refs_))
+        return true;
+
+    //  External callbacks may recycle caller-owned metadata, so inspect its
+    //  ownership before invoking the callback and never read it afterwards.
+    const bool pooled_slice_content = content_->ffn == &msg_t::call_dec_ref_on_slice;
+    content_->refcnt.~atomic_counter_t ();
+    if (content_->ffn)
+        content_->ffn (content_->data, content_->hint);
+    if (lmsg_owner_)
+        free (content_);
+    else if (pooled_slice_content)
+        release_slice_content (content_);
+    return false;
+}
+
 void zlink::msg_t::call_dec_ref_on_slice (void *data_, void *hint_)
 {
     LIBZLINK_UNUSED (data_);
@@ -207,13 +225,7 @@ void zlink::msg_t::call_dec_ref_on_slice (void *data_, void *hint_)
     if (!content)
         return;
 
-    if (!content->refcnt.sub (1)) {
-        content->refcnt.~atomic_counter_t ();
-        if (content->ffn)
-            content->ffn (content->data, content->hint);
-        if (lmsg_owner)
-            free (content);
-    }
+    release_content (content, lmsg_owner, 1);
 }
 
 int zlink::msg_t::init_view (msg_t &src_, size_t offset_, size_t size_)
@@ -262,13 +274,7 @@ int zlink::msg_t::init_view (msg_t &src_, size_t offset_, size_t size_)
         const bool lmsg_owner = src_.is_lmsg ();
         content_t *view_content = acquire_slice_content ();
         if (!view_content) {
-            if (!content->refcnt.sub (1)) {
-                content->refcnt.~atomic_counter_t ();
-                if (content->ffn)
-                    content->ffn (content->data, content->hint);
-                if (lmsg_owner)
-                    free (content);
-            } else if (promoted_to_shared) {
+            if (release_content (content, lmsg_owner, 1) && promoted_to_shared) {
                 src_._u.base.flags &= ~msg_t::shared;
             }
             const int init_rc = init ();
@@ -283,13 +289,7 @@ int zlink::msg_t::init_view (msg_t &src_, size_t offset_, size_t size_)
 
         const int saved_errno = errno;
         release_slice_content (view_content);
-        if (!content->refcnt.sub (1)) {
-            content->refcnt.~atomic_counter_t ();
-            if (content->ffn)
-                content->ffn (content->data, content->hint);
-            if (lmsg_owner)
-                free (content);
-        } else if (promoted_to_shared) {
+        if (release_content (content, lmsg_owner, 1) && promoted_to_shared) {
             src_._u.base.flags &= ~msg_t::shared;
         }
         const int init_rc = init ();
@@ -419,37 +419,11 @@ int zlink::msg_t::close ()
         return -1;
     }
 
-    if (_u.base.type == type_lmsg) {
-        //  If the content is not shared, or if it is shared and the reference
-        //  count has dropped to zero, deallocate it.
-        if (!(_u.lmsg.flags & msg_t::shared) || !_u.lmsg.content->refcnt.sub (1)) {
-            //  We used "placement new" operator to initialize the reference
-            //  counter so we call the destructor explicitly now.
-            _u.lmsg.content->refcnt.~atomic_counter_t ();
-
-            if (_u.lmsg.content->ffn)
-                _u.lmsg.content->ffn (_u.lmsg.content->data, _u.lmsg.content->hint);
-            free (_u.lmsg.content);
-        }
-    }
-
-    if (is_zcmsg ()) {
-        zlink_assert (_u.zclmsg.content->ffn);
-        content_t *content = _u.zclmsg.content;
-        msg_free_fn *ffn = content->ffn;
-        const bool pooled_slice_content = ffn == &msg_t::call_dec_ref_on_slice;
-
-        //  If the content is not shared, or if it is shared and the reference
-        //  count has dropped to zero, deallocate it.
-        if (!(_u.zclmsg.flags & msg_t::shared) || !content->refcnt.sub (1)) {
-            //  We used "placement new" operator to initialize the reference
-            //  counter so we call the destructor explicitly now.
-            content->refcnt.~atomic_counter_t ();
-
-            ffn (content->data, content->hint);
-            if (pooled_slice_content)
-                release_slice_content (content);
-        }
+    if (is_lmsg () || is_zcmsg ()) {
+        content_t *content = is_lmsg () ? _u.lmsg.content : _u.zclmsg.content;
+        if (is_zcmsg ())
+            zlink_assert (content->ffn);
+        release_content (content, is_lmsg (), 1, (_u.base.flags & msg_t::shared) != 0);
     }
 
     clear_auxiliary ();
@@ -711,31 +685,9 @@ bool zlink::msg_t::rm_refs (int refs_)
     }
 
     bool payload_alive = true;
-    if (_u.base.type == type_lmsg
-        && !_u.lmsg.content->refcnt.sub (refs_)) {
-        //  We used "placement new" operator to initialize the reference
-        //  counter so we call the destructor explicitly now.
-        _u.lmsg.content->refcnt.~atomic_counter_t ();
-
-        if (_u.lmsg.content->ffn)
-            _u.lmsg.content->ffn (_u.lmsg.content->data, _u.lmsg.content->hint);
-        free (_u.lmsg.content);
-        payload_alive = false;
-    }
-
-    if (is_zcmsg () && !_u.zclmsg.content->refcnt.sub (refs_)) {
-        //  init_external_storage() placement-constructs this counter even
-        //  though its storage belongs to the caller. Destroy it before the
-        //  release callback can recycle that storage.
-        _u.zclmsg.content->refcnt.~atomic_counter_t ();
-        msg_free_fn *ffn = _u.zclmsg.content->ffn;
-        const bool pooled_slice_content = ffn == &msg_t::call_dec_ref_on_slice;
-        if (ffn) {
-            ffn (_u.zclmsg.content->data, _u.zclmsg.content->hint);
-            if (pooled_slice_content)
-                release_slice_content (_u.zclmsg.content);
-        }
-        payload_alive = false;
+    if (refcounted_payload) {
+        content_t *content = is_lmsg () ? _u.lmsg.content : _u.zclmsg.content;
+        payload_alive = release_content (content, is_lmsg (), refs_);
     }
 
     bool auxiliary_alive = true;

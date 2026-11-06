@@ -1,6 +1,10 @@
 export class RuntimeDisposal {
   private task?: Promise<void> | null;
 
+  get operation(): Promise<void> | undefined {
+    return this.task ?? undefined;
+  }
+
   get started(): boolean {
     return this.task !== undefined;
   }

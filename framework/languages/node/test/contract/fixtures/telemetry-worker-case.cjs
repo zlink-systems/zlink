@@ -63,13 +63,15 @@ function assertNoRecordAllocation(tracer) {
 
 async function stopHost(telemetryLease) {
   let closed, lifecycle;
-  await require(process.env.ZLINK_TEST_TELEMETRY_HOST_STOP).call({
+  const HostStopSourceProof = require(process.env.ZLINK_TEST_TELEMETRY_HOST_STOP);
+  await Object.assign(new HostStopSourceProof(), {
     telemetryLease,
     requests: { close(error) { closed = error; } },
     runWithShutdownDeadline(_timeout, work) { return work(); },
     runLifecycle(work) { lifecycle = true; return work(); },
-    async stopCore() {}
-  });
+    async stopCore() {},
+    setRuntimeState() {}
+  }).stop();
   assert.equal(closed.message, 'Host stopped.');
   assert.equal(lifecycle, true);
 }
