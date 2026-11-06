@@ -64,6 +64,7 @@ struct location_options_t
     /* Spot mesh name to route mesh channel name, used when the two differ.
      * An unmapped mesh name is used as the route channel name as-is. */
     std::map<std::string, std::string> spot_router_channels;
+    bool store_outage_retention = false;
 };
 
 } // namespace zlink::framework

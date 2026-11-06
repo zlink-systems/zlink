@@ -1771,7 +1771,7 @@ void route_client_t::submit_request_reply_message_erased (
     {
         std::shared_ptr<detail::route_client_state_t> state;
         detail::node_transport_t transport;
-        zlink::routing_id_t target;
+        std::shared_ptr<const zlink::routing_id_t> target;
         std::string packet_name;
         std::string router_channel_id;
 
@@ -1814,7 +1814,7 @@ void route_client_t::submit_request_reply_message_erased (
                                                       router_channel_id,
                                                       std::nullopt,
                                                       reply_header.value ().correlation_id,
-                                                      target.to_string (),
+                                                      target->to_string (),
                                                       std::nullopt,
                                                       std::nullopt,
                                                       std::nullopt};
@@ -1840,7 +1840,12 @@ void route_client_t::submit_request_reply_message_erased (
             return decode (reply.value ());
         }
     };
-    request_decoder_t decode{state, transport.value (), std::move (target_node_rid),
+    auto target_owner = receiver.complete.retain (std::move (target_node_rid));
+    auto target_view = receiver.complete.has_request_storage ()
+                         ? std::shared_ptr<const zlink::routing_id_t> (
+                             std::shared_ptr<const zlink::routing_id_t>{}, target_owner.get ())
+                         : std::shared_ptr<const zlink::routing_id_t> (target_owner);
+    request_decoder_t decode{state, transport.value (), std::move (target_view),
                              std::move (packet_name), std::move (router_channel_id)};
 
     auto effective_timeout = timeout;
@@ -1870,7 +1875,7 @@ void route_client_t::submit_request_reply_message_erased (
                                               decode.router_channel_id,
                                               std::nullopt,
                                               header.correlation_id,
-                                              decode.target.to_string (),
+                                              decode.target->to_string (),
                                               std::nullopt,
                                               std::nullopt,
                                               std::nullopt};
@@ -1890,26 +1895,23 @@ void route_client_t::submit_request_reply_message_erased (
             using projection_t =
               detail::request_receiver_t<encoded_payload_t>::projection_t<node_reply_t,
                                                                           request_decoder_t>;
-            auto context = std::make_shared<projection_t> (
-              projection_t{std::move (receiver.complete), std::move (decode)});
-            detail::request_receiver_t<node_reply_t> physical{
-              std::move (receiver.admitted),
-              detail::request_callback_t<const result_t<node_reply_t> &>::from_shared (context),
-              std::move (receiver.fail_public)};
-            (*mesh)->request (context->project.target, std::move (parts), remaining,
-                              std::move (physical));
+            auto complete = receiver.complete.template capture<const result_t<node_reply_t> &> (
+              projection_t{receiver.complete.borrow (), std::move (decode)});
+            detail::request_receiver_t<node_reply_t> physical{std::move (receiver.admitted),
+                                                              std::move (complete),
+                                                              std::move (receiver.fail_public)};
+            (*mesh)->request (*target_owner, std::move (parts), remaining, std::move (physical));
         } else {
             using projection_t =
               detail::request_receiver_t<encoded_payload_t>::projection_t<reply_parts_t,
                                                                           request_decoder_t>;
-            auto context = std::make_shared<projection_t> (
-              projection_t{std::move (receiver.complete), std::move (decode)});
-            detail::request_receiver_t<reply_parts_t> physical{
-              std::move (receiver.admitted),
-              detail::request_callback_t<const result_t<reply_parts_t> &>::from_shared (context),
-              std::move (receiver.fail_public)};
-            (*route)->request_reply_parts (context->project.target, std::nullopt, std::move (parts),
-                                           deadline, std::move (physical));
+            auto complete = receiver.complete.template capture<const result_t<reply_parts_t> &> (
+              projection_t{receiver.complete.borrow (), std::move (decode)});
+            detail::request_receiver_t<reply_parts_t> physical{std::move (receiver.admitted),
+                                                               std::move (complete),
+                                                               std::move (receiver.fail_public)};
+            (*route)->request_reply_parts (*target_owner, std::nullopt, std::move (parts), deadline,
+                                           std::move (physical));
         }
     }
     catch (const framework_exception_t &) {

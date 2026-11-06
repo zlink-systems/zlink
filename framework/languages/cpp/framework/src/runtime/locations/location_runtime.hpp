@@ -59,10 +59,43 @@ class owner_lease_claim_rejected_error_t final : public std::runtime_error
 class location_runtime_t
 {
     friend struct location_runtime_test_access_t;
+    struct store_outage_t
+    {
+        store_outage_t (std::chrono::steady_clock::time_point observed_at,
+                        std::chrono::steady_clock::time_point cutoff,
+                        location_owner_token_t token) :
+            observed_at (observed_at), cutoff (cutoff), token (std::move (token))
+        {
+        }
+
+        const std::chrono::steady_clock::time_point observed_at;
+        const std::chrono::steady_clock::time_point cutoff;
+        const location_owner_token_t token;
+        std::atomic_bool discarded = false;
+        std::shared_ptr<detail::deadline_state_t> deadline =
+          std::make_shared<detail::deadline_state_t> ();
+
+        bool latch (std::chrono::steady_clock::time_point now)
+        {
+            if (now >= cutoff)
+                discarded.store (true, std::memory_order_release);
+            return discarded.load (std::memory_order_acquire);
+        }
+    };
+
+    struct successful_lease_t
+    {
+        location_owner_token_t token;
+        std::chrono::steady_clock::time_point started_at;
+        std::chrono::steady_clock::time_point admission_deadline;
+    };
+
     struct owner_lease_snapshot_t
     {
         std::optional<location_owner_token_t> token;
         std::optional<std::chrono::steady_clock::time_point> admission_deadline;
+        std::optional<successful_lease_t> last_successful_lease;
+        std::shared_ptr<store_outage_t> outage;
         bool healthy = false;
         std::optional<std::chrono::system_clock::time_point> renewed_at;
     };
@@ -121,6 +154,7 @@ class location_runtime_t
         std::stop_token cancellation;
         std::function<void ()> expire;
         std::optional<task_t<lease_renew_outcome_t>> task;
+        std::shared_ptr<store_outage_t> requested_outage;
     };
 
     struct descriptor_publication_t
@@ -176,13 +210,23 @@ class location_runtime_t
         std::optional<std::string> last_error;
         bool owner_lease_healthy;
         std::optional<std::chrono::system_clock::time_point> owner_lease_renewed_at;
+        std::optional<std::chrono::steady_clock::time_point> store_outage_observed_at;
+        std::optional<std::chrono::steady_clock::time_point> store_outage_cutoff;
+        bool store_outage_discarded;
     };
 
     task_t<observation_status_t> observation_status_task () const
     {
         return _lane.run_task ([this] {
             const auto lease = std::atomic_load_explicit (&_owner_lease, std::memory_order_acquire);
-            return observation_status_t{_last_error, lease->healthy, lease->renewed_at};
+            const auto &outage = lease->outage;
+            return observation_status_t{
+              _last_error,
+              lease->healthy,
+              lease->renewed_at,
+              outage ? std::make_optional (outage->observed_at) : std::nullopt,
+              outage ? std::make_optional (outage->cutoff) : std::nullopt,
+              outage && outage->discarded.load (std::memory_order_acquire)};
         });
     }
 
@@ -556,6 +600,74 @@ class location_runtime_t
         });
     }
 
+    void observe_store_outage_on_lane (std::chrono::steady_clock::time_point observed_at)
+    {
+        update_owner_lease_on_lane ([&] (auto &lease) {
+            if (lease.outage || !lease.last_successful_lease)
+                return;
+            auto cutoff = lease.last_successful_lease->admission_deadline;
+            if (_options.store_outage_retention) {
+                cutoff = lease.last_successful_lease->started_at;
+                // Saturate each addition before converting milliseconds to clock ticks.
+                for (const auto duration :
+                     {_options.owner_lease_ttl, _options.owner_lease_fencing_margin,
+                      _options.owner_lease_fencing_margin}) {
+                    const auto available = std::chrono::duration_cast<std::chrono::milliseconds> (
+                      std::chrono::steady_clock::time_point::max () - cutoff);
+                    cutoff = duration > available ? std::chrono::steady_clock::time_point::max ()
+                                                  : cutoff + duration;
+                }
+            }
+            auto episode = std::make_shared<store_outage_t> (observed_at, cutoff,
+                                                             lease.last_successful_lease->token);
+            lease.outage = episode;
+            episode->latch (episode->observed_at);
+            detail::deadline_scheduler_t::instance ().schedule (
+              episode->cutoff, episode->deadline, [weak = std::weak_ptr{episode}] {
+                  if (auto active = weak.lock ())
+                      active->latch (active->cutoff);
+              });
+        });
+    }
+
+    void observe_successful_lease_on_lane (owner_lease_snapshot_t &lease,
+                                           const location_owner_token_t &token,
+                                           std::chrono::steady_clock::time_point started_at,
+                                           std::chrono::steady_clock::time_point admission_deadline,
+                                           bool renewal,
+                                           const std::shared_ptr<store_outage_t> &requested_outage)
+    {
+        const auto &episode = lease.outage;
+        if (episode) {
+            if (episode->latch (_lease_now ()) || !renewal || episode != requested_outage
+                || started_at < episode->observed_at || !lease.token
+                || lease.token->owner_id != token.owner_id
+                || lease.token->lease_generation != token.lease_generation
+                || episode->token.owner_id != token.owner_id
+                || episode->token.lease_generation != token.lease_generation)
+                return;
+            episode->deadline->cancelled.store (true, std::memory_order_release);
+            detail::deadline_scheduler_t::instance ().wake ();
+            lease.outage.reset ();
+        }
+        if (!lease.last_successful_lease || started_at >= lease.last_successful_lease->started_at)
+            lease.last_successful_lease = successful_lease_t{token, started_at, admission_deadline};
+    }
+
+    static task_t<void>
+    heartbeat_communication_failure (std::shared_ptr<heartbeat_attempt_t> attempt)
+    {
+        auto *runtime = attempt->runtime;
+        const auto observed_at = runtime->_lease_now ();
+        const auto heartbeat = attempt->heartbeat.lock ();
+        if (attempt->cancellation.stop_requested ()
+            || (heartbeat && heartbeat->stop.load (std::memory_order_acquire)
+                && observed_at < attempt->deadline_at))
+            co_return;
+        co_await lease_lane (
+          attempt, [runtime, observed_at] { runtime->observe_store_outage_on_lane (observed_at); });
+    }
+
     std::optional<location_owner_token_t> current_owner_token_unchecked () const
     {
         return std::atomic_load_explicit (&_owner_lease, std::memory_order_acquire)->token;
@@ -613,7 +725,8 @@ class location_runtime_t
         auto attempt = weak_attempt.lock ();
         auto heartbeat = attempt ? attempt->heartbeat.lock () : nullptr;
         if (!attempt || !heartbeat || heartbeat->stop.load (std::memory_order_acquire)
-            || remaining_until (attempt->deadline_at) <= std::chrono::milliseconds::zero ())
+            || remaining_until (attempt->deadline_at, attempt->runtime->_lease_now ())
+                 <= std::chrono::milliseconds::zero ())
             co_return std::nullopt;
         auto completion = std::make_shared<task_completion_source_t<std::optional<result_t<T>>>> ();
         auto ready = completion->task ();
@@ -629,7 +742,8 @@ class location_runtime_t
           pending, [weak_attempt, completion] (const result_t<T> &result) {
               if (auto active = weak_attempt.lock ()) {
                   completion->complete (result_t<std::optional<result_t<T>>>::success (
-                    remaining_until (active->deadline_at) > std::chrono::milliseconds::zero ()
+                    remaining_until (active->deadline_at, active->runtime->_lease_now ())
+                        > std::chrono::milliseconds::zero ()
                       ? std::optional<result_t<T>>{result}
                       : std::nullopt));
               }
@@ -649,23 +763,28 @@ class location_runtime_t
                                           location_owner_token_t token,
                                           std::chrono::system_clock::time_point expires_at,
                                           std::chrono::system_clock::time_point store_now,
-                                          std::chrono::steady_clock::time_point started_at)
+                                          std::chrono::steady_clock::time_point started_at,
+                                          bool renewal = false)
     {
         auto *runtime = attempt->runtime;
         co_await lease_lane (attempt, [runtime, token = std::move (token), expires_at, store_now,
-                                       started_at] () mutable {
+                                       started_at, renewal,
+                                       requested_outage = attempt->requested_outage] () mutable {
             const auto admission_lifetime =
               expires_at > store_now + runtime->_options.owner_lease_fencing_margin
                 ? expires_at - store_now - runtime->_options.owner_lease_fencing_margin
                 : std::chrono::system_clock::duration::zero ();
+            const auto admission_deadline =
+              started_at
+              + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
+                admission_lifetime);
             runtime->update_owner_lease_on_lane ([&] (auto &lease) {
+                runtime->observe_successful_lease_on_lane (
+                  lease, token, started_at, admission_deadline, renewal, requested_outage);
                 lease.token = std::move (token);
                 lease.healthy = true;
                 lease.renewed_at = store_now;
-                lease.admission_deadline =
-                  started_at
-                  + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
-                    admission_lifetime);
+                lease.admission_deadline = admission_deadline;
             });
             runtime->_last_error.reset ();
             return true;
@@ -693,12 +812,15 @@ class location_runtime_t
                 co_return std::nullopt;
             if (auto heartbeat = attempt->heartbeat.lock ();
                 heartbeat && heartbeat->stop.load (std::memory_order_acquire)
-                || remaining_until (attempt->deadline_at) <= std::chrono::milliseconds::zero ())
+                || remaining_until (attempt->deadline_at, attempt->runtime->_lease_now ())
+                     <= std::chrono::milliseconds::zero ())
                 co_return std::nullopt;
             auto response = co_await await_heartbeat_store (
               runtime->_store->read_owner_lease (runtime->_owner_id), attempt);
-            if (!response)
+            if (!response) {
+                co_await heartbeat_communication_failure (attempt);
                 co_return std::nullopt;
+            }
             if (!response->has_value ()) {
                 failure = response->error () ? response->error ()->what ()
                                              : "owner lease confirmation read failed";
@@ -714,8 +836,10 @@ class location_runtime_t
             failure = error.what ();
             failed = true;
         }
-        if (failed)
+        if (failed) {
+            co_await heartbeat_communication_failure (attempt);
             co_await heartbeat_failure (attempt, failure);
+        }
         co_return std::nullopt;
     }
 
@@ -734,9 +858,12 @@ class location_runtime_t
         std::optional<std::string> unexpected_failure;
         try {
             const auto owner_token =
-              co_await lease_lane (attempt, [runtime, metrics_enabled, lateness_seconds] {
+              co_await lease_lane (attempt, [runtime, attempt, metrics_enabled, lateness_seconds] {
                   if (metrics_enabled && lateness_seconds > 0)
                       runtime->record_lease_metric_on_lane (false, lateness_seconds);
+                  attempt->requested_outage =
+                    std::atomic_load_explicit (&runtime->_owner_lease, std::memory_order_acquire)
+                      ->outage;
                   return runtime->current_owner_token_unchecked ();
               });
             if (auto heartbeat = attempt->heartbeat.lock ();
@@ -746,8 +873,9 @@ class location_runtime_t
                 std::string failure = "owner lease renewal timed out";
                 std::optional<owner_lease_renew_result_t> result;
                 try {
-                    if (remaining_until (attempt->deadline_at)
+                    if (remaining_until (attempt->deadline_at, attempt->runtime->_lease_now ())
                         <= std::chrono::milliseconds::zero ()) {
+                        co_await heartbeat_communication_failure (attempt);
                         co_await heartbeat_failure (attempt, failure);
                         co_return outcome;
                     }
@@ -780,7 +908,7 @@ class location_runtime_t
                                       << '\n';
                         }
                         co_await heartbeat_accept (attempt, *owner_token, renewed->lease_expires_at,
-                                                   renewed->store_now, started_at);
+                                                   renewed->store_now, started_at, true);
                         outcome.result = *renewed;
                         co_return outcome;
                     }
@@ -789,6 +917,7 @@ class location_runtime_t
                         return true;
                     });
                 } else {
+                    co_await heartbeat_communication_failure (attempt);
                     auto confirmed = co_await heartbeat_confirm (attempt, failure);
                     if (confirmed && confirmed->token.owner_id == owner_token->owner_id
                         && confirmed->token.lease_generation == owner_token->lease_generation) {
@@ -815,7 +944,8 @@ class location_runtime_t
                 if (auto heartbeat = attempt->heartbeat.lock ();
                     heartbeat && heartbeat->stop.load (std::memory_order_acquire))
                     co_return outcome;
-                if (remaining_until (attempt->deadline_at) <= std::chrono::milliseconds::zero ()) {
+                if (remaining_until (attempt->deadline_at, attempt->runtime->_lease_now ())
+                    <= std::chrono::milliseconds::zero ()) {
                     co_await heartbeat_failure (attempt, failure);
                     co_return outcome;
                 }
@@ -1009,7 +1139,8 @@ class location_runtime_t
                 heartbeat->current.reset ();
             } else {
                 auto attempt = heartbeat->current;
-                const auto remaining = remaining_until (attempt->deadline_at);
+                const auto remaining =
+                  remaining_until (attempt->deadline_at, attempt->runtime->_lease_now ());
                 if (remaining <= std::chrono::milliseconds::zero ()) {
                     auto expire = std::move (attempt->expire);
                     lock.unlock ();
@@ -1081,6 +1212,8 @@ class location_runtime_t
     location_repository_t *_store;
     location_options_t _options;
     std::string _owner_id;
+    std::function<std::chrono::steady_clock::time_point ()> _lease_now =
+      &std::chrono::steady_clock::now;
     std::atomic_bool _draining = false;
     std::vector<std::pair<std::string, std::string>> _metric_scopes;
     std::shared_ptr<framework::detail::monitoring_runtime_state_t> _monitoring;

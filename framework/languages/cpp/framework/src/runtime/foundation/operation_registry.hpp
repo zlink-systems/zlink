@@ -56,7 +56,7 @@ class completion_sink_t
     {
     }
     explicit operator bool () const noexcept { return bool (_complete); }
-    completion_sink_t with_admission (std::shared_ptr<task_completion_source_t<void>> admitted) &&
+    completion_sink_t &&with_admission (std::shared_ptr<task_completion_source_t<void>> admitted) &&
     {
         _admitted = std::move (admitted);
         return std::move (*this);
@@ -97,7 +97,7 @@ class operation_registry_t
 
     bool register_operation (call_id_t id,
                              clock_t::time_point deadline,
-                             callback_t callback,
+                             callback_t &&callback,
                              std::vector<std::uint8_t> target_routing_id = {},
                              mesh_request_metric_t request_metric = {},
                              std::optional<request_identity_t> request = {},

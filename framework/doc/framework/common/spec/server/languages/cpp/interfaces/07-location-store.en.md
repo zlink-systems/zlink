@@ -42,10 +42,15 @@ struct location_options_t {
  std::uint64_t relocation_payload_chunk_limit_bytes{262144};
  std::uint64_t relocation_in_flight_payload_budget_bytes{16777216};
  std::uint64_t relocation_node_in_flight_payload_budget_bytes{0};
+ bool store_outage_retention{false};
 };
 
 } // namespace zlink::framework
 ```
+
+`owner_lease_ttl` defaults to 30 seconds. `store_outage_retention` is a startup-only bool option, default `false`.
+Retention eligibility, the admission bound when `false`, and domain-wide identical settings follow
+[Location runtime §5.1](../../../05-location-relocation/01-location-runtime.en.md#51-retention-and-rejoining-after-a-short-outage).
 
 The Store registration member is owned by
 [Configuration and host](02-configuration-host.en.md)'s
