@@ -3,6 +3,10 @@
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
 
+#include <array>
+#include <cstddef>
+#include <memory_resource>
+
 namespace zlink::framework
 {
 
@@ -26,6 +30,65 @@ struct public_request_projection_t
 {
 };
 
+// Capture storage belongs to one request, including codec captures added by
+// internal layers. It is not a registry or an execution queue. Oversize custom
+// captures use the resource's upstream allocator without imposing a request limit.
+class request_capture_storage_t
+{
+    struct capture_t
+    {
+        capture_t *next;
+        void (*destroy) (capture_t *) noexcept;
+    };
+    template <typename T> struct stored_capture_t : capture_t
+    {
+        explicit stored_capture_t (T value) :
+            capture_t{nullptr,
+                      [] (capture_t *capture) noexcept {
+                          std::destroy_at (static_cast<stored_capture_t *> (capture));
+                      }},
+            value (std::move (value))
+        {
+        }
+        template <typename... TArgs> void operator() (TArgs &&...arguments)
+        {
+            // Keep the capture's address stable through physical processing;
+            // retained public task handles must not retain completed captures.
+            const auto reset = [] (std::optional<T> *capture) { capture->reset (); };
+            std::unique_ptr<std::optional<T>, decltype (reset)> lifetime (&value, reset);
+            (*value) (std::forward<TArgs> (arguments)...);
+        }
+        std::optional<T> value;
+    };
+
+  public:
+    request_capture_storage_t () = default;
+    request_capture_storage_t (const request_capture_storage_t &) = delete;
+    request_capture_storage_t &operator= (const request_capture_storage_t &) = delete;
+    ~request_capture_storage_t ()
+    {
+        while (_captures) {
+            auto *capture = _captures;
+            _captures = capture->next;
+            capture->destroy (capture);
+        }
+    }
+    template <typename T> auto *store (T value)
+    {
+        using stored_t = stored_capture_t<T>;
+        auto *storage = _resource.allocate (sizeof (stored_t), alignof (stored_t));
+        auto *capture = std::construct_at (static_cast<stored_t *> (storage), std::move (value));
+        capture->next = _captures;
+        _captures = capture;
+        return capture;
+    }
+
+  private:
+    alignas (std::max_align_t) std::array<std::byte, 1024> _buffer;
+    std::pmr::monotonic_buffer_resource _resource{_buffer.data (), _buffer.size ()};
+    capture_t *_captures = nullptr;
+};
+
 // Copies retain the same operation's callable without cloning its captures.
 template <typename... TArgs> class request_callback_t
 {
@@ -46,8 +109,12 @@ template <typename... TArgs> class request_callback_t
 
     template <typename TOwner, typename TInvoke>
         requires (std::is_empty_v<TInvoke> && std::is_default_constructible_v<TInvoke>)
-    request_callback_t (std::shared_ptr<TOwner> owner, TInvoke) :
-        _owner (std::move (owner)), _invoke ([] (void *owner, TArgs... arguments) {
+    request_callback_t (std::shared_ptr<TOwner> owner,
+                        TInvoke,
+                        request_capture_storage_t *storage = nullptr) :
+        _storage (storage),
+        _owner (std::move (owner)),
+        _invoke ([] (void *owner, TArgs... arguments) {
             TInvoke{}(*static_cast<TOwner *> (owner), std::forward<TArgs> (arguments)...);
         })
     {
@@ -64,6 +131,53 @@ template <typename... TArgs> class request_callback_t
         return selected;
     }
 
+    // Stored downstream callbacks borrow this block. The outward callback owns
+    // it, so composing a projection cannot create a request ownership cycle.
+    request_callback_t borrow () const
+    {
+        if (!_storage)
+            return *this;
+        request_callback_t selected;
+        selected._storage = _storage;
+        selected._invoke = _invoke;
+        selected._owner = std::shared_ptr<void> (std::shared_ptr<void>{}, _owner.get ());
+        return selected;
+    }
+
+    template <typename... TNextArgs, typename TCallback>
+    request_callback_t<TNextArgs...> capture (TCallback callback) const
+    {
+        if (!_storage) {
+            auto stored = std::make_shared<TCallback> (std::move (callback));
+            return request_callback_t<TNextArgs...>::from_shared (std::move (stored));
+        }
+        auto *stored = _storage->store (std::move (callback));
+        return request_callback_t<TNextArgs...>::from_storage (_owner, _storage, stored);
+    }
+
+    // Values borrowed by submit and by physical conversion share this request
+    // block. The caller retains the alias until submit returns; projections
+    // stored in the block borrow it to avoid a cycle.
+    template <typename TValue> std::shared_ptr<TValue> retain (TValue value) const
+    {
+        if (!_storage)
+            return std::make_shared<TValue> (std::move (value));
+        auto *stored = _storage->store (std::move (value));
+        return std::shared_ptr<TValue> (_owner, std::addressof (*stored->value));
+    }
+
+    bool has_request_storage () const noexcept { return _storage != nullptr; }
+
+    template <typename TOwner, typename TCallback>
+    static request_callback_t from_storage (const std::shared_ptr<TOwner> &owner,
+                                            request_capture_storage_t *storage,
+                                            TCallback *callback)
+    {
+        auto selected = from_shared (std::shared_ptr<TCallback> (owner, callback));
+        selected._storage = storage;
+        return selected;
+    }
+
     explicit operator bool () const noexcept { return bool (_owner); }
     void operator() (TArgs... arguments) const
     {
@@ -75,6 +189,8 @@ template <typename... TArgs> class request_callback_t
     }
 
   private:
+    template <typename...> friend class request_callback_t;
+    request_capture_storage_t *_storage = nullptr;
     std::shared_ptr<void> _owner;
     void (*_invoke) (void *, TArgs...) = nullptr;
 };
@@ -110,11 +226,18 @@ template <typename T> struct request_receiver_t
     request_receiver_t<TInput> project (TProject &&project)
     {
         using storage_t = projection_t<TInput, std::decay_t<TProject>>;
-        auto storage = std::make_shared<storage_t> (
-          storage_t{std::move (complete), std::forward<TProject> (project)});
-        return {std::move (admitted),
-                request_callback_t<const result_t<TInput> &>::from_shared (std::move (storage)),
-                std::move (fail_public)};
+        auto projected = complete.template capture<const result_t<TInput> &> (
+          storage_t{complete.borrow (), std::forward<TProject> (project)});
+        return {std::move (admitted), std::move (projected), std::move (fail_public)};
+    }
+
+    request_receiver_t borrow () const
+    {
+        return {complete.has_request_storage ()
+                  ? std::shared_ptr<task_completion_source_t<void>> (
+                      std::shared_ptr<task_completion_source_t<void>>{}, admitted.get ())
+                  : admitted,
+                complete.borrow (), fail_public.borrow ()};
     }
 
     void observe (request_task_t<T> selected);
@@ -276,37 +399,6 @@ template <typename TReply> class request_task_t : public task_t<TReply>
         _physical_reply._release_turn_on_suspend = this->_release_turn_on_suspend;
     }
 
-    request_task_t (detail::request_projection_t,
-                    std::shared_ptr<task_completion_source_t<void>> admitted) :
-        task_t<TReply> (std::make_shared<detail::application_task_shared_state_t<TReply>> ()),
-        _physical_reply (this->shared_state ()),
-        _admitted (std::move (admitted))
-    {
-    }
-
-    request_task_t (detail::public_request_projection_t,
-                    std::shared_ptr<task_completion_source_t<void>> admitted) :
-        task_t<TReply> (std::make_shared<detail::application_task_shared_state_t<TReply>> ()),
-        _physical_reply (std::make_shared<detail::application_task_shared_state_t<TReply>> ()),
-        _admitted (std::move (admitted))
-    {
-        end_at_admission_failure ();
-    }
-
-    detail::request_receiver_t<TReply> receiver (detail::request_projection_t)
-    {
-        return {_admitted,
-                detail::request_callback_t<const result_t<TReply> &> (
-                  this->shared_state (),
-                  [] (auto &reply, const result_t<TReply> &result) { reply.complete (result); })};
-    }
-
-    detail::request_receiver_t<TReply> receiver (detail::public_request_projection_t)
-    {
-        return receiver<TReply> (detail::public_request_projection_t{},
-                                 [] (const result_t<TReply> &result) { return result; });
-    }
-
     template <typename TInput, typename TProject>
     detail::request_receiver_t<TInput> receiver (detail::public_request_projection_t,
                                                  TProject &&project)
@@ -453,19 +545,15 @@ struct request_task_access_t
     template <typename TOutput, typename TInput, typename TSubmit, typename TProject>
     static request_task_t<TOutput> receive_public (TSubmit &&submit, TProject &&project)
     {
-        return receive<TOutput> (
-          public_request_projection_t{}, std::forward<TSubmit> (submit), [&] (auto &pending) {
-              return pending.template receiver<TInput> (public_request_projection_t{},
-                                                        std::forward<TProject> (project));
-          });
+        return receive<TOutput, TInput, true> (std::forward<TSubmit> (submit),
+                                               std::forward<TProject> (project));
     }
 
     template <typename T, typename TSubmit>
     static request_task_t<T> receive_internal (TSubmit &&submit)
     {
-        return receive<T> (
-          request_projection_t{}, std::forward<TSubmit> (submit),
-          [] (auto &pending) { return pending.receiver (request_projection_t{}); });
+        return receive<T, T, false> (std::forward<TSubmit> (submit),
+                                     [] (const result_t<T> &result) { return result; });
     }
 
     template <typename T>
@@ -480,20 +568,97 @@ struct request_task_access_t
     }
 
   private:
-    template <typename T, typename TTag, typename TSubmit, typename TReceiver>
-    static request_task_t<T> receive (TTag tag, TSubmit &&submit, TReceiver &&make_receiver)
+    template <typename T, typename TInput, typename TProject, bool Public>
+    struct receiver_state_t final : request_capture_storage_t, application_task_shared_state_t<void>
     {
-        auto admitted = make_task_completion_source<void> ();
-        request_task_t<T> pending (tag, admitted);
-        auto receiver = std::forward<TReceiver> (make_receiver) (pending);
+        template <typename TValue> struct stage_t final : application_task_shared_state_t<TValue>
+        {
+            explicit stage_t (receiver_state_t &owner) : owner (owner) {}
+            std::shared_ptr<task_shared_state_t<TValue>> shared_from_this () override
+            {
+                return {owner.application_task_shared_state_t<void>::shared_from_this (), this};
+            }
+            std::weak_ptr<task_shared_state_t<TValue>> weak_from_this () noexcept override
+            {
+                return shared_from_this ();
+            }
+            receiver_state_t &owner;
+        };
+
+        explicit receiver_state_t (TProject project) :
+            admitted (this),
+            reply (*this),
+            physical (make_physical (*this)),
+            project (std::move (project))
+        {
+        }
+        void publish_terminal (const result_t<void> &result) override
+        {
+            if constexpr (Public) {
+                if (!result)
+                    reply.complete (result_access_t::failure<T> (result.exception ()));
+            }
+        }
+        void operator() (const result_t<TInput> &input)
+        {
+            auto projected = [&] () -> result_t<T> {
+                try {
+                    return (*project) (input);
+                }
+                catch (...) {
+                    return current_exception_result<T> ();
+                }
+            }();
+            project.reset ();
+            if constexpr (Public)
+                physical.complete (projected);
+            reply.complete (std::move (projected));
+        }
+        task_completion_source_t<void> admitted;
+        stage_t<T> reply;
+        static auto make_physical (receiver_state_t &owner)
+        {
+            if constexpr (Public)
+                return stage_t<T> (owner);
+            else
+                return std::monostate{};
+        }
+        std::conditional_t<Public, stage_t<T>, std::monostate> physical;
+        std::optional<TProject> project;
+    };
+
+    template <typename T, typename TInput, bool Public, typename TSubmit, typename TProject>
+    static request_task_t<T> receive (TSubmit &&submit, TProject &&project)
+    {
+        using storage_t = receiver_state_t<T, TInput, std::decay_t<TProject>, Public>;
+        auto storage = std::make_shared<storage_t> (std::forward<TProject> (project));
+        auto admitted =
+          std::shared_ptr<task_completion_source_t<void>> (storage, &storage->admitted);
+        auto reply = std::shared_ptr<task_shared_state_t<T>> (storage, &storage->reply);
+        request_task_t<T> pending (request_projection_t{}, task_t<T> (reply), admitted);
+        if constexpr (Public) {
+            pending._physical_reply =
+              task_t<T> (std::shared_ptr<task_shared_state_t<T>> (storage, &storage->physical));
+        }
+        request_receiver_t<TInput> receiver{
+          admitted,
+          request_callback_t<const result_t<TInput> &>::from_storage (storage, storage.get (),
+                                                                      storage.get ()),
+          request_callback_t<std::exception_ptr> (
+            reply,
+            [] (auto &reply, std::exception_ptr failure) {
+                reply.complete (result_access_t::failure<T> (std::move (failure)));
+            },
+            storage.get ())};
         try {
             std::forward<TSubmit> (submit) (std::move (receiver));
         }
         catch (...) {
             const auto failure = current_exception_result<T> ();
             admitted->complete (result_access_t::failure<void> (failure.exception ()));
-            // The submitter may already have moved the receiver into a decoder.
-            pending.receiver (tag).complete (failure);
+            if constexpr (Public)
+                storage->physical.complete (failure);
+            storage->reply.complete (failure);
         }
         return pending;
     }

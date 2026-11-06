@@ -4401,41 +4401,58 @@ void mesh_node_runtime_t::submit_node_request_reply (const zlink::routing_id_t &
                                                      std::chrono::milliseconds timeout,
                                                      request_receiver_t<node_reply_t> receiver)
 {
-    auto submission = _node->request_to_node (
-      target, std::move (parts), timeout,
-      [host = _node, receiver] (runtime::foundation::operation_terminal_t terminal,
-                                result_t<zlink::message_t> payload) mutable {
-          try {
-              if (!payload)
-                  payload.value ();
-              auto record = host
-                              ->decode_operation_record ({}, host::operation_kind_t::none, terminal,
-                                                         payload.value ())
-                              .value ();
-              if (const auto failure = request_completion_failure (record, "MeshNode request"))
-                  std::rethrow_exception (failure);
-              auto views = runtime::protocol::decode_application_part_views (
-                runtime::protocol::message_bytes (payload.value ()), host->capture_flow ());
-              receiver.complete (result_t<node_reply_t>::success (
-                node_reply_t::success (runtime::messaging::message_parts_t::borrow (views))));
+    auto completion = runtime::foundation::operation_registry_t::callback_t (
+      receiver.complete.template capture<runtime::foundation::operation_terminal_t,
+                                         result_t<zlink::message_t>> (
+        [host = _node,
+         receiver = receiver.borrow ()] (runtime::foundation::operation_terminal_t terminal,
+                                         result_t<zlink::message_t> payload) mutable {
+            try {
+                if (!payload)
+                    payload.value ();
+                auto record = host
+                                ->decode_operation_record ({}, host::operation_kind_t::none,
+                                                           terminal, payload.value ())
+                                .value ();
+                if (const auto failure = request_completion_failure (record, "MeshNode request"))
+                    std::rethrow_exception (failure);
+                auto views = runtime::protocol::decode_application_part_views (
+                  runtime::protocol::message_bytes (payload.value ()), host->capture_flow ());
+                receiver.complete (result_t<node_reply_t>::success (
+                  node_reply_t::success (runtime::messaging::message_parts_t::borrow (views))));
+            }
+            catch (const runtime::protocol::service_wire_error_t &) {
+                auto failure = result_access_t::failure<runtime::messaging::message_parts_t> (
+                  runtime::messaging::request_failure_mapper_t{}.reply_header_exception (
+                    static_cast<std::uint32_t> (zlink::request_result_t::protocol_error), 0,
+                    "MeshNode request"));
+                receiver.admitted->complete (result_access_t::failure<void> (failure.exception ()));
+                receiver.complete (result_t<node_reply_t>::success (std::move (failure)));
+            }
+            catch (...) {
+                auto failure = current_exception_result<runtime::messaging::message_parts_t> ();
+                receiver.admitted->complete (result_access_t::failure<void> (failure.exception ()));
+                receiver.complete (result_t<node_reply_t>::success (std::move (failure)));
+            }
+        }));
+    auto submission = _node->request_to_node (target, std::move (parts), timeout,
+                                              std::move (completion), receiver.admitted);
+    // A callback retained here was never registered. Once C1 accepts it,
+    // submission observes admission only; C1 alone owns reply delivery.
+    observe_task_terminal (
+      submission, [admitted = std::move (receiver.admitted), completion = std::move (completion)] (
+                    const result_t<zlink::submit_result_t> &submitted) mutable {
+          if (submitted && submitted.value () == zlink::submit_result_t::ok) {
+              admitted->complete (result_t<void>::success ());
+              return;
           }
-          catch (const runtime::protocol::service_wire_error_t &) {
-              auto failure = result_access_t::failure<runtime::messaging::message_parts_t> (
-                runtime::messaging::request_failure_mapper_t{}.reply_header_exception (
-                  static_cast<std::uint32_t> (zlink::request_result_t::protocol_error), 0,
-                  "MeshNode request"));
-              receiver.admitted->complete (result_access_t::failure<void> (failure.exception ()));
-              receiver.complete (result_t<node_reply_t>::success (std::move (failure)));
-          }
-          catch (...) {
-              auto failure = current_exception_result<runtime::messaging::message_parts_t> ();
-              receiver.admitted->complete (result_access_t::failure<void> (failure.exception ()));
-              receiver.complete (result_t<node_reply_t>::success (std::move (failure)));
-          }
-      },
-      receiver.admitted);
-    compose_node_request_submission (
-      std::move (submission), std::move (receiver), [] {}, [] (auto) {});
+          const auto failure = submitted ? node_submission_failure (submitted.value ()).exception ()
+                                         : submitted.exception ();
+          admitted->complete (result_access_t::failure<void> (failure));
+          if (completion)
+              completion (runtime::foundation::operation_terminal_t::transport_failed,
+                          result_access_t::failure<zlink::message_t> (failure));
+      });
 }
 
 void mesh_node_runtime_t::request_node_reply (const zlink::routing_id_t &target,

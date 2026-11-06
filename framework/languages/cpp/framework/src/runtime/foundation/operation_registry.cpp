@@ -60,7 +60,7 @@ class operation_registry_state_t : public std::enable_shared_from_this<operation
 
     bool register_operation (call_id_t id,
                              clock_t::time_point deadline,
-                             callback_t callback,
+                             callback_t &&callback,
                              std::vector<std::uint8_t> target_routing_id = {},
                              mesh_request_metric_t request_metric = {},
                              std::optional<request_identity_t> request = {},
@@ -362,7 +362,7 @@ void notify (std::unique_ptr<operation_completion_item_t> completion,
 
 bool operation_registry_state_t::register_operation (call_id_t id,
                                                      clock_t::time_point deadline,
-                                                     callback_t callback,
+                                                     callback_t &&callback,
                                                      std::vector<std::uint8_t> target_routing_id,
                                                      mesh_request_metric_t request_metric,
                                                      std::optional<request_identity_t> request,
@@ -380,7 +380,7 @@ bool operation_registry_state_t::register_operation (call_id_t id,
     prepared.id = id;
     prepared.deadline = deadline;
     prepared.completion = std::make_unique<operation_completion_item_t> (
-      std::move (callback), _drain_state, detail::borrow_completion_dispatcher ());
+      callback_t{}, _drain_state, detail::borrow_completion_dispatcher ());
     prepared.completion->request_metric = std::move (request_metric);
     if (cancellation.stop_possible ())
         prepared.completion->cancellation.emplace (cancellation,
@@ -431,6 +431,10 @@ bool operation_registry_state_t::register_operation (call_id_t id,
         } else {
             earlier = index_deadline (id, deadline, *entry);
         }
+        // C1 publication transfers delivery ownership before any later
+        // deadline reservation or cancellation can throw or deliver.
+        if (accepted)
+            entry->completion->callback = std::move (callback);
     }
     if (publication_error)
         std::rethrow_exception (publication_error);
@@ -839,7 +843,7 @@ operation_registry_t::request_identity (call_id_t id, call_id_t operation) const
 
 bool operation_registry_t::register_operation (call_id_t id,
                                                clock_t::time_point deadline,
-                                               callback_t callback,
+                                               callback_t &&callback,
                                                std::vector<std::uint8_t> target_routing_id,
                                                mesh_request_metric_t request_metric,
                                                std::optional<request_identity_t> request,

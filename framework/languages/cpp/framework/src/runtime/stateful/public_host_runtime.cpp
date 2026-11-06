@@ -3256,7 +3256,7 @@ task_t<zlink::submit_result_t>
 public_host_runtime_t::request_to_node (const zlink::routing_id_t &target,
                                         std::vector<zlink::message_t> parts,
                                         std::chrono::milliseconds timeout,
-                                        foundation::operation_registry_t::callback_t completion,
+                                        foundation::operation_registry_t::callback_t &&completion,
                                         std::shared_ptr<task_completion_source_t<void>> admitted)
 try {
     const auto host = shared_from_this ();
