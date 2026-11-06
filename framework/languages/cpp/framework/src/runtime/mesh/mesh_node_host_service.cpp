@@ -3550,6 +3550,7 @@ task_t<bool> mesh_node_host_service_t::republish_after_store_recovery (
             co_return _published_mesh_descriptors.empty ();
         descriptors = _published_mesh_descriptors;
     }
+    bool published = true;
     for (const auto &original : descriptors) {
         if (cancellation.stop_requested ())
             co_return false;
@@ -3585,8 +3586,12 @@ task_t<bool> mesh_node_host_service_t::republish_after_store_recovery (
               return store->update_mesh_node (descriptor, write_intent);
           },
           std::chrono::steady_clock::now, cancellation, deadline);
-        if (!written || cancellation.stop_requested ())
+        if (cancellation.stop_requested ())
             co_return false;
+        if (!written) {
+            published = false;
+            continue;
+        }
         std::lock_guard lock (_descriptor_publish_mutex);
         const auto current =
           std::find_if (_published_mesh_descriptors.begin (), _published_mesh_descriptors.end (),
@@ -3604,7 +3609,7 @@ task_t<bool> mesh_node_host_service_t::republish_after_store_recovery (
         if (first_publication)
             _published_mesh_nodes.push_back (key);
     }
-    if (cancellation.stop_requested ())
+    if (!published || cancellation.stop_requested ())
         co_return false;
     _accept_application_dispatch.store (true, std::memory_order_release);
     _dispatch_gate_changed.notify_all ();

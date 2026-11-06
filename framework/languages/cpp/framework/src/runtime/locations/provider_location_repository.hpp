@@ -3267,7 +3267,9 @@ class provider_location_repository_t final : public location_repository_t
           {store_put_t{row_key, std::move (encoded), std::nullopt}}};
         auto result = co_await write_async (std::move (write_request));
         if (const auto *applied = std::get_if<store_write_applied_t> (&result)) {
-            remove_reclaim_observation (row_key.value, observed_owner);
+            if (observed_owner.owner_id != owner_id
+                || observed_owner.lease_generation != lease_generation)
+                remove_reclaim_observation (row_key.value, observed_owner);
             co_return location_write_result_t::stored (static_cast<std::int64_t> (generation),
                                                        applied->store_now);
         }

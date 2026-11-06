@@ -25,6 +25,7 @@
 #include <zlink/framework/contracts/detail/handler_invocation.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -900,6 +901,9 @@ class reclaim_scan_store_t final : public location_store_t
             auto callback = std::exchange (after_read, {});
             co_await callback ();
         }
+        if (key.value == expired_lease_key.value)
+            if (auto *found = std::get_if<store_found_t> (&result))
+                found->value.expires_at = found->value.store_now;
         co_return result;
     }
     task_t<store_write_result_t> write (store_write_request_t request) override
@@ -948,6 +952,7 @@ class reclaim_scan_store_t final : public location_store_t
     bool expire_next_page = false;
     store_key_t before_read_key;
     store_key_t after_read_key;
+    store_key_t expired_lease_key;
     std::function<task_t<void> ()> after_read;
     std::function<task_t<void> ()> before_read;
     std::function<task_t<void> ()> before_member_write;
@@ -6644,14 +6649,19 @@ class reclaim_count_memory_repository_t final : public in_memory_location_reposi
 class fixed_rid_startup_probe_t final : public hosted_service_t
 {
   public:
+    std::function<void (framework_runtime_state_t)> status_changed;
     task_t<void> start (service_provider_t &services) override
     {
         runtime = &services.get_required<location_runtime_t> ();
         observation = services.get_required<zlink::framework::framework_runtime_t> ().observe (
           1, [this] (const auto &event) {
-              const std::lock_guard lock (mutex);
-              ready = event.status.state == framework_runtime_state_t::serving;
-              changed.notify_all ();
+              {
+                  const std::lock_guard lock (mutex);
+                  ready = event.status.state == framework_runtime_state_t::serving;
+                  changed.notify_all ();
+              }
+              if (status_changed)
+                  status_changed (event.status.state);
           });
         const std::lock_guard lock (mutex);
         started = true;
@@ -6685,6 +6695,7 @@ class fixed_rid_startup_probe_t final : public hosted_service_t
         return changed.wait_for (lock, 5s, [&] { return reads > 0 || ready; });
     }
     bool owner_lease_healthy () { return runtime->owner_lease_healthy (); }
+    auto current_owner () { return runtime->current_owner_token (); }
     unsigned read_count ()
     {
         const std::lock_guard lock (mutex);
@@ -6705,6 +6716,245 @@ class fixed_rid_startup_probe_t final : public hosted_service_t
     unsigned reads = 0;
     std::unique_ptr<runtime_observation_t> observation;
 };
+}
+
+namespace
+{
+class startup_review_store_t final : public location_store_t
+{
+  public:
+    task_t<store_read_result_t> read (store_key_t key) override
+    {
+        if (unavailable && key.value.starts_with ("owner-lease"))
+            co_return result_t<store_read_result_t>::failure (framework_error_kind_t::unavailable,
+                                                              "startup owner read unavailable");
+        co_return co_await inner.read (std::move (key));
+    }
+    task_t<store_write_result_t> write (store_write_request_t request) override
+    {
+        for (const auto &mutation : request.mutations) {
+            const auto *put = std::get_if<store_put_t> (&mutation);
+            if (!put)
+                continue;
+            if (unavailable && put->key.value.starts_with ("owner-lease"))
+                co_return result_t<store_write_result_t>::failure (
+                  framework_error_kind_t::unavailable, "startup owner write unavailable");
+            if (hold_claims && put->key.value.starts_with ("mesh-node")) {
+                unsigned index;
+                {
+                    const std::lock_guard lock (mutex);
+                    index = held++;
+                    changed.notify_all ();
+                }
+                if (index < releases.size ())
+                    co_await releases[index].task ();
+            }
+        }
+        auto result = co_await inner.write (std::move (request));
+        if (std::holds_alternative<store_write_conflict_t> (result))
+            ++conflicts;
+        co_return result;
+    }
+    task_t<store_scan_result_t> scan (store_scan_request_t request) override
+    {
+        return inner.scan (std::move (request));
+    }
+    bool wait_held ()
+    {
+        std::unique_lock lock (mutex);
+        return changed.wait_for (lock, 5s, [&] { return held >= 2; });
+    }
+    void release_all ()
+    {
+        for (auto &release : releases)
+            release.complete (result_t<void>::success ());
+    }
+    in_memory_location_store_t inner;
+    std::atomic_bool unavailable{false};
+    bool hold_claims = false;
+    std::array<task_completion_source_t<void>, 2> releases;
+    std::atomic_uint conflicts{0};
+
+  private:
+    std::mutex mutex;
+    std::condition_variable changed;
+    unsigned held = 0;
+};
+
+void configure_review_host (app_t &app,
+                            const std::shared_ptr<startup_review_store_t> &store,
+                            const std::shared_ptr<location_repository_t> &repository,
+                            unsigned meshes = 1)
+{
+    auto &options = app.add_zlink_framework ();
+    options.add_location_store (store);
+    options.add_relocation_store (std::make_shared<in_memory_relocation_store_t> ());
+    auto &locations = options.configure_locations ();
+    locations.owner_lease_renew_interval = 10ms;
+    locations.owner_lease_fencing_margin = 7ms;
+    for (unsigned index = 0; index < meshes; ++index) {
+        const auto name = "startup-review-" + std::to_string (index);
+        auto mesh = options.add_route_mesh (name);
+        mesh.channel_name (name + "-channel").server ();
+        mesh.set_object_role (object_role_t::none)
+          .set_routing_id (zlink::routing_id_t::from (name))
+          .listen ("inproc://" + name);
+    }
+    app.advanced ().services ().add_factory<location_repository_t> (
+      [repository] (service_provider_t &) { return repository; }, service_lifetime_t::singleton);
+}
+}
+
+TEST (CppFrameworkOpaqueLocationStore, FixedRidCompetingStartupRejectsLoserAfterPreparing)
+{
+    const auto verify = [] (unsigned mode) {
+        SCOPED_TRACE (mode); // in-memory, provider, provider CAS loser
+        auto store = std::make_shared<startup_review_store_t> ();
+        store->hold_claims = mode == 2;
+        std::shared_ptr<location_repository_t> repository =
+          mode ? std::static_pointer_cast<location_repository_t> (
+                   std::make_shared<provider_location_repository_t> (*store))
+               : std::static_pointer_cast<location_repository_t> (
+                   std::make_shared<in_memory_location_repository_t> ());
+        location_reclaim_test_access_t clock;
+        clock.bind (*repository);
+        auto first = app_t::create ();
+        auto second = app_t::create ();
+        std::array<app_t *, 2> apps{&first, &second};
+        std::array<fixed_rid_startup_probe_t *, 2> probes;
+        std::array<location_owner_token_t, 2> owners;
+        std::array<std::jthread, 2> running;
+        std::array<int, 2> exits{-1, -1};
+        std::array<framework_runtime_state_t, 2> states{framework_runtime_state_t::preparing,
+                                                        framework_runtime_state_t::preparing};
+        std::mutex mutex;
+        std::condition_variable changed;
+        struct stop_on_exit_t
+        {
+            std::array<app_t *, 2> &apps;
+            startup_review_store_t &store;
+            std::array<std::jthread, 2> &running;
+            ~stop_on_exit_t ()
+            {
+                store.release_all ();
+                for (auto *app : apps)
+                    app->request_stop ();
+                for (auto &thread : running)
+                    if (thread.joinable ())
+                        thread.join ();
+            }
+        } stop{apps, *store, running};
+        for (unsigned index = 0; index < apps.size (); ++index) {
+            configure_review_host (*apps[index], store, repository);
+            auto probe = std::make_unique<fixed_rid_startup_probe_t> ();
+            probes[index] = probe.get ();
+            probe->status_changed = [&, index] (auto state) {
+                const std::lock_guard lock (mutex);
+                states[index] = state;
+                changed.notify_all ();
+            };
+            apps[index]->add_hosted_service (std::move (probe));
+            running[index] = std::jthread ([&, index] {
+                char program[] = "competing-startup";
+                char *arguments[] = {program, nullptr};
+                exits[index] = apps[index]->run (1, arguments);
+                const std::lock_guard lock (mutex);
+                states[index] = apps[index]->runtime_state ();
+                changed.notify_all ();
+            });
+            ASSERT_TRUE (probes[index]->wait_started ());
+            EXPECT_EQ (apps[index]->runtime_state (), framework_runtime_state_t::preparing);
+            const auto owner = probes[index]->current_owner ();
+            ASSERT_TRUE (owner.has_value ());
+            owners[index] = *owner;
+        }
+        clock.advance (21ms);
+        if (store->hold_claims) {
+            ASSERT_TRUE (store->wait_held ());
+            store->releases[0].complete (result_t<void>::success ());
+            std::unique_lock lock (mutex);
+            ASSERT_TRUE (changed.wait_for (lock, 5s, [&] {
+                return states[0] == framework_runtime_state_t::serving
+                       || states[1] == framework_runtime_state_t::serving;
+            }));
+            lock.unlock ();
+            store->releases[1].complete (result_t<void>::success ());
+        }
+        unsigned winner;
+        {
+            std::unique_lock lock (mutex);
+            ASSERT_TRUE (changed.wait_for (lock, 5s, [&] {
+                return (states[0] == framework_runtime_state_t::serving
+                        && states[1] == framework_runtime_state_t::error)
+                       || (states[1] == framework_runtime_state_t::serving
+                           && states[0] == framework_runtime_state_t::error);
+            }));
+            winner = states[0] == framework_runtime_state_t::serving ? 0 : 1;
+        }
+        running[1 - winner].join ();
+        EXPECT_EQ (exits[1 - winner], 1);
+        EXPECT_EQ (apps[winner]->runtime_state (), framework_runtime_state_t::serving);
+        const auto descriptors =
+          repository->list_mesh_nodes ("startup-review-0").result ().value ();
+        ASSERT_EQ (descriptors.items.size (), 1u);
+        EXPECT_EQ (descriptors.items.front ().owner_id, owners[winner].owner_id);
+        EXPECT_EQ (descriptors.items.front ().lease_generation, owners[winner].lease_generation);
+        if (store->hold_claims)
+            EXPECT_GE (store->conflicts.load (), 1u);
+        apps[winner]->request_stop ();
+        running[winner].join ();
+        EXPECT_EQ (exits[winner], 0);
+    };
+    for (unsigned mode = 0; mode < 3; ++mode)
+        verify (mode);
+}
+
+TEST (CppFrameworkOpaqueLocationStore, LeaseLessStartupObservesAllFixedRidsOnFirstRecovery)
+{
+    auto store = std::make_shared<startup_review_store_t> ();
+    store->unavailable = true;
+    auto repository = std::make_shared<provider_location_repository_t> (*store);
+    auto app = app_t::create ();
+    configure_review_host (app, store, repository, 2);
+    auto probe = std::make_unique<fixed_rid_startup_probe_t> ();
+    auto *view = probe.get ();
+    location_reclaim_test_access_t clock;
+    clock.bind (*repository, [view] { view->clock_observed (); });
+    app.add_hosted_service (std::move (probe));
+    int exit_code = -1;
+    std::jthread running ([&] {
+        char program[] = "lease-less-startup";
+        char *arguments[] = {program, nullptr};
+        exit_code = app.run (1, arguments);
+    });
+    struct stop_on_exit_t
+    {
+        app_t &app;
+        ~stop_on_exit_t () { app.request_stop (); }
+    } stop{app};
+    ASSERT_TRUE (view->wait_started ());
+    EXPECT_EQ (app.runtime_state (), framework_runtime_state_t::preparing);
+    EXPECT_FALSE (view->owner_lease_healthy ());
+    EXPECT_EQ (location_reclaim_test_access_t::observations (*repository), 0u);
+    store->unavailable = false;
+    ASSERT_TRUE (view->wait_reads (2));
+    EXPECT_EQ (location_reclaim_test_access_t::observations (*repository), 2u);
+    EXPECT_EQ (app.runtime_state (), framework_runtime_state_t::preparing);
+    clock.advance (20ms);
+    const auto reads = view->read_count ();
+    ASSERT_TRUE (view->wait_reads (reads + 2));
+    EXPECT_EQ (app.runtime_state (), framework_runtime_state_t::preparing);
+    clock.advance (1ms);
+    ASSERT_TRUE (view->wait_ready ());
+    for (unsigned index = 0; index < 2; ++index)
+        EXPECT_EQ (repository->list_mesh_nodes ("startup-review-" + std::to_string (index))
+                     .result ()
+                     .value ()
+                     .items.size (),
+                   1u);
+    app.request_stop ();
+    running.join ();
+    EXPECT_EQ (exit_code, 0);
 }
 
 TEST (CppFrameworkOpaqueLocationStore, FixedRidStartupStaysPreparingWithoutClaimUntilReleaseWait)
@@ -7087,6 +7337,59 @@ TEST (CppFrameworkOpaqueLocationStore, LateDescriptorPublishKeepsReplacementToke
         .value ()
         .status,
       location_write_status_t::stored);
+    EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 0u);
+}
+
+TEST (CppFrameworkOpaqueLocationStore, LateSameTokenRenewKeepsInvalidObservation)
+{
+    reclaim_scan_store_t opaque;
+    provider_location_repository_t repository (opaque);
+    location_reclaim_test_access_t clock;
+    clock.bind (repository);
+    repository.configure_reclaim_margin (0ms);
+    const auto owner = std::get<owner_lease_claimed_t> (
+                         repository.claim_owner_lease ("renew-owner", 60s).result ().value ())
+                         .token;
+    const auto contender =
+      std::get<owner_lease_claimed_t> (
+        repository.claim_owner_lease ("renew-contender", 60s).result ().value ())
+        .token;
+    auto descriptor = review_mesh_descriptor (owner);
+    ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+    repository.configure_reclaim_margin (5s);
+    task_completion_source_t<void> applied;
+    task_completion_source_t<void> release;
+    release_descriptor_on_exit_t release_on_exit{release};
+    opaque.after_write = [&] () -> task_t<void> {
+        applied.complete (result_t<void>::success ());
+        co_await release.task ();
+    };
+    ++descriptor.descriptor_revision;
+    auto renewal = repository.update_mesh_node (descriptor, location_write_intent_t::renew);
+    applied.task ().result ().value ();
+    opaque.expired_lease_key = {std::string ("owner-lease") + '\0' + owner.owner_id};
+    descriptor.owner_id = contender.owner_id;
+    descriptor.lease_generation = contender.lease_generation;
+    const auto claim = [&] {
+        return repository
+          .update_mesh_node (descriptor, location_write_intent_t::fixed_rid_new_claim)
+          .result ()
+          .value ()
+          .status;
+    };
+    ASSERT_EQ (claim (), location_write_status_t::waiting);
+    ASSERT_EQ (location_reclaim_test_access_t::observations (repository), 1u);
+    release.complete (result_t<void>::success ());
+    EXPECT_EQ (renewal.result ().value ().status, location_write_status_t::stored);
+    EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 1u);
+    clock.advance (15s - 1ms);
+    EXPECT_EQ (claim (), location_write_status_t::waiting);
+    clock.advance (1ms);
+    EXPECT_EQ (claim (), location_write_status_t::stored);
     EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 0u);
 }
 

@@ -337,7 +337,15 @@ class app_state_t
     static task_t<void> enter_serving_after_publication (std::shared_ptr<app_state_access_t> access,
                                                          task_t<bool> published)
     {
-        if (co_await published) {
+        const auto result = co_await runtime::await_result (std::move (published));
+        if (!result) {
+            std::shared_lock lock (access->mutex);
+            if (auto *state = access->state)
+                state->runtime_state.store (framework_runtime_state_t::error,
+                                            std::memory_order_release);
+            (void) result.value ();
+        }
+        if (result.value ()) {
             std::shared_lock lock (access->mutex);
             if (auto *state = access->state) {
                 auto expected = framework_runtime_state_t::preparing;
@@ -3379,9 +3387,11 @@ try {
           _state->framework_options ? _state->framework_options->handler_coroutine_workers () : 0,
           completion_dispatcher);
         _state->start_hosted_services (provider, started);
-        (void) detail::app_state_t::enter_serving_after_publication (
+        auto startup_publication = detail::app_state_t::enter_serving_after_publication (
           _state->status_access, _state->startup_publication ());
         while (!_state->stop_requested.load (std::memory_order_acquire)) {
+            if (startup_publication.await_ready ())
+                startup_publication.result ().value ();
             _state->delays.reap_completed ();
             if (g_stop_signal_requested != 0) {
                 g_stop_signal_requested = 0;
