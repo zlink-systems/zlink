@@ -725,6 +725,13 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
     [Fact]
     public async Task NewManagedDeadlineWakesAnIdleReceiveOwner()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshReceiveWakeTests),
+                nameof(NewManagedDeadlineWakesAnIdleReceiveOwner)
+            )
+        )
+            return;
         await using var context = Systems.Zlink.Zlink.CreateContext();
         using var queue = new ZLinkApplicationJobQueue(
             new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
@@ -778,8 +785,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
     public async Task PermitGrantResumesReceiveOwnerWithoutAPollTick(bool failRearm)
     {
         if (
-            failRearm
-            && await IsolatedTestProcess.RunIsolatedAsync(
+            await IsolatedTestProcess.RunIsolatedAsync(
                 typeof(MeshReceiveWakeTests),
                 nameof(PermitGrantResumesReceiveOwnerWithoutAPollTick)
             )
@@ -832,6 +838,13 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
     [Fact]
     public async Task ShutdownWakesOwnerAndReturnsPublishedGrant()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshReceiveWakeTests),
+                nameof(ShutdownWakesOwnerAndReturnsPublishedGrant)
+            )
+        )
+            return;
         await using var context = Systems.Zlink.Zlink.CreateContext();
         using var queue = new ZLinkApplicationJobQueue(
             new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
@@ -968,6 +981,13 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
     [Fact]
     public async Task IdleReceiveRotationManagementAddsNoAllocationBeyondItsNodeTurns()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshReceiveWakeTests),
+                nameof(IdleReceiveRotationManagementAddsNoAllocationBeyondItsNodeTurns)
+            )
+        )
+            return;
         const int warmup = 128;
         const int iterations = 1000;
         var poller = new ControlledReceivePoller();
@@ -1107,6 +1127,13 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
     [Fact]
     public async Task NodeIngressSourceGenerationAddsNoAllocationBeyondItsOwners()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshReceiveWakeTests),
+                nameof(NodeIngressSourceGenerationAddsNoAllocationBeyondItsOwners)
+            )
+        )
+            return;
         const int warmup = 128;
         const int iterations = 1000;
         await using var inner = Systems.Zlink.Zlink.CreateContext();
