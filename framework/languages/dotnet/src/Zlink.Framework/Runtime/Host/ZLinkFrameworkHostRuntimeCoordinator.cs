@@ -36,31 +36,17 @@ internal sealed class ZLinkFrameworkHostRuntimeCoordinator(
             // The host enters Serving when its descriptors are published; a
             // host without an owner lease stays Preparing until then (§5).
             await autoConnectLifecycle
-                .FrameworkReadyAsync(state, maintenance.MarkServing, cancellationToken)
+                .FrameworkReadyAsync(
+                    state,
+                    maintenance.MarkServing,
+                    cancellationToken,
+                    HandleDeferredStartupFailureAsync
+                )
                 .ConfigureAwait(false);
         }
         catch (Exception startFailure)
         {
-            maintenance.MarkError();
-            try
-            {
-                if (cancellationToken.IsCancellationRequested)
-                    await (
-                        startFailure is ZLinkOwnerLeaseCancellationCleanupException
-                            ? maintenance.ShutdownAfterStartupFailureAsync(
-                                maintenance.ShutdownCancellationToken.IsCancellationRequested
-                                    ? ZLinkDrainForceReason.DeadlineExceeded
-                                    : ZLinkDrainForceReason.OwnerCleanupFailed
-                            )
-                            : maintenance.ShutdownAsync()
-                    ).ConfigureAwait(false);
-                else
-                    await CloseResourcesAsync().ConfigureAwait(false);
-            }
-            catch (Exception cleanupFailure)
-            {
-                throw new AggregateException(startFailure, cleanupFailure);
-            }
+            await HandleStartupFailureAsync(startFailure, cancellationToken).ConfigureAwait(false);
 
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(startFailure).Throw();
         }
@@ -118,6 +104,36 @@ internal sealed class ZLinkFrameworkHostRuntimeCoordinator(
             {
                 (failures ??= []).Add(exception);
             }
+        }
+    }
+
+    private ValueTask HandleDeferredStartupFailureAsync(Exception startFailure) =>
+        new(HandleStartupFailureAsync(startFailure, CancellationToken.None));
+
+    private async Task HandleStartupFailureAsync(
+        Exception startFailure,
+        CancellationToken cancellationToken
+    )
+    {
+        maintenance.MarkError();
+        try
+        {
+            if (cancellationToken.IsCancellationRequested)
+                await (
+                    startFailure is ZLinkOwnerLeaseCancellationCleanupException
+                        ? maintenance.ShutdownAfterStartupFailureAsync(
+                            maintenance.ShutdownCancellationToken.IsCancellationRequested
+                                ? ZLinkDrainForceReason.DeadlineExceeded
+                                : ZLinkDrainForceReason.OwnerCleanupFailed
+                        )
+                        : maintenance.ShutdownAsync()
+                ).ConfigureAwait(false);
+            else
+                await CloseResourcesAsync().ConfigureAwait(false);
+        }
+        catch (Exception cleanupFailure)
+        {
+            throw new AggregateException(startFailure, cleanupFailure);
         }
     }
 }

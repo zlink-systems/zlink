@@ -13356,11 +13356,23 @@ public sealed partial class EntrySpotActorDispatchTests
         var locationProvider = new ZLinkInMemoryProviderLocationStore(locationTime);
         var runtimeLocationProvider =
             locationStoreWrapper?.Invoke(locationProvider) ?? locationProvider;
-        var locationStore = new ZLinkProviderLocationRepository(locationProvider);
+        var locationOptions = new ZLinkLocationOptions
+        {
+            PollingInterval = TimeSpan.Zero,
+            OwnerLeaseFencingMargin = TimeSpan.FromMilliseconds(1),
+        };
+        var locationStore = new ZLinkProviderLocationRepository(
+            locationProvider,
+            locationTime,
+            locationOptions.OwnerLeaseFencingMargin
+        );
         locationStoreCapture?.Invoke(locationStore);
-        var runtimeLocationStore = new ZLinkProviderLocationRepository(runtimeLocationProvider);
+        var runtimeLocationStore = new ZLinkProviderLocationRepository(
+            runtimeLocationProvider,
+            locationTime,
+            locationOptions.OwnerLeaseFencingMargin
+        );
         await locationStore.ClaimLiveOwnerAsync(locationOwnerId, TimeSpan.FromMinutes(5));
-        var locationOptions = new ZLinkLocationOptions { PollingInterval = TimeSpan.Zero };
         var leaseTracker = new ZLinkOwnerLeaseTracker(
             runtimeLocationStore,
             locationOptions,
@@ -13574,6 +13586,16 @@ public sealed partial class EntrySpotActorDispatchTests
         var preparingDescriptor = (
             await locationStore.ListMeshNodesAsync("entry", default)
         ).Items.SingleOrDefault(item => item.Rid == RoutingId.From("entry-node"));
+        if (preparingDescriptor is null)
+        {
+            locationTime.Advance(locationOptions.OwnerLeaseFencingMargin * 3);
+            Assert.True(await locationRuntime.RenewOwnerLeaseOnceAsync());
+            Assert.True(await runtime.GetMeshNodeRuntime("entry").StartOwnerBoundAsync());
+            preparingDescriptor = (
+                await locationStore.ListMeshNodesAsync("entry", default)
+            ).Items.SingleOrDefault(item => item.Rid == RoutingId.From("entry-node"));
+        }
+        Assert.NotNull(preparingDescriptor);
         if (preparingDescriptor is not null)
         {
             var servingDescriptor = preparingDescriptor with

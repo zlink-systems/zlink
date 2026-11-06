@@ -13,6 +13,7 @@ internal sealed class ZLinkAutoConnectLifecycleCoordinator
         ZLinkFrameworkComponentState,
         CancellationToken,
         Action,
+        Func<Exception, ValueTask>,
         ValueTask
     >? _start;
     private readonly Func<CancellationToken, ValueTask>? _stop;
@@ -27,7 +28,13 @@ internal sealed class ZLinkAutoConnectLifecycleCoordinator
         ) { }
 
     internal ZLinkAutoConnectLifecycleCoordinator(
-        Func<ZLinkFrameworkComponentState, CancellationToken, Action, ValueTask>? start,
+        Func<
+            ZLinkFrameworkComponentState,
+            CancellationToken,
+            Action,
+            Func<Exception, ValueTask>,
+            ValueTask
+        >? start,
         Func<CancellationToken, ValueTask>? stop
     )
     {
@@ -43,7 +50,8 @@ internal sealed class ZLinkAutoConnectLifecycleCoordinator
     internal Task FrameworkReadyAsync(
         ZLinkFrameworkComponentState state,
         Action published,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Func<Exception, ValueTask>? startupFailure = null
     )
     {
         if (_start is null)
@@ -65,7 +73,13 @@ internal sealed class ZLinkAutoConnectLifecycleCoordinator
         {
             CompleteTask(
                 start.Completion,
-                _start!(start.State, cancellationToken, published).AsTask()
+                _start!(
+                    start.State,
+                    cancellationToken,
+                    published,
+                    startupFailure ?? (static _ => ValueTask.CompletedTask)
+                )
+                    .AsTask()
             );
         }
         catch (Exception exception)

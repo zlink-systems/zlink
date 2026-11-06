@@ -12,6 +12,7 @@ using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Channels;
+using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
@@ -283,6 +284,19 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
                 .Async()
         );
         Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, rejected.Kind);
+        if (ready)
+        {
+            Assert.IsType<ZLinkAuthorityReadResult.Found>(await repository.ReadAuthorityAsync(key));
+            time.Advance(TimeSpan.FromSeconds(15));
+            var afterWait = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await host
+                    .Manager.GetOrCreate("expired-ready-room", SpotCloseHost.SpotType)
+                    .InMesh(SpotCloseHost.MeshName)
+                    .Timeout(Wait)
+                    .Async()
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, afterWait.Kind);
+        }
         Assert.IsType<ZLinkAuthorityReadResult.Missing>(await repository.ReadAuthorityAsync(key));
         var expired = (
             await repository.ListMeshNodesAsync(SpotCloseHost.MeshName, default)
@@ -2520,6 +2534,8 @@ internal sealed class SpotCloseHost : IAsyncDisposable
         services.AddTransient<SpotCloseInstanceSignalHandler>();
         services.AddZLinkFramework(options =>
         {
+            if (timeProvider is not null)
+                options.UseTestTimeProvider(timeProvider);
             options.AddLocationStore(store);
             options.AddRelocationStore(new InMemoryRelocationStore());
             options.ConfigureLocations().PollingInterval = TimeSpan.FromMilliseconds(10);

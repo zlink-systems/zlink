@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
@@ -36,6 +37,7 @@ public sealed class ChannelReceiveMessageFlowTests(Xunit.Abstractions.ITestOutpu
             options.DisableImplicitHandlerAutoRegistration();
             if (routeMesh)
             {
+                options.ConfigureLocations().OwnerLeaseFencingMargin = TimeSpan.FromTicks(1);
                 options.UseTestLocationStore();
                 var mesh = options
                     .AddRouteMesh("flow-mesh")
@@ -69,6 +71,13 @@ public sealed class ChannelReceiveMessageFlowTests(Xunit.Abstractions.ITestOutpu
             .GetServices<IHostedService>()
             .Single(service => service is ZLinkFrameworkHostedService)
             .StartAsync(CancellationToken.None);
+        if (routeMesh)
+        {
+            Assert.True(
+                await provider.GetRequiredService<ZLinkLocationRuntime>().RenewOwnerLeaseOnceAsync()
+            );
+            await WaitUntilServingAsync(provider);
+        }
         var probe = provider.GetRequiredService<Probe>();
         var sourceServices = new ServiceCollection();
         sourceServices.AddZLinkFramework(options =>
@@ -76,6 +85,7 @@ public sealed class ChannelReceiveMessageFlowTests(Xunit.Abstractions.ITestOutpu
             options.DisableImplicitHandlerAutoRegistration();
             if (routeMesh)
             {
+                options.ConfigureLocations().OwnerLeaseFencingMargin = TimeSpan.FromTicks(1);
                 options.UseTestLocationStore();
                 var target = runtime.GetMeshNodeRuntime("flow-mesh").Node;
                 var mesh = options
@@ -105,6 +115,13 @@ public sealed class ChannelReceiveMessageFlowTests(Xunit.Abstractions.ITestOutpu
             .GetServices<IHostedService>()
             .Single(service => service is ZLinkFrameworkHostedService)
             .StartAsync(CancellationToken.None);
+        if (routeMesh)
+        {
+            Assert.True(
+                await source.GetRequiredService<ZLinkLocationRuntime>().RenewOwnerLeaseOnceAsync()
+            );
+            await WaitUntilServingAsync(source);
+        }
         if (routeMesh)
         {
             using var readyTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -180,6 +197,19 @@ public sealed class ChannelReceiveMessageFlowTests(Xunit.Abstractions.ITestOutpu
             await sourceRuntime.StopAsync(CancellationToken.None);
             await runtime.StopAsync(CancellationToken.None);
         }
+    }
+
+    private static async Task WaitUntilServingAsync(IServiceProvider provider)
+    {
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await foreach (
+            var observed in provider
+                .GetRequiredService<ZLinkFrameworkMaintenanceRuntime>()
+                .ObserveAsync(cancellation.Token)
+        )
+            if (observed.Status.State == ZLinkFrameworkRuntimeState.Serving)
+                return;
+        throw new InvalidOperationException("Fixed RID flow test host stopped before Serving.");
     }
 
     [Theory]
