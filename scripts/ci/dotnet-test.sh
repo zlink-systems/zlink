@@ -19,4 +19,4 @@ fi
 dotnet test "$project" -c "$configuration" -f "$framework" --no-build \
   --logger "trx;LogFileName=test.trx" --results-directory "$results" \
   --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full \
-  "${runsettings_args[@]}"
+  ${runsettings_args[@]+"${runsettings_args[@]}"}

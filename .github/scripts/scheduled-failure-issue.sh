@@ -24,6 +24,9 @@ build_issue_body() {
   local failed_job_lines="$5"
   local label_note="$6"
   local manual_unpause="수동 해제: 원인을 확인한 뒤 Mergify CLI에서 mergify queue unpause를 실행하거나 Mergify 대시보드에서 merge queue를 재개하세요."
+  if ! should_pause_merge_queue "$workflow_name"; then
+    manual_unpause="이 workflow의 실패는 merge queue를 멈추지 않습니다. 원인을 확인해 이슈로 처리하세요."
+  fi
 
   printf '%s\n\n예약 실행이 실패했습니다.\n- Workflow: %s\n- 실행: %s\n- Head SHA: %s\n- Conclusion: %s\n- 실패 job:\n%s%s' \
     "$manual_unpause" "$workflow_name" "$run_url" "$head_sha" "$run_conclusion" "$failed_job_lines" "$label_note"
