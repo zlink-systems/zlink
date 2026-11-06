@@ -19,6 +19,8 @@ namespace zlink::framework::tests
 {
 std::atomic_bool tracking_process_allocations{false};
 std::atomic<std::size_t> process_allocation_count{0};
+std::atomic<std::size_t> process_allocation_failure_size{0};
+std::atomic<std::size_t> process_allocation_failure_count{0};
 thread_local bool tracking_allocations = false;
 thread_local std::optional<std::size_t> allocations_before_failure;
 thread_local std::size_t tracked_allocation_count = 0;
@@ -103,9 +105,20 @@ bool should_fail_allocation () noexcept
     return false;
 }
 
+bool should_fail_process_allocation (std::size_t size) noexcept
+{
+    auto expected = process_allocation_failure_size.load (std::memory_order_relaxed);
+    if (expected == 0 || size < expected
+        || !process_allocation_failure_size.compare_exchange_strong (expected, 0,
+                                                                     std::memory_order_relaxed))
+        return false;
+    process_allocation_failure_count.fetch_add (1, std::memory_order_relaxed);
+    return true;
+}
+
 void *allocate_bytes (std::size_t size) noexcept
 {
-    if (should_fail_allocation ())
+    if (should_fail_process_allocation (size) || should_fail_allocation ())
         return nullptr;
     if (void *memory = std::malloc (size == 0 ? 1 : size)) {
         record_allocation (memory, size);
@@ -116,7 +129,7 @@ void *allocate_bytes (std::size_t size) noexcept
 
 void *allocate_aligned_bytes (std::size_t size, std::size_t alignment) noexcept
 {
-    if (should_fail_allocation ())
+    if (should_fail_process_allocation (size) || should_fail_allocation ())
         return nullptr;
 #if defined(_MSC_VER)
     void *memory = _aligned_malloc (size == 0 ? 1 : size, alignment);

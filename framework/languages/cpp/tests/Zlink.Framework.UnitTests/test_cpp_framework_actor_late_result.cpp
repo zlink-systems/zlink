@@ -18,8 +18,30 @@
 
 namespace zlink::framework::runtime::mesh
 {
+namespace
+{
+foundation::operation_registry_t::clock_t::time_point injected_registry_now;
+
+foundation::operation_registry_t::clock_t::time_point registry_now ()
+{
+    return injected_registry_now;
+}
+}
+
 struct raw_mesh_node_owner_test_access_t
 {
+    static void inject_registry_clock (raw_mesh_node_owner_t &owner)
+    {
+        injected_registry_now =
+          foundation::operation_registry_t::clock_t::now () + std::chrono::hours (1);
+        owner._operations =
+          std::make_shared<foundation::operation_registry_t> (owner._lane, &registry_now);
+    }
+    static void reset_registry_clock ()
+    {
+        injected_registry_now =
+          foundation::operation_registry_t::clock_t::now () + std::chrono::hours (1);
+    }
     static task_t<bool>
     submit_unadmitted (raw_mesh_node_owner_t &owner,
                        std::shared_ptr<foundation::operation_registry_t> registry,
@@ -51,13 +73,11 @@ struct raw_mesh_node_owner_test_access_t
     {
         if (terminal == foundation::operation_terminal_t::cancelled)
             EXPECT_TRUE (owner._operations->cancel (id));
-        else if (terminal == foundation::operation_terminal_t::timed_out)
-            EXPECT_EQ (owner._operations
-                         ->expire (foundation::operation_registry_t::clock_t::time_point::max ())
-                         .result ()
-                         .value (),
-                       1);
-        else
+        else if (terminal == foundation::operation_terminal_t::timed_out) {
+            const auto deadline = owner._operations->next_deadline ();
+            ASSERT_TRUE (deadline);
+            EXPECT_EQ (owner._operations->expire (*deadline).result ().value (), 1);
+        } else
             EXPECT_TRUE (owner.fail_local_operation (id, terminal));
     }
     static void deliver (std::shared_ptr<foundation::operation_registry_t> registry,
@@ -432,6 +452,8 @@ class local_actor_receiver_t : public testing::Test
                 {"owner", 1, query.source_node_routing_id, query.source_node_generation}, 1};
           });
         runtime->start ().result ().value ();
+        rt::mesh::raw_mesh_node_owner_test_access_t::inject_registry_clock (
+          runtime->native_node ().transport ());
         const auto actor = runtime->create_actor ("late-result", "actor");
         fence = {"actor",
                  actor.ref ().object_generation (),
@@ -638,6 +660,7 @@ TEST_F (local_actor_receiver_t, PublicRequestReleasesClientAfterNoReply)
 
 TEST_F (local_actor_receiver_t, PublicRequestReleasesClientAfterTimeout)
 {
+    rt::mesh::raw_mesh_node_owner_test_access_t::reset_registry_clock ();
     auto pending = client->request (fw::actor_id_t ("actor"), std::string ("request"))
                      .timeout (1h)
                      .async<std::string> ();
@@ -686,6 +709,8 @@ TEST_F (local_actor_receiver_t, LocalRegistryTerminalsReachPreparedReceiverOnce)
           fw::node_rid_t::from_string (runtime->status ().routing_id ().to_string ()),
           "late-result", "actor", fence.object_generation);
         std::vector<zlink::message_t> parts{zlink::message_t::from (std::string ("request"))};
+        rt::mesh::raw_mesh_node_owner_test_access_t::inject_registry_clock (
+          runtime->native_node ().transport ());
         ASSERT_EQ (runtime->request_to_actor (actor, parts, operation, 1h).result ().value (),
                    zlink::submit_result_t::ok);
         dispatch_request ();
