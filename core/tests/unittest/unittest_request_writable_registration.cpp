@@ -2,6 +2,7 @@
 
 #include "../testutil.hpp"
 #include "../testutil_unity.hpp"
+#include "contract_socket_pair_fixture.hpp"
 #include "api/socket/socket_completion_queue_internal.hpp"
 #include "core/pipe.hpp"
 
@@ -24,9 +25,7 @@ std::atomic<size_t> epoch_reads (0);
 std::atomic<uint64_t> simulated_epoch (0);
 std::atomic<bool> recheck_entered (false);
 std::atomic<bool> release_during_recheck (false);
-int simulated_pipe_storage;
-const zlink::pipe_t *const simulated_pipe =
-  reinterpret_cast<const zlink::pipe_t *> (&simulated_pipe_storage);
+zlink::pipe_t *simulated_pipe = NULL;
 
 zlink::socket_completion::request_writable_wait_t make_simulated_wait (uint64_t epoch_)
 {
@@ -60,6 +59,10 @@ __wrap__ZNK5zlink6pipe_t33request_correlation_release_epochEv (const zlink::pipe
 void setUp ()
 {
     setup_test_context ();
+    void *const first = test_context_socket (ZLINK_SOCKET_PAIR);
+    void *const second = test_context_socket (ZLINK_SOCKET_PAIR);
+    const contract_socket_pair_t pair (first, second, 0);
+    simulated_pipe = pair.application[0];
     simulated_epoch.store (0);
     recheck_entered.store (false);
     release_during_recheck.store (false);
@@ -67,6 +70,7 @@ void setUp ()
 
 void tearDown ()
 {
+    simulated_pipe = NULL;
     teardown_test_context ();
 }
 

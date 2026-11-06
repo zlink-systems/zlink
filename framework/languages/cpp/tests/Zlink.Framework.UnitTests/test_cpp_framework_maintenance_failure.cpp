@@ -5,52 +5,17 @@
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/allocation_counter.hpp"
 #include <gtest/gtest.h>
 #include <future>
 #include <atomic>
-#include <cstdlib>
-#include <new>
 #include <string>
 
 using zlink::framework::test::begin_reserved_object;
 
 namespace
 {
-std::atomic<std::size_t> fail_size{0};
-std::atomic<int> injected{0};
 constexpr std::size_t inventory_count = 257;
-}
-
-void *operator new (std::size_t size)
-{
-    auto expected = fail_size.load ();
-    if (expected != 0 && size >= expected && fail_size.compare_exchange_strong (expected, 0)) {
-        ++injected;
-        throw std::bad_alloc ();
-    }
-    if (auto *memory = std::malloc (size == 0 ? 1 : size))
-        return memory;
-    throw std::bad_alloc ();
-}
-void *operator new[] (std::size_t size)
-{
-    return ::operator new (size);
-}
-void operator delete (void *memory) noexcept
-{
-    std::free (memory);
-}
-void operator delete[] (void *memory) noexcept
-{
-    std::free (memory);
-}
-void operator delete (void *memory, std::size_t) noexcept
-{
-    std::free (memory);
-}
-void operator delete[] (void *memory, std::size_t) noexcept
-{
-    std::free (memory);
 }
 
 namespace zlink::framework
@@ -60,11 +25,14 @@ TEST (MaintenanceFailure, CompletionSnapshotFailureReleasesSourceSeal)
     detail::actor_transfer_coordinator_t transfers;
     for (std::size_t index = 0; index < inventory_count; ++index)
         ASSERT_TRUE (transfers.try_reserve_source (std::to_string (index)));
-    injected = 0;
-    fail_size = inventory_count * sizeof (std::shared_ptr<task_completion_source_t<void>>);
+    auto &failure_size = zlink::framework::tests::process_allocation_failure_size;
+    auto &failure_count = zlink::framework::tests::process_allocation_failure_count;
+    failure_count.store (0, std::memory_order_relaxed);
+    failure_size.store (inventory_count * sizeof (std::shared_ptr<task_completion_source_t<void>>),
+                        std::memory_order_relaxed);
     const auto result = transfers.try_seal_maintenance_inventory ().result ();
-    fail_size = 0;
-    ASSERT_EQ (injected.load (), 1);
+    failure_size.store (0, std::memory_order_relaxed);
+    ASSERT_EQ (failure_count.load (std::memory_order_relaxed), 1);
     ASSERT_FALSE (result);
     // state_lane maps std::exception to the existing InternalFailure contract.
     EXPECT_EQ (result.error_kind (), framework_error_kind_t::internal_failure);
@@ -87,11 +55,14 @@ TEST (MaintenanceFailure, NativeInventoryFailureReleasesSourceSeal)
         ASSERT_EQ (created.error, st::stateful_error_t::none);
         ASSERT_EQ (objects.commit_create (created.attempt), st::stateful_error_t::none);
     }
-    injected = 0;
-    fail_size = inventory_count * sizeof (st::object_inventory_t);
+    auto &failure_size = zlink::framework::tests::process_allocation_failure_size;
+    auto &failure_count = zlink::framework::tests::process_allocation_failure_count;
+    failure_count.store (0, std::memory_order_relaxed);
+    failure_size.store (inventory_count * sizeof (st::object_inventory_t),
+                        std::memory_order_relaxed);
     const auto result = objects.try_begin_maintenance_inventory ().result ();
-    fail_size = 0;
-    ASSERT_EQ (injected.load (), 1);
+    failure_size.store (0, std::memory_order_relaxed);
+    ASSERT_EQ (failure_count.load (std::memory_order_relaxed), 1);
     ASSERT_FALSE (result);
     // state_lane maps std::exception to the existing InternalFailure contract.
     EXPECT_EQ (result.error_kind (), framework_error_kind_t::internal_failure);
@@ -135,29 +106,32 @@ TEST (MaintenanceFailure, ApplicationClaimAllocationFailureReturnsWorkAccounting
     for (std::size_t index = 0; index < count; ++index)
         enqueue ();
     std::size_t started = 0, rejected = 0, dispatched = 0;
-    injected = 0;
+    auto &failure_size = zlink::framework::tests::process_allocation_failure_size;
+    auto &failure_count = zlink::framework::tests::process_allocation_failure_count;
+    failure_count.store (0, std::memory_order_relaxed);
     // The batch's record storage is larger than its pointer/byte claim vectors.
     std::promise<void> begin_dispatch;
     auto begin = begin_dispatch.get_future ().share ();
     auto cold = std::async (std::launch::async, [&] {
         begin.wait ();
-        fail_size = count * sizeof (mesh::service_mailbox_record_t);
+        failure_size.store (count * sizeof (mesh::service_mailbox_record_t),
+                            std::memory_order_relaxed);
         try {
             auto result = owner->dispatch_application_owner (
               "node", [&] (const auto &, const auto &, auto, auto) { ++dispatched; },
               [&] { ++started; }, [&] { ++rejected; });
-            fail_size = 0;
+            failure_size.store (0, std::memory_order_relaxed);
             return result;
         }
         catch (...) {
-            fail_size = 0;
+            failure_size.store (0, std::memory_order_relaxed);
             throw;
         }
     });
     begin_dispatch.set_value ();
     auto pending = cold.get ();
     const auto &result = zlink::framework::test::application_owner_result (pending);
-    ASSERT_EQ (injected.load (), 1);
+    ASSERT_EQ (failure_count.load (std::memory_order_relaxed), 1);
     ASSERT_FALSE (result);
     EXPECT_THROW (result.value (), std::bad_alloc);
     EXPECT_EQ (started, count);
