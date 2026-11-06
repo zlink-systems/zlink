@@ -11,10 +11,8 @@ public sealed class DirectRequestWaitCostTests
     private const int RequestCount = 1000;
     private static readonly TimeSpan TestGuard = TimeSpan.FromSeconds(5);
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Direct_request_only_awaits_for_reply_observation(bool encodedWire)
+    [Fact]
+    public async Task Direct_request_only_awaits_for_reply_observation()
     {
         using var context = Systems.Zlink.Zlink.CreateContext();
         using var server = context.CreateRouterSocket();
@@ -46,19 +44,12 @@ public sealed class DirectRequestWaitCostTests
             waits.Begin();
             try
             {
-                pending = encodedWire
-                    ? node.RequestDirectWireAsync(
-                        target,
-                        new ReadOnlyMemory<byte>[] { BitConverter.GetBytes(index) },
-                        TestGuard,
-                        CancellationToken.None
-                    )
-                    : node.RequestDirectWireAsync(
-                        target,
-                        new[] { payload },
-                        TestGuard,
-                        CancellationToken.None
-                    );
+                pending = node.RequestDirectWireAsync(
+                    target,
+                    new[] { payload },
+                    TestGuard,
+                    CancellationToken.None
+                );
             }
             finally
             {

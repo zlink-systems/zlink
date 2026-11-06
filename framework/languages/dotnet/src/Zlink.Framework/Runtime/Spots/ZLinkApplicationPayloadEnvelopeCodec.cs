@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -14,6 +15,18 @@ internal readonly record struct ZLinkApplicationPayloadEnvelope(
 
 internal static class ZLinkApplicationPayloadEnvelopeCodec
 {
+#if DEBUG
+    internal static readonly AsyncLocal<Action<string>?> EncodingObserver = new();
+#endif
+
+    [Conditional("DEBUG")]
+    internal static void ObserveEncoding(string name)
+    {
+#if DEBUG
+        EncodingObserver.Value?.Invoke(name);
+#endif
+    }
+
     private const byte Version = 1;
     internal const string CreationPacketName = "ZLinkFrameworkCreationRequest";
     private const string MultipartPacketName = Systems
@@ -248,6 +261,7 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
     {
         var encodedLength = GetFrameworkMultipartEncodedLength(parts);
         EnsureRepresentableEncodedLength(encodedLength);
+        ObserveEncoding("packed-array");
         var result = new byte[checked((int)encodedLength)];
         WriteFrameworkMultipartEnvelope(result, parts, encodedLength);
         return result;
@@ -257,6 +271,7 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
     {
         var encodedLength = GetFrameworkMultipartEncodedLength(parts);
         EnsureRepresentableEncodedLength(encodedLength);
+        ObserveEncoding("packed-array");
         var result = new byte[checked((int)encodedLength)];
         WriteFrameworkMultipartEnvelope(result, parts, encodedLength);
         return result;
@@ -317,6 +332,7 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
         long encodedLength
     )
     {
+        ObserveEncoding("packed-write");
         WriteEnvelopeHeader(result, checked((int)encodedLength));
         var offset = 1 + sizeof(uint);
         var payloadOffset = WriteMultipartEnvelopeFields(
@@ -333,6 +349,7 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
         long encodedLength
     )
     {
+        ObserveEncoding("packed-write");
         WriteEnvelopeHeader(result, checked((int)encodedLength));
         var offset = 1 + sizeof(uint);
         var payloadOffset = WriteMultipartEnvelopeFields(

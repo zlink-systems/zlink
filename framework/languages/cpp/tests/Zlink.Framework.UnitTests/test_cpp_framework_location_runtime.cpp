@@ -3423,3 +3423,357 @@ TEST (ZLinkFrameworkLocationRuntime, DrainingPublicationDoesNotHoldRecoveryMutex
     service.stop ();
     runtime.stop ();
 }
+
+namespace zlink::framework::runtime
+{
+namespace
+{
+using namespace std::chrono_literals;
+using lease_access = location_runtime_test_access_t;
+using monotonic_time = std::chrono::steady_clock::time_point;
+
+class outage_provider_t final : public location_store_t
+{
+  public:
+    in_memory_location_store_t inner;
+    bool fail = false;
+    bool fail_next_read = false;
+    bool hold_read = false;
+    task_completion_source_t<void> resume;
+    task_t<store_read_result_t> read (store_key_t key) override
+    {
+        if (fail || std::exchange (fail_next_read, false))
+            return task_t<store_read_result_t> (result_t<store_read_result_t>::failure (
+              framework_error_kind_t::internal_failure, "injected outage read"));
+        if (hold_read)
+            return continue_task<store_read_result_t> (
+              resume.task (),
+              [this, key = std::move (key)] () mutable { return inner.read (std::move (key)); });
+        return inner.read (std::move (key));
+    }
+    task_t<store_write_result_t> write (store_write_request_t request) override
+    {
+        return inner.write (std::move (request));
+    }
+    task_t<store_scan_result_t> scan (store_scan_request_t request) override
+    {
+        return inner.scan (std::move (request));
+    }
+};
+
+class outage_memory_t final : public in_memory_location_repository_t
+{
+  public:
+    bool fail = false;
+    bool fail_renew = false;
+    bool hold_read = false;
+    bool hold_renew = false;
+    task_completion_source_t<void> resume;
+    task_t<owner_lease_renew_result_t> renew_owner_lease (location_owner_token_t token,
+                                                          std::chrono::milliseconds ttl) override
+    {
+        if (fail || fail_renew)
+            return task_t<owner_lease_renew_result_t> (
+              result_t<owner_lease_renew_result_t>::failure (
+                framework_error_kind_t::internal_failure, "injected outage renew"));
+        if (hold_renew)
+            return continue_task<owner_lease_renew_result_t> (
+              resume.task (), [this, token = std::move (token), ttl] () mutable {
+                  return in_memory_location_repository_t::renew_owner_lease (std::move (token),
+                                                                             ttl);
+              });
+        return in_memory_location_repository_t::renew_owner_lease (std::move (token), ttl);
+    }
+    task_t<owner_lease_read_result_t> read_owner_lease (std::string owner) override
+    {
+        if (fail)
+            return task_t<owner_lease_read_result_t> (result_t<owner_lease_read_result_t>::failure (
+              framework_error_kind_t::internal_failure, "injected outage read"));
+        if (hold_read)
+            return continue_task<owner_lease_read_result_t> (
+              resume.task (), [this, owner = std::move (owner)] () mutable {
+                  return in_memory_location_repository_t::read_owner_lease (std::move (owner));
+              });
+        return in_memory_location_repository_t::read_owner_lease (std::move (owner));
+    }
+};
+
+class StoreOutageRetention : public ::testing::TestWithParam<bool>
+{
+  protected:
+    outage_provider_t provider;
+    outage_memory_t memory;
+    provider_location_repository_t repository{provider};
+    location_repository_t &store ()
+    {
+        return GetParam () ? static_cast<location_repository_t &> (repository) : memory;
+    }
+    // Future synthetic epoch keeps the real scheduler asleep; only advance_to dispatches it.
+    std::atomic<monotonic_time> clock_now{monotonic_time{std::chrono::hours (1000000)}};
+
+    void advance (std::chrono::milliseconds duration)
+    {
+        clock_now.store (clock_now.load () + duration);
+    }
+
+    void move_to (monotonic_time at) { clock_now.store (at); }
+    location_options_t options;
+
+    void claim (location_runtime_t &runtime)
+    {
+        lease_access::heartbeat (runtime, clock_now.load ());
+        ASSERT_TRUE (lease_access::snapshot (runtime)->token);
+        EXPECT_EQ (clock_now.load (),
+                   lease_access::snapshot (runtime)->last_successful_lease->started_at);
+    }
+};
+
+TEST_P (StoreOutageRetention, CutoffAndScheduledLatchDoNotChangeAdmission)
+{
+    for (bool enabled : {false, true}) {
+        options.store_outage_retention = enabled;
+        location_runtime_t runtime (store (), options, enabled ? "enabled-owner" : "default-owner");
+        lease_access::clock (runtime, [&] { return clock_now.load (); });
+        claim (runtime);
+        auto initial = lease_access::snapshot (runtime);
+        advance (5s);
+        lease_access::communication_failure (runtime);
+        auto episode = lease_access::snapshot (runtime)->outage;
+        ASSERT_TRUE (episode);
+        EXPECT_EQ (clock_now.load (), episode->observed_at);
+        EXPECT_EQ (enabled ? initial->last_successful_lease->started_at + 40s
+                           : *initial->admission_deadline,
+                   episode->cutoff);
+        EXPECT_EQ (initial->admission_deadline,
+                   lease_access::snapshot (runtime)->admission_deadline);
+        move_to (episode->cutoff - 1ms);
+        detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+        EXPECT_FALSE (episode->discarded.load ());
+        EXPECT_EQ (lease_access::usable_at (runtime, clock_now.load ()),
+                   clock_now.load () < *initial->admission_deadline);
+        advance (1ms);
+        detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+        EXPECT_TRUE (episode->discarded.load ());
+        EXPECT_EQ (initial->admission_deadline,
+                   lease_access::snapshot (runtime)->admission_deadline);
+        EXPECT_TRUE (lease_access::outage_discarded (runtime));
+    }
+}
+
+TEST_P (StoreOutageRetention, NewClaimAndLateRenewCannotChangeOriginalEpisode)
+{
+    options.store_outage_retention = true;
+    location_runtime_t runtime (store (), options, "outage-owner");
+    lease_access::clock (runtime, [&] { return clock_now.load (); });
+    claim (runtime);
+    const auto original = lease_access::snapshot (runtime);
+    advance (5s);
+    lease_access::communication_failure (runtime);
+    auto episode = lease_access::snapshot (runtime)->outage;
+    ASSERT_TRUE (episode);
+    auto token = *original->token;
+    const auto store_now = *original->renewed_at;
+    ++token.lease_generation;
+    lease_access::accept (runtime, token, store_now + 30s, store_now, clock_now.load (), false);
+    advance (1s);
+    lease_access::accept (runtime, *original->token, store_now + 30s, store_now,
+                          original->last_successful_lease->started_at + 1s, true);
+    EXPECT_EQ (episode, lease_access::snapshot (runtime)->outage);
+    EXPECT_EQ (original->last_successful_lease->started_at + 40s, episode->cutoff);
+    move_to (episode->cutoff);
+    // Even a recovery response delivered before the due callback cannot erase the latch.
+    lease_access::accept (runtime, *original->token, store_now + 30s, store_now,
+                          clock_now.load () - 1s, true, episode);
+    EXPECT_TRUE (episode->discarded.load ());
+    EXPECT_EQ (episode, lease_access::snapshot (runtime)->outage);
+    detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+    EXPECT_TRUE (episode->discarded.load ());
+}
+
+TEST_P (StoreOutageRetention, ClaimAdvancesBaselineAndLateSuccessCannotMoveItBack)
+{
+    options.store_outage_retention = true;
+    location_runtime_t runtime (store (), options, "outage-owner");
+    lease_access::clock (runtime, [&] { return clock_now.load (); });
+    claim (runtime);
+    const auto initial = lease_access::snapshot (runtime);
+    advance (5s);
+    auto new_token = *initial->token;
+    ++new_token.lease_generation;
+    const auto claim_started_at = clock_now.load ();
+    const auto store_now = *initial->renewed_at;
+    lease_access::accept (runtime, new_token, store_now + 30s, store_now, claim_started_at, false);
+    EXPECT_EQ (claim_started_at,
+               lease_access::snapshot (runtime)->last_successful_lease->started_at);
+
+    lease_access::accept (runtime, new_token, store_now + 30s, store_now,
+                          initial->last_successful_lease->started_at, true);
+    EXPECT_EQ (claim_started_at,
+               lease_access::snapshot (runtime)->last_successful_lease->started_at);
+    advance (1s);
+    lease_access::communication_failure (runtime);
+    const auto episode = lease_access::snapshot (runtime)->outage;
+    ASSERT_TRUE (episode);
+    EXPECT_EQ (claim_started_at + 40s, episode->cutoff);
+}
+
+TEST_P (StoreOutageRetention, TimelySameOwnerRenewClosesEpisodeAndCancelsLatch)
+{
+    options.store_outage_retention = true;
+    location_runtime_t runtime (store (), options, "outage-owner");
+    lease_access::clock (runtime, [&] { return clock_now.load (); });
+    claim (runtime);
+    advance (5s);
+    lease_access::communication_failure (runtime);
+    auto snapshot = lease_access::snapshot (runtime);
+    auto episode = snapshot->outage;
+    ASSERT_TRUE (episode);
+    advance (1s);
+    lease_access::accept (runtime, *snapshot->token, *snapshot->renewed_at + 30s,
+                          *snapshot->renewed_at, clock_now.load (), true, episode);
+    EXPECT_FALSE (lease_access::snapshot (runtime)->outage);
+    move_to (episode->cutoff);
+    detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+    EXPECT_FALSE (episode->discarded.load ());
+    // A second episode uses the last successful renewal request, not the initial claim.
+    lease_access::communication_failure (runtime);
+    EXPECT_EQ (snapshot->outage->observed_at + 1s + 40s,
+               lease_access::snapshot (runtime)->outage->cutoff);
+}
+
+TEST_P (StoreOutageRetention, ProviderErrorsOpenEpisodeAndActualRenewClosesIt)
+{
+    options.store_outage_retention = true;
+    location_runtime_t runtime (store (), options, "outage-owner");
+    lease_access::clock (runtime, [&] { return clock_now.load (); });
+    claim (runtime);
+    advance (5s);
+    provider.fail = memory.fail = true;
+    lease_access::heartbeat (runtime, clock_now.load ());
+    auto episode = lease_access::snapshot (runtime)->outage;
+    ASSERT_TRUE (episode);
+    EXPECT_EQ (clock_now.load (), episode->observed_at);
+    provider.fail = memory.fail = false;
+    advance (1s);
+    lease_access::heartbeat (runtime, clock_now.load ());
+    EXPECT_FALSE (lease_access::snapshot (runtime)->outage);
+    move_to (episode->cutoff);
+    detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+    EXPECT_FALSE (episode->discarded.load ());
+}
+
+TEST_P (StoreOutageRetention, ConfirmationReadDoesNotRenewRetentionBaseline)
+{
+    options.store_outage_retention = true;
+    location_runtime_t runtime (store (), options, "outage-owner");
+    lease_access::clock (runtime, [&] { return clock_now.load (); });
+    claim (runtime);
+    auto initial = lease_access::snapshot (runtime);
+    advance (5s);
+    provider.fail_next_read = memory.fail_renew = true;
+    lease_access::heartbeat (runtime, clock_now.load ());
+    const auto snapshot = lease_access::snapshot (runtime);
+    ASSERT_TRUE (snapshot->outage);
+    EXPECT_TRUE (snapshot->healthy);
+    EXPECT_EQ (initial->last_successful_lease->started_at,
+               snapshot->last_successful_lease->started_at);
+    EXPECT_EQ (initial->last_successful_lease->started_at + 40s, snapshot->outage->cutoff);
+    move_to (snapshot->outage->cutoff);
+    detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+    EXPECT_TRUE (snapshot->outage->discarded.load ());
+}
+
+TEST_P (StoreOutageRetention, RenewTimeoutOpensEpisode)
+{
+    location_runtime_t runtime (store (), options, "outage-owner");
+    lease_access::clock (runtime, [&] { return clock_now.load (); });
+    claim (runtime);
+    advance (5s);
+    provider.hold_read = memory.hold_renew = true;
+    lease_access::heartbeat (runtime, clock_now.load (), [&] {
+        advance (options.owner_lease_renew_timeout);
+        provider.resume.complete (result_t<void>::success ());
+        memory.resume.complete (result_t<void>::success ());
+    });
+    auto episode = lease_access::snapshot (runtime)->outage;
+    ASSERT_TRUE (episode);
+    EXPECT_EQ (clock_now.load (), episode->observed_at);
+    move_to (episode->cutoff);
+    detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+    EXPECT_TRUE (episode->discarded.load ());
+}
+
+TEST_P (StoreOutageRetention, ReadErrorAndReadTimeoutOpenEpisode)
+{
+    for (bool timeout : {false, true}) {
+        location_runtime_t runtime (store (), options, timeout ? "timeout-owner" : "error-owner");
+        lease_access::clock (runtime, [&] { return clock_now.load (); });
+        claim (runtime);
+        advance (5s);
+        if (timeout) {
+            provider.hold_read = memory.hold_read = true;
+        } else {
+            provider.fail = memory.fail = true;
+        }
+        lease_access::confirm (runtime, clock_now.load (), [&] {
+            if (timeout) {
+                advance (options.owner_lease_renew_timeout);
+                provider.resume.complete (result_t<void>::success ());
+                memory.resume.complete (result_t<void>::success ());
+            }
+        });
+        auto episode = lease_access::snapshot (runtime)->outage;
+        ASSERT_TRUE (episode);
+        EXPECT_EQ (clock_now.load (), episode->observed_at);
+        provider.hold_read = memory.hold_read = false;
+        provider.fail = memory.fail = false;
+        move_to (episode->cutoff);
+        detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+        EXPECT_TRUE (episode->discarded.load ());
+    }
+}
+
+TEST_P (StoreOutageRetention, ConflictMissingAndStaleDoNotOpenEpisode)
+{
+    location_runtime_t runtime (store (), options, "outage-owner");
+    lease_access::clock (runtime, [&] { return clock_now.load (); });
+    claim (runtime);
+    location_runtime_t conflict (store (), options, runtime.owner_id ());
+    lease_access::clock (conflict, [&] { return clock_now.load (); });
+    lease_access::heartbeat (conflict, clock_now.load ());
+    EXPECT_FALSE (lease_access::snapshot (conflict)->outage);
+    const auto token = *lease_access::snapshot (runtime)->token;
+    store ().release_owner_lease (token).result ().value ();
+    lease_access::confirm (runtime, clock_now.load ());
+    EXPECT_FALSE (lease_access::snapshot (runtime)->outage);
+    lease_access::heartbeat (runtime, clock_now.load ());
+    EXPECT_FALSE (lease_access::snapshot (runtime)->outage);
+}
+
+INSTANTIATE_TEST_SUITE_P (BothRepositories, StoreOutageRetention, ::testing::Bool ());
+
+TEST (ZLinkFrameworkLocationRuntime, StoreOutageRetentionIsStartupCopyWithFalseDefault)
+{
+    location_options_t positional{7s};
+    EXPECT_EQ (7s, positional.owner_lease_renew_interval);
+    EXPECT_FALSE (positional.store_outage_retention);
+    location_options_t defaults;
+    EXPECT_FALSE (defaults.store_outage_retention);
+    detail::validate_location_options (defaults);
+    app_t app;
+    auto &builder = app.add_zlink_framework ();
+    EXPECT_FALSE (builder.location_options ().store_outage_retention);
+    builder.configure_locations ().store_outage_retention = true;
+    auto options = builder.location_options ();
+    detail::validate_location_options (options);
+    in_memory_location_repository_t store;
+    location_runtime_t runtime (store, options, "startup-owner");
+    lease_access::clock (runtime, [] { return monotonic_time{std::chrono::hours (1000000)}; });
+    lease_access::heartbeat (runtime, monotonic_time{std::chrono::hours (1000000)});
+    options.store_outage_retention = false;
+    builder.configure_locations ().store_outage_retention = false;
+    EXPECT_TRUE (runtime.options ().store_outage_retention);
+    static_assert (std::is_const_v<std::remove_reference_t<decltype (runtime.options ())>>);
+}
+} // namespace
+} // namespace zlink::framework::runtime

@@ -6,6 +6,7 @@ import java.time.Duration;
 
 public final class ZLinkLocationOptions {
     private static final Duration ROUTE_CACHE_FORWARDING_SAFETY_MARGIN = Duration.ofSeconds(5);
+    private boolean storeOutageRetention;
     private Duration ownerLeaseRenewInterval = Duration.ofSeconds(5);
     private Duration ownerLeaseTtl = Duration.ofSeconds(30);
     private Duration pollingInterval = Duration.ofSeconds(1);
@@ -24,6 +25,14 @@ public final class ZLinkLocationOptions {
     private int maxConcurrentRelocationCaptures = 8;
     private int maxConcurrentRelocationRestores = 8;
     private long maxRelocationPayloadInFlightBytes = 256L * 1024 * 1024;
+
+    public boolean storeOutageRetention() {
+        return storeOutageRetention;
+    }
+
+    public void setStoreOutageRetention(boolean value) {
+        storeOutageRetention = value;
+    }
 
     public Duration ownerLeaseRenewInterval() {
         return ownerLeaseRenewInterval;

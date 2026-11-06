@@ -841,22 +841,25 @@ class actor_client_impl_t final : public actor_client_t,
       detail::host::pending_operation_t operation,
       detail::request_receiver_t<result_t<runtime::messaging::message_parts_t>> receiver)
     {
-        auto copied = parts.items ();
-        const auto submit = co_await runtime->request_to_actor (
-          actor.native_ref, copied, operation, timeout, {}, actor.authority_owner_generation,
-          actor.owner_lease_generation);
-        if (submit != zlink::submit_result_t::ok) {
-            const auto failure = std::make_exception_ptr (
-              runtime::messaging::map_submit_result_exception (submit, "Actor submission"));
-            // No registry/binding receiver owns a rejected submission. Process its
-            // physical failure before admission publication can finish the public call.
-            receiver.complete (
-              detail::result_access_t::failure<result_t<runtime::messaging::message_parts_t>> (
-                failure));
-            receiver.admitted->complete (detail::result_access_t::failure<void> (failure));
-            co_return;
+        try {
+            auto copied = parts.items ();
+            const auto submit = co_await runtime->request_to_actor (
+              actor.native_ref, copied, operation, timeout, {}, actor.authority_owner_generation,
+              actor.owner_lease_generation);
+            if (submit != zlink::submit_result_t::ok)
+                throw runtime::messaging::map_submit_result_exception (submit, "Actor submission");
+            receiver.admitted->complete (result_t<void>::success ());
         }
-        receiver.admitted->complete (result_t<void>::success ());
+        catch (...) {
+            const auto failure = std::current_exception ();
+            // Registration consumes operation.receiver. Only a rejection before
+            // that transfer has no physical producer and needs local delivery.
+            if (operation.receiver)
+                receiver.complete (
+                  detail::result_access_t::failure<result_t<runtime::messaging::message_parts_t>> (
+                    failure));
+            receiver.admitted->complete (detail::result_access_t::failure<void> (failure));
+        }
     }
 
     request_task_t<result_t<message_t>>
@@ -893,14 +896,11 @@ class actor_client_impl_t final : public actor_client_t,
                     return submit_prepared_request (runtime, std::move (actor), std::move (parts),
                                                     timeout, operation, physical);
                 });
-              runtime::start_owned_task<void> (
-                std::move (work), [receiver] (const auto &result) mutable {
-                    if (!result) {
-                        receiver.admitted->complete (result);
-                        receiver.complete (detail::result_access_t::failure<result_t<message_t>> (
-                          result.exception ()));
-                    }
-                });
+              runtime::start_owned_task<void> (std::move (work),
+                                               [admitted = receiver.admitted] (const auto &result) {
+                                                   if (!result)
+                                                       admitted->complete (result);
+                                               });
           });
     }
 
