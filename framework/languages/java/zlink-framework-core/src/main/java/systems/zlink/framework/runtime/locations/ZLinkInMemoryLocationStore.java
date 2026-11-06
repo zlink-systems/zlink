@@ -320,10 +320,12 @@ public final class ZLinkInMemoryLocationStore
                                 new ZLinkLocationOwnerToken(
                                         current.ownerId(), current.leaseGeneration());
                         if (isExactOwnerLeaseLive(previousOwner)) {
-                            ownerLeaseWait.shouldWait(waitKey, previousOwner, false);
+                            if (fixedRidClaim)
+                                ownerLeaseWait.shouldWait(waitKey, previousOwner, false);
                             return completed(ZLinkLocationWriteResult.rejectedConflict());
                         }
-                        if (ownerLeaseWait.shouldWait(waitKey, previousOwner, true))
+                        if (fixedRidClaim
+                                && ownerLeaseWait.shouldWait(waitKey, previousOwner, true))
                             throw new ZLinkFrameworkException(
                                     ZLinkFrameworkErrorKind.UNAVAILABLE,
                                     "Previous MeshNode owner lease is within its release wait");
@@ -342,8 +344,8 @@ public final class ZLinkInMemoryLocationStore
                                 "same descriptor revision has different bytes");
                     }
                     if (intent == ZLinkLocationWriteIntent.RENEW
-                            && (current == null
-                                    || !current.ownerId().equals(descriptor.ownerId())
+                            && current != null
+                            && (!current.ownerId().equals(descriptor.ownerId())
                                     || current.leaseGeneration() > descriptor.leaseGeneration()
                                     || current.lifecycleGeneration()
                                             != descriptor.lifecycleGeneration()

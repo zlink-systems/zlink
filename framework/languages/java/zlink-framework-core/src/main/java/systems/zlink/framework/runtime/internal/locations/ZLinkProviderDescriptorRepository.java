@@ -473,7 +473,10 @@ final class ZLinkProviderDescriptorRepository {
                                                                     rowKey,
                                                                     found.value().version());
                                                 } else {
-                                                    if (intent == ZLinkLocationWriteIntent.RENEW) {
+                                                    if (intent == ZLinkLocationWriteIntent.RENEW
+                                                            && !(descriptor
+                                                                    instanceof
+                                                                    ZLinkMeshNodeDescriptor)) {
                                                         return completed(
                                                                 ZLinkLocationWriteResult
                                                                         .ignoredStale());

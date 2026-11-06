@@ -88,23 +88,6 @@ public final class ZLinkObjectServerDescriptorPublisher {
                                     ignored ->
                                             runtime.writeDescriptor(
                                                     () -> store.updateMeshNode(descriptor, intent)))
-                            .thenCompose(
-                                    result ->
-                                            claimConfirmedInLifecycle
-                                                            && !sameLease
-                                                            && intent
-                                                                    == ZLinkLocationWriteIntent
-                                                                            .RENEW
-                                                            && result.status()
-                                                                    == ZLinkLocationWriteStatus
-                                                                            .IGNORED_STALE
-                                                    ? runtime.writeDescriptor(
-                                                            () ->
-                                                                    store.updateMeshNode(
-                                                                            descriptor,
-                                                                            ZLinkLocationWriteIntent
-                                                                                    .NEW_CLAIM))
-                                                    : CompletableFuture.completedFuture(result))
                             .thenAccept(
                                     result -> {
                                         if (result.status() != ZLinkLocationWriteStatus.STORED) {
