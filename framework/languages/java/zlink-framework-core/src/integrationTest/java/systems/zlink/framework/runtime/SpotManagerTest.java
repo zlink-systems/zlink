@@ -53,7 +53,8 @@ final class SpotManagerTest {
                 .server()
                 .addEntrySpot(DirectEntrySpot.class);
         try (ZLinkFrameworkRuntime runtime =
-                RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
+                RuntimeTestSupport.startFixedRidFramework(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             var node =
                     systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTesting.primaryNode(
                             runtime.spotManager());
@@ -109,7 +110,7 @@ final class SpotManagerTest {
                         factory -> factory.disableRelocation());
 
         try (ZLinkFrameworkRuntime target =
-                RuntimeTestSupport.startFramework(
+                RuntimeTestSupport.startFixedRidFramework(
                         targetOptions, new ZLinkJavaBackendAdapterFactory())) {
             String targetEndpoint =
                     target.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "game").endpoint();
@@ -126,7 +127,7 @@ final class SpotManagerTest {
             sourceNode.peerConnections().connect(targetEndpoint);
 
             try (ZLinkFrameworkRuntime source =
-                    RuntimeTestSupport.startFramework(
+                    RuntimeTestSupport.startFixedRidFramework(
                             sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
                 waitForPeer(source, targetRid, 3_000);
 
@@ -161,7 +162,8 @@ final class SpotManagerTest {
                             "GameSpot", GameSpot.class, factory -> factory.disableRelocation());
         }
         try (ZLinkFrameworkRuntime runtime =
-                RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
+                RuntimeTestSupport.startFixedRidFramework(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             ZLinkSpotCreateResult created =
                     runtime.spotManager().create("GameSpot").submit().toCompletableFuture().join();
             assertEquals(ZLinkSpotCreateState.CREATED, created.state());
@@ -251,7 +253,8 @@ final class SpotManagerTest {
                 .addSpotFactory("GameSpot", GameSpot.class, factory -> factory.disableRelocation());
         GameSpot.closingCalls.set(0);
         try (ZLinkFrameworkRuntime runtime =
-                RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
+                RuntimeTestSupport.startFixedRidFramework(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             var created =
                     runtime.spotManager()
                             .create("GameSpot")
@@ -306,7 +309,8 @@ final class SpotManagerTest {
         String spotId = "game-once-" + suffix;
 
         try (ZLinkFrameworkRuntime runtime =
-                RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
+                RuntimeTestSupport.startFixedRidFramework(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             assertEquals(
                     ZLinkSpotCreateState.CREATED,
                     runtime.spotManager()
@@ -348,7 +352,8 @@ final class SpotManagerTest {
         String spotId = "game-concurrent-" + suffix;
 
         try (ZLinkFrameworkRuntime runtime =
-                RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
+                RuntimeTestSupport.startFixedRidFramework(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             CompletionStage<ZLinkSpotCreateResult> first =
                     runtime.spotManager()
                             .getOrCreate(spotId, "SlowCreateSpot")
@@ -394,7 +399,8 @@ final class SpotManagerTest {
                             factory -> factory.disableRelocation());
         }
         try (ZLinkFrameworkRuntime runtime =
-                RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
+                RuntimeTestSupport.startFixedRidFramework(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             ZLinkSpotCreateResult created =
                     runtime.spotManager()
                             .create("PublishingSpot")
@@ -433,7 +439,7 @@ final class SpotManagerTest {
         targetNode.objects().server();
 
         try (ZLinkFrameworkRuntime target =
-                RuntimeTestSupport.startFramework(
+                RuntimeTestSupport.startFixedRidFramework(
                         targetOptions, new ZLinkJavaBackendAdapterFactory())) {
             String targetEndpoint =
                     target.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "game").endpoint();
@@ -454,7 +460,7 @@ final class SpotManagerTest {
                             factory -> factory.disableRelocation());
 
             try (ZLinkFrameworkRuntime source =
-                    RuntimeTestSupport.startFramework(
+                    RuntimeTestSupport.startFixedRidFramework(
                             sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
                 waitForPeer(source, targetRid, 3_000);
                 ZLinkSpotCreateResult created =
@@ -498,7 +504,8 @@ final class SpotManagerTest {
                             factory -> factory.disableRelocation());
         }
         try (ZLinkFrameworkRuntime runtime =
-                RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
+                RuntimeTestSupport.startFixedRidFramework(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             var rejected =
                     runtime.spotManager()
                             .create("RejectingSpot")

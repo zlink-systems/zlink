@@ -37,6 +37,9 @@ final class ZLinkJavaMeshNodeIsolationTest {
     void blockedNodeTurnDoesNotHoldAnotherNodesSubmissionOrReceivePump() throws Exception {
         var targetOptions = new DefaultZLinkFrameworkOptions();
         targetOptions
+                .configureLocations()
+                .setOwnerLeaseFencingMargin(java.time.Duration.ofNanos(1));
+        targetOptions
                 .addRouteMesh(MESH_A)
                 .listen(LOOPBACK + 0)
                 .setRoutingId(TARGET)
@@ -51,6 +54,9 @@ final class ZLinkJavaMeshNodeIsolationTest {
         try (var target =
                 ZLinkFrameworkRuntimeTestAccess.start(targetOptions, capturingNodes(targetNodes))) {
             var sourceOptions = new DefaultZLinkFrameworkOptions();
+            sourceOptions
+                    .configureLocations()
+                    .setOwnerLeaseFencingMargin(java.time.Duration.ofNanos(1));
             for (String mesh : new String[] {MESH_A, MESH_B}) {
                 var node =
                         sourceOptions.addRouteMesh(mesh).listen(LOOPBACK + 0).setRoutingId(SOURCE);

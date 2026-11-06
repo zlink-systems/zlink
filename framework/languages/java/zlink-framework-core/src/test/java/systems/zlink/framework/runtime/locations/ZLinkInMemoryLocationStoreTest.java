@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -63,6 +64,7 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 class ZLinkInMemoryLocationStoreTest {
     private static final Instant NOW = Instant.parse("2026-07-03T00:00:00Z");
@@ -919,7 +921,7 @@ class ZLinkInMemoryLocationStoreTest {
                                 first.entrySpotId(),
                                 new ZLinkActivationConcurrency(
                                         0, first.activationConcurrency().limit() + 1));
-        if (intent == ZLinkLocationWriteIntent.NEW_CLAIM) {
+        if (intent.isNewClaim()) {
             assertEquals(
                     ZLinkLocationWriteStatus.REJECTED_CONFLICT,
                     store.updateMeshNode(changed, intent).toCompletableFuture().get().status());
@@ -1089,6 +1091,351 @@ class ZLinkInMemoryLocationStoreTest {
         assertEquals(ZLinkLocationWriteStatus.STORED, first.status());
         assertEquals(7, first.generation());
         assertEquals(ZLinkLocationWriteStatus.REJECTED_CONFLICT, conflict.status());
+    }
+
+    @RepeatedTest(100)
+    void fixedRidClaimWaitsThreeMarginsAfterTheOldLeaseIsObservedInvalid() throws Exception {
+        var monotonicNanos = new AtomicLong();
+        var store =
+                new ZLinkInMemoryLocationStore(
+                        Clock.fixed(NOW, ZoneOffset.UTC), monotonicNanos::get, Duration.ofNanos(1));
+        var oldOwner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                store.claimOwnerLease("fixed-rid-old", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var oldDescriptor = meshNodeDescriptor(oldOwner, 1, "tcp://127.0.0.1:6000");
+        assertUnavailable(
+                () ->
+                        store.updateMeshNode(
+                                oldDescriptor,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM));
+        monotonicNanos.addAndGet(3);
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                store.updateMeshNode(
+                                oldDescriptor,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+        assertEquals(
+                ZLinkOwnerLeaseReleaseResult.RELEASED,
+                store.releaseOwnerLease(oldOwner).toCompletableFuture().get());
+        var nextOwner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                store.claimOwnerLease("fixed-rid-next", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var replacement = meshNodeDescriptor(nextOwner, 2, "tcp://127.0.0.1:6001");
+
+        assertUnavailable(
+                () ->
+                        store.updateMeshNode(
+                                replacement,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM));
+        var retained =
+                store.listMeshNodes("mesh", ZLinkPageRequest.firstPage())
+                        .toCompletableFuture()
+                        .get()
+                        .items()
+                        .getFirst();
+        assertEquals(oldOwner.ownerId(), retained.ownerId());
+        monotonicNanos.addAndGet(2);
+        assertUnavailable(
+                () ->
+                        store.updateMeshNode(
+                                replacement,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM));
+        monotonicNanos.incrementAndGet();
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                store.updateMeshNode(
+                                replacement,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+    }
+
+    @RepeatedTest(100)
+    void fixedRidClaimWaitsThreeMarginsAfterNormalRemovalLeavesDescriptorMissing()
+            throws Exception {
+        var monotonicNanos = new AtomicLong();
+        Duration margin = Duration.ofNanos(1);
+        var store =
+                new ZLinkInMemoryLocationStore(
+                        Clock.fixed(NOW, ZoneOffset.UTC), monotonicNanos::get, margin);
+        var oldOwner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                store.claimOwnerLease("fixed-rid-clean-old", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var oldDescriptor = meshNodeDescriptor(oldOwner, 1, "tcp://127.0.0.1:6000");
+
+        assertUnavailable(
+                () ->
+                        store.updateMeshNode(
+                                oldDescriptor,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM));
+        monotonicNanos.addAndGet(margin.multipliedBy(3).toNanos());
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                store.updateMeshNode(
+                                oldDescriptor,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                store.removeMeshNode(new ZLinkMeshNodeDescriptorKey("mesh", NODE_A), oldOwner)
+                        .toCompletableFuture()
+                        .get());
+        assertEquals(
+                ZLinkOwnerLeaseReleaseResult.RELEASED,
+                store.releaseOwnerLease(oldOwner).toCompletableFuture().get());
+
+        var nextOwner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                store.claimOwnerLease("fixed-rid-clean-next", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var replacement = meshNodeDescriptor(nextOwner, 2, "tcp://127.0.0.1:6001");
+        assertUnavailable(
+                () ->
+                        store.updateMeshNode(
+                                replacement,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM));
+        assertEquals(
+                0,
+                store.listMeshNodes("mesh", ZLinkPageRequest.firstPage())
+                        .toCompletableFuture()
+                        .get()
+                        .items()
+                        .size());
+
+        monotonicNanos.addAndGet(margin.multipliedBy(3).toNanos() - 1);
+        assertUnavailable(
+                () ->
+                        store.updateMeshNode(
+                                replacement,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM));
+        monotonicNanos.incrementAndGet();
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                store.updateMeshNode(
+                                replacement,
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                        .FIXED_RID_NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+    }
+
+    @RepeatedTest(100)
+    void readyAuthorityRecreationWaitsThreeMarginsAndReservationReleaseDoesNotWait()
+            throws Exception {
+        var monotonicNanos = new AtomicLong();
+        var store =
+                new ZLinkInMemoryLocationStore(
+                        Clock.fixed(NOW, ZoneOffset.UTC), monotonicNanos::get, Duration.ofNanos(1));
+        var oldOwner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                store.claimOwnerLease("ready-old", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var oldDescriptor = meshNodeDescriptor(oldOwner, 1, "tcp://127.0.0.1:6100");
+        store.updateMeshNode(oldDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture()
+                .get();
+        String key = ZLinkAuthorityKeyCodec.actor("ready-recreate");
+        var oldRequest = actorRequest(key, oldDescriptor, oldOwner, 1);
+        var oldReservation =
+                assertInstanceOf(
+                                ZLinkObjectReserved.class,
+                                store.reserve(oldRequest, () -> false).toCompletableFuture().get())
+                        .reservation();
+        byte[] readyPayload =
+                new systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec()
+                        .encode(
+                                systems.zlink.framework.runtime.locations
+                                        .ZLinkActorAuthorityPayloadCodec.State.READY,
+                                "player",
+                                "ready-recreate",
+                                "ready-entry",
+                                1,
+                                1,
+                                oldOwner.ownerId(),
+                                oldOwner.leaseGeneration(),
+                                oldDescriptor.meshName(),
+                                oldDescriptor.rid(),
+                                1);
+        assertEquals(
+                ZLinkObjectCommitResult.COMMITTED,
+                store.commit(oldReservation, readyPayload, () -> false)
+                        .toCompletableFuture()
+                        .get());
+        var before =
+                assertInstanceOf(
+                        ZLinkAuthoritySnapshot.class,
+                        store.read(key, () -> false).toCompletableFuture().get());
+        store.releaseOwnerLease(oldOwner).toCompletableFuture().get();
+        var nextOwner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                store.claimOwnerLease("ready-next", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var nextDescriptor =
+                meshNodeDescriptor(
+                        nextOwner,
+                        RoutingId.from(new byte[] {2}),
+                        8,
+                        1,
+                        "tcp://127.0.0.1:6101",
+                        "ready-next-entry");
+        store.updateMeshNode(nextDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture()
+                .get();
+        var nextRequest = actorRequest(key, nextDescriptor, nextOwner, 2);
+
+        assertUnavailable(() -> store.reserve(nextRequest, () -> false));
+        assertEquals(
+                before.storeVersion(),
+                assertInstanceOf(
+                                ZLinkAuthoritySnapshot.class,
+                                store.read(key, () -> false).toCompletableFuture().get())
+                        .storeVersion());
+        monotonicNanos.addAndGet(3);
+        assertInstanceOf(
+                ZLinkObjectReserved.class,
+                store.reserve(nextRequest, () -> false).toCompletableFuture().get());
+
+        var reservationOwner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                store.claimOwnerLease("reservation-old", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var reservationDescriptor =
+                meshNodeDescriptor(
+                        reservationOwner,
+                        RoutingId.from(new byte[] {3}),
+                        9,
+                        1,
+                        "tcp://127.0.0.1:6102",
+                        "reservation-entry");
+        store.updateMeshNode(reservationDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture()
+                .get();
+        String reservationKey = ZLinkAuthorityKeyCodec.actor("reservation-recreate");
+        assertInstanceOf(
+                ZLinkObjectReserved.class,
+                store.reserve(
+                                actorRequest(
+                                        reservationKey, reservationDescriptor, reservationOwner, 1),
+                                () -> false)
+                        .toCompletableFuture()
+                        .get());
+        store.releaseOwnerLease(reservationOwner).toCompletableFuture().get();
+        var reservationSuccessor =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                store.claimOwnerLease("reservation-next", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var successorDescriptor =
+                meshNodeDescriptor(
+                        reservationSuccessor,
+                        RoutingId.from(new byte[] {4}),
+                        10,
+                        1,
+                        "tcp://127.0.0.1:6103",
+                        "reservation-next-entry");
+        store.updateMeshNode(successorDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture()
+                .get();
+        assertInstanceOf(
+                ZLinkObjectReserved.class,
+                store.reserve(
+                                actorRequest(
+                                        reservationKey,
+                                        successorDescriptor,
+                                        reservationSuccessor,
+                                        2),
+                                () -> false)
+                        .toCompletableFuture()
+                        .get());
+    }
+
+    private static ZLinkObjectReservationRequest actorRequest(
+            String key,
+            ZLinkMeshNodeDescriptor descriptor,
+            ZLinkLocationOwnerToken owner,
+            long generation) {
+        return new ZLinkObjectReservationRequest(
+                ZLinkPlacementObjectKind.ACTOR,
+                key,
+                "player",
+                "root",
+                new byte[32],
+                32,
+                new ZLinkMeshNodeDescriptorKey(descriptor.meshName(), descriptor.rid()),
+                descriptor.lifecycleGeneration(),
+                owner,
+                new byte[] {(byte) generation},
+                ZLinkPlacementCapacityBundle.actor(1),
+                new systems.zlink.framework.runtime.internal.configuration
+                        .ZLinkObjectFactoryRegistration.RelocationPolicy.Disabled());
+    }
+
+    private static void assertUnavailable(
+            java.util.function.Supplier<? extends java.util.concurrent.CompletionStage<?>>
+                    operation) {
+        var failure =
+                assertThrows(
+                        RuntimeException.class, () -> operation.get().toCompletableFuture().join());
+        while (failure instanceof java.util.concurrent.CompletionException
+                && failure.getCause() != null) failure = (RuntimeException) failure.getCause();
+        assertEquals(
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                assertInstanceOf(
+                                systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                                failure)
+                        .kind());
     }
 
     @Test

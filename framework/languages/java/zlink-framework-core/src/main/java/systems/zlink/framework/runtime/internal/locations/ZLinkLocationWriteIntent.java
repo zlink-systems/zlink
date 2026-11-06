@@ -1,6 +1,6 @@
 package systems.zlink.framework.runtime.internal.locations;
 
-public enum ZLinkLocationWriteIntent {
+public enum ZLinkLocationWriteIntent implements ZLinkDescriptorWriteIntent {
     NEW_CLAIM(1),
     RENEW(2),
     TAKEOVER(3);
@@ -13,5 +13,15 @@ public enum ZLinkLocationWriteIntent {
 
     public int value() {
         return value;
+    }
+
+    @Override
+    public boolean isNewClaim() {
+        return this == NEW_CLAIM;
+    }
+
+    @Override
+    public boolean isFixedRidNewClaim() {
+        return false;
     }
 }

@@ -10,8 +10,13 @@ import java.util.concurrent.CompletionStage;
 
 /** Framework-private repository for decoded location and relocation state. */
 public interface ZLinkLocationRepository {
+    default CompletionStage<ZLinkLocationWriteResult> updateMeshNode(
+            ZLinkMeshNodeDescriptor descriptor, ZLinkLocationWriteIntent intent) {
+        return updateMeshNode(descriptor, (ZLinkDescriptorWriteIntent) intent);
+    }
+
     CompletionStage<ZLinkLocationWriteResult> updateMeshNode(
-            ZLinkMeshNodeDescriptor descriptor, ZLinkLocationWriteIntent intent);
+            ZLinkMeshNodeDescriptor descriptor, ZLinkDescriptorWriteIntent intent);
 
     CompletionStage<ZLinkLocationWriteStatus> removeMeshNode(
             ZLinkMeshNodeDescriptorKey key, ZLinkLocationOwnerToken owner);

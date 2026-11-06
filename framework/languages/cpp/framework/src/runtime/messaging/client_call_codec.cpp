@@ -5,7 +5,7 @@
 #include "runtime/messaging/client_call_codec.hpp"
 
 #include <atomic>
-#include <ctime>
+#include <array>
 
 namespace zlink::framework::runtime::messaging
 {
@@ -28,22 +28,33 @@ std::string next_correlation_id ()
     return std::string (buffer + index);
 }
 
-std::string format_utc_deadline (std::chrono::system_clock::time_point deadline)
-{
-    const auto seconds = std::chrono::time_point_cast<std::chrono::seconds> (deadline);
-    const std::time_t time = std::chrono::system_clock::to_time_t (seconds);
-    std::tm tm{};
-#if defined(_WIN32)
-    gmtime_s (&tm, &time);
-#else
-    gmtime_r (&time, &tm);
-#endif
-    char output[64];
-    const auto size = std::strftime (output, sizeof (output), "%Y-%m-%dT%H:%M:%SZ", &tm);
-    return std::string (output, size);
-}
 
 } // namespace
+
+std::string format_utc_deadline (std::chrono::system_clock::time_point deadline)
+{
+    using namespace std::chrono;
+    // Match the former time_point_cast/to_time_t truncation before splitting UTC fields.
+    const auto seconds = time_point_cast<std::chrono::seconds> (deadline);
+    const auto day = floor<days> (seconds);
+    const year_month_day date (day);
+    const hh_mm_ss clock (seconds - day);
+    std::array<char, 20> output{'0', '0', '0', '0', '-', '0', '0', '-', '0', '0',
+                                'T', '0', '0', ':', '0', '0', ':', '0', '0', 'Z'};
+    const auto write = [&] (std::size_t offset, std::size_t width, unsigned value) {
+        while (width != 0) {
+            output[offset + --width] = static_cast<char> ('0' + value % 10);
+            value /= 10;
+        }
+    };
+    write (0, 4, static_cast<unsigned> (static_cast<int> (date.year ())));
+    write (5, 2, static_cast<unsigned> (date.month ()));
+    write (8, 2, static_cast<unsigned> (date.day ()));
+    write (11, 2, static_cast<unsigned> (clock.hours ().count ()));
+    write (14, 2, static_cast<unsigned> (clock.minutes ().count ()));
+    write (17, 2, static_cast<unsigned> (clock.seconds ().count ()));
+    return std::string (output.data (), output.size ());
+}
 
 message_parts_t client_call_codec_t::encode_payload_parts (const envelope_header_t &header,
                                                            encoded_payload_t payload,

@@ -8,6 +8,149 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class ProtobufNativePayloadTests
 {
+    [Fact]
+    public void Reply_header_rejects_invalid_utf8_in_unknown_property_names()
+    {
+        var codecs = Codecs();
+        var bytes = System.Text.Encoding.UTF8.GetBytes(
+            "{\"formatMarker\":242,\"kind\":2,\"correlationId\":\"r\",\"contentType\":\"application/x-protobuf\",\"x\":0}"
+        );
+        bytes[Array.LastIndexOf(bytes, (byte)'x')] = 0xff;
+        using var header = Message.From(bytes);
+        using var body = Message.From(new byte[] { 10, 1, 1 });
+        IReadOnlyList<Message> parts = new[] { header, body };
+        var failure = Assert.Throws<ZLinkFrameworkException>(() =>
+            ZLinkEnvelopeReplyDecoder.Decode<BytesValue>(parts, "empty", "error", codecs)
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.ProtocolError, failure.Kind);
+        using var packed = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(
+            parts
+        );
+        Assert.True(
+            ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
+                packed,
+                out var view
+            )
+        );
+        var borrowed = Assert.Throws<ZLinkFrameworkException>(() =>
+            ZLinkEnvelopeReplyDecoder.Decode<BytesValue>(
+                parts,
+                "empty",
+                "error",
+                codecs,
+                applicationPayloadView: view
+            )
+        );
+        Assert.Equal(failure.Kind, borrowed.Kind);
+        Assert.Equal(failure.Message, borrowed.Message);
+    }
+
+    [Theory]
+    [InlineData(1024)]
+    [InlineData(4096)]
+    public void Reply_decode_is_equivalent_for_identical_parts_and_borrowed_view(int size)
+    {
+        var codecs = Codecs();
+        var value = new BytesValue { Value = ByteString.CopyFrom(new byte[size]) };
+        var header = new ZLinkEnvelopeHeader(
+            ZLinkMessageKind.Response,
+            "bench",
+            "BenchPayload",
+            "application/x-protobuf",
+            "reply-1",
+            null,
+            null,
+            null,
+            null
+        );
+        var parts = ZLinkEnvelopeCodec.EncodeParts(header, value, typeof(BytesValue), codecs);
+        try
+        {
+            using var packed = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(
+                parts
+            );
+            Assert.True(
+                ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
+                    packed,
+                    out var view
+                )
+            );
+            for (var i = 0; i < parts.Count; i++)
+                Assert.True(parts[i].AsReadOnlySpan().SequenceEqual(view.GetSpan(i)));
+            var direct = ZLinkEnvelopeReplyDecoder.Decode<BytesValue>(
+                parts,
+                "empty",
+                "error",
+                codecs
+            );
+            var borrowed = ZLinkEnvelopeReplyDecoder.Decode<BytesValue>(
+                parts,
+                "empty",
+                "error",
+                codecs,
+                applicationPayloadView: view
+            );
+            Assert.Equal(value, direct);
+            Assert.Equal(direct, borrowed);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
+    }
+
+    [Theory]
+    [InlineData("{", new byte[] { 10, 1, 1 })]
+    [InlineData(
+        "{\"formatMarker\":241,\"kind\":2,\"correlationId\":\"r\"}",
+        new byte[] { 10, 1, 1 }
+    )]
+    [InlineData(
+        "{\"formatMarker\":242,\"kind\":2,\"kind\":2,\"correlationId\":\"r\"}",
+        new byte[] { 10, 1, 1 }
+    )]
+    [InlineData("{\"formatMarker\":242,\"kind\":2}", new byte[] { 10, 1, 1 })]
+    [InlineData("{\"formatMarker\":242,\"kind\":3}", new byte[] { 10, 1, 1 })]
+    [InlineData(
+        "{\"formatMarker\":242,\"kind\":2,\"correlationId\":\"r\",\"contentType\":\"application/x-protobuf\"}",
+        new byte[] { 10, 5, 1 }
+    )]
+    public void Malformed_reply_rejection_is_equivalent_for_parts_and_borrowed_view(
+        string json,
+        byte[] bytes
+    )
+    {
+        var codecs = Codecs();
+        using var header = Message.From(System.Text.Encoding.UTF8.GetBytes(json));
+        using var body = Message.From(bytes);
+        IReadOnlyList<Message> parts = new[] { header, body };
+        using var packed = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(
+            parts
+        );
+        Assert.True(
+            ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
+                packed,
+                out var view
+            )
+        );
+        var direct = Assert.Throws<ZLinkFrameworkException>(() =>
+            ZLinkEnvelopeReplyDecoder.Decode<BytesValue>(parts, "empty", "error", codecs)
+        );
+        var borrowed = Assert.Throws<ZLinkFrameworkException>(() =>
+            ZLinkEnvelopeReplyDecoder.Decode<BytesValue>(
+                parts,
+                "empty",
+                "error",
+                codecs,
+                applicationPayloadView: view
+            )
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.ProtocolError, direct.Kind);
+        Assert.Equal(direct.Kind, borrowed.Kind);
+        Assert.Equal(direct.Message, borrowed.Message);
+        Assert.Equal(direct.InnerException?.GetType(), borrowed.InnerException?.GetType());
+    }
+
     private const int AllocationPayloadSize = 1024;
     private const int AllocationIterations = 1024;
     private const int AllocationWarmupIterations = 256;

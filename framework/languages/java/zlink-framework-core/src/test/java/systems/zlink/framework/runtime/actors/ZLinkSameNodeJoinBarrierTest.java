@@ -64,6 +64,7 @@ final class ZLinkSameNodeJoinBarrierTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         // OnJoinedActor의 완료를 보류하여 Join completion 전 수신을 확인한다.
         options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         var node = options.addRouteMesh("game");
         node.listen("inproc://same-node-join-barrier-" + System.nanoTime())
                 .setRoutingId(RoutingId.from("same-node-join-barrier"));
@@ -79,6 +80,13 @@ final class ZLinkSameNodeJoinBarrierTest {
         try (ZLinkFrameworkRuntime runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(
                         options, observeMeshJoins(meshJoinSubmissions))) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS));
             try {
                 var targetCreated =
                         runtime.spotManager()

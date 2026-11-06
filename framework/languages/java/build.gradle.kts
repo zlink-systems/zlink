@@ -10,6 +10,8 @@ plugins {
     id("dev.detekt") version "2.0.0-alpha.3" apply false
 }
 
+val singleWorker = providers.environmentVariable("ZLINK_SINGLE_WORKER").orNull == "true"
+
 group = "systems.zlink"
 version = providers.fileContents(layout.projectDirectory.file("VERSION"))
     .asText
@@ -135,6 +137,12 @@ subprojects {
         tasks.withType<Test>().configureEach {
             useJUnitPlatform()
             jvmArgs("--enable-native-access=ALL-UNNAMED")
+            if (singleWorker || name == "integrationTest") {
+                maxParallelForks = 1
+            }
+            if (singleWorker) {
+                systemProperty("junit.jupiter.execution.parallel.enabled", "false")
+            }
         }
 
         fun registerSourceSetTestTask(taskName: String, sourceSetName: String) {
@@ -149,7 +157,6 @@ subprojects {
                 useJUnitPlatform()
                 if (taskName == "integrationTest") {
                     forkEvery = 1
-                    maxParallelForks = 1
                 }
             }
             tasks.named("check") {

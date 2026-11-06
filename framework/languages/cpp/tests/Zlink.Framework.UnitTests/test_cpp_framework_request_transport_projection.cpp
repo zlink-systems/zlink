@@ -200,6 +200,30 @@ TEST (RequestCallAllocations, CompletionObserverReleasesCapturesBeforeDeliverySt
     EXPECT_EQ (calls, 1);
     EXPECT_TRUE (weak.expired ());
     EXPECT_TRUE (delivery);
+    delivery ();
+    EXPECT_EQ (calls, 1);
+}
+
+TEST (RequestCallAllocations, SharedAdmissionSourceCannotMoveAfterRegistration)
+{
+    auto source = fw::detail::make_task_completion_source<int> ();
+    auto task = source->task ();
+    fw::detail::observe_task_completion (task, [] (const auto &) {});
+    EXPECT_DEATH ({ fw::task_completion_source_t<int> moved (std::move (*source)); }, "");
+    EXPECT_DEATH (
+      {
+          fw::task_completion_source_t<int> destination;
+          destination = std::move (*source);
+      },
+      "");
+    EXPECT_DEATH (
+      {
+          fw::task_completion_source_t<int> replacement;
+          *source = std::move (replacement);
+      },
+      "");
+    EXPECT_TRUE (source->complete (fw::result_t<int>::success (42)));
+    EXPECT_EQ (task.result ().value (), 42);
 }
 
 TEST (RequestCallAllocations, InlineRawCallbackCopiesAndMovesWithoutAllocating)

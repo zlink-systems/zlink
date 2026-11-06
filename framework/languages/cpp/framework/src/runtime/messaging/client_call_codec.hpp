@@ -9,12 +9,13 @@
 
 #include <chrono>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <typeindex>
 
 namespace zlink::framework::runtime::messaging
 {
+
+std::string format_utc_deadline (std::chrono::system_clock::time_point deadline);
 
 class client_call_codec_t
 {

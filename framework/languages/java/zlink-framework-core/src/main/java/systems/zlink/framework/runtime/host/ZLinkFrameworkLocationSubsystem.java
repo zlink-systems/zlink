@@ -65,7 +65,10 @@ final class ZLinkFrameworkLocationSubsystem {
             Supplier<Instant> cleanupDeadline,
             ZLinkFrameworkRuntimeConstruction construction) {
         ZLinkRegisteredLocationStores locationStores =
-                ZLinkLocationStoreResolver.resolve(registration.locations(), runtimeHandlers);
+                construction.locationStores() == null
+                        ? ZLinkLocationStoreResolver.resolve(
+                                registration.locations(), runtimeHandlers)
+                        : construction.locationStores();
         if (locationStores == null) {
             return disabled();
         }

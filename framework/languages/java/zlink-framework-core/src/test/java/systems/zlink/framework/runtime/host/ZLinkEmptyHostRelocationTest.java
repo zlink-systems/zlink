@@ -32,9 +32,7 @@ final class ZLinkEmptyHostRelocationTest {
                         systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
                                 .install();
                 var runtime = ZLinkFrameworkRuntimeTestAccess.start(options("solo", false))) {
-            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
-                    .toCompletableFuture()
-                    .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+            awaitReady(runtime);
             assertEquals(ZLinkFrameworkRuntimeState.SERVING, runtime.status().state());
 
             // No other node exists in the Mesh, so any target requirement can only end Blocked.
@@ -79,6 +77,7 @@ final class ZLinkEmptyHostRelocationTest {
     @Test
     void hostWithAUnitAndNoOtherServingNodeStaysBlocked() throws Exception {
         try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(options("owner", true))) {
+            awaitReady(runtime);
             runtime.spotManager()
                     .getOrCreate("room", "room")
                     .submit()
@@ -108,6 +107,7 @@ final class ZLinkEmptyHostRelocationTest {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
         options.addRelocationStore(new InMemoryRelocationStore());
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         var node =
                 options.addRouteMesh(MESH)
                         .listen("tcp://127.0.0.1:0")
@@ -118,6 +118,18 @@ final class ZLinkEmptyHostRelocationTest {
                     .addSpotFactory("room", Room.class, f -> f.recreateOnRelocation());
         }
         return options;
+    }
+
+    private static void awaitReady(ZLinkFrameworkRuntime runtime) throws Exception {
+        ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                .toCompletableFuture()
+                .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+        if (!runtime.isReady())
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                            .toCompletableFuture()
+                            .get(WAIT.toSeconds(), TimeUnit.SECONDS));
+        assertTrue(runtime.isReady());
     }
 
     public record Room(ZLinkSpotContext context) implements ZLinkSpot<ZLinkActor> {

@@ -126,6 +126,8 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
       .set_min_level (log_level_t::debug);
     app.set_message_flow_mode (message_flow_log_mode_t::normal);
     app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (
           std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
         options.add_route_mesh ("seal-relay-mesh")
@@ -514,6 +516,7 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
     namespace host = runtime::host;
     namespace protocol = runtime::protocol;
     runtime::in_memory_location_repository_t authority_repository;
+    authority_repository.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto target_owner =
       std::get<owner_lease_claimed_t> (
         authority_repository.claim_owner_lease ("seal-dedup-target-owner", 30s).result ().value ())

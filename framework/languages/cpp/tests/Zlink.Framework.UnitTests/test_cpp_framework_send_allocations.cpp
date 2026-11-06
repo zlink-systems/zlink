@@ -10,6 +10,8 @@
 #include "scope_exit.hpp"
 
 #include <array>
+#include <barrier>
+#include <thread>
 #include <condition_variable>
 #include <cstdio>
 #include <mutex>
@@ -145,6 +147,50 @@ struct route_payload_t
     static constexpr const char *packet_name = "p";
     int value = 7;
 };
+
+TEST (SendAllocations, CopiedNodeCallsShareOneInlineSubmissionClaim)
+{
+    fw::serializer_registry_t serializers;
+    serializers.add<route_payload_t> (
+      [] (const auto &) { return fw::encoded_payload_t::from_string ("7"); },
+      [] (const auto &) { return route_payload_t{}; }, "x/y");
+    auto builder = fw::test::runtime_failure_builder ();
+    auto runtime = detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_serializers (serializers);
+    std::atomic<unsigned> submitted{0};
+    runtime.bind_mesh_node_transport (
+      "m",
+      [&] (const auto &, auto) {
+          ++submitted;
+          return fw::task_t<fw::result_t<void>> (
+            fw::result_t<fw::result_t<void>>::success (fw::result_t<void>::success ()));
+      },
+      {});
+    auto client = builder.route_client (serializers);
+    auto call = client.send_to_node ("m", zlink::routing_id_t::from ("n"), route_payload_t{});
+    const fw::route_send_call_t::metadata_map_t metadata;
+    const auto field_copies = fw::tests::count_allocations ([&] {
+        const auto copy = metadata;
+        (void) copy;
+    });
+    std::optional<fw::route_send_call_t> copied;
+    EXPECT_EQ (fw::tests::count_allocations ([&] { copied.emplace (call); }), field_copies);
+    std::barrier start (3);
+    std::array<bool, 2> succeeded{};
+    std::thread first ([&] {
+        start.arrive_and_wait ();
+        succeeded[0] = bool (call.async ().result ());
+    });
+    std::thread second ([&] {
+        start.arrive_and_wait ();
+        succeeded[1] = bool (copied->async ().result ());
+    });
+    start.arrive_and_wait ();
+    first.join ();
+    second.join ();
+    EXPECT_EQ (submitted.load (), 1u);
+    EXPECT_NE (succeeded[0], succeeded[1]);
+}
 
 TEST (SendAllocations, SynchronousNodeSendAddsNoStorageBeyondEncoding)
 {

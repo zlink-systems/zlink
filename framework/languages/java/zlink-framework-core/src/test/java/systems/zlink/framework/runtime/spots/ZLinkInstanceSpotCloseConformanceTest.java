@@ -63,6 +63,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         observation.closingRelease.complete(null);
         current = observation;
         var options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.addLocationStore(new ObservedStore(spotId, observation));
         options.addRelocationStore(new systems.zlink.framework.runtime.InMemoryRelocationStore());
         options.addRouteMesh(MESH)
@@ -112,6 +113,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         ObservedStore store = new ObservedStore(spotId, observation);
         store.readyCapacityConflicts.set(1);
         var options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.addLocationStore(store);
         options.addRelocationStore(new systems.zlink.framework.runtime.InMemoryRelocationStore());
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
@@ -179,6 +181,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         current = observation;
         ObservedStore store = new ObservedStore(spotId, observation);
         var options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.setDefaultRequestTimeout(Duration.ofSeconds(7));
         options.addLocationStore(store);
         options.addRelocationStore(new systems.zlink.framework.runtime.InMemoryRelocationStore());
@@ -247,6 +250,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
             ObservedStore store = new ObservedStore(spotId, observation);
             var repository = new ZLinkProviderLocationRepository(store);
             var options = new DefaultZLinkFrameworkOptions();
+            options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
             options.addLocationStore(store);
             options.addRelocationStore(
                     new systems.zlink.framework.runtime.InMemoryRelocationStore());
@@ -346,6 +350,9 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                         failure = assertInstanceOf(ZLinkFrameworkException.class, terminal);
                     } else {
                         var sourceOptions = new DefaultZLinkFrameworkOptions();
+                        sourceOptions
+                                .configureLocations()
+                                .setOwnerLeaseFencingMargin(Duration.ofNanos(1));
                         sourceOptions.addLocationStore(store.inner);
                         sourceOptions
                                 .addRouteMesh(MESH)
@@ -533,6 +540,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         ObservedStore store = new ObservedStore(spotId, observation);
         var repository = new ZLinkProviderLocationRepository(store);
         var options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.addLocationStore(store);
         options.addRelocationStore(new systems.zlink.framework.runtime.InMemoryRelocationStore());
         options.addRouteMesh(MESH)
@@ -718,6 +726,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         ZLinkProviderLocationRepository repository = new ZLinkProviderLocationRepository(store);
         var relocationStore = new systems.zlink.framework.runtime.InMemoryRelocationStore();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.addLocationStore(store);
         options.addRelocationStore(relocationStore);
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
@@ -732,6 +741,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         if (!host.equals("Serving")) addRelocationHold(objects);
         if (host.equals("Relocating")) {
             targetOptions = new DefaultZLinkFrameworkOptions();
+            targetOptions.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
             targetOptions.addLocationStore(store.inner);
             targetOptions.addRelocationStore(relocationStore);
             var targetObjects =
@@ -1214,6 +1224,10 @@ final class ZLinkInstanceSpotCloseConformanceTest {
         ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
                 .toCompletableFuture()
                 .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+        assertTrue(
+                ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                        .toCompletableFuture()
+                        .get(WAIT.toSeconds(), TimeUnit.SECONDS));
         assertTrue(runtime.isReady(), "Instance fixture requires a serving descriptor");
     }
 

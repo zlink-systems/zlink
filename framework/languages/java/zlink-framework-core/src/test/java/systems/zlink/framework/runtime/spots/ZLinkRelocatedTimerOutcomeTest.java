@@ -48,6 +48,7 @@ final class ZLinkRelocatedTimerOutcomeTest {
         try (var source =
                 ZLinkFrameworkRuntimeTestAccess.start(
                         options("source", locations, relocations, null))) {
+            awaitInitialFixedRidRetry(source);
             source.spotManager()
                     .getOrCreate("room", "room")
                     .submit()
@@ -59,6 +60,7 @@ final class ZLinkRelocatedTimerOutcomeTest {
                                     options("target", locations, relocations, endpoint));
                     var sourceReady = new Ready(source.routeMeshRuntime().observe(MESH, 8));
                     var targetReady = new Ready(target.routeMeshRuntime().observe(MESH, 8))) {
+                awaitInitialFixedRidRetry(target);
                 sourceReady.result.get(WAIT.toSeconds(), TimeUnit.SECONDS);
                 targetReady.result.get(WAIT.toSeconds(), TimeUnit.SECONDS);
                 var result =
@@ -110,6 +112,16 @@ final class ZLinkRelocatedTimerOutcomeTest {
         }
     }
 
+    private static void awaitInitialFixedRidRetry(ZLinkFrameworkRuntime runtime) throws Exception {
+        ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                .toCompletableFuture()
+                .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+        assertTrue(
+                ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                        .toCompletableFuture()
+                        .get(WAIT.toSeconds(), TimeUnit.SECONDS));
+    }
+
     private static Throwable rootCause(Throwable failure) {
         while (failure.getCause() != null) failure = failure.getCause();
         return failure;
@@ -121,6 +133,7 @@ final class ZLinkRelocatedTimerOutcomeTest {
             InMemoryRelocationStore relocations,
             String peer) {
         var options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.addLocationStore(locations);
         options.addRelocationStore(relocations);
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);

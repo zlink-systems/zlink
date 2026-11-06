@@ -137,6 +137,13 @@ public sealed class RawPortCloseFailureTests
     [Fact]
     public async Task AutomaticFanout_Preserves_Failed_Subscriber_Close()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(RawPortCloseFailureTests),
+                nameof(AutomaticFanout_Preserves_Failed_Subscriber_Close)
+            )
+        )
+            return;
         using var context = Systems.Zlink.Zlink.CreateContext();
         using var socket = context.CreateSubSocket();
         var subscriber = DispatchProxy.Create<ISubSocket, CloseFailureProxy>();
@@ -212,6 +219,13 @@ public sealed class RawPortCloseFailureTests
     [Fact]
     public async Task AutomaticFanout_Rejects_Work_And_Shares_Concurrent_Disposal()
     {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(RawPortCloseFailureTests),
+                nameof(AutomaticFanout_Rejects_Work_And_Shares_Concurrent_Disposal)
+            )
+        )
+            return;
         using var context = Systems.Zlink.Zlink.CreateContext();
         using var socket = context.CreateSubSocket();
         var subscriber = DispatchProxy.Create<ISubSocket, CloseFailureProxy>();

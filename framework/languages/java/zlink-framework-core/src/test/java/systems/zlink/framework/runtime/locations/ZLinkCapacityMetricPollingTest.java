@@ -239,6 +239,7 @@ final class ZLinkCapacityMetricPollingTest {
             options.addRelocationStore(
                     new systems.zlink.framework.runtime.InMemoryRelocationStore());
             options.configureLocations().setPollingInterval(Duration.ofHours(1));
+            options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
             options.addRouteMesh(MESH)
                     .listen("tcp://127.0.0.1:0")
                     .setRoutingId(RoutingId.from("capacity-poll-node"))
@@ -253,6 +254,11 @@ final class ZLinkCapacityMetricPollingTest {
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
                     .toCompletableFuture()
                     .get(10, TimeUnit.SECONDS);
+            if (!runtime.isReady())
+                ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                        .toCompletableFuture()
+                        .get(10, TimeUnit.SECONDS);
+            assertTrue(runtime.isReady());
             var location = ZLinkFrameworkRuntimeTestAccess.locationRuntime(runtime);
             repository = location.locationStore();
             var host =

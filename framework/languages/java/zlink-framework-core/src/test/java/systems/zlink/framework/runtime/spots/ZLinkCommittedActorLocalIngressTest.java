@@ -494,18 +494,33 @@ final class ZLinkCommittedActorLocalIngressTest {
         return ((ZLinkSpotRuntime) host.spotManager()).primaryNode();
     }
 
-    private static ZLinkFrameworkRuntime start(DefaultZLinkFrameworkOptions options) {
-        return ZLinkFrameworkRuntimeTestAccess.startHostWithConstruction(
-                options,
-                new ZLinkJavaBackendAdapterFactory(),
-                systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
-                        .reflection(),
-                null,
-                new ZLinkFrameworkRuntimeTestAccess.Construction()
-                        .aggregateRelocationAuthorityStoreDecorator(
-                                systems.zlink.framework.runtime.internal.locations
-                                                .ZLinkAggregateRelocationCoordinatorTestAccess
-                                        ::interceptingStore));
+    private static ZLinkFrameworkRuntime start(DefaultZLinkFrameworkOptions options)
+            throws Exception {
+        var runtime =
+                ZLinkFrameworkRuntimeTestAccess.startHostWithConstruction(
+                        options,
+                        new ZLinkJavaBackendAdapterFactory(),
+                        systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
+                                .reflection(),
+                        null,
+                        new ZLinkFrameworkRuntimeTestAccess.Construction()
+                                .aggregateRelocationAuthorityStoreDecorator(
+                                        systems.zlink.framework.runtime.internal.locations
+                                                        .ZLinkAggregateRelocationCoordinatorTestAccess
+                                                ::interceptingStore));
+        try {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                            .toCompletableFuture()
+                            .get(WAIT_SECONDS, TimeUnit.SECONDS));
+            return runtime;
+        } catch (Exception | Error failure) {
+            runtime.close();
+            throw failure;
+        }
     }
 
     private static DefaultZLinkFrameworkOptions options(
@@ -514,6 +529,7 @@ final class ZLinkCommittedActorLocalIngressTest {
             InMemoryRelocationStore relocations,
             String peerEndpoint) {
         var options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.configureDispatch()
                 .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
         options.addLocationStore(locations);

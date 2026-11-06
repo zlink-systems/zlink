@@ -3,6 +3,7 @@ const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { acquireNodeTestGateLock } = require('./node-test-gate-lock');
+const { nodeTestConcurrencyArgs } = require(path.join(__dirname, 'node-test-options'));
 
 const nodeRoot = path.resolve(__dirname, '..');
 const eslintEntry = path.resolve(nodeRoot, 'node_modules/eslint/bin/eslint.js');
@@ -18,6 +19,7 @@ const skippedTestFiles = new Set(
 //  SupportChat, TicTacToe, ZoneWorld) are not part of the framework build or CI;
 //  `npm run test:samples` / `verify:samples` cover them explicitly.
 const includeSamples = process.env.ZLINK_NODE_RUNTIME_GATE_INCLUDE_SAMPLES === '1';
+const testConcurrencyArgs = nodeTestConcurrencyArgs();
 const sampleTestPattern = /^(sample-|tictactoe-|node-sample-client-bundle)/;
 const skipped = [];
 const failedTestFiles = [];
@@ -57,6 +59,7 @@ for (const testFile of listTestFiles(nodeRoot)) {
   //  된다. 실제로 그 상태에서 부분 로그를 통과로 오인하기 쉬웠다.
   const result = runTestFile(relative, [
     '--test',
+    ...testConcurrencyArgs,
     '--test-timeout=600000',
     //  inspectTap() below parses TAP. TAP is Node 22's default reporter but not
     //  every Node's, so pin it explicitly instead of relying on the default.

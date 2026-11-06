@@ -114,6 +114,10 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         return inRoutingIdStateLane(this::routingIdCore);
     }
 
+    public boolean hasExplicitRoutingId() {
+        return inRoutingIdStateLane(() -> hasExplicitRoutingId);
+    }
+
     private RoutingId routingIdCore() {
         if (routingId == null) {
             routingId = RoutingId.from(routingIdPrefixCore() + "-" + UUID.randomUUID());

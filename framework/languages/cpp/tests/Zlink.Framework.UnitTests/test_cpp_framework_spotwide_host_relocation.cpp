@@ -243,6 +243,8 @@ TEST (SpotRequestAdmission, NewHostRequestsExistingSpotImmediatelyAfterReady)
     std::atomic<unsigned> requests = 0;
     const auto configure = [&] (host_t &host, const char *rid) {
         auto &options = host.app.add_zlink_framework ();
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (locations);
         options.add_relocation_store (relocations);
         options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::normal);
@@ -301,6 +303,8 @@ TEST (SpotWideHostRelocation, FrameworkManagedMembersKeepUserSpotHandler)
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     const auto configure = [&] (host_t &host, const char *rid) {
         auto &options = host.app.add_zlink_framework ();
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (locations);
         options.add_relocation_store (relocations);
         options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::normal);
@@ -394,6 +398,8 @@ TEST (SpotWideHostRelocation, GetOrCreateReturnsExistingRelocationTarget)
     std::atomic<unsigned> factory_calls = 0;
     const auto configure = [&] (host_t &host, const char *rid) {
         auto &options = host.app.add_zlink_framework ();
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (locations);
         options.add_relocation_store (relocations);
         options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::normal);
@@ -488,6 +494,8 @@ TEST (SpotWideHostRelocation, AbortRunsAcceptedSpotPrefixWithoutNewIngress)
     };
     const auto configure = [&] (host_t &host, const char *rid) {
         auto &options = host.app.add_zlink_framework ();
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (locations);
         options.add_relocation_store (relocations);
         options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::detailed);

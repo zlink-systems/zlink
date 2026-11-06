@@ -308,6 +308,7 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
 
         Fixture(Class<T> roomType) throws Exception {
             var options = new DefaultZLinkFrameworkOptions();
+            options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
             options.addLocationStore(new ZLinkInMemoryLocationStore());
             var node = options.addRouteMesh("join-admission");
             node.listen("inproc://join-admission-" + UUID.randomUUID()).setRoutingId(NODE);
@@ -315,6 +316,13 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
                     .server()
                     .addSpotFactory("room", roomType, factory -> factory.disableRelocation());
             framework = ZLinkFrameworkRuntimeTestAccess.start(options);
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(framework)
+                    .toCompletableFuture()
+                    .get(COMPLETION_SECONDS, TimeUnit.SECONDS);
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(framework)
+                            .toCompletableFuture()
+                            .get(COMPLETION_SECONDS, TimeUnit.SECONDS));
             framework
                     .spotManager()
                     .getOrCreate("room-a", "room")

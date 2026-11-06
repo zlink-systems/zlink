@@ -53,6 +53,11 @@ on:
         required: false
         type: boolean
         default: false
+      single_worker:
+        description: Run tests with one worker for the nightly stress workflow.
+        required: false
+        type: boolean
+        default: false
       queue_checks_only:
         description: Run the checks used to admit a pull request to the merge queue.
         required: false
@@ -93,7 +98,7 @@ jobs:
     # ZLINK_LINUX_RUNNER/ZLINK_WINDOWS_RUNNER (JSON label lists) move the x64 Linux/Windows
     # jobs to self-hosted runners; arm64 and macOS stay hosted. Queue, manual
     # and main cache runs do not execute fork PR code.
-    runs-on: ${{ (matrix.target.runner == 'ubuntu-24.04' && vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER)) || (matrix.target.runner == 'windows-latest' && vars.ZLINK_WINDOWS_RUNNER && fromJSON(vars.ZLINK_WINDOWS_RUNNER)) || matrix.target.runner }}
+    runs-on: ${{ inputs.single_worker && matrix.target.name == 'linux-x64' && 'ubuntu-24.04' || (matrix.target.runner == 'ubuntu-24.04' && vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER)) || (matrix.target.runner == 'windows-latest' && vars.ZLINK_WINDOWS_RUNNER && fromJSON(vars.ZLINK_WINDOWS_RUNNER)) || matrix.target.runner }}
     strategy:
       fail-fast: false
       matrix:
@@ -103,13 +108,14 @@ jobs:
         # PR-stage queue checks (queue_checks_only) run linux-x64 only. main queue
         # batches add linux-arm64. Hosted macOS arm64 capacity runs out often enough
         # to fail whole batches, so macOS runs in schedule, manual and release runs.
-        target: ${{ fromJSON(inputs.queue_checks_only && '[{"name":"linux-x64","runner":"ubuntu-24.04","core_platform":"linux-x64"}]' || startsWith(github.ref_name, 'mergify/merge-queue/') && '[{"name":"linux-x64","runner":"ubuntu-24.04","core_platform":"linux-x64"},{"name":"linux-arm64","runner":"ubuntu-24.04-arm","core_platform":"linux-arm64"}]' || '[{"name":"linux-x64","runner":"ubuntu-24.04","core_platform":"linux-x64"},{"name":"linux-arm64","runner":"ubuntu-24.04-arm","core_platform":"linux-arm64"},{"name":"darwin-arm64","runner":"macos-15","core_platform":"macos-arm64"}]') }}
+        target: ${{ fromJSON(inputs.single_worker && '[{"name":"linux-x64","runner":"ubuntu-24.04","core_platform":"linux-x64"}]' || inputs.queue_checks_only && '[{"name":"linux-x64","runner":"ubuntu-24.04","core_platform":"linux-x64"}]' || startsWith(github.ref_name, 'mergify/merge-queue/') && '[{"name":"linux-x64","runner":"ubuntu-24.04","core_platform":"linux-x64"},{"name":"linux-arm64","runner":"ubuntu-24.04-arm","core_platform":"linux-arm64"}]' || '[{"name":"linux-x64","runner":"ubuntu-24.04","core_platform":"linux-x64"},{"name":"linux-arm64","runner":"ubuntu-24.04-arm","core_platform":"linux-arm64"},{"name":"darwin-arm64","runner":"macos-15","core_platform":"macos-arm64"}]') }}
         # Windows runs on schedule, manual and release runs; queue batches and queue checks omit Windows.
-        include: ${{ fromJSON((inputs.queue_checks_only || startsWith(github.ref_name, 'mergify/merge-queue/')) && '[]' || '[{"node-version":20,"target":{"name":"win-x64","runner":"windows-latest","msvc_arch":"x64","core_platform":"windows-x64"}},{"node-version":22,"target":{"name":"win-x64","runner":"windows-latest","msvc_arch":"x64","core_platform":"windows-x64"}}]') }}
+        include: ${{ fromJSON((inputs.single_worker || inputs.queue_checks_only || startsWith(github.ref_name, 'mergify/merge-queue/')) && '[]' || '[{"node-version":20,"target":{"name":"win-x64","runner":"windows-latest","msvc_arch":"x64","core_platform":"windows-x64"}},{"node-version":22,"target":{"name":"win-x64","runner":"windows-latest","msvc_arch":"x64","core_platform":"windows-x64"}}]') }}
 
     env:
       # Node 20 exposes the platform WebSocket API behind this flag.
       NODE_OPTIONS: ${{ matrix.node-version == 20 && '--experimental-websocket' || '' }}
+      ZLINK_SINGLE_WORKER: ${{ inputs.single_worker }}
 
     steps:
       - name: Checkout repository
@@ -296,7 +302,7 @@ jobs:
   framework-node-cross-language:
     if: ${{ !inputs.skip_tests }}
     name: cross-language smoke
-    runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    runs-on: ${{ inputs.single_worker && 'ubuntu-24.04' || vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
     timeout-minutes: 30
     needs:
       - framework-node
