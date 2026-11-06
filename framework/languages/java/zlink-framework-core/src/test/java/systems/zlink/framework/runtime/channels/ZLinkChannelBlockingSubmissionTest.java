@@ -487,6 +487,10 @@ final class ZLinkChannelBlockingSubmissionTest {
                             Duration.ofSeconds(5),
                             ZLinkFrameworkMultipartView.owned(requestPayload),
                             Optional.of("packet"),
+                            null,
+                            "application/json",
+                            null,
+                            null,
                             null);
         }
 

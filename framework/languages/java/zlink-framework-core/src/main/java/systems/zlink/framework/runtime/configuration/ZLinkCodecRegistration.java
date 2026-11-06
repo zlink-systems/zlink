@@ -8,6 +8,8 @@ import systems.zlink.framework.configuration.ZLinkCodecRegistryBuilder;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.PreparedNames;
+import systems.zlink.framework.runtime.messaging.ZLinkPacketNames;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 
 import java.util.Collections;
@@ -23,6 +25,10 @@ public final class ZLinkCodecRegistration
     private static final String DEFAULT_JSON_CONTENT_TYPE =
             systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile.CONTENT_TYPE;
     private static final String LEGACY_JSON_CONTENT_TYPE = "application/zlink-framework-json-v1";
+    private static final PreparedNames DEFAULT_JSON_NAMES =
+            new PreparedNames(null, null, DEFAULT_JSON_CONTENT_TYPE);
+    private static final PreparedNames LEGACY_JSON_NAMES =
+            new PreparedNames(null, null, LEGACY_JSON_CONTENT_TYPE);
     private static final int MAX_TYPE_CACHE_ENTRIES = 1024;
     private volatile Map<String, RegisteredSerializer> serializers = new LinkedHashMap<>();
     private volatile Map<String, ZLinkStreamCodec> streamCodecsByContentType =
@@ -64,7 +70,12 @@ public final class ZLinkCodecRegistration
         String normalized = normalizeRegistrationContentType(contentType, "custom serializer");
         serializers.remove(normalized);
         serializers.put(
-                normalized, new RegisteredSerializer(serializer, canSerialize, fallbackSerializer));
+                normalized,
+                new RegisteredSerializer(
+                        serializer,
+                        canSerialize,
+                        fallbackSerializer,
+                        new PreparedNames(null, null, normalized)));
         clearSendTypeCache();
     }
 
@@ -186,6 +197,13 @@ public final class ZLinkCodecRegistration
         return new CompositeSerializer(this, fallback);
     }
 
+    public PreparedNames envelopeContentNamesFor(String contentType) {
+        if (DEFAULT_JSON_CONTENT_TYPE.equals(contentType)) return DEFAULT_JSON_NAMES;
+        if (LEGACY_JSON_CONTENT_TYPE.equals(contentType)) return LEGACY_JSON_NAMES;
+        RegisteredSerializer registered = serializers.get(contentType);
+        return registered == null ? null : registered.names();
+    }
+
     public String contentTypeFor(Class<?> type) {
         return sendSelectionFor(type).contentType();
     }
@@ -193,8 +211,8 @@ public final class ZLinkCodecRegistration
     public ZLinkMessageSerializer serializerForSending(
             Class<?> declaredType, ZLinkMessageSerializer jsonFallback) {
         Objects.requireNonNull(jsonFallback, "jsonFallback");
-        RegisteredSerializer selected = sendSelectionFor(declaredType).serializer();
-        return selected == null ? jsonFallback : selected.serializer();
+        ZLinkMessageSerializer selected = sendSelectionFor(declaredType).serializer();
+        return selected == null ? jsonFallback : selected;
     }
 
     /**
@@ -291,7 +309,7 @@ public final class ZLinkCodecRegistration
         return Optional.ofNullable(match);
     }
 
-    private SendSelection sendSelectionFor(Class<?> type) {
+    public SendSelection sendSelectionFor(Class<?> type) {
         if (type == null) {
             return SendSelection.JSON;
         }
@@ -306,9 +324,20 @@ public final class ZLinkCodecRegistration
             }
             SendSelection selected =
                     lastSerializerFor(serializers, type)
-                            .map(entry -> new SendSelection(entry.getKey(), entry.getValue()))
+                            .map(
+                                    entry ->
+                                            new SendSelection(
+                                                    entry.getKey(),
+                                                    entry.getValue().serializer(),
+                                                    entry.getValue().names()))
                             .orElse(SendSelection.JSON);
             if (sendTypeCache.size() < MAX_TYPE_CACHE_ENTRIES) {
+                selected =
+                        new SendSelection(
+                                selected.contentType(),
+                                selected.serializer(),
+                                new PreparedNames(
+                                        ZLinkPacketNames.resolve(type), selected.names()));
                 sendTypeCache.put(type, selected);
             }
             return selected;
@@ -341,7 +370,8 @@ public final class ZLinkCodecRegistration
             Map<String, RegisteredSerializer> registeredSerializers) {
         Objects.requireNonNull(jsonFallback, "jsonFallback");
         RegisteredSerializer defaultJson =
-                new RegisteredSerializer(jsonFallback, ignored -> false, false);
+                new RegisteredSerializer(
+                        jsonFallback, ignored -> false, false, SendSelection.JSON.names());
         Map<String, RegisteredSerializer> received = new LinkedHashMap<>();
         received.put(DEFAULT_JSON_CONTENT_TYPE, defaultJson);
         received.put(LEGACY_JSON_CONTENT_TYPE, defaultJson);
@@ -496,11 +526,13 @@ public final class ZLinkCodecRegistration
     private record RegisteredSerializer(
             ZLinkMessageSerializer serializer,
             Predicate<Class<?>> canSerialize,
-            boolean fallbackSerializer) {}
+            boolean fallbackSerializer,
+            PreparedNames names) {}
 
-    private record SendSelection(String contentType, RegisteredSerializer serializer) {
+    public record SendSelection(
+            String contentType, ZLinkMessageSerializer serializer, PreparedNames names) {
         private static final SendSelection JSON =
-                new SendSelection(DEFAULT_JSON_CONTENT_TYPE, null);
+                new SendSelection(DEFAULT_JSON_CONTENT_TYPE, null, DEFAULT_JSON_NAMES);
     }
 
     private static final class CompositeSerializer implements ZLinkMessageSerializer {

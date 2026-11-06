@@ -67,7 +67,7 @@ final class ZLinkClientServerMetadataTest {
                 new ZLinkChannelMessageDispatcher(
                         registry,
                         invoker,
-                        new ZLinkChannelDispatchReporter(reporter),
+                        new ZLinkChannelDispatchReporter(reporter, null),
                         reporter.flow());
         {
             var backend =

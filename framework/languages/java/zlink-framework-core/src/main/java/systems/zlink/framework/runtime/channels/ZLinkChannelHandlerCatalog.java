@@ -48,6 +48,7 @@ final class ZLinkChannelHandlerCatalog {
         for (ChannelRequestHandlerRegistration handler : channel.requestHandlers()) {
             handlers.put(handler.packetName(), handler);
         }
+        handlers.replaceAll((name, handler) -> handler.withChannelNames(channel.envelopeNames()));
         return Map.copyOf(handlers);
     }
 
@@ -119,6 +120,7 @@ final class ZLinkChannelHandlerCatalog {
         for (ChannelRouteRequestHandlerRegistration handler : channel.routeRequestHandlers()) {
             handlers.put(handler.packetName(), handler);
         }
+        handlers.replaceAll((name, handler) -> handler.withChannelNames(channel.envelopeNames()));
         return Map.copyOf(handlers);
     }
 

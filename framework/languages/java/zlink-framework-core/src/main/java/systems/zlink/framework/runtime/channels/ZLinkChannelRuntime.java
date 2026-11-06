@@ -52,6 +52,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescript
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.spots.ZLinkSpotRequestCall;
@@ -107,6 +108,7 @@ public final class ZLinkChannelRuntime
     private final ZLinkMessageSerializer serializer;
     private final ZLinkChannelReplyDecoder replyDecoder;
     private final ZLinkCodecRegistration codecs;
+    private final Map<String, ZLinkChannelEnvelope.PreparedNames> channelEnvelopeNames;
     private final ZLinkHandlerActivator handlerFactory;
     private final Executor handlerExecutor;
     private final List<Class<? extends ZLinkHandlerFilter>> filterTypes;
@@ -646,6 +648,18 @@ public final class ZLinkChannelRuntime
         this.serializer = Objects.requireNonNull(serializer, "serializer");
         this.replyDecoder = new ZLinkChannelReplyDecoder(this.serializer);
         this.codecs = Objects.requireNonNull(registration.codecs(), "codecs");
+        Map<String, ZLinkChannelEnvelope.PreparedNames> preparedChannels =
+                new java.util.HashMap<>();
+        for (var mesh : registration.meshNodes()) {
+            preparedChannels.putIfAbsent(mesh.meshName(), mesh.envelopeNames());
+            for (String name : mesh.channelNames()) {
+                preparedChannels.putIfAbsent(name, mesh.channelEnvelopeNames(name));
+            }
+        }
+        for (ChannelRegistration channel : registration.channels()) {
+            preparedChannels.put(channel.name(), channel.envelopeNames());
+        }
+        this.channelEnvelopeNames = Map.copyOf(preparedChannels);
         this.handlerFactory = Objects.requireNonNull(handlerFactory, "handlerFactory");
         this.spotAddressResolver = resolveSpotAddressResolver(this.handlerFactory);
         this.handlerExecutor =
@@ -680,7 +694,7 @@ public final class ZLinkChannelRuntime
                         this::requestToSpotViaRouterChannel,
                         actualNanoTime,
                         sockets.operationLane());
-        this.dispatchReporter = new ZLinkChannelDispatchReporter(dispatchErrors);
+        this.dispatchReporter = new ZLinkChannelDispatchReporter(dispatchErrors, codecs);
         this.messageDispatcher =
                 new ZLinkChannelMessageDispatcher(
                         dispatchRegistry,
@@ -1219,7 +1233,9 @@ public final class ZLinkChannelRuntime
 
     private ZLinkPayloadEncoding.EncodedPayload encodePayload(Object message) {
         Class<?> payloadType = ZLinkPayloadEncoding.declaredType(message);
-        return ZLinkPayloadEncoding.encode(serializer, message, codecs.contentTypeFor(payloadType));
+        var selected = codecs.sendSelectionFor(payloadType);
+        return ZLinkPayloadEncoding.encode(
+                serializer, message, selected.contentType(), selected.names());
     }
 
     @Override
@@ -1235,6 +1251,8 @@ public final class ZLinkChannelRuntime
                 Optional.of(encoded.packetName()),
                 null,
                 encoded.contentType(),
+                channelEnvelopeNames.get(channelName),
+                encoded.names(),
                 null);
     }
 
@@ -1340,6 +1358,8 @@ public final class ZLinkChannelRuntime
                 Optional.of(encoded.packetName()),
                 null,
                 encoded.contentType(),
+                channelEnvelopeNames.get(meshName),
+                encoded.names(),
                 null);
     }
 
@@ -1358,6 +1378,8 @@ public final class ZLinkChannelRuntime
                 Optional.of(encoded.packetName()),
                 defaultRequestTimeout,
                 encoded.contentType(),
+                null,
+                encoded.names(),
                 false,
                 null,
                 null,
