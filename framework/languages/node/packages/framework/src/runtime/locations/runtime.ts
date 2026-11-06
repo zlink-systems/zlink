@@ -723,10 +723,8 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       (result.status === ZLinkLocationWriteStatus.RejectedConflict ||
         result.status === ZLinkLocationWriteStatus.IgnoredStale)
     ) {
-      // A Store restart can remove the descriptor while retaining the
-      // in-process owner token. Renew cannot recreate an absent row, so use
-      // NewClaim as a bounded fallback. If another owner has recreated the
-      // row, NewClaim remains rejected and the caller keeps the conflict.
+      // Recovery creates an absent row with a Missing CAS condition. A found
+      // row follows the Fixed RID owner check and release delay in the store.
       result = await this.guardWrite(() =>
         this.writeDescriptor(
           (writeSignal) =>
@@ -734,7 +732,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
               stamped,
               intent === ZLinkInternalMeshNodeWriteIntent.FixedRidRenew
                 ? ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
-                : ZLinkLocationWriteIntent.NewClaim,
+                : ZLinkInternalMeshNodeWriteIntent.RecoveryClaim,
               writeSignal
             ),
           signal

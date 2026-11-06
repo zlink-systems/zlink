@@ -296,6 +296,7 @@ export class ZLinkInMemoryLocationStore
       if (
         intent !== ZLinkLocationWriteIntent.NewClaim &&
         intent !== ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim &&
+        intent !== ZLinkInternalMeshNodeWriteIntent.RecoveryClaim &&
         intent !== ZLinkLocationWriteIntent.Takeover
       )
         return ignoredStale();
@@ -316,7 +317,8 @@ export class ZLinkInMemoryLocationStore
       currentLease.token.leaseGeneration === current.leaseGeneration &&
       currentLease.leaseExpiresAt.getTime() > updatedAt.getTime();
     if (
-      intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim &&
+      (intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim ||
+        intent === ZLinkInternalMeshNodeWriteIntent.RecoveryClaim) &&
       current.ownerId !== descriptor.ownerId
     ) {
       const claimAllowed = this.ownerLeaseReleaseDelay.allows(
@@ -358,7 +360,8 @@ export class ZLinkInMemoryLocationStore
     }
     if (
       (intent === ZLinkLocationWriteIntent.NewClaim ||
-        intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim) &&
+        intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim ||
+        intent === ZLinkInternalMeshNodeWriteIntent.RecoveryClaim) &&
       currentLease !== undefined &&
       currentLease.leaseExpiresAt.getTime() > updatedAt.getTime()
     ) {
@@ -1664,7 +1667,8 @@ function canTakeOver(
   }
   if (
     intent !== ZLinkLocationWriteIntent.NewClaim &&
-    intent !== ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+    intent !== ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim &&
+    intent !== ZLinkInternalMeshNodeWriteIntent.RecoveryClaim
   ) {
     return false;
   }

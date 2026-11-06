@@ -3170,7 +3170,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const currentLeaseGeneration = liveOwnerLeaseGeneration(currentLease);
       const currentOwnerLive = currentLeaseGeneration === stored.leaseGeneration;
       if (
-        intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim &&
+        (intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim ||
+          intent === ZLinkInternalMeshNodeWriteIntent.RecoveryClaim) &&
         releaseDelayScope !== undefined &&
         stored.ownerId !== descriptor.ownerId
       ) {
@@ -3195,13 +3196,15 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         currentLeaseGeneration
       );
       const renew =
-        (intent === 2 || intent === ZLinkInternalMeshNodeWriteIntent.FixedRidRenew) &&
+        (intent === ZLinkLocationWriteIntent.Renew ||
+          intent === ZLinkInternalMeshNodeWriteIntent.FixedRidRenew) &&
         canRenew(stored, descriptor);
       if (!takeover && !renew) {
         return {
           status:
             (intent === ZLinkLocationWriteIntent.NewClaim ||
-              intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim) &&
+              intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim ||
+              intent === ZLinkInternalMeshNodeWriteIntent.RecoveryClaim) &&
             currentLeaseGeneration !== undefined
               ? WriteStatus.RejectedConflict
               : WriteStatus.IgnoredStale,
@@ -3210,7 +3213,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         };
       }
       if (takeover) generation += 1n;
-    } else if (intent === 2 || intent === ZLinkInternalMeshNodeWriteIntent.FixedRidRenew) {
+    } else if (
+      intent === ZLinkLocationWriteIntent.Renew ||
+      intent === ZLinkInternalMeshNodeWriteIntent.FixedRidRenew
+    ) {
       return rejected(lease.value.storeNow);
     } else {
       if (
@@ -5000,7 +5006,8 @@ function canTakeOverStoredLocation(
   }
   if (
     intent !== ZLinkLocationWriteIntent.NewClaim &&
-    intent !== ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+    intent !== ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim &&
+    intent !== ZLinkInternalMeshNodeWriteIntent.RecoveryClaim
   ) {
     return false;
   }

@@ -1194,31 +1194,40 @@ export class ZLinkFrameworkRuntimeHost
     return await this.runWithShutdownDeadline(deadlineMs, async () => {
       const deadlineAtMs = performance.now() + deadlineMs;
       try {
-        this.admission.close();
-        if (this.runtimeState === ZLinkFrameworkRuntimeState.Preparing) {
-          this.executionState?.abortController.abort();
+        let drain: Awaited<ReturnType<ZLinkRouteMeshRuntimeCoordinator['shutdownHost']>>;
+        try {
+          this.admission.close();
+          if (this.runtimeState === ZLinkFrameworkRuntimeState.Preparing) {
+            this.executionState?.abortController.abort();
+          }
+          this.setRuntimeState(ZLinkFrameworkRuntimeState.Draining);
+          if (
+            this.relocationOperation !== undefined &&
+            this.relocationStopStarting?.signal.aborted === true
+          ) {
+            await this.relocationOperation;
+          }
+          // Seal application admission before the public status reports that the
+          // host no longer accepts work. This prevents status polling from racing
+          // with the coordinator's synchronous seal step.
+          const unscopedStreamDrain = this.streamRuntime?.notifyUnscopedServerDrain();
+          drain = await this.routeMeshCoordinator.shutdownHost(
+            this.runtimeDeadline!,
+            this.shutdownDeadline!.signal
+          );
+          await unscopedStreamDrain;
+          if (drain.kind === 'forceStopped' && drain.error !== undefined) {
+            this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
+              'host shutdown',
+              drain.error
+            );
+          }
+        } finally {
+          await this.teardownRuntime();
         }
-        this.setRuntimeState(ZLinkFrameworkRuntimeState.Draining);
-        if (
-          this.relocationOperation !== undefined &&
-          this.relocationStopStarting?.signal.aborted === true
-        ) {
-          await this.relocationOperation;
+        if (this.shutdownDeadline!.signal.aborted || performance.now() >= deadlineAtMs) {
+          throw createDeadlineExceededError('Shutdown resource cleanup exceeded its deadline.');
         }
-        // Seal application admission before the public status reports that the
-        // host no longer accepts work. This prevents status polling from racing
-        // with the coordinator's synchronous seal step.
-        const unscopedStreamDrain = this.streamRuntime?.notifyUnscopedServerDrain();
-        const shutdown = this.routeMeshCoordinator.shutdownHost(
-          this.runtimeDeadline!,
-          this.shutdownDeadline!.signal
-        );
-        const drain = await shutdown;
-        await unscopedStreamDrain;
-        if (drain.kind === 'forceStopped' && drain.error !== undefined) {
-          this.runtimeOrPreStartErrorSink.reportRuntimeTaskException('host shutdown', drain.error);
-        }
-        await this.stop();
         if (drain.kind === 'forceStopped') {
           return this.completeTermination({
             outcome: ZLinkFrameworkTerminationOutcome.ForceStopped,
@@ -1228,18 +1237,14 @@ export class ZLinkFrameworkRuntimeHost
                 : ZLinkFrameworkTerminationReason.TeardownFailed
           });
         }
-        if (performance.now() >= deadlineAtMs) {
-          throw createDeadlineExceededError('Shutdown resource cleanup exceeded its deadline.');
-        }
         return this.completeTermination({
           outcome: ZLinkFrameworkTerminationOutcome.Stopped,
           reason: ZLinkFrameworkTerminationReason.None
         });
       } catch (error) {
-        await this.stop().catch(() => undefined);
         return this.completeTermination({
           outcome: ZLinkFrameworkTerminationOutcome.ForceStopped,
-          reason: isDeadlineExceededError(error)
+          reason: isDeadlineExceededError(this.shutdownDeadline!.signal.reason ?? error)
             ? ZLinkFrameworkTerminationReason.DeadlineExceeded
             : ZLinkFrameworkTerminationReason.TeardownFailed
         });
@@ -1363,7 +1368,12 @@ export class ZLinkFrameworkRuntimeHost
   }
 
   private setRuntimeState(state: ZLinkFrameworkRuntimeState): void {
-    if (this.runtimeState === state) return;
+    if (
+      this.runtimeState === state ||
+      (this.runtimeState === ZLinkFrameworkRuntimeState.Error &&
+        state === ZLinkFrameworkRuntimeState.Stopped)
+    )
+      return;
     this.runtimeState = state;
     this.notifyTopologyHostStateChanged();
     this.publishCurrentRuntimeStatus();
@@ -1499,6 +1509,8 @@ export class ZLinkFrameworkRuntimeHost
       return;
     }
 
+    this.shutdownOperation = undefined;
+    this.shutdownOperationStartedAt = undefined;
     const previousLease = this.telemetryLease;
     this.telemetryLease = renewTelemetryLease(previousLease);
     if (this.telemetryLease !== previousLease) {
@@ -1641,6 +1653,15 @@ export class ZLinkFrameworkRuntimeHost
   }
 
   async stop(): Promise<void> {
+    this.shutdownOperation ??= this.teardownRuntime().then(() => ({
+      outcome: ZLinkFrameworkTerminationOutcome.Stopped,
+      reason: ZLinkFrameworkTerminationReason.None
+    }));
+    await this.shutdownOperation;
+    this.setRuntimeState(ZLinkFrameworkRuntimeState.Stopped);
+  }
+
+  private async teardownRuntime(): Promise<void> {
     retireTelemetryLease(this.telemetryLease);
     this.requests.close(
       new ZLinkFrameworkException(ZLinkFrameworkErrorKind.ShuttingDown, 'Host stopped.')
@@ -1736,12 +1757,6 @@ export class ZLinkFrameworkRuntimeHost
     this.cachedLocationSpotRouteResolver = undefined;
     this.listenerRecords.clear();
     this.lifecycleSink?.push('framework:stopped');
-    if (
-      this.shutdownOperation === undefined &&
-      this.runtimeState !== ZLinkFrameworkRuntimeState.Error
-    ) {
-      this.setRuntimeState(ZLinkFrameworkRuntimeState.Stopped);
-    }
   }
 
   installOwnerLeaseRecoveryPublication(

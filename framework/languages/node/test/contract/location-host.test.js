@@ -1,5 +1,6 @@
 const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const { createMeshHost } = require('./fixtures/mesh-host');
+const { createRelayHost } = require('./fixtures/relay-host');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { performance } = require('node:perf_hooks');
@@ -1020,6 +1021,426 @@ for (const storage of ['provider', 'in-memory']) {
       await first.stop();
     }
   });
+}
+
+for (const storage of ['provider', 'in-memory']) {
+  test(`P1 partial mesh publication preserves the Fixed RID boundary (${storage})`, async (t) => {
+    const scenario = await fixedRidRegressionScenario(t, storage);
+    const { host } = scenario.makeHost([], {
+      automatic: { router: { bind: 'tcp://automatic' } },
+      play: { router: { bind: 'tcp://fixed', routingId: 'fixed-p1-node' } }
+    });
+    try {
+      await host.start();
+      assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Preparing);
+      await publishRegressionWeight(host, 'automatic', 42);
+      assert.equal((await scenario.store.listMeshNodes('automatic')).items[0].placementWeight, 42);
+
+      scenario.advance(14);
+      await renewFixedRidRegressionHost(host);
+      assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Preparing);
+      assert.equal(
+        (await scenario.store.listMeshNodes('play')).items[0].ownerId,
+        'expired-p1-owner'
+      );
+      scenario.advance(1);
+      await renewFixedRidRegressionHost(host);
+      assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
+      assert.equal(
+        (await scenario.store.listMeshNodes('play')).items[0].ownerId,
+        host.locationOwner.currentRuntime.currentOwnerToken.ownerId
+      );
+    } finally {
+      await host.stop();
+    }
+  });
+}
+
+for (const storage of ['provider', 'in-memory']) {
+  test(`P1 recovery restores Missing immediately and waits for an invalid foreign row (${storage})`, async t => {
+    const scenario = await fixedRidRegressionScenario(t, storage);
+    const { host } = scenario.makeHost();
+    try {
+      await host.start();
+      scenario.advance(15);
+      await renewFixedRidRegressionHost(host);
+      const owner = host.locationOwner.currentRuntime.currentOwnerToken;
+      const key = { meshName: 'play', rid: rid('fixed-p1-node') };
+      assert.equal(await scenario.store.removeMeshNode(key, owner), framework.ZLinkLocationWriteStatus.Stored);
+      await publishRegressionWeight(host, 'play', 41);
+      const [restored] = (await scenario.store.listMeshNodes('play')).items;
+      assert.equal(restored.ownerId, owner.ownerId);
+      assert.equal(restored.placementWeight, 41);
+
+      assert.equal(await scenario.store.removeMeshNode(key, owner), framework.ZLinkLocationWriteStatus.Stored);
+      const foreign = await scenario.store.claimOwnerLease('foreign-recovery-owner', 60_000);
+      assert.equal(foreign.kind, 'claimed');
+      assert.equal((await scenario.store.updateMeshNode({
+        ...restored, ownerId: foreign.token.ownerId, leaseGeneration: foreign.token.leaseGeneration
+      }, framework.ZLinkLocationWriteIntent.NewClaim)).status, framework.ZLinkLocationWriteStatus.Stored);
+      assert.equal(await scenario.store.releaseOwnerLease(foreign.token), 'released');
+      for (const [advance, weight] of [[0, 42], [14, 43]]) {
+        scenario.advance(advance);
+        await assert.rejects(() => publishRegressionWeight(host, 'play', weight), {
+          kind: framework.ZLinkFrameworkErrorKind.Unavailable
+        });
+        assert.equal((await scenario.store.listMeshNodes('play')).items[0].ownerId, foreign.token.ownerId);
+      }
+      scenario.advance(1);
+      await publishRegressionWeight(host, 'play', 44);
+      assert.equal((await scenario.store.listMeshNodes('play')).items[0].ownerId, owner.ownerId);
+    } finally {
+      await host.stop();
+    }
+  });
+}
+
+test('P1 Missing recovery CAS never overwrites a concurrently created invalid owner row', async t => {
+  const scenario = await fixedRidRegressionScenario(t, 'provider');
+  const { host } = scenario.makeHost();
+  try {
+    await host.start();
+    scenario.advance(15);
+    await renewFixedRidRegressionHost(host);
+    const owner = host.locationOwner.currentRuntime.currentOwnerToken;
+    const [descriptor] = (await scenario.store.listMeshNodes('play')).items;
+    assert.equal(await scenario.store.removeMeshNode({ meshName: 'play', rid: descriptor.rid }, owner),
+      framework.ZLinkLocationWriteStatus.Stored);
+    const foreign = await scenario.store.claimOwnerLease('concurrent-recovery-owner', 60_000);
+    assert.equal(foreign.kind, 'claimed');
+    const write = scenario.provider.write.bind(scenario.provider);
+    let inserted = false;
+    scenario.provider.write = async (request, signal) => {
+      if (!inserted && request.conditions.some(condition =>
+        condition.kind === 'missing' && condition.key.value.startsWith('mesh-node\0'))) {
+        inserted = true;
+        assert.equal((await scenario.store.updateMeshNode({
+          ...descriptor, ownerId: foreign.token.ownerId, leaseGeneration: foreign.token.leaseGeneration
+        }, framework.ZLinkLocationWriteIntent.NewClaim)).status, framework.ZLinkLocationWriteStatus.Stored);
+        assert.equal(await scenario.store.releaseOwnerLease(foreign.token), 'released');
+      }
+      return await write(request, signal);
+    };
+    await assert.rejects(() => publishRegressionWeight(host, 'play', 42), /ignoredStale/u);
+    assert.equal(inserted, true);
+    assert.equal((await scenario.store.listMeshNodes('play')).items[0].ownerId, foreign.token.ownerId);
+  } finally {
+    await host.stop();
+  }
+});
+
+test('P1 unconfirmed first Fixed RID publication renews its own committed row', async t => {
+  const scenario = await fixedRidRegressionScenario(t, 'provider');
+  const { host } = scenario.makeHost();
+  try {
+    await host.start();
+    const write = scenario.provider.write.bind(scenario.provider);
+    const read = scenario.provider.read.bind(scenario.provider);
+    let committed = false;
+    let uncertain = true;
+    scenario.provider.write = async (request, signal) => {
+      const result = await write(request, signal);
+      if (uncertain && request.mutations.some(mutation =>
+        mutation.kind === 'put' && mutation.key.value.startsWith('mesh-node\0'))) {
+        committed = true;
+        throw new Error('first descriptor response lost after commit');
+      }
+      return result;
+    };
+    scenario.provider.read = async (key, signal) => {
+      if (uncertain && committed && key.value.startsWith('mesh-node\0')) {
+        throw new Error('descriptor confirmation unavailable');
+      }
+      return await read(key, signal);
+    };
+    scenario.advance(15);
+    await renewFixedRidRegressionHost(host);
+    assert.equal(committed, true);
+    assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Preparing);
+    uncertain = false;
+    await renewFixedRidRegressionHost(host);
+    assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
+    const [descriptor] = (await scenario.store.listMeshNodes('play')).items;
+    assert.equal(descriptor.ownerId, host.locationOwner.currentRuntime.currentOwnerToken.ownerId);
+  } finally {
+    await host.stop();
+  }
+});
+
+test('P1 conflict cleanup joins shutdown and concurrent public stop', async (t) => {
+  const scenario = await fixedRidRegressionScenario(t, 'provider');
+  const { host: winner } = scenario.makeHost();
+  const calls = [];
+  const { host: loser, coordinator } = scenario.makeHost(calls);
+  const drainEntered = deferredRegressionStep();
+  const allowDrain = deferredRegressionStep();
+  const disposeEntered = deferredRegressionStep();
+  const allowDispose = deferredRegressionStep();
+  let shutdown;
+  let stopping;
+  let ownedDisposes = 0;
+  scenario.provider.dispose = async () => {
+    ownedDisposes += 1;
+  };
+  try {
+    await winner.start();
+    await loser.start();
+    scenario.advance(15);
+    await renewFixedRidRegressionHost(winner);
+    const shutdownHost = coordinator.shutdownHost.bind(coordinator);
+    coordinator.shutdownHost = async (...args) => {
+      drainEntered.resolve();
+      await allowDrain.promise;
+      return await shutdownHost(...args);
+    };
+    const disposeContext = loser.context.dispose.bind(loser.context);
+    loser.context.dispose = async () => {
+      await disposeContext();
+      disposeEntered.resolve();
+      await allowDispose.promise;
+    };
+    loser.errorSink.onRuntimeTaskException(({ taskName }) => {
+      if (taskName === 'owner lease recovery') shutdown = loser.shutdown();
+    });
+    await renewFixedRidRegressionHost(loser);
+    await drainEntered.promise;
+    assert.equal(
+      calls.filter((call) => call === 'spot:dispose').length,
+      0,
+      'transport cleanup must wait for the shutdown owner to finish draining'
+    );
+    stopping = loser.stop();
+    let stopCompleted = false;
+    stopping.then(() => {
+      stopCompleted = true;
+    });
+    allowDrain.resolve();
+    await disposeEntered.promise;
+    assert.equal(stopCompleted, false, 'public stop shares the pending teardown');
+    assert.equal(calls.filter((call) => call === 'context:dispose').length, 1);
+    allowDispose.resolve();
+    await Promise.all([shutdown, stopping]);
+    assert.equal(calls.filter((call) => call === 'spot:dispose').length, 1);
+    assert.equal(calls.filter((call) => call === 'context:dispose').length, 1);
+    assert.equal(ownedDisposes, 1);
+    assert.equal(loser.status.state, framework.ZLinkFrameworkRuntimeState.Error);
+  } finally {
+    allowDrain.resolve();
+    allowDispose.resolve();
+    await shutdown;
+    await stopping;
+    await loser.stop();
+    await winner.stop();
+  }
+});
+
+test('P1 predecessor CAS loser enters Error and cannot republish after winner stop', async (t) => {
+  const scenario = await fixedRidRegressionScenario(t, 'provider');
+  const hosts = [scenario.makeHost().host, scenario.makeHost().host];
+  const bothSubmitted = deferredRegressionStep();
+  const allowWrites = deferredRegressionStep();
+  const write = scenario.provider.write.bind(scenario.provider);
+  const submissions = [];
+  const outcomes = new Map();
+  scenario.provider.write = async (request, signal) => {
+    if (
+      request.mutations.some(
+        (mutation) => mutation.kind === 'put' && mutation.key.value.startsWith('mesh-node\0')
+      )
+    ) {
+      submissions.push(request);
+      if (submissions.length === 2) bothSubmitted.resolve();
+      await allowWrites.promise;
+    }
+    return await write(request, signal);
+  };
+  try {
+    await Promise.all(hosts.map((host) => host.start()));
+    for (const host of hosts) {
+      const store = host.locationOwner.locationStore();
+      const update = store.updateMeshNode.bind(store);
+      store.updateMeshNode = async (...args) => {
+        const result = await update(...args);
+        outcomes.set(host, result.status);
+        return result;
+      };
+    }
+    const runtimes = new Map(hosts.map(host => [host, host.locationOwner.currentRuntime]));
+    const cleanups = new Map(hosts.map(host => [host, deferredRegressionStep()]));
+    for (const host of hosts) {
+      const stop = host.stop.bind(host);
+      host.stop = async () => {
+        try { await stop(); }
+        finally { cleanups.get(host).resolve(); }
+      };
+    }
+    scenario.advance(15);
+    const recoveries = hosts.map((host) => renewFixedRidRegressionHost(host));
+    await bothSubmitted.promise;
+    const predecessor = submissions.map((request) =>
+      request.conditions.find(
+        (condition) => condition.kind === 'version' && condition.key.value.startsWith('mesh-node\0')
+      )
+    );
+    assert.ok(predecessor.every(Boolean));
+    assert.equal(predecessor[0].expected.value, predecessor[1].expected.value);
+    allowWrites.resolve();
+    await Promise.all(recoveries);
+    const loser = hosts.find(
+      (host) => outcomes.get(host) === framework.ZLinkLocationWriteStatus.IgnoredStale
+    );
+    assert.ok(loser, 'one host must lose the CAS against the shared predecessor');
+    const winner = hosts.find((host) => host !== loser);
+    assert.equal(loser.status.state, framework.ZLinkFrameworkRuntimeState.Error);
+    const loserRuntime = runtimes.get(loser);
+    const winnerOwner = winner.locationOwner.currentRuntime.currentOwnerToken;
+    await cleanups.get(loser).promise;
+    assert.equal(loser.executionState, undefined, 'CAS failure completes automatic cleanup');
+    await winner.stop();
+    assert.equal(
+      await scenario.store.removeMeshNode({ meshName: 'play', rid: rid('fixed-p1-node') }, winnerOwner),
+      framework.ZLinkLocationWriteStatus.Stored
+    );
+    const submissionsAtStop = submissions.length;
+    scenario.advance(60_001);
+    assert.equal(await loserRuntime.renewOwnerLeaseOnce(), false);
+    assert.equal(loser.status.state, framework.ZLinkFrameworkRuntimeState.Error);
+    assert.equal(submissions.length, submissionsAtStop);
+    assert.equal((await scenario.store.listMeshNodes('play')).items.length, 0);
+  } finally {
+    allowWrites.resolve();
+    await Promise.all(hosts.map((host) => host.stop()));
+  }
+});
+
+function deferredRegressionStep() {
+  let resolve, reject;
+  const promise = new Promise((done, failed) => {
+    resolve = done;
+    reject = failed;
+  });
+  return { promise, resolve, reject };
+}
+
+async function publishRegressionWeight(host, meshName, weight) {
+  const runner = host.taskRunner;
+  const runDetached = runner.runDetached.bind(runner);
+  const published = deferredRegressionStep();
+  runner.runDetached = (taskName, callback) => {
+    runDetached(taskName, async signal => {
+      try {
+        await callback(signal);
+        if (taskName === `RouteMesh '${meshName}' runtime weight publication`) published.resolve();
+      } catch (error) {
+        if (taskName === `RouteMesh '${meshName}' runtime weight publication`) published.reject(error);
+        throw error;
+      }
+    });
+  };
+  try {
+    host.routeMeshRuntimeOptions.mesh(meshName).placementWeight = weight;
+    await published.promise;
+  } finally {
+    runner.runDetached = runDetached;
+  }
+}
+
+async function renewFixedRidRegressionHost(host) {
+  const recovery = waitForNextHostOwnerRecovery(host);
+  assert.equal(await host.locationOwner.currentRuntime.renewOwnerLeaseOnce(), true);
+  await recovery;
+}
+
+async function fixedRidRegressionScenario(t, storage) {
+  let monotonicMs = 0;
+  let storeNow = Date.UTC(2026, 6, 3);
+  t.mock.method(performance, 'now', () => monotonicMs);
+  const provider =
+    storage === 'provider'
+      ? new framework.ZLinkInMemoryProviderLocationStore(() => new Date(storeNow))
+      : undefined;
+  const store =
+    provider === undefined
+      ? new framework.ZLinkInMemoryLocationStore(
+          () => new Date(storeNow),
+          () => monotonicMs,
+          5
+        )
+      : new framework.ZLinkLocationStoreRepository(
+          provider,
+          () => new Date(storeNow),
+          undefined,
+          () => monotonicMs,
+          5
+        );
+  await seedFixedRidDescriptor(store, 'play', 'fixed-p1-node', 'expired-p1-owner', storeNow);
+  storeNow += 101;
+  return {
+    provider,
+    store,
+    advance(milliseconds) {
+      monotonicMs += milliseconds;
+    },
+    makeHost(
+      calls = [],
+      spotNodes = {
+        play: { router: { bind: 'tcp://fixed', routingId: 'fixed-p1-node' } }
+      }
+    ) {
+      const backendAdapterFactory = fakeBackendAdapterFactory(calls, rid('automatic-p1-node'));
+      const createMeshAdapter = backendAdapterFactory.createMeshAdapter;
+      backendAdapterFactory.createMeshAdapter = () => {
+        const adapter = createMeshAdapter();
+        const createMeshNode = adapter.createMeshNode;
+        adapter.createMeshNode = (...args) => {
+          const node = createMeshNode(...args);
+          const status = node.status;
+          node.status = () => {
+            const snapshot = status();
+            return { ...snapshot, routingId: rid(snapshot.routingId) };
+          };
+          return node;
+        };
+        return adapter;
+      };
+      const { host, coordinator } = createRelayHost(
+        {
+          registration: framework.createFrameworkRegistration({
+            locations: {
+              ...(provider === undefined
+                ? { useInMemoryStores: true }
+                : { storeInstance: provider }),
+              options: {
+                ownerLeaseRenewIntervalMs: 20_000,
+                ownerLeaseTtlMs: 60_000,
+                ownerLeaseFencingMarginMs: 5,
+                ownerLeaseRenewTimeoutMs: 3_000,
+                pollingIntervalMs: 60_000
+              }
+            },
+            spotNodes
+          })
+        },
+        { backendAdapterFactory }
+      );
+      if (provider === undefined) {
+        host.locationOwner.stores = Object.fromEntries(
+          [
+            'locationStore',
+            'authorityStore',
+            'clientServerStore',
+            'fanoutStore',
+            'peerStore',
+            'spotStore',
+            'actorStore',
+            'routeStore',
+            'ownerLeaseStore'
+          ].map((name) => [name, store])
+        );
+      }
+      return { host, coordinator };
+    }
+  };
 }
 
 test('Fixed RID startup observes every mesh before the shared release-delay boundary', async t => {
@@ -2193,6 +2614,7 @@ function fakeBackendAdapterFactory(calls, nodeRid) {
             setBind() {},
             addChannelName() {},
             setChannelWeight() {},
+            setPlacementWeight() {},
             configureObjectPlacement() {},
             createPublisher() { return { close() {} }; },
             start() {},

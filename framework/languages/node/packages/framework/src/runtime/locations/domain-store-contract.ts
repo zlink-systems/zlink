@@ -46,7 +46,8 @@ import type {
 
 export enum ZLinkInternalMeshNodeWriteIntent {
   FixedRidNewClaim = 'fixed_rid_new_claim',
-  FixedRidRenew = 'fixed_rid_renew'
+  FixedRidRenew = 'fixed_rid_renew',
+  RecoveryClaim = 'recovery_claim'
 }
 
 export type ZLinkMeshNodeWriteIntent = ZLinkLocationWriteIntent | ZLinkInternalMeshNodeWriteIntent;
