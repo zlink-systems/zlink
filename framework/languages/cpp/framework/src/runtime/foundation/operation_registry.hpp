@@ -56,6 +56,10 @@ class completion_sink_t
     {
     }
     explicit operator bool () const noexcept { return bool (_complete); }
+    std::shared_ptr<void> completion_storage () const noexcept
+    {
+        return _complete.completion_storage ();
+    }
     completion_sink_t &&with_admission (std::shared_ptr<task_completion_source_t<void>> admitted) &&
     {
         _admitted = std::move (admitted);

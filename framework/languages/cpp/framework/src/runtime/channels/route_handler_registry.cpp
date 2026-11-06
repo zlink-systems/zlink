@@ -8,16 +8,26 @@ namespace zlink::framework::detail
 {
 
 route_handler_registry_t &
-route_handler_registry_t::add_handler (route_handler_descriptor_t descriptor, invoker_t invoker)
+route_handler_registry_t::add_handler (route_handler_descriptor_t descriptor,
+                                       invoker_t invoker,
+                                       std::function<void (serializer_registry_t &)> bind_codecs)
 {
     key_t key{descriptor.router_channel_id, descriptor.kind, descriptor.packet_name};
     const auto [_, inserted] =
-      _handlers.emplace (std::move (key), entry_t{std::move (descriptor), std::move (invoker)});
+      _handlers.emplace (std::move (key), entry_t{std::move (descriptor), std::move (invoker),
+                                                  std::move (bind_codecs)});
     if (!inserted) {
         throw framework_exception_t (framework_error_kind_t::protocol_error,
                                      "duplicate routed handler registration");
     }
     return *this;
+}
+
+void route_handler_registry_t::bind_codecs (serializer_registry_t &serializers)
+{
+    for (auto &[_, entry] : _handlers)
+        if (entry.bind_codecs)
+            entry.bind_codecs (serializers);
 }
 
 const route_handler_descriptor_t *

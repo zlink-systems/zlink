@@ -40,7 +40,7 @@ extern "C" fw::task_t<std::size_t> real_dispatch (
   bool accept,
   std::function<bool ()> next,
   std::optional<zlink::poll_event_flag_t>
-    readiness) __asm__ ("__real__ZN5zlink9framework6detail19mesh_node_runtime_t14dispatch_"
+    readiness) __asm__ ("__real__ZN5zlink9framework6detail19mesh_node_runtime_t21dispatch_hosted_"
                         "readyESt8functionIFvRKNS0_7runtime4host14ready_record_tERKNS5_"
                         "16receive_record_tESt6vectorINS_9message_tESaISD_EENS4_"
                         "23application_job_queue_t8permit_tEEEbS3_IFbvEESt8optionalINS_17poll_"
@@ -51,7 +51,7 @@ extern "C" fw::task_t<std::size_t> wrap_dispatch (
   bool accept,
   std::function<bool ()> next,
   std::optional<zlink::poll_event_flag_t>
-    readiness) __asm__ ("__wrap__ZN5zlink9framework6detail19mesh_node_runtime_t14dispatch_"
+    readiness) __asm__ ("__wrap__ZN5zlink9framework6detail19mesh_node_runtime_t21dispatch_hosted_"
                         "readyESt8functionIFvRKNS0_7runtime4host14ready_record_tERKNS5_"
                         "16receive_record_tESt6vectorINS_9message_tESaISD_EENS4_"
                         "23application_job_queue_t8permit_tEEEbS3_IFbvEESt8optionalINS_17poll_"
@@ -61,16 +61,18 @@ extern "C" std::optional<zlink::poll_event_flag_t> real_wait (
   std::chrono::milliseconds timeout,
   bool accept,
   deadline_t
-    next) __asm__ ("__real__ZN5zlink9framework7runtime4host21public_host_runtime_t26wait_for_"
-                   "dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_"
+    next) __asm__ ("__real__ZN5zlink9framework7runtime4host21public_host_runtime_t33wait_for_"
+                   "hosted_dispatch_"
+                   "activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_"
                    "10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE");
 extern "C" std::optional<zlink::poll_event_flag_t> wrap_wait (
   fw::runtime::host::public_host_runtime_t *self,
   std::chrono::milliseconds timeout,
   bool accept,
   deadline_t
-    next) __asm__ ("__wrap__ZN5zlink9framework7runtime4host21public_host_runtime_t26wait_for_"
-                   "dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_"
+    next) __asm__ ("__wrap__ZN5zlink9framework7runtime4host21public_host_runtime_t33wait_for_"
+                   "hosted_dispatch_"
+                   "activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_"
                    "10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE");
 
 extern "C" fw::task_t<std::size_t> wrap_dispatch (fw::detail::mesh_node_runtime_t *self,

@@ -188,9 +188,9 @@ int main ()
         const auto &payload = body.at ("payload");
         require (actual.record.application.has_value (), "record payload must decode");
         if (actual.record.application) {
-            require (actual.record.application->packet_name
+            require (actual.record.application->packet_name ()
                          == payload.at ("packetName").get<std::string> ()
-                       && actual.record.application->content_type
+                       && actual.record.application->content_type ()
                             == payload.at ("contentType").get<std::string> ()
                        && actual.record.application->payload_bytes ()
                             == fixture_bytes (payload.at ("payloadUtf8Fixture")),

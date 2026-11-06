@@ -93,4 +93,19 @@ task_t<zlink::message_t> serialize_handler_result (TResult &&result,
     }
 }
 
+template <typename TResult, typename TPlan>
+task_t<zlink::message_t> serialize_handler_result (TResult result,
+                                                   serializer_registry_t &serializers,
+                                                   std::shared_ptr<TPlan> codecs)
+{
+    if constexpr (is_task_v<TResult>) {
+        auto value = co_await result;
+        co_return result_t<zlink::message_t>::success (
+          encoded_payload_to_raw (codecs->serialize (serializers, value)));
+    } else {
+        co_return result_t<zlink::message_t>::success (
+          encoded_payload_to_raw (codecs->serialize (serializers, result)));
+    }
+}
+
 } // namespace zlink::framework::detail
