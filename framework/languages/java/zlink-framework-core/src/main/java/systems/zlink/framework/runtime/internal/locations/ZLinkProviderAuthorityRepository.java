@@ -351,14 +351,24 @@ final class ZLinkProviderAuthorityRepository {
         requireKey(key);
         ZLinkStoreKey rowKey = authorityKey(key);
         var opaqueCancellation = adapt(cancellation);
-        return provider.read(rowKey, opaqueCancellation)
+        return readAuthorityRow(rowKey, opaqueCancellation)
                 .thenCompose(
                         result -> {
-                            if (result instanceof ZLinkStoreReadMissing)
-                                ownerLeaseWait.clear(
-                                        ZLinkOwnerLeaseWaitTracker.authorityRecordKey(
-                                                rowKey.value()));
                             return projectRead(result, opaqueCancellation);
+                        });
+    }
+
+    private CompletionStage<ZLinkStoreReadResult> readAuthorityRow(
+            ZLinkStoreKey rowKey,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        String waitKey = ZLinkOwnerLeaseWaitTracker.authorityRecordKey(rowKey.value());
+        var observedWait = ownerLeaseWait.snapshot(waitKey);
+        return provider.read(rowKey, cancellation)
+                .thenApply(
+                        result -> {
+                            if (result instanceof ZLinkStoreReadMissing)
+                                ownerLeaseWait.clearIfUnchanged(waitKey, observedWait);
+                            return result;
                         });
     }
 
@@ -795,7 +805,7 @@ final class ZLinkProviderAuthorityRepository {
         Objects.requireNonNull(request, "request");
         var opaqueCancellation = adapt(cancellation);
         ZLinkStoreKey key = authorityKey(request.authorityKey());
-        return provider.read(key, opaqueCancellation)
+        return readAuthorityRow(key, opaqueCancellation)
                 .thenCompose(
                         read -> {
                             if (read instanceof ZLinkStoreReadFound found) {
@@ -855,9 +865,6 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                     current));
                                                         });
                             }
-                            if (read instanceof ZLinkStoreReadMissing)
-                                ownerLeaseWait.clear(
-                                        ZLinkOwnerLeaseWaitTracker.authorityRecordKey(key.value()));
                             if (reclaimVersion != null)
                                 return completed(new ZLinkObjectConflict(toRead(read)));
                             List<ZLinkStoreCondition> conditions = new ArrayList<>();
@@ -1048,7 +1055,7 @@ final class ZLinkProviderAuthorityRepository {
             ZLinkObjectReservationRequest request,
             ZLinkLocationOwnerToken requiredOwner) {
         ZLinkStoreKey rowKey = authorityKey(key);
-        return provider.read(rowKey, cancellation)
+        return readAuthorityRow(rowKey, cancellation)
                 .thenCompose(
                         read -> {
                             if (!(read instanceof ZLinkStoreReadFound found)
@@ -1056,10 +1063,6 @@ final class ZLinkProviderAuthorityRepository {
                                             .version()
                                             .value()
                                             .equals(expectedStoreVersion)) {
-                                if (!(read instanceof ZLinkStoreReadFound))
-                                    ownerLeaseWait.clear(
-                                            ZLinkOwnerLeaseWaitTracker.authorityRecordKey(
-                                                    rowKey.value()));
                                 return completed(false);
                             }
                             var current = decode(found.value().bytes());
@@ -1144,7 +1147,7 @@ final class ZLinkProviderAuthorityRepository {
                                                         ownerEvidence.ownerLeaseGeneration());
                                         boolean authorityOwnerWaitingCandidate;
                                         if (!active) {
-                                            ownerLeaseWait.clear(waitKey);
+                                            ownerLeaseWait.clear(waitKey, ownerToken);
                                             authorityOwnerWaitingCandidate = false;
                                         } else {
                                             boolean steadyReady =
@@ -1172,7 +1175,7 @@ final class ZLinkProviderAuthorityRepository {
                                                         ownerLeaseWait.shouldWait(
                                                                 waitKey, ownerToken, true);
                                             } else {
-                                                ownerLeaseWait.clear(waitKey);
+                                                ownerLeaseWait.clear(waitKey, ownerToken);
                                                 authorityOwnerWaitingCandidate = false;
                                             }
                                         }
@@ -1582,11 +1585,18 @@ final class ZLinkProviderAuthorityRepository {
                                             return StaleAuthorityReclaim.CONFLICT;
                                         ownerLeaseWait.clear(
                                                 ZLinkOwnerLeaseWaitTracker.authorityRecordKey(
-                                                        authorityKey.value()));
+                                                        authorityKey.value()),
+                                                new ZLinkLocationOwnerToken(
+                                                        current.ownerId(),
+                                                        current.ownerLeaseGeneration()));
                                         for (var member : members)
                                             ownerLeaseWait.clear(
                                                     ZLinkOwnerLeaseWaitTracker.authorityRecordKey(
-                                                            member.key().value()));
+                                                            member.key().value()),
+                                                    new ZLinkLocationOwnerToken(
+                                                            member.record().ownerId(),
+                                                            member.record()
+                                                                    .ownerLeaseGeneration()));
                                         return StaleAuthorityReclaim.RECLAIMED;
                                     });
                 });
@@ -4012,8 +4022,11 @@ final class ZLinkProviderAuthorityRepository {
                                                                                         ::new));
                             }
                             if (mutation instanceof ZLinkAuthorityDelete) {
+                                AuthorityRecord deleted = decode(found.value().bytes());
                                 ownerLeaseWait.clear(
-                                        ZLinkOwnerLeaseWaitTracker.authorityRecordKey(key.value()));
+                                        ZLinkOwnerLeaseWaitTracker.authorityRecordKey(key.value()),
+                                        new ZLinkLocationOwnerToken(
+                                                deleted.ownerId(), deleted.ownerLeaseGeneration()));
                                 return completed(
                                         new ZLinkAuthorityDeleted(
                                                 found.value().version().value(),

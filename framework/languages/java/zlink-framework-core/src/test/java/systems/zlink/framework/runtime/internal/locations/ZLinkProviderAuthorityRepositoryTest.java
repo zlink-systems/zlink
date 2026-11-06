@@ -24,6 +24,7 @@ import systems.zlink.framework.locationprovider.ZLinkStoreScanPageResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreValue;
+import systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
 import systems.zlink.framework.locations.ZLinkActivationConcurrency;
@@ -1378,6 +1379,179 @@ final class ZLinkProviderAuthorityRepositoryTest {
 
         monotonicNanos.addAndGet(Duration.ofNanos(3).toNanos());
         assertTrue(waitTracker.shouldWait(waitKey, owner, true));
+    }
+
+    @RepeatedTest(100)
+    void lateDeleteResponseDoesNotClearNewOwnerWaitObservation() throws Exception {
+        var monotonicNanos = new AtomicLong();
+        var inner = new ZLinkInMemoryProviderLocationStore();
+        String key = ZLinkAuthorityKeyCodec.spot("delete-wait-race");
+        var store =
+                new DeferredAuthorityDeleteStore(
+                        inner, ZLinkProviderAuthorityRepository.authorityKey(key).value());
+        var owners = new ZLinkProviderOwnerLeaseRepository(store);
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                owners.claim("delete-wait-race", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var descriptors = new ZLinkProviderDescriptorRepository(store);
+        var descriptor = capacityDescriptor(owner);
+        assertEquals(
+                ZLinkLocationWriteStatus.STORED,
+                descriptors
+                        .updateMeshNode(descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+        var waitTracker = new ZLinkOwnerLeaseWaitTracker(monotonicNanos::get, Duration.ofNanos(1));
+        var repository = new ZLinkProviderAuthorityRepository(store, descriptors, waitTracker);
+        var reservation =
+                assertInstanceOf(
+                                ZLinkObjectReserved.class,
+                                repository
+                                        .reserve(
+                                                capacityRequest(key, descriptor, owner),
+                                                () -> false)
+                                        .toCompletableFuture()
+                                        .get())
+                        .reservation();
+        assertEquals(
+                ZLinkObjectCommitResult.COMMITTED,
+                repository
+                        .commit(reservation, new byte[] {2}, null, () -> false)
+                        .toCompletableFuture()
+                        .get());
+        var before =
+                assertInstanceOf(
+                        ZLinkAuthoritySnapshot.class,
+                        repository.read(key, () -> false).toCompletableFuture().get());
+        String waitKey =
+                ZLinkOwnerLeaseWaitTracker.authorityRecordKey(
+                        ZLinkProviderAuthorityRepository.authorityKey(key).value());
+        assertTrue(waitTracker.shouldWait(waitKey, owner, true));
+
+        monotonicNanos.set(1);
+        var deleting =
+                repository
+                        .compareExchange(
+                                key,
+                                new ZLinkAuthorityExpectFound(before.storeVersion()),
+                                new ZLinkAuthorityDelete(),
+                                () -> false)
+                        .toCompletableFuture();
+        store.deleteApplied.get();
+        assertFalse(deleting.isDone());
+        var nextOwner = new ZLinkLocationOwnerToken("delete-wait-next", 2);
+        assertTrue(waitTracker.shouldWait(waitKey, nextOwner, true));
+
+        monotonicNanos.set(2);
+        store.releaseDeleteResponse.complete(null);
+        assertInstanceOf(ZLinkAuthorityDeleted.class, deleting.get());
+
+        monotonicNanos.set(4);
+        assertFalse(waitTracker.shouldWait(waitKey, nextOwner, true));
+    }
+
+    @RepeatedTest(100)
+    void validLeaseCleanupDoesNotRemoveAnotherTokenObservation() {
+        var monotonicNanos = new AtomicLong();
+        var waitTracker = new ZLinkOwnerLeaseWaitTracker(monotonicNanos::get, Duration.ofNanos(1));
+        var firstOwner = new ZLinkLocationOwnerToken("wait-owner-first", 1);
+        var nextOwner = new ZLinkLocationOwnerToken("wait-owner-next", 2);
+        String waitKey = ZLinkOwnerLeaseWaitTracker.authorityRecordKey("valid-cleanup-race");
+
+        assertTrue(waitTracker.shouldWait(waitKey, firstOwner, true));
+        monotonicNanos.set(1);
+        assertTrue(waitTracker.shouldWait(waitKey, nextOwner, true));
+        assertFalse(waitTracker.shouldWait(waitKey, firstOwner, false));
+
+        monotonicNanos.set(4);
+        assertFalse(waitTracker.shouldWait(waitKey, nextOwner, true));
+    }
+
+    @RepeatedTest(100)
+    void missingReadCleanupOnlyRemovesTheObservationSeenBeforeTheRequest() {
+        var monotonicNanos = new AtomicLong();
+        var waitTracker = new ZLinkOwnerLeaseWaitTracker(monotonicNanos::get, Duration.ofNanos(1));
+        var firstOwner = new ZLinkLocationOwnerToken("missing-owner-first", 1);
+        var nextOwner = new ZLinkLocationOwnerToken("missing-owner-next", 2);
+        String waitKey = ZLinkOwnerLeaseWaitTracker.authorityRecordKey("missing-read-race");
+
+        assertTrue(waitTracker.shouldWait(waitKey, firstOwner, true));
+        var requestObservation = waitTracker.snapshot(waitKey);
+        monotonicNanos.set(1);
+        assertTrue(waitTracker.shouldWait(waitKey, nextOwner, true));
+        waitTracker.clearIfUnchanged(waitKey, requestObservation);
+
+        monotonicNanos.set(4);
+        assertFalse(waitTracker.shouldWait(waitKey, nextOwner, true));
+    }
+
+    @RepeatedTest(100)
+    void missingReadCleanupPreservesAReplacementObservationForTheSameToken() {
+        var monotonicNanos = new AtomicLong();
+        var waitTracker = new ZLinkOwnerLeaseWaitTracker(monotonicNanos::get, Duration.ofNanos(1));
+        var owner = new ZLinkLocationOwnerToken("same-token-observation", 1);
+        String waitKey = ZLinkOwnerLeaseWaitTracker.authorityRecordKey("same-token-missing-race");
+
+        assertTrue(waitTracker.shouldWait(waitKey, owner, true));
+        var requestObservation = waitTracker.snapshot(waitKey);
+        assertFalse(waitTracker.shouldWait(waitKey, owner, false));
+        assertTrue(waitTracker.shouldWait(waitKey, owner, true));
+        waitTracker.clearIfUnchanged(waitKey, requestObservation);
+
+        monotonicNanos.set(3);
+        assertFalse(waitTracker.shouldWait(waitKey, owner, true));
+    }
+
+    private static final class DeferredAuthorityDeleteStore implements ZLinkLocationStore {
+        private final ZLinkInMemoryProviderLocationStore inner;
+        private final String delayedAuthorityKey;
+        private final CompletableFuture<Void> deleteApplied = new CompletableFuture<>();
+        private final CompletableFuture<Void> releaseDeleteResponse = new CompletableFuture<>();
+
+        DeferredAuthorityDeleteStore(
+                ZLinkInMemoryProviderLocationStore inner, String delayedAuthorityKey) {
+            this.inner = inner;
+            this.delayedAuthorityKey = delayedAuthorityKey;
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreReadResult> read(
+                ZLinkStoreKey key, ZLinkStoreCancellation cancellation) {
+            return inner.read(key, cancellation);
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreWriteResult> write(
+                ZLinkStoreWriteRequest request, ZLinkStoreCancellation cancellation) {
+            boolean deletesAuthority =
+                    request.mutations().stream()
+                            .anyMatch(
+                                    mutation ->
+                                            mutation instanceof ZLinkStoreDelete delete
+                                                    && delete.key()
+                                                            .value()
+                                                            .equals(delayedAuthorityKey));
+            return inner.write(request, cancellation)
+                    .thenCompose(
+                            result -> {
+                                if (!deletesAuthority
+                                        || !(result instanceof ZLinkStoreWriteApplied))
+                                    return CompletableFuture.completedFuture(result);
+                                deleteApplied.complete(null);
+                                return releaseDeleteResponse.thenApply(ignored -> result);
+                            });
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreScanResult> scan(
+                ZLinkStoreScanRequest request, ZLinkStoreCancellation cancellation) {
+            return inner.scan(request, cancellation);
+        }
     }
 
     private record ReincarnationFixture(

@@ -26,7 +26,7 @@ public final class ZLinkOwnerLeaseWaitTracker {
         Objects.requireNonNull(recordKey, "recordKey");
         Objects.requireNonNull(owner, "owner");
         if (!invalid) {
-            observations.remove(recordKey);
+            clear(recordKey, owner);
             return false;
         }
         long now = monotonicNanos.getAsLong();
@@ -38,8 +38,24 @@ public final class ZLinkOwnerLeaseWaitTracker {
         return now - current.firstObservedNanos() < waitNanos;
     }
 
-    public synchronized void clear(String recordKey) {
-        observations.remove(Objects.requireNonNull(recordKey, "recordKey"));
+    public synchronized Observation snapshot(String recordKey) {
+        return observations.get(Objects.requireNonNull(recordKey, "recordKey"));
+    }
+
+    public synchronized void clear(String recordKey, ZLinkLocationOwnerToken owner) {
+        Objects.requireNonNull(recordKey, "recordKey");
+        Objects.requireNonNull(owner, "owner");
+        Observation current = observations.get(recordKey);
+        if (current != null && current.owner().equals(owner)) clearIfCurrent(recordKey, current);
+    }
+
+    public synchronized void clearIfUnchanged(String recordKey, Observation observed) {
+        Objects.requireNonNull(recordKey, "recordKey");
+        clearIfCurrent(recordKey, observed);
+    }
+
+    private void clearIfCurrent(String recordKey, Observation observed) {
+        if (observations.get(recordKey) == observed) observations.remove(recordKey);
     }
 
     public static String authorityRecordKey(String authorityKey) {
@@ -50,5 +66,21 @@ public final class ZLinkOwnerLeaseWaitTracker {
         return "descriptor:" + Objects.requireNonNull(descriptorKey, "descriptorKey");
     }
 
-    private record Observation(ZLinkLocationOwnerToken owner, long firstObservedNanos) {}
+    public static final class Observation {
+        private final ZLinkLocationOwnerToken owner;
+        private final long firstObservedNanos;
+
+        private Observation(ZLinkLocationOwnerToken owner, long firstObservedNanos) {
+            this.owner = owner;
+            this.firstObservedNanos = firstObservedNanos;
+        }
+
+        public ZLinkLocationOwnerToken owner() {
+            return owner;
+        }
+
+        public long firstObservedNanos() {
+            return firstObservedNanos;
+        }
+    }
 }

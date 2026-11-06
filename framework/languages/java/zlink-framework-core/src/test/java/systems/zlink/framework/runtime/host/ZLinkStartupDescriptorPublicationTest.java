@@ -250,24 +250,117 @@ final class ZLinkStartupDescriptorPublicationTest {
         }
     }
 
-    @Test
+    @RepeatedTest(100)
     void invalidDescriptorRequestRemainsAStartupError() throws Exception {
         var store =
                 new LostDescriptorResponseStore(ZLinkFrameworkRuntimeState.PREPARING, false, false);
         store.failure = new IllegalArgumentException("invalid descriptor request");
         var monotonicNanos = new AtomicLong();
         try (var runtime =
+                start(automaticOptions(store, "invalid-publication"), store, monotonicNanos)) {
+            ExecutionException failure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () ->
+                                    ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                                            .toCompletableFuture()
+                                            .get(WAIT_SECONDS, TimeUnit.SECONDS));
+            assertInstanceOf(IllegalArgumentException.class, failure.getCause());
+            assertEquals(ZLinkFrameworkRuntimeState.ERROR, runtime.state());
+        } finally {
+            store.losing.set(false);
+        }
+    }
+
+    @RepeatedTest(100)
+    void fixedRidWaitThenInvalidDescriptorRequestRemainsAStartupError() throws Exception {
+        var store =
+                new LostDescriptorResponseStore(ZLinkFrameworkRuntimeState.PREPARING, false, false);
+        store.failure = new IllegalArgumentException("invalid descriptor request");
+        var monotonicNanos = new AtomicLong();
+        try (var runtime =
                 start(
-                        options(store, "invalid-publication", Duration.ofSeconds(10)),
+                        options(store, "fixed-invalid-publication", Duration.ofSeconds(10)),
                         store,
                         monotonicNanos)) {
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
                     .toCompletableFuture()
                     .get(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertEquals(ZLinkFrameworkRuntimeState.PREPARING, runtime.state());
             monotonicNanos.set(3);
             renew(runtime);
             assertEquals(ZLinkFrameworkRuntimeState.ERROR, runtime.state());
+        } finally {
             store.losing.set(false);
+        }
+    }
+
+    @RepeatedTest(100)
+    void servingFixedRidLeaseGenerationRecoveryStoresOnItsFirstRenew() throws Exception {
+        var clock = new MutableClock(Instant.parse("2026-11-06T00:00:00Z"));
+        var inner = new ZLinkInMemoryProviderLocationStore(clock);
+        var store = new FixedRidWaitStore(inner);
+        var monotonicNanos = new AtomicLong();
+        try (var runtime =
+                start(
+                        options(store, "fixed-rid-lease-recovery", Duration.ofSeconds(2)),
+                        store,
+                        monotonicNanos)) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertEquals(ZLinkFrameworkRuntimeState.PREPARING, runtime.state());
+            monotonicNanos.set(3);
+            assertTrue(renew(runtime));
+            assertEquals(ZLinkFrameworkRuntimeState.SERVING, runtime.state());
+            var previous = descriptors(store).getFirst();
+
+            clock.advance(Duration.ofHours(1));
+            renew(runtime);
+
+            var recovered = descriptors(store).getFirst();
+            assertEquals(ZLinkFrameworkRuntimeState.SERVING, runtime.state());
+            assertTrue(runtime.isReady());
+            assertEquals(previous.ownerId(), recovered.ownerId());
+            assertEquals(previous.lifecycleGeneration(), recovered.lifecycleGeneration());
+            assertTrue(recovered.leaseGeneration() > previous.leaseGeneration());
+            assertEquals(ZLinkFrameworkRuntimeState.SERVING, recovered.state());
+        }
+    }
+
+    @RepeatedTest(100)
+    void preparingFixedRidLeaseGenerationReplacementKeepsTheNewClaimWait() throws Exception {
+        var clock = new MutableClock(Instant.parse("2026-11-06T00:00:00Z"));
+        var inner = new ZLinkInMemoryProviderLocationStore(clock);
+        var store = new FixedRidWaitStore(inner);
+        var monotonicNanos = new AtomicLong();
+        try (var runtime =
+                start(
+                        options(store, "fixed-rid-preparing-recovery", Duration.ofSeconds(2)),
+                        store,
+                        monotonicNanos)) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertEquals(ZLinkFrameworkRuntimeState.PREPARING, runtime.state());
+            assertTrue(descriptors(store).isEmpty());
+            monotonicNanos.set(2);
+
+            clock.advance(Duration.ofHours(1));
+            renew(runtime);
+            assertEquals(ZLinkFrameworkRuntimeState.PREPARING, runtime.state());
+            assertTrue(descriptors(store).isEmpty());
+            long replacementObservedAt = monotonicNanos.get();
+
+            monotonicNanos.set(replacementObservedAt + 2);
+            renew(runtime);
+            assertEquals(ZLinkFrameworkRuntimeState.PREPARING, runtime.state());
+            assertTrue(descriptors(store).isEmpty());
+
+            monotonicNanos.incrementAndGet();
+            renew(runtime);
+            assertEquals(ZLinkFrameworkRuntimeState.SERVING, runtime.state());
+            assertEquals(1, descriptors(store).size());
         }
     }
 

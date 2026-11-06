@@ -308,9 +308,14 @@ final class ZLinkProviderDescriptorRepository {
                                             != leaseGeneration) {
                                 return completed(ZLinkLocationWriteResult.ignoredStale());
                             }
+                            var observedWait = ownerLeaseWait.snapshot(waitKey);
                             return provider.read(rowKey, active())
                                     .thenCompose(
                                             current -> {
+                                                if (current instanceof ZLinkStoreReadMissing
+                                                        && !fixedRidClaim)
+                                                    ownerLeaseWait.clearIfUnchanged(
+                                                            waitKey, observedWait);
                                                 if (fixedRidClaim
                                                         && current instanceof ZLinkStoreReadMissing
                                                         && ownerLeaseWait.shouldWait(
@@ -335,7 +340,7 @@ final class ZLinkProviderDescriptorRepository {
                                                                     && identity.ownerId()
                                                                             .equals(ownerId)
                                                                     && identity.leaseGeneration()
-                                                                            == leaseGeneration
+                                                                            <= leaseGeneration
                                                                     && identity
                                                                                     .lifecycleGeneration()
                                                                             == lifecycleGeneration
@@ -361,7 +366,12 @@ final class ZLinkProviderDescriptorRepository {
                                                                                         record
                                                                                                 .generation(),
                                                                                         descriptor)))) {
-                                                            ownerLeaseWait.clear(waitKey);
+                                                            ownerLeaseWait.clear(
+                                                                    waitKey,
+                                                                    new ZLinkLocationOwnerToken(
+                                                                            identity.ownerId(),
+                                                                            identity
+                                                                                    .leaseGeneration()));
                                                             return completed(
                                                                     ZLinkLocationWriteResult.stored(
                                                                             record.generation(),
@@ -452,7 +462,8 @@ final class ZLinkProviderDescriptorRepository {
                                                                                                                 .STORED)
                                                                                                     ownerLeaseWait
                                                                                                             .clear(
-                                                                                                                    waitKey);
+                                                                                                                    waitKey,
+                                                                                                                    previousOwnerToken);
                                                                                                 return result;
                                                                                             });
                                                                         });
@@ -462,8 +473,6 @@ final class ZLinkProviderDescriptorRepository {
                                                                     rowKey,
                                                                     found.value().version());
                                                 } else {
-                                                    if (!fixedRidClaim)
-                                                        ownerLeaseWait.clear(waitKey);
                                                     if (intent == ZLinkLocationWriteIntent.RENEW) {
                                                         return completed(
                                                                 ZLinkLocationWriteResult
@@ -489,7 +498,10 @@ final class ZLinkProviderDescriptorRepository {
                                                                             == ZLinkLocationWriteStatus
                                                                                     .STORED)
                                                                         ownerLeaseWait.clear(
-                                                                                waitKey);
+                                                                                waitKey,
+                                                                                new ZLinkLocationOwnerToken(
+                                                                                        ownerId,
+                                                                                        leaseGeneration));
                                                                     return result;
                                                                 });
                                             });
@@ -558,8 +570,6 @@ final class ZLinkProviderDescriptorRepository {
         return provider.read(rowKey, cancellation)
                 .thenCompose(
                         current -> {
-                            if (!(current instanceof ZLinkStoreReadFound))
-                                ownerLeaseWait.clear(waitKey);
                             if (!(current instanceof ZLinkStoreReadFound found)
                                     || !owner.ownerId().equals(ownerId.apply(found.value().bytes()))
                                     || owner.leaseGeneration()
@@ -578,7 +588,7 @@ final class ZLinkProviderDescriptorRepository {
                                             result -> {
                                                 if (!(result instanceof ZLinkStoreWriteApplied))
                                                     return ZLinkLocationWriteStatus.IGNORED_STALE;
-                                                ownerLeaseWait.clear(waitKey);
+                                                ownerLeaseWait.clear(waitKey, owner);
                                                 return ZLinkLocationWriteStatus.STORED;
                                             });
                         });
@@ -1096,8 +1106,7 @@ final class ZLinkProviderDescriptorRepository {
                 && current.capacity().actors().limit() == next.capacity().actors().limit()
                 && current.capacity().spots().limit() == next.capacity().spots().limit()
                 && current.securityIdentity().equals(next.securityIdentity())
-                && current.ownerId().equals(next.ownerId())
-                && current.leaseGeneration() == next.leaseGeneration();
+                && current.ownerId().equals(next.ownerId());
     }
 
     private static long decodeOwnerGeneration(byte[] bytes) {
