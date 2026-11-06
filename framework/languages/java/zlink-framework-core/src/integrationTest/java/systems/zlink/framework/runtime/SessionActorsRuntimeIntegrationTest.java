@@ -236,7 +236,7 @@ final class SessionActorsRuntimeIntegrationTest {
                         PlayerActorFactory.class,
                         factory -> factory.disableRelocation());
         try (var target =
-                RuntimeTestSupport.startFramework(
+                RuntimeTestSupport.startFixedRidFramework(
                         targetOptions, new ZLinkJavaBackendAdapterFactory())) {
             var sourceOptions = new DefaultZLinkFrameworkOptions();
             sourceOptions.addLocationStore(locations);
@@ -254,7 +254,7 @@ final class SessionActorsRuntimeIntegrationTest {
             stream.enableActorDispatch();
             stream.registerSession(GameSession.class);
             try (var source =
-                            RuntimeTestSupport.startFramework(
+                            RuntimeTestSupport.startFixedRidFramework(
                                     sourceOptions, new ZLinkJavaBackendAdapterFactory());
                     Socket client = connectStream(source, "gateway")) {
                 var created =
@@ -452,7 +452,8 @@ final class SessionActorsRuntimeIntegrationTest {
         }
         ;
 
-        return RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory());
+        return RuntimeTestSupport.startFixedRidFramework(
+                options, new ZLinkJavaBackendAdapterFactory());
     }
 
     private static ZLinkFrameworkRuntime startLocalManagedStreamRuntime() {
@@ -484,7 +485,8 @@ final class SessionActorsRuntimeIntegrationTest {
         }
         ;
 
-        return RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory());
+        return RuntimeTestSupport.startFixedRidFramework(
+                options, new ZLinkJavaBackendAdapterFactory());
     }
 
     private static ZLinkFrameworkRuntime startBoundGatewayRuntime() {
@@ -509,7 +511,8 @@ final class SessionActorsRuntimeIntegrationTest {
                             factory -> factory.disableRelocation());
         }
 
-        return RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory());
+        return RuntimeTestSupport.startFixedRidFramework(
+                options, new ZLinkJavaBackendAdapterFactory());
     }
 
     private static ZLinkFrameworkRuntime startChannelJoinRuntime() {
@@ -537,7 +540,8 @@ final class SessionActorsRuntimeIntegrationTest {
                             factory -> factory.disableRelocation());
         }
 
-        return RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory());
+        return RuntimeTestSupport.startFixedRidFramework(
+                options, new ZLinkJavaBackendAdapterFactory());
     }
 
     public static final class PlayerActor implements ZLinkActor {

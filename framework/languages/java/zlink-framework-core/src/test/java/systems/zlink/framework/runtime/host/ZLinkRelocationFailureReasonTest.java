@@ -97,6 +97,7 @@ final class ZLinkRelocationFailureReasonTest {
         try (var source =
                 ZLinkFrameworkRuntimeTestAccess.start(
                         options("source", sourceStore, relocations, null))) {
+            awaitReady(source);
             source.spotManager()
                     .getOrCreate("room", "room")
                     .submit()
@@ -108,6 +109,7 @@ final class ZLinkRelocationFailureReasonTest {
                                     options("target", inner, relocations, endpoint));
                     var sourceReady = new Ready(source.routeMeshRuntime().observe(MESH, 8));
                     var targetReady = new Ready(target.routeMeshRuntime().observe(MESH, 8))) {
+                awaitReady(target);
                 sourceReady.result.get(WAIT.toSeconds(), TimeUnit.SECONDS);
                 targetReady.result.get(WAIT.toSeconds(), TimeUnit.SECONDS);
                 inject.set(true);
@@ -135,6 +137,7 @@ final class ZLinkRelocationFailureReasonTest {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(locations);
         options.addRelocationStore(relocations);
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         var node =
                 options.addRouteMesh(MESH)
                         .listen("tcp://127.0.0.1:0")
@@ -142,6 +145,16 @@ final class ZLinkRelocationFailureReasonTest {
         if (peer != null) node.peerConnections().connect(peer);
         node.objects().server().addSpotFactory("room", Room.class, f -> f.recreateOnRelocation());
         return options;
+    }
+
+    private static void awaitReady(ZLinkFrameworkRuntime runtime) {
+        ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime).toCompletableFuture().join();
+        if (!runtime.isReady())
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                            .toCompletableFuture()
+                            .join());
+        assertTrue(runtime.isReady());
     }
 
     private static final class Ready

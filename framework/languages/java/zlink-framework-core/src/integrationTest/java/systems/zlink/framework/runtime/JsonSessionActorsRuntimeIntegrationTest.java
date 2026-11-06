@@ -86,7 +86,8 @@ final class JsonSessionActorsRuntimeIntegrationTest {
         }
         ;
 
-        return RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory());
+        return RuntimeTestSupport.startFixedRidFramework(
+                options, new ZLinkJavaBackendAdapterFactory());
     }
 
     public record JsonRelaySend(String value) {}

@@ -17,6 +17,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.locations.ZLinkLocationRuntime;
+import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 import systems.zlink.framework.runtime.spots.ZLinkSpotRuntime;
@@ -42,6 +43,7 @@ record ZLinkFrameworkRuntimeConstruction(
         ExecutorService channelInfrastructureExecutor,
         SpotTransportAddressResolver channelSpotAddressResolver,
         ZLinkLocationRuntime locationRuntime,
+        ZLinkRegisteredLocationStores locationStores,
         ScheduledExecutorService spotTimerExecutor,
         ThreadPoolExecutor spotMulticastExecutor,
         Executor spotHandlerExecutor,
@@ -59,6 +61,7 @@ record ZLinkFrameworkRuntimeConstruction(
 
     static ZLinkFrameworkRuntimeConstruction defaults() {
         return new ZLinkFrameworkRuntimeConstruction(
+                null,
                 null,
                 null,
                 null,

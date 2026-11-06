@@ -214,6 +214,7 @@ class ZLinkTelemetryOwnerTest {
     void commonRuntimeCloseRetiresLeaseBeforeBlockedProviderFinishes() throws Exception {
         var options =
                 new systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(java.time.Duration.ofNanos(1));
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
         var target = systems.zlink.contracts.core.RoutingId.from("telemetry-owner");
         options.addRouteMesh("telemetry")

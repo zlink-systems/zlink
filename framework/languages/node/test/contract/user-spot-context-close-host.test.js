@@ -5,9 +5,15 @@ const test = require('node:test');
 const { Injectable, Module, Scope } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const nestjs = require('../../packages/nestjs/dist');
-const { ZLinkFrameworkErrorKind, ZLinkSpotCreateState } = require('../../packages/framework/dist');
+const {
+  ZLinkFrameworkErrorKind,
+  ZLinkFrameworkRuntimeState,
+  ZLinkSpotCreateState
+} = require('../../packages/framework/dist');
+const { fixedRidHostClock, finishFixedRidHostStartup } = require('../helpers/fixed-rid-host-clock');
 
-test('User Spot context Close commits and releases its authority through the host coordinator', async () => {
+test('User Spot context Close commits and releases its authority through the host coordinator', async (t) => {
+  const hostClock = fixedRidHostClock(t);
   const events = [];
   class RoomSpot {
     async onClosing() {
@@ -15,7 +21,9 @@ test('User Spot context Close commits and releases its authority through the hos
     }
   }
   Injectable({ scope: Scope.TRANSIENT })(RoomSpot);
-  const builder = nestjs.zlinkFramework().options({ locations: { useInMemoryStores: true } });
+  const builder = nestjs.zlinkFramework().options({
+    locations: { useInMemoryStores: true, options: { ownerLeaseFencingMarginMs: 1 } }
+  });
   builder
     .addRouteMesh('context-close')
     .listen('tcp://127.0.0.1:0')
@@ -32,6 +40,11 @@ test('User Spot context Close commits and releases its authority through the hos
     abortOnError: false
   });
   try {
+    await finishFixedRidHostStartup(
+      app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME),
+      hostClock,
+      ZLinkFrameworkRuntimeState.Preparing
+    );
     const runtime = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME);
     const spots = app.get(nestjs.ZLINK_SPOT_MANAGER);
     const created = await spots.create('room').inMesh('context-close').submit();
@@ -54,7 +67,8 @@ test('User Spot context Close commits and releases its authority through the hos
 });
 
 for (const expire of [false, true]) {
-  test(`GetOrCreate waits for Closing authority (deadline=${expire})`, async () => {
+  test(`GetOrCreate waits for Closing authority (deadline=${expire})`, async (t) => {
+    const hostClock = fixedRidHostClock(t);
     let enter;
     let release;
     const entered = new Promise((resolve) => {
@@ -88,6 +102,7 @@ for (const expire of [false, true]) {
       }
     }
     const builder = nestjs.zlinkFramework().addLocationStore(new ObservedStore());
+    builder.configureLocations().ownerLeaseFencingMarginMs(1);
     builder
       .addRouteMesh('closing-create')
       .listen('tcp://127.0.0.1:0')
@@ -106,6 +121,11 @@ for (const expire of [false, true]) {
     });
     let close;
     try {
+      await finishFixedRidHostStartup(
+        app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME),
+        hostClock,
+        ZLinkFrameworkRuntimeState.Preparing
+      );
       const spots = app.get(nestjs.ZLINK_SPOT_MANAGER);
       const original = await spots
         .getOrCreate('closing-room', 'room')

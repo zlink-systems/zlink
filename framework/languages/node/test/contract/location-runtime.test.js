@@ -47,7 +47,7 @@ test('store record golden fixture: key derivation and value byte vectors decode 
   const creation = fixture.keyDerivation.find((item) => item.record === 'creation-terminal');
   assert.ok(creation);
   let actualCreationPreimage;
-  const repository = new internal.ZLinkLocationStoreRepository({
+  const repository = testLocationStoreRepository({
     async read(key) {
       actualCreationPreimage = key.value;
       return { kind: 'missing', storeNow: new Date(0) };
@@ -171,7 +171,7 @@ test('authority key codec consumes the shared fixture and rejects non-canonical 
 });
 
 test('location runtime renews owner lease, records store failure, and recovers', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
+  const store = testInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
   const leaseStore = new FlakyOwnerLeaseStore(store);
   const runtime = runtimeFor(store, { ownerLeaseStore: leaseStore });
 
@@ -197,7 +197,7 @@ test('location runtime completes startup without a lease after the initial claim
   t.mock.method(performance, 'now', () => now);
   t.mock.timers.enable({ apis: ['setTimeout'] });
 
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   const timers = [];
   const leaseStore = {
     async claimOwnerLease(_ownerId, _leaseTtlMs, signal) {
@@ -232,7 +232,7 @@ test('location runtime completes startup without a lease after the initial claim
 });
 
 test('location runtime claims on the next heartbeat after startup Store recovery', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   const timers = [];
   let unavailable = true;
   const leaseStore = {
@@ -272,7 +272,7 @@ test('location runtime installs the same late-committed lease after heartbeat Co
   let now = initialMockClockMs;
   t.mock.method(performance, 'now', () => now);
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   const timers = [];
   let claimCalls = 0;
   let commitFirstClaim;
@@ -330,7 +330,7 @@ test('location runtime installs the same late-committed lease after heartbeat Co
 });
 
 test('location runtime does not start confirmation read after claim consumes renew deadline', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   let readCalls = 0;
   const leaseStore = {
     async claimOwnerLease() { return await new Promise(() => {}); },
@@ -360,7 +360,7 @@ test('location runtime does not start confirmation read after claim consumes ren
 
 test('location runtime fails startup for terminal owner lease claim results', async () => {
   for (const kind of ['conflict', 'generationExhausted']) {
-    const store = new internal.ZLinkInMemoryLocationStore();
+    const store = testInMemoryLocationStore();
     const leaseStore = {
       async claimOwnerLease() { return { kind }; },
       readOwnerLease: store.readOwnerLease.bind(store),
@@ -384,7 +384,7 @@ test('location runtime fails startup for terminal owner lease claim results', as
 
 test('location runtime preserves claim conflict when confirmation fails', async () => {
   for (const claimFails of [false, true]) {
-    const store = new internal.ZLinkInMemoryLocationStore();
+    const store = testInMemoryLocationStore();
     const failure = new Error('claim unavailable');
     const confirmationFailure = new DOMException('confirmation deadline exceeded', 'TimeoutError');
     const timers = [];
@@ -425,7 +425,7 @@ test('location runtime preserves claim conflict when confirmation fails', async 
 });
 
 test('location runtime releases a claim confirmed after startup cancellation without starting heartbeat', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   const timers = [];
   const controller = new AbortController();
   let claimStarted;
@@ -469,7 +469,7 @@ test('location runtime releases a claim confirmed after startup cancellation wit
 });
 
 test('location runtime preserves cancellation when confirmed-claim release does not respond', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   const controller = new AbortController();
   let claimStarted;
   const leaseStore = {
@@ -504,7 +504,7 @@ test('location runtime preserves cancellation when confirmed-claim release does 
 });
 
 test('location runtime records a stop-race claim release failure', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   let claimStarted;
   let completeClaim;
   const leaseStore = {
@@ -533,7 +533,7 @@ test('location runtime records a stop-race claim release failure', async () => {
 });
 
 test('late startup claim release uses the stop shutdown signal', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   const shutdown = new AbortController();
   let claimStarted;
   let completeClaim;
@@ -583,7 +583,7 @@ test('late startup claim release uses the stop shutdown signal', async () => {
 
 for (const failedPhase of ['confirmation', 'release']) {
   test(`startup cancellation preserves ${failedPhase} failure for stop without retry`, async () => {
-    const store = new internal.ZLinkInMemoryLocationStore();
+    const store = testInMemoryLocationStore();
     const cancellation = new AbortController();
     const shutdown = new AbortController();
     let claimStarted;
@@ -621,7 +621,7 @@ for (const failedPhase of ['confirmation', 'release']) {
 }
 
 test('location runtime reclaims immediately after the Store rejects a stale owner token', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   let stale = true;
   const leaseStore = {
     claimOwnerLease: store.claimOwnerLease.bind(store),
@@ -647,7 +647,7 @@ test('location runtime reclaims immediately after the Store rejects a stale owne
 });
 
 test('location runtime exact object queries preserve Ready rows as unavailable after owner loss', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   const authorityStore = new internal.ZLinkInMemoryAuthorityStore({
     isTargetLive: () => true
   });
@@ -711,7 +711,7 @@ test('location runtime exact object queries preserve Ready rows as unavailable a
 });
 
 test('location lifecycle reclaims tracked Spot and Actor rows after an owner lease generation change', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   const runtime = runtimeFor(store, { ownerId: 'owner-a' });
   const lifecycle = new internal.ZLinkLocationLifecycle(runtime, store, 'play', store);
 
@@ -795,7 +795,7 @@ for (const kind of ['Actor', 'Spot']) {
 }
 
 test('location runtime bounds fixed routing-id owner lease renewal by the configured timeout', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   const leaseStore = {
     claimOwnerLease: store.claimOwnerLease.bind(store),
     readOwnerLease: store.readOwnerLease.bind(store),
@@ -824,7 +824,7 @@ for (const failClaim of [false, true]) {
     let monotonicMs = 0;
     const timers = [];
     let storeUnavailable = failClaim;
-    const store = new internal.ZLinkInMemoryLocationStore(() => new Date(0));
+    const store = testInMemoryLocationStore(() => new Date(0));
     const ownerLeaseStore = {
       async claimOwnerLease(...args) {
         const result = await store.claimOwnerLease(...args);
@@ -872,7 +872,7 @@ for (const failClaim of [false, true]) {
 }
 
 test('location runtime schedules heartbeats from the actual monotonic start after a late renewal', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   const timers = [];
   let wallClockMs = 0;
   let monotonicMs = 0;
@@ -912,7 +912,7 @@ test('location runtime schedules heartbeats from the actual monotonic start afte
 });
 
 test('location runtime subtracts Store round trip from local lease eligibility', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(0));
+  const store = testInMemoryLocationStore(() => new Date(0));
   let monotonicMs = 0;
   const leaseStore = {
     claimOwnerLease: async (...args) => {
@@ -952,7 +952,7 @@ test('location runtime subtracts Store round trip from local lease eligibility',
 for (const expiresDuringRenewal of [false, true]) {
   for (const queuedResult of [false, true]) {
     test(`lease recovery observes admission at result application (expires: ${expiresDuringRenewal}, queued: ${queuedResult})`, async () => {
-      const store = new internal.ZLinkInMemoryLocationStore(() => new Date(0));
+      const store = testInMemoryLocationStore(() => new Date(0));
       let monotonicMs = 1_000;
       let resolveResponse;
       let rejectResponse;
@@ -1039,7 +1039,7 @@ for (const expiresDuringRenewal of [false, true]) {
 }
 
 test('location runtime waits for an in-flight heartbeat before removing the owner lease', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   const timers = [];
   let completeRenewal;
   const leaseStore = {
@@ -1092,7 +1092,7 @@ test('location runtime waits for an in-flight heartbeat before removing the owne
 });
 
 test('location runtime does not install a reclaimed lease after stop races with the claim', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   const timers = [];
   let claimCount = 0;
   let completeFreshClaim;
@@ -1154,7 +1154,7 @@ test('location runtime does not install a reclaimed lease after stop races with 
 });
 
 test('location runtime stamps owner id, reports stale ownership, and removes rows on stop', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
+  const store = testInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
   const oldOwner = runtimeFor(store, { ownerId: 'owner-a' });
   const newOwner = runtimeFor(store, { ownerId: 'owner-b' });
   const lost = [];
@@ -1192,7 +1192,7 @@ test('location runtime stamps owner id, reports stale ownership, and removes row
 });
 
 test('location runtime exposes owner cleanup failure instead of completing stop successfully', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   const failingLocationStore = {
     async removeAllByOwner() { throw new Error('owner rows unavailable'); }
   };
@@ -1204,7 +1204,7 @@ test('location runtime exposes owner cleanup failure instead of completing stop 
 });
 
 test('location runtime emits row events and resolvers emit resolve misses', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
+  const store = testInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
   const events = [];
   const sink = {
     peerRowUpdated(key, row) { events.push(['peer-updated', key, row]); },
@@ -1238,7 +1238,7 @@ test('location runtime emits row events and resolvers emit resolve misses', asyn
 });
 
 test('location runtime uses the contract default page size when no override is supplied', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   const pages = [];
   for (const methodName of ['listSpots', 'listActors', 'listRoutes']) {
     store[methodName] = async (_filter, page) => {
@@ -1254,7 +1254,7 @@ test('location runtime uses the contract default page size when no override is s
 });
 
 test('location runtime applies listPageSize when callers omit a page size', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   const pages = [];
   for (const methodName of ['listSpots', 'listActors', 'listRoutes']) {
     const original = store[methodName].bind(store);
@@ -1279,7 +1279,7 @@ test('location runtime applies listPageSize when callers omit a page size', asyn
 });
 
 test('location resolver filters exact actor capacity before weighted placement', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   const descriptors = [
     placementDescriptor('node-z', 'Player', 1, 0, 0),
     placementDescriptor('node-a', 'Player', 1, 0, 0),
@@ -1301,7 +1301,7 @@ test('location resolver filters exact actor capacity before weighted placement',
 
 test('descriptor target selection excludes an expired owner and continues with the live owner', async () => {
   let nowMs = Date.UTC(2026, 6, 3, 0, 0, 0);
-  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(nowMs));
+  const store = testInMemoryLocationStore(() => new Date(nowMs));
   const expired = await ownedPlacementDescriptor(store, 'owner-expired', 'node-expired', 100);
   nowMs += 100;
   const live = await ownedPlacementDescriptor(store, 'owner-live', 'node-live', 100);
@@ -1323,7 +1323,7 @@ test('descriptor target selection excludes an expired owner and continues with t
 
 test('descriptor target selection preserves a live owner', async () => {
   const nowMs = Date.UTC(2026, 6, 3, 0, 0, 0);
-  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(nowMs));
+  const store = testInMemoryLocationStore(() => new Date(nowMs));
   const live = await ownedPlacementDescriptor(store, 'owner-live', 'node-live', 100);
   const resolvers = resolversFor(store, undefined, store, {
     async listMeshNodes() {
@@ -1343,7 +1343,7 @@ test('descriptor target selection preserves a live owner', async () => {
 
 test('descriptor target selection rejects a Found owner lease without expiry', async () => {
   const nowMs = Date.UTC(2026, 6, 3, 0, 0, 0);
-  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(nowMs));
+  const store = testInMemoryLocationStore(() => new Date(nowMs));
   const descriptor = await ownedPlacementDescriptor(store, 'owner-corrupt', 'node-corrupt', 100);
   const locationStore = {
     async listMeshNodes() {
@@ -1419,7 +1419,7 @@ function placementDescriptor(nodeRid, stableType, placementWeight, active, reser
 
 test('descriptor queries require the exact owner lease generation', async () => {
   let nowMs = Date.UTC(2026, 6, 3, 0, 0, 0);
-  const store = new internal.ZLinkLocationStoreRepository(
+  const store = testLocationStoreRepository(
     new internal.ZLinkInMemoryProviderLocationStore(() => new Date(nowMs)),
     () => new Date(nowMs)
   );
@@ -1487,7 +1487,7 @@ test('location readiness returns false when ready state is missing or query fail
 });
 
 test('location lifecycle claims before activation and loser never activates', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
+  const store = testInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
   const nodeA = await lifecycleNode(store, 'owner-a', 'node-a');
   const nodeB = await lifecycleNode(store, 'owner-b', 'node-b');
   let activatedB = 0;
@@ -1523,7 +1523,7 @@ test('location lifecycle claims before activation and loser never activates', as
 });
 
 test('location lifecycle already-owned claim does not activate a second instance', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
+  const store = testInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
   const node = await lifecycleNode(store, 'owner-a', 'node-a');
 
   const first = await node.lifecycle.executeActorClaimThenActivate(
@@ -1555,7 +1555,7 @@ test('location lifecycle already-owned claim does not activate a second instance
 });
 
 test('location lifecycle rolls failed activation back and renews the claimed Actor ref', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
+  const store = testInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
   await liveUserSpotAuthority(store, 'play', 'spot-1', 7n);
 
   const node = await lifecycleNode(store, 'owner-a', 'node-a');
@@ -1601,7 +1601,7 @@ test('location lifecycle rolls failed activation back and renews the claimed Act
 });
 
 test('location lifecycle deactivates stale hosted actor and protects new owner row', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
+  const store = testInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
   await liveUserSpotAuthority(store, 'play', 'spot-1', 7n);
 
   const nodeA = await lifecycleNode(store, 'owner-a', 'node-a');
@@ -1630,7 +1630,7 @@ test('location lifecycle deactivates stale hosted actor and protects new owner r
 });
 
 test('location lifecycle reports source actor cleanup failure without resubmitting release', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
+  const store = testInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
   const node = await lifecycleNode(store, 'owner-a', 'node-a');
   await node.lifecycle.claimActor('player', 'actor-retry', rid('node-a'));
   const failure = new Error('store release failure');
@@ -1648,7 +1648,7 @@ test('location lifecycle reports source actor cleanup failure without resubmitti
 });
 
 test('location lifecycle releases placement Actor authority for the exact native ref', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
+  const store = testInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
   const runtime = runtimeFor(store, { ownerId: 'owner-a' });
   await runtime.start(rid('node-a'));
   const ownerToken = runtime.currentOwnerToken;
@@ -1723,7 +1723,7 @@ test('location lifecycle releases placement Actor authority for the exact native
 });
 
 test('location lifecycle durably closes an exact Ready Instance before deleting its authority', async () => {
-  const locationStore = new internal.ZLinkInMemoryLocationStore();
+  const locationStore = testInMemoryLocationStore();
   const runtime = runtimeFor(locationStore, { ownerId: 'owner-a' });
   const ownerLeaseGeneration = 5n;
   const payload = internal.encodeServiceInstanceAuthorityPayload({
@@ -1833,7 +1833,7 @@ test('location lifecycle durably closes an exact Ready Instance before deleting 
 });
 
 test('location lifecycle ignores an old Instance generation release after authority replacement', async () => {
-  const locationStore = new internal.ZLinkInMemoryLocationStore();
+  const locationStore = testInMemoryLocationStore();
   const runtime = runtimeFor(locationStore, { ownerId: 'owner-a' });
   let deletes = 0;
   const authorityStore = {
@@ -1892,7 +1892,7 @@ test('location lifecycle ignores an old Instance generation release after author
 });
 
 test('location lifecycle claims spots and binds actor session routes with takeover', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
+  const store = testInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
   const nodeA = await lifecycleNode(store, 'owner-a', 'node-a');
   const nodeB = await lifecycleNode(store, 'owner-b', 'node-b');
 
@@ -1929,7 +1929,7 @@ test('location lifecycle claims spots and binds actor session routes with takeov
 });
 
 test('store location resolvers seed reusable SpotHandle snapshots from live rows', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
+  const store = testInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
   await liveUserSpotAuthority(store, 'play', 'spot-1', 7n);
 
   const node = await lifecycleNode(store, 'owner-a', 'node-a', 'play');
@@ -1994,7 +1994,7 @@ test('store location resolvers seed reusable SpotHandle snapshots from live rows
 });
 
 test('actor resolver keeps the current Actor route while its enclosing Spot projection changes', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
+  const store = testInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
   await liveUserSpotAuthority(store, 'play', 'spot-1', 7n);
 
   const firstOwner = await lifecycleNode(store, 'owner-a', 'node-a', 'play');
@@ -2165,7 +2165,7 @@ test('Spot Message Follow invalidates only resolver entries for the source owner
 });
 
 test('store location resolver returns a live remote ActorRef', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   const runtime = runtimeFor(store, { ownerId: 'owner-a' });
   await runtime.start(rid('node-a'));
   const actorRef = {
@@ -2238,7 +2238,7 @@ test('Actor Message Follow invalidation preserves a newer cached owner fence', a
 });
 
 test('location spot route resolver bridges internal routed transport', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
+  const store = testInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
   const node = await lifecycleNode(store, 'owner-a', 'node-a', 'play');
   const resolver = new internal.ZLinkLocationSpotRouteResolver(resolversFor(store), ['play']);
 
@@ -2268,7 +2268,7 @@ test('location spot route resolver bridges internal routed transport', async () 
 });
 
 test('location spot route resolver reads a local activation when the store row is not yet visible', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   const local = {
     routerChannelId: 'play',
     targetNodeRid: rid('node-local'),
@@ -2287,7 +2287,7 @@ test('location spot route resolver reads a local activation when the store row i
 });
 
 test('location resolvers resolve Entry Spots from live MeshNode descriptors', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
+  const store = testInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
   const runtime = runtimeFor(store, { ownerId: 'owner-a' });
   await runtime.start(rid('node-a'));
   const entrySpotId = 'play-entry-00000000-0000-4000-8000-000000000001';
@@ -2316,7 +2316,7 @@ test('location resolvers resolve Entry Spots from live MeshNode descriptors', as
 });
 
 test('location runtime recreates a missing MeshNode row after Renew conflict', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   const runtime = runtimeFor(store, { ownerId: 'owner-a' });
   await runtime.start(rid('node-a'));
   const descriptor = placementDescriptor('node-a', 'Player', 100, 0, 0);
@@ -2343,7 +2343,7 @@ test('location runtime recreates a missing MeshNode row after Renew conflict', a
 });
 
 test('Entry Spot route resolution excludes non-serving nodes during replacement', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   const entrySpotId = 'play-entry-00000000-0000-4000-8000-000000000002';
 
   const draining = {
@@ -2378,8 +2378,8 @@ test('production repository persists owner lease and MeshNode records through on
   assert.equal(provider.claimOwnerLease, undefined);
   assert.equal(provider.updateMeshNode, undefined);
 
-  const writer = new internal.ZLinkLocationStoreRepository(provider, () => new Date(nowMs));
-  const reader = new internal.ZLinkLocationStoreRepository(provider, () => new Date(nowMs));
+  const writer = testLocationStoreRepository(provider, () => new Date(nowMs));
+  const reader = testLocationStoreRepository(provider, () => new Date(nowMs));
   const claimed = await writer.claimOwnerLease('owner-a', 30_000);
   assert.equal(claimed.kind, 'claimed');
   const descriptor = {
@@ -2451,10 +2451,18 @@ test('production repository persists owner lease and MeshNode records through on
   assert.equal((await writer.listMeshNodes('play')).items.length, 0);
 });
 
-test('production repository lets NewClaim replace only descriptors whose owner lease is Missing', async () => {
+test('production repository lets NewClaim replace only descriptors whose owner lease is Missing', async (t) => {
+  let monotonicMs = 0;
+  t.mock.method(performance, 'now', () => monotonicMs);
   let nowMs = Date.UTC(2026, 8, 20, 0, 0, 0);
   const provider = new internal.ZLinkInMemoryProviderLocationStore(() => new Date(nowMs));
-  const repository = new internal.ZLinkLocationStoreRepository(provider, () => new Date(nowMs));
+  const repository = new internal.ZLinkLocationStoreRepository(
+    provider,
+    () => new Date(nowMs),
+    undefined,
+    () => monotonicMs,
+    1
+  );
   const expiredClaim = await repository.claimOwnerLease('expired-descriptor-owner', 30_000);
   assert.equal(expiredClaim.kind, 'claimed');
   if (expiredClaim.kind !== 'claimed') throw new Error('owner lease claim failed');
@@ -2463,10 +2471,18 @@ test('production repository lets NewClaim replace only descriptors whose owner l
     ownerId: expiredClaim.token.ownerId,
     leaseGeneration: expiredClaim.token.leaseGeneration
   };
+  await assert.rejects(
+    repository.updateMeshNode(
+      expiredDescriptor,
+      internal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+    ),
+    error => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+  );
+  monotonicMs = 3;
   assert.equal(
     (await repository.updateMeshNode(
       expiredDescriptor,
-      internal.ZLinkLocationWriteIntent.NewClaim
+      internal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
     )).status,
     internal.ZLinkLocationWriteStatus.Stored
   );
@@ -2480,12 +2496,24 @@ test('production repository lets NewClaim replace only descriptors whose owner l
   assert.equal(successorClaim.kind, 'claimed');
   if (successorClaim.kind !== 'claimed') throw new Error('owner lease claim failed');
   assert.ok(successorClaim.token.leaseGeneration > expiredClaim.token.leaseGeneration);
-  assert.equal(
-    (await repository.updateMeshNode({
+  const replacement = {
       ...expiredDescriptor,
       ownerId: successorClaim.token.ownerId,
       leaseGeneration: successorClaim.token.leaseGeneration
-    }, internal.ZLinkLocationWriteIntent.NewClaim)).status,
+  };
+  await assert.rejects(
+    repository.updateMeshNode(
+      replacement,
+      internal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+    ),
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+  );
+  monotonicMs = 6;
+  assert.equal(
+    (await repository.updateMeshNode(
+      replacement,
+      internal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+    )).status,
     internal.ZLinkLocationWriteStatus.Stored
   );
 
@@ -2497,10 +2525,18 @@ test('production repository lets NewClaim replace only descriptors whose owner l
     ownerId: liveClaim.token.ownerId,
     leaseGeneration: liveClaim.token.leaseGeneration
   };
+  await assert.rejects(
+    repository.updateMeshNode(
+      liveDescriptor,
+      internal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+    ),
+    error => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+  );
+  monotonicMs = 9;
   assert.equal(
     (await repository.updateMeshNode(
       liveDescriptor,
-      internal.ZLinkLocationWriteIntent.NewClaim
+      internal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
     )).status,
     internal.ZLinkLocationWriteStatus.Stored
   );
@@ -2512,7 +2548,7 @@ test('production repository lets NewClaim replace only descriptors whose owner l
       ...liveDescriptor,
       ownerId: contenderClaim.token.ownerId,
       leaseGeneration: contenderClaim.token.leaseGeneration
-    }, internal.ZLinkLocationWriteIntent.NewClaim)).status,
+    }, internal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim)).status,
     internal.ZLinkLocationWriteStatus.Stored
   );
 });
@@ -2520,9 +2556,9 @@ test('production repository lets NewClaim replace only descriptors whose owner l
 test('production repository reclaims a Reserved authority after the Store reports its owner lease expired', async () => {
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
-  const source = new internal.ZLinkLocationStoreRepository(inner, () => now);
+  const source = testLocationStoreRepository(inner, () => now);
   const expired = new OwnerLeaseReadOverride(inner, 'owner-expired', (storeNow) => storeNow);
-  const recovery = new internal.ZLinkLocationStoreRepository(expired, () => now);
+  const recovery = testLocationStoreRepository(expired, () => now);
   const sourceOwner = await source.claimOwnerLease('owner-expired', 30_000);
   const targetOwner = await source.claimOwnerLease('owner-recovery', 30_000);
   assert.equal(sourceOwner.kind, 'claimed');
@@ -2570,7 +2606,7 @@ test('production repository reclaims a Reserved authority after the Store report
 test('production repository does not reclaim a live owner Reserved authority', async () => {
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const provider = new internal.ZLinkInMemoryProviderLocationStore(() => now);
-  const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
+  const repository = testLocationStoreRepository(provider, () => now);
   const sourceOwner = await repository.claimOwnerLease('owner-live-source', 30_000);
   const targetOwner = await repository.claimOwnerLease('owner-live-target', 30_000);
   assert.equal(sourceOwner.kind, 'claimed');
@@ -2605,9 +2641,9 @@ test('production repository does not reclaim a live owner Reserved authority', a
 test('production repository rejects a Reserved authority whose owner lease omits expiry', async () => {
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
-  const source = new internal.ZLinkLocationStoreRepository(inner, () => now);
+  const source = testLocationStoreRepository(inner, () => now);
   const corrupt = new OwnerLeaseReadOverride(inner, 'owner-corrupt', () => undefined);
-  const recovery = new internal.ZLinkLocationStoreRepository(corrupt, () => now);
+  const recovery = testLocationStoreRepository(corrupt, () => now);
   const sourceOwner = await source.claimOwnerLease('owner-corrupt', 30_000);
   const targetOwner = await source.claimOwnerLease('owner-corrupt-target', 30_000);
   assert.equal(sourceOwner.kind, 'claimed');
@@ -2679,7 +2715,7 @@ async function descriptorConflictScenario(mutation) {
     inner,
     mutation
   );
-  const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
+  const repository = testLocationStoreRepository(provider, () => now);
   const claimed = await repository.claimOwnerLease(`descriptor-${mutation}`, 30_000);
   assert.equal(claimed.kind, 'claimed');
   if (claimed.kind !== 'claimed') throw new Error('owner lease claim failed');
@@ -2849,7 +2885,7 @@ class DescriptorCasConflictLocationStore {
 
 test('production repository leaves authority record and next-to-issue counters unchanged at generation exhaustion', async () => {
   const provider = new internal.ZLinkInMemoryProviderLocationStore();
-  const repository = new internal.ZLinkLocationStoreRepository(provider);
+  const repository = testLocationStoreRepository(provider);
   const owner = await repository.claimOwnerLease('owner-generation-ceiling', 30_000);
   assert.equal(owner.kind, 'claimed');
   if (owner.kind !== 'claimed') throw new Error('owner lease claim failed');
@@ -2943,7 +2979,7 @@ test('production repository rejects non-canonical decimal bytes for every counte
       'zlink:v11:authority-owner-counter'
     ]) {
       const provider = new internal.ZLinkInMemoryProviderLocationStore();
-      const repository = new internal.ZLinkLocationStoreRepository(provider);
+      const repository = testLocationStoreRepository(provider);
       const owner = await repository.claimOwnerLease(`counter-${counterKey}-${malformed}`, 30_000);
       assert.equal(owner.kind, 'claimed');
       if (owner.kind !== 'claimed') throw new Error('owner lease claim failed');
@@ -2977,7 +3013,7 @@ test('production repository rejects non-canonical decimal bytes for every counte
       mutations: [{ kind: 'put', key: { value: 'zlink:v11:owner-counter' }, bytes: Buffer.from(malformed) }]
     })).kind, 'applied');
     await assert.rejects(
-      new internal.ZLinkLocationStoreRepository(provider).claimOwnerLease(`owner-${malformed}`, 30_000),
+      testLocationStoreRepository(provider).claimOwnerLease(`owner-${malformed}`, 30_000),
       /counter is not canonical decimal/
     );
   }
@@ -2995,7 +3031,7 @@ test('production repository rejects legacy public records without recordVersion'
     }]
   });
   assert.equal(written.kind, 'applied');
-  const repository = new internal.ZLinkLocationStoreRepository(provider);
+  const repository = testLocationStoreRepository(provider);
   await assert.rejects(
     repository.readAuthority(authorityKey),
     /unrecognized recordVersion/
@@ -3014,7 +3050,7 @@ test('production owner sweep preserves descriptors without issuing delete writes
       return await inner.write(request, signal);
     }
   };
-  const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
+  const repository = testLocationStoreRepository(provider, () => now);
   const claimed = await repository.claimOwnerLease('owner-batch', 30_000);
   assert.equal(claimed.kind, 'claimed');
 
@@ -3073,7 +3109,7 @@ test('production repository restarts an expired owner cleanup scan from its firs
     },
     write: inner.write.bind(inner)
   };
-  const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
+  const repository = testLocationStoreRepository(provider, () => now);
   const claimed = await repository.claimOwnerLease('owner-expired-scan', 30_000);
   assert.equal(claimed.kind, 'claimed');
   await repository.updateMeshNode({
@@ -3094,7 +3130,7 @@ test('production repository restarts an expired owner cleanup scan from its firs
 test('production repository does not delete a row after its owner lease is replaced', async () => {
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
-  const leaseRepository = new internal.ZLinkLocationStoreRepository(inner, () => now);
+  const leaseRepository = testLocationStoreRepository(inner, () => now);
   let ownerToken;
   let replaced = false;
   const provider = {
@@ -3109,7 +3145,7 @@ test('production repository does not delete a row after its owner lease is repla
       return await inner.write(request, signal);
     }
   };
-  const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
+  const repository = testLocationStoreRepository(provider, () => now);
   const claimed = await repository.claimOwnerLease('owner-fenced', 30_000);
   assert.equal(claimed.kind, 'claimed');
   ownerToken = claimed.token;
@@ -3130,7 +3166,7 @@ test('location runtime reconciles an opaque write applied before its response is
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
   const provider = new ReplyLossLocationStore(inner);
-  const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
+  const repository = testLocationStoreRepository(provider, () => now);
   const runtime = runtimeFor(repository, {
     ownerId: 'owner-ambiguous',
     locationOptions: { ownerLeaseTtlMs: 30_000 }
@@ -3157,7 +3193,7 @@ test('location runtime preserves a corrupt owner lease error during claim confir
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
   const provider = new ReplyLossLocationStore(inner);
-  const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
+  const repository = testLocationStoreRepository(provider, () => now);
   const runtime = runtimeFor(repository, { ownerId: 'owner-corrupt' });
 
   provider.loseNextResponse = true;
@@ -3177,7 +3213,7 @@ test('production repository rejects an ambiguous owner lease without an expiry a
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
   const provider = new ReplyLossLocationStore(inner);
-  const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
+  const repository = testLocationStoreRepository(provider, () => now);
 
   provider.loseNextResponse = true;
   provider.replaceFirstMutationBeforeFailure = true;
@@ -3196,7 +3232,7 @@ test('production repository rejects an ambiguous owner lease without an expiry a
 test('production repository reports conflict for a live owner lease with an expiry', async () => {
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const provider = new internal.ZLinkInMemoryProviderLocationStore(() => now);
-  const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
+  const repository = testLocationStoreRepository(provider, () => now);
   const claimed = await repository.claimOwnerLease('owner-conflict', 30_000);
 
   assert.equal(claimed.kind, 'claimed');
@@ -3218,8 +3254,8 @@ test('production repository reports conflict for a live owner lease with an expi
 test('production repository shares ClientServer and fanout discovery through only opaque Store primitives', async () => {
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const provider = new internal.ZLinkInMemoryProviderLocationStore(() => now);
-  const writer = new internal.ZLinkLocationStoreRepository(provider, () => now);
-  const reader = new internal.ZLinkLocationStoreRepository(provider, () => now);
+  const writer = testLocationStoreRepository(provider, () => now);
+  const reader = testLocationStoreRepository(provider, () => now);
   const claimed = await writer.claimOwnerLease('owner-a', 30_000);
   assert.equal(claimed.kind, 'claimed');
 
@@ -3367,8 +3403,8 @@ class OwnerLeaseReadOverride {
 test('production repository shares Spot Actor and route ownership through only opaque Store primitives', async () => {
   const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const provider = new internal.ZLinkInMemoryProviderLocationStore(() => now);
-  const writer = new internal.ZLinkLocationStoreRepository(provider, () => now);
-  const reader = new internal.ZLinkLocationStoreRepository(provider, () => now);
+  const writer = testLocationStoreRepository(provider, () => now);
+  const reader = testLocationStoreRepository(provider, () => now);
   const claimed = await writer.claimOwnerLease('owner-a', 30_000);
   assert.equal(claimed.kind, 'claimed');
 
@@ -3531,6 +3567,20 @@ function resolversFor(store, events, ownerLeaseStore = store, locationStore = st
   });
 }
 
+function testInMemoryLocationStore(now = () => new Date()) {
+  return new internal.ZLinkInMemoryLocationStore(now, () => performance.now(), 0);
+}
+
+function testLocationStoreRepository(provider, now = () => new Date()) {
+  return new internal.ZLinkLocationStoreRepository(
+    provider,
+    now,
+    undefined,
+    () => performance.now(),
+    0
+  );
+}
+
 function runtimeFor(store, options = {}) {
   const timers = options.timers ?? [];
   return new internal.ZLinkLocationRuntime({
@@ -3598,7 +3648,7 @@ test('creation Store calculations follow authority and owner qualification', asy
       return inner.write(request, signal);
     }
   };
-  const repository = new internal.ZLinkLocationStoreRepository(provider, () => now);
+  const repository = testLocationStoreRepository(provider, () => now);
   const descriptor = await ownedPlacementDescriptor(
     repository,
     'read-boundary',
@@ -3773,7 +3823,7 @@ async function creationDescriptorFixture(objectKind = 'actor') {
       return inner.write(request, signal);
     }
   };
-  const repository = new internal.ZLinkLocationStoreRepository(provider);
+  const repository = testLocationStoreRepository(provider);
   const owner = (await repository.claimOwnerLease('creation-owner', 30_000)).token;
   const descriptor = { ...placementDescriptor('creation-node', 'Player', 1, 0, 0),
     ownerId: owner.ownerId, leaseGeneration: owner.leaseGeneration };
@@ -3923,8 +3973,8 @@ test('sameLifecycleDescriptorRepublishRebuildsQualifiedConflictWithoutRepeatingF
 });
 
 test('#2646 owner sweep preserves publisher descriptors in both stores', async () => {
-  for (const store of [new internal.ZLinkInMemoryLocationStore(),
-    new internal.ZLinkLocationStoreRepository(new internal.ZLinkInMemoryProviderLocationStore())]) {
+  for (const store of [testInMemoryLocationStore(),
+    testLocationStoreRepository(new internal.ZLinkInMemoryProviderLocationStore())]) {
     const owner = await store.claimOwnerLease('cleanup-owner', 30_000);
     assert.equal(owner.kind, 'claimed');
     await store.updateMeshNode({
@@ -3943,7 +3993,7 @@ test('#2646 stop observes an in-flight cleanup and starts no release after cance
   let entered;
   const started = new Promise(resolve => { entered = resolve; });
   const pending = new Promise(resolve => { finish = resolve; });
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   const runtime = runtimeFor(store, { locationStore: {
     async removeAllByOwner(_owner, signal) {
       entered();
@@ -3967,7 +4017,7 @@ test('#2646 stop observes an in-flight cleanup and starts no release after cance
 });
 
 test('#2646 stop preserves replacement leases before and after deadline', async () => {
-  const store = new internal.ZLinkInMemoryLocationStore();
+  const store = testInMemoryLocationStore();
   let sweeps = 0;
   const runtime = runtimeFor(store, { ownerId: 'deadline-owner', locationStore: {
     async removeAllByOwner() { sweeps++; return 0n; }
@@ -3992,8 +4042,8 @@ test('#2646 stop preserves replacement leases before and after deadline', async 
 });
 
 test('#2646 owner sweep deletes matching authority and preserves another owner', async () => {
-  for (const store of [new internal.ZLinkInMemoryLocationStore(),
-    new internal.ZLinkLocationStoreRepository(new internal.ZLinkInMemoryProviderLocationStore())]) {
+  for (const store of [testInMemoryLocationStore(),
+    testLocationStoreRepository(new internal.ZLinkInMemoryProviderLocationStore())]) {
     const owner = await store.claimOwnerLease('authority-cleanup-owner', 30_000);
     const other = await store.claimOwnerLease('authority-other-owner', 30_000);
     for (const token of [owner.token, other.token]) {

@@ -57,6 +57,14 @@ import { decodeAuthorityKey, encodeAuthorityKey } from './authority-key-codec';
 import { ZLinkInMemoryLocationStore } from './in-memory-location-store';
 import { PROVIDER_STORAGE_NAMESPACE_PREFIX, storeKey } from './in-memory-provider-location-store';
 import {
+  ZLinkInternalMeshNodeWriteIntent,
+  type ZLinkMeshNodeWriteIntent
+} from './domain-store-contract';
+import {
+  ZLinkOwnerLeaseReleaseDelayPendingError,
+  ownerLeaseReleaseDelayScope
+} from './owner-lease-release-delay';
+import {
   type ZLinkActorLocation,
   type ZLinkActorLocationFilter,
   type ZLinkActorLocationKey,
@@ -138,6 +146,7 @@ interface AuthorityRecord {
 /** An Actor membership of an ended User Spot incarnation (location runtime §6.1). */
 interface EndedSpotMember {
   readonly key: ZLinkStoreKey;
+  readonly authorityKey: string;
   readonly version: ZLinkStoreVersion;
   readonly ownerId: string;
   readonly leaseGeneration: bigint;
@@ -221,9 +230,11 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   constructor(
     provider: ZLinkLocationStore,
     private readonly nowProvider: () => Date = () => new Date(),
-    private readonly metrics?: ZLinkRuntimeMetrics
+    private readonly metrics?: ZLinkRuntimeMetrics,
+    monotonicNowMs: () => number = () => performance.now(),
+    ownerLeaseFencingMarginMs = zlinkRuntimeDefaultLocationOptions.ownerLeaseFencingMarginMs
   ) {
-    super(nowProvider);
+    super(nowProvider, monotonicNowMs, ownerLeaseFencingMarginMs);
     // Classify only failures of the opaque SPI, before interpreting its records.
     const confirm = (key: ZLinkStoreKey, bytes?: Uint8Array) => {
       if (this.confirmedCapacities.has(key.value)) {
@@ -302,8 +313,11 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     key: ZLinkAuthorityKey,
     signal?: AbortSignal
   ): Promise<ZLinkAuthorityReadResult> {
+    const releaseDelayScope = ownerLeaseReleaseDelayScope.authority(key.value);
+    const releaseDelayObservation = this.ownerLeaseReleaseDelay.observation(releaseDelayScope);
     const result = await this.provider.read(authorityKey(key.value), signal);
     if (result.kind === 'missing') {
+      this.ownerLeaseReleaseDelay.clearIfUnchanged(releaseDelayScope, releaseDelayObservation);
       return { kind: 'missing', storeNow: result.storeNow };
     }
     return await this.projectAuthority(
@@ -389,8 +403,11 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     const rowKey = authorityKey(requireText(key.value, 'authority key'));
     for (;;) {
       signal?.throwIfAborted();
+      const releaseDelayScope = ownerLeaseReleaseDelayScope.authority(key.value);
+      const releaseDelayObservation = this.ownerLeaseReleaseDelay.observation(releaseDelayScope);
       const current = await this.provider.read(rowKey, signal);
       if (current.kind === 'missing') {
+        this.ownerLeaseReleaseDelay.clearIfUnchanged(releaseDelayScope, releaseDelayObservation);
         return { kind: 'conflict', current: { kind: 'missing', storeNow: current.storeNow } };
       }
       const record = decodeAuthorityRecord(current.value.bytes);
@@ -621,6 +638,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         (entry) => entry.key.value === rowKey.value
       )?.version;
       if (mutation.kind === 'delete') {
+        this.ownerLeaseReleaseDelay.clearAuthorityIfOwner(key.value, {
+          ownerId: record.snapshot.ownerId,
+          leaseGeneration: record.snapshot.ownerLeaseGeneration
+        });
         return {
           kind: 'deleted',
           storeVersion: {
@@ -1354,9 +1375,14 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   ): Promise<'notReclaimable' | 'conflict' | 'reclaimed'> {
     for (;;) {
       throwIfOperationExpired(signal, deadlineUnixMs);
+      const releaseDelayScope = ownerLeaseReleaseDelayScope.authority(key.value);
       const rowKey = authorityKey(key.value);
+      const releaseDelayObservation = this.ownerLeaseReleaseDelay.observation(releaseDelayScope);
       const current = await this.provider.read(rowKey, signal);
-      if (current.kind === 'missing') return 'conflict';
+      if (current.kind === 'missing') {
+        this.ownerLeaseReleaseDelay.clearIfUnchanged(releaseDelayScope, releaseDelayObservation);
+        return 'conflict';
+      }
       const record = decodeAuthorityRecord(current.value.bytes);
       if (
         current.value.version.value !== expectedStoreVersion &&
@@ -1371,6 +1397,35 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       )
         return 'notReclaimable';
       const leaseKey = ownerKey(snapshot.ownerId);
+      const owner = {
+        ownerId: snapshot.ownerId,
+        leaseGeneration: snapshot.ownerLeaseGeneration
+      };
+      const readySpot =
+        snapshot.allocation.objectKind === 'actor'
+          ? undefined
+          : decodeServiceReadySpotAuthority(snapshot.payload);
+      const readyActor =
+        snapshot.allocation.objectKind === 'actor'
+          ? decodeActorAuthorityPayload(
+              serviceRelocationAuthorityApplicationPayload(snapshot.payload)
+            )
+          : undefined;
+      const releaseCandidate =
+        snapshot.allocation.state === 'active' &&
+        requiredOwner === undefined &&
+        record.aggregate === undefined &&
+        !hasRelocationAuthority(snapshot.payload) &&
+        request?.actorRelocationPolicy === 'disabled' &&
+        request.key.kind === snapshot.allocation.objectKind &&
+        request.intent.stableType === snapshot.allocation.stableType &&
+        (readySpot !== undefined || readyActor?.state === 'ready') &&
+        (readySpot === undefined ||
+          (readySpot.kind === request.key.kind &&
+            readySpot.stableType === request.intent.stableType &&
+            readySpot.spotId === request.key.globalId &&
+            readySpot.activationRecovery === undefined));
+      if (!releaseCandidate) this.ownerLeaseReleaseDelay.clearAuthority(key.value);
       const descriptorKey = meshKey(
         snapshot.allocation.descriptor.meshName,
         snapshot.allocation.descriptor.rid
@@ -1379,12 +1434,83 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         snapshot.allocation.descriptor.meshName,
         String(snapshot.allocation.descriptor.rid)
       );
-      const [lease, descriptor, capacity] = await Promise.all([
-        this.provider.read(leaseKey, signal),
+      const leaseRead = this.provider.read(leaseKey, signal).then((read) => {
+        const observedAtMs = this.ownerLeaseReleaseDelay.nowMs();
+        const ownerLive = sameLiveOwner(read, snapshot);
+        const ownerReleaseAllowed = releaseCandidate
+          ? this.ownerLeaseReleaseDelay.allows(releaseDelayScope, owner, ownerLive, observedAtMs)
+          : false;
+        return { read, observedAtMs, ownerLive, ownerReleaseAllowed };
+      });
+      const memberObservations = leaseRead.then(async (leaseObservation) => {
+        if (
+          snapshot.allocation.state !== 'active' ||
+          leaseObservation.ownerLive ||
+          !releaseCandidate ||
+          readySpot?.kind !== 'user_spot'
+        )
+          return {
+            members: [] as EndedSpotMember[],
+            owners: new Map<string, { read: ZLinkStoreReadResult; observedAtMs: number }>(),
+            releaseStates: new Map<string, { ownerLive: boolean; allowed: boolean }>()
+          };
+
+        const members = await this.readEndedSpotMembers(
+          readySpot.spotId,
+          snapshot.objectGeneration,
+          signal
+        );
+        const targetsByOwner = new Map<
+          string,
+          { member: EndedSpotMember; scope: string; owner: ZLinkLocationOwnerToken }[]
+        >();
+        for (const member of members) {
+          const targets = targetsByOwner.get(member.ownerId) ?? [];
+          targets.push({
+            member,
+            scope: ownerLeaseReleaseDelayScope.userSpotMember(
+              readySpot.spotId,
+              snapshot.objectGeneration,
+              member.authorityKey
+            ),
+            owner: { ownerId: member.ownerId, leaseGeneration: member.leaseGeneration }
+          });
+          targetsByOwner.set(member.ownerId, targets);
+        }
+        const owners = new Map<string, { read: ZLinkStoreReadResult; observedAtMs: number }>();
+        const releaseStates = new Map<string, { ownerLive: boolean; allowed: boolean }>();
+        await Promise.all(
+          [...targetsByOwner].map(async ([ownerId, targets]) => {
+            const observation = await this.provider.read(ownerKey(ownerId), signal).then((read) => {
+              const observedAtMs = this.ownerLeaseReleaseDelay.nowMs();
+              for (const target of targets) {
+                const ownerLive =
+                  read.kind === 'found' &&
+                  matchesLiveOwnerLease(read, target.owner.ownerId, target.owner.leaseGeneration);
+                const allowed = this.ownerLeaseReleaseDelay.allows(
+                  target.scope,
+                  target.owner,
+                  ownerLive,
+                  observedAtMs
+                );
+                releaseStates.set(target.member.key.value, { ownerLive, allowed });
+              }
+              return { read, observedAtMs };
+            });
+            owners.set(ownerId, observation);
+          })
+        );
+        return { members, owners, releaseStates };
+      });
+      const [leaseObservation, descriptor, capacity, memberObservation] = await Promise.all([
+        leaseRead,
         this.provider.read(descriptorKey, signal),
-        this.provider.read(capacityRowKey, signal)
+        this.provider.read(capacityRowKey, signal),
+        memberObservations
       ]);
-      const ownerLive = sameLiveOwner(lease, snapshot);
+      const lease = leaseObservation.read;
+      const ownerLive = leaseObservation.ownerLive;
+      const ownerReleaseAllowed = leaseObservation.ownerReleaseAllowed;
       if (
         requiredOwner !== undefined &&
         (!ownerLive ||
@@ -1392,44 +1518,42 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           requiredOwner.leaseGeneration !== snapshot.ownerLeaseGeneration)
       )
         return 'notReclaimable';
-      let members: EndedSpotMember[] = [];
+      const members = memberObservation.members;
       if (snapshot.allocation.state === 'active') {
         if (ownerLive) return 'notReclaimable';
         let unavailable =
           record.aggregate !== undefined || hasRelocationAuthority(snapshot.payload);
         if (snapshot.allocation.objectKind !== 'actor') {
-          const spot = decodeServiceReadySpotAuthority(snapshot.payload);
+          const spot = readySpot;
           unavailable ||=
             spot === undefined ||
             spot.kind !== request?.key.kind ||
             spot.stableType !== request.intent.stableType ||
             spot.spotId !== request.key.globalId ||
             spot.activationRecovery !== undefined;
-          if (
-            spot?.kind === 'user_spot' &&
-            !unavailable &&
-            request?.actorRelocationPolicy === 'disabled'
-          )
-            members = await this.readEndedSpotMembers(
-              spot.spotId,
-              snapshot.objectGeneration,
-              signal
-            );
         }
         if (unavailable || request?.actorRelocationPolicy !== 'disabled')
           throw new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.Unavailable,
             'Object owner lease is unavailable.'
           );
-      } else if (
-        ownerLive &&
-        descriptor.kind === 'found' &&
-        reviveMeshDescriptor(
-          decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(descriptor.value.bytes)
-            .descriptor
-        ).lifecycleGeneration === snapshot.allocation.descriptorLifecycleGeneration
-      )
-        return 'notReclaimable';
+        if (releaseCandidate && !ownerReleaseAllowed)
+          throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.Unavailable,
+            'Object owner lease release is waiting for the invalid lease delay.'
+          );
+      } else {
+        this.ownerLeaseReleaseDelay.clearAuthority(key.value);
+        if (
+          ownerLive &&
+          descriptor.kind === 'found' &&
+          reviveMeshDescriptor(
+            decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(descriptor.value.bytes)
+              .descriptor
+          ).lifecycleGeneration === snapshot.allocation.descriptorLifecycleGeneration
+        )
+          return 'notReclaimable';
+      }
       if (
         snapshot.allocation.state !== 'active' &&
         (record.aggregate !== undefined || hasRelocationAuthority(snapshot.payload))
@@ -1445,25 +1569,29 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const mutations: ZLinkStoreWriteRequest['mutations'][number][] = [
         { kind: 'delete', key: rowKey }
       ];
-      const owners = new Map<string, ZLinkStoreReadResult>([[snapshot.ownerId, lease]]);
+      const owners = new Map<string, { read: ZLinkStoreReadResult; observedAtMs: number }>([
+        [snapshot.ownerId, { read: lease, observedAtMs: leaseObservation.observedAtMs }]
+      ]);
+      for (const [ownerId, observation] of memberObservation.owners)
+        owners.set(ownerId, observation);
+      const endedSpotId = readySpot?.kind === 'user_spot' ? readySpot.spotId : undefined;
+      let memberReleasePending = false;
       for (const member of members) {
-        let memberLease = owners.get(member.ownerId);
-        if (memberLease === undefined) {
-          memberLease = await this.provider.read(ownerKey(member.ownerId), signal);
-          owners.set(member.ownerId, memberLease);
+        const memberRelease = memberObservation.releaseStates.get(member.key.value);
+        if (memberRelease === undefined || !memberRelease.allowed || memberRelease.ownerLive) {
+          memberReleasePending = true;
+          continue;
         }
-        if (
-          memberLease.kind === 'found' &&
-          matchesLiveOwnerLease(memberLease, member.ownerId, member.leaseGeneration)
-        )
-          throw new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.Unavailable,
-            'User Spot still has a member with a live owner lease.'
-          );
         conditions.push({ kind: 'version', key: member.key, expected: member.version });
         mutations.push({ kind: 'delete', key: member.key });
       }
-      for (const [ownerId, read] of owners) conditions.push(conditionFor(ownerKey(ownerId), read));
+      if (memberReleasePending)
+        throw new ZLinkFrameworkException(
+          ZLinkFrameworkErrorKind.Unavailable,
+          'User Spot member owner lease release is waiting for the invalid lease delay.'
+        );
+      for (const [ownerId, observation] of owners)
+        conditions.push(conditionFor(ownerKey(ownerId), observation.read));
       const capacities = new Map<string, { read: ZLinkStoreReadResult; next?: CapacityRecord }>([
         [capacityRowKey.value, { read: capacity }]
       ]);
@@ -1528,7 +1656,28 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           'User Spot member release exceeds one Location Store batch.'
         );
       const result = await this.provider.write({ conditions, mutations }, signal);
-      if (result.kind === 'applied') return 'reclaimed';
+      if (result.kind === 'applied') {
+        this.ownerLeaseReleaseDelay.clearAuthorityIfOwner(key.value, {
+          ownerId: snapshot.ownerId,
+          leaseGeneration: snapshot.ownerLeaseGeneration
+        });
+        for (const member of members) {
+          const memberOwner = {
+            ownerId: member.ownerId,
+            leaseGeneration: member.leaseGeneration
+          };
+          this.ownerLeaseReleaseDelay.clearAuthorityIfOwner(member.authorityKey, memberOwner);
+          if (endedSpotId !== undefined) {
+            this.ownerLeaseReleaseDelay.clearUserSpotMemberIfOwner(
+              endedSpotId,
+              snapshot.objectGeneration,
+              member.authorityKey,
+              memberOwner
+            );
+          }
+        }
+        return 'reclaimed';
+      }
       await macrotaskBoundary();
     }
   }
@@ -1546,6 +1695,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   ): Promise<EndedSpotMember[]> {
     membershipSnapshot: for (;;) {
       const members: EndedSpotMember[] = [];
+      const memberScopePrefix = ownerLeaseReleaseDelayScope.userSpotMembers(spotId, spotGeneration);
+      const observedMemberScopes = new Set<string>();
+      let unavailableMember = false;
       let cursor: ZLinkStoreScanCursor | undefined;
       do {
         const page = await this.provider.scan(
@@ -1570,18 +1722,26 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             actor.currentSpotGeneration !== spotGeneration
           )
             continue;
+          const memberAuthorityKey = authorityContractValueFromPreimage(item.key.value);
+          const memberScope = ownerLeaseReleaseDelayScope.userSpotMember(
+            spotId,
+            spotGeneration,
+            memberAuthorityKey
+          );
+          observedMemberScopes.add(memberScope);
           if (
             authority.allocation.state !== 'active' ||
             record.aggregate !== undefined ||
             hasRelocationAuthority(authority.payload) ||
             decodeActorAuthorityPayload(authority.payload)?.state !== 'ready'
-          )
-            throw new ZLinkFrameworkException(
-              ZLinkFrameworkErrorKind.Unavailable,
-              'User Spot still has a relocating or unactivated member.'
-            );
+          ) {
+            this.ownerLeaseReleaseDelay.clear(memberScope);
+            unavailableMember = true;
+            continue;
+          }
           members.push({
             key: item.key,
+            authorityKey: memberAuthorityKey,
             version: item.value.version,
             ownerId: authority.ownerId,
             leaseGeneration: authority.ownerLeaseGeneration,
@@ -1590,6 +1750,12 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         }
         cursor = page.value.nextCursor;
       } while (cursor !== undefined);
+      this.ownerLeaseReleaseDelay.clearExcept(memberScopePrefix, observedMemberScopes);
+      if (unavailableMember)
+        throw new ZLinkFrameworkException(
+          ZLinkFrameworkErrorKind.Unavailable,
+          'User Spot still has a relocating or unactivated member.'
+        );
       return members;
     }
   }
@@ -1618,7 +1784,12 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const descriptorKey = meshKey(request.target.meshName, request.target.nodeRid);
       const leaseKey = ownerKey(request.target.owner.ownerId);
       const capacityRowKey = capacityKey(request.target.meshName, String(request.target.nodeRid));
+      const releaseDelayScope = ownerLeaseReleaseDelayScope.authority(encodedAuthorityKey.value);
+      const releaseDelayObservation = this.ownerLeaseReleaseDelay.observation(releaseDelayScope);
       const current = await this.provider.read(rowKey, signal);
+      if (current.kind === 'missing') {
+        this.ownerLeaseReleaseDelay.clearIfUnchanged(releaseDelayScope, releaseDelayObservation);
+      }
       if (current.kind === 'found') {
         const record = decodeAuthorityRecord(current.value.bytes);
         const snapshot = authoritySnapshot(
@@ -2277,7 +2448,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
 
   override async updateMeshNode(
     descriptor: ZLinkMeshNodeDescriptor,
-    intent: ZLinkLocationWriteIntent,
+    intent: ZLinkMeshNodeWriteIntent,
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteResult> {
     return this.observeStore('compare_exchange', () =>
@@ -2287,7 +2458,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
 
   private async updateMeshNodeRequest(
     descriptor: ZLinkMeshNodeDescriptor,
-    intent: ZLinkLocationWriteIntent,
+    intent: ZLinkMeshNodeWriteIntent,
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteResult> {
     const capacityRowKey = capacityKey(descriptor.meshName, String(descriptor.rid));
@@ -2300,7 +2471,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       reviveMeshDescriptor,
       sameMeshDescriptor,
       canRenewMesh,
-      signal
+      signal,
+      ownerLeaseReleaseDelayScope.meshNode(descriptor.meshName, String(descriptor.rid))
     );
   }
 
@@ -2963,12 +3135,17 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   private async updateDescriptor<T extends OwnedDescriptor>(
     rowKey: ZLinkStoreKey,
     descriptor: T,
-    intent: ZLinkLocationWriteIntent,
+    intent: ZLinkMeshNodeWriteIntent,
     revive: (descriptor: T) => T,
     same: (left: T, right: T) => boolean,
     canRenew: (current: T, next: T) => boolean,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    releaseDelayScope?: string
   ): Promise<ZLinkLocationWriteResult> {
+    let releaseDelayObservation =
+      releaseDelayScope === undefined
+        ? undefined
+        : this.ownerLeaseReleaseDelay.observation(releaseDelayScope);
     const leaseKey = ownerKey(descriptor.ownerId);
     const [lease, current] = await Promise.all([
       this.provider.read(leaseKey, signal),
@@ -2985,10 +3162,30 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const stored = revive(record.descriptor);
       generation = descriptorStoreGeneration(record, current.value.version.value);
       if (same(stored, descriptor)) {
+        if (releaseDelayScope !== undefined)
+          this.ownerLeaseReleaseDelay.clearIfUnchanged(releaseDelayScope, releaseDelayObservation);
         return { status: WriteStatus.Stored, generation, updatedAt: current.value.storeNow };
       }
       const currentLease = await this.provider.read(ownerKey(stored.ownerId), signal);
       const currentLeaseGeneration = liveOwnerLeaseGeneration(currentLease);
+      const currentOwnerLive = currentLeaseGeneration === stored.leaseGeneration;
+      if (
+        intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim &&
+        releaseDelayScope !== undefined &&
+        stored.ownerId !== descriptor.ownerId
+      ) {
+        const currentOwner = {
+          ownerId: stored.ownerId,
+          leaseGeneration: stored.leaseGeneration
+        };
+        const claimAllowed = this.ownerLeaseReleaseDelay.allows(
+          releaseDelayScope,
+          currentOwner,
+          currentOwnerLive
+        );
+        releaseDelayObservation = this.ownerLeaseReleaseDelay.observation(releaseDelayScope);
+        if (!currentOwnerLive && !claimAllowed) throw new ZLinkOwnerLeaseReleaseDelayPendingError();
+      }
       const takeover = canTakeOverStoredLocation(
         intent,
         stored.ownerId,
@@ -2997,11 +3194,17 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         descriptor.leaseGeneration,
         currentLeaseGeneration
       );
-      const renew = intent === 2 && canRenew(stored, descriptor);
+      const renew =
+        (intent === ZLinkLocationWriteIntent.Renew ||
+          intent === ZLinkInternalMeshNodeWriteIntent.FixedRidRenew) &&
+        canRenew(stored, descriptor);
       if (!takeover && !renew) {
         return {
           status:
-            intent === ZLinkLocationWriteIntent.NewClaim && currentLeaseGeneration !== undefined
+            (intent === ZLinkLocationWriteIntent.NewClaim ||
+              intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim ||
+              intent === ZLinkInternalMeshNodeWriteIntent.RecoveryClaim) &&
+            currentLeaseGeneration !== undefined
               ? WriteStatus.RejectedConflict
               : WriteStatus.IgnoredStale,
           generation,
@@ -3009,11 +3212,23 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         };
       }
       if (takeover) generation += 1n;
-    } else if (intent === 2) {
+    } else if (
+      intent === ZLinkLocationWriteIntent.Renew ||
+      intent === ZLinkInternalMeshNodeWriteIntent.FixedRidRenew
+    ) {
       return rejected(lease.value.storeNow);
+    } else {
+      if (
+        intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim &&
+        releaseDelayScope !== undefined
+      ) {
+        const claimAllowed = this.ownerLeaseReleaseDelay.allows(releaseDelayScope, undefined);
+        releaseDelayObservation = this.ownerLeaseReleaseDelay.observation(releaseDelayScope);
+        if (!claimAllowed) throw new ZLinkOwnerLeaseReleaseDelayPendingError();
+      }
     }
 
-    return this.writeDescriptorWithReconciliation(
+    const result = await this.writeDescriptorWithReconciliation(
       leaseKey,
       descriptor.ownerId,
       descriptor.leaseGeneration,
@@ -3023,6 +3238,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       generation,
       signal
     );
+    if (result.status === WriteStatus.Stored && releaseDelayScope !== undefined)
+      this.ownerLeaseReleaseDelay.clearIfUnchanged(releaseDelayScope, releaseDelayObservation);
+    return result;
   }
 
   private async writeDescriptorWithReconciliation(
@@ -4773,7 +4991,7 @@ function liveOwnerLeaseGeneration(lease: ZLinkStoreReadResult): bigint | undefin
 }
 
 function canTakeOverStoredLocation(
-  intent: ZLinkLocationWriteIntent,
+  intent: ZLinkMeshNodeWriteIntent,
   currentOwnerId: string,
   currentLeaseGeneration: bigint,
   nextOwnerId: string,
@@ -4785,10 +5003,16 @@ function canTakeOverStoredLocation(
     // fences concurrent stale writes while the next owner lease is checked.
     return true;
   }
-  if (intent !== ZLinkLocationWriteIntent.NewClaim) {
+  const recovery = intent === ZLinkInternalMeshNodeWriteIntent.RecoveryClaim;
+  if (
+    intent !== ZLinkLocationWriteIntent.NewClaim &&
+    intent !== ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim &&
+    !recovery
+  ) {
     return false;
   }
-  if (liveLeaseGeneration === undefined) return true;
+  // Recovery replaces only this owner's row from an earlier lease generation.
+  if (liveLeaseGeneration === undefined) return !recovery;
   return (
     currentOwnerId === nextOwnerId &&
     currentLeaseGeneration !== nextLeaseGeneration &&

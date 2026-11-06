@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const framework = require('../../packages/framework/dist/internal');
+const { fixedRidHostClock, finishFixedRidHostStartup } = require('../helpers/fixed-rid-host-clock');
 
 // Each RouteMesh binds an OS-assigned port; peers connect to the endpoint it
 // bound, read from its node status after start.
@@ -11,12 +12,18 @@ test.afterEach(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
 });
 
-test('wildcard RouteMesh advertisement admits a loopback RID-fenced peer for node-direct and channel calls', async () => {
+test('wildcard RouteMesh advertisement admits a loopback RID-fenced peer for node-direct and channel calls', async (t) => {
+  const hostClock = fixedRidHostClock(t);
   const target = createTargetRuntime('tcp://0.0.0.0:*', { channelServer: true });
   let caller;
 
   try {
     await target.runtime.start();
+    await finishFixedRidHostStartup(
+      target.runtime,
+      hostClock,
+      framework.ZLinkFrameworkRuntimeState.Preparing
+    );
     // A wildcard bind advertises the same-family loopback address.
     const remoteConnectEndpoint = boundEndpoint(target.runtime);
     assert.match(remoteConnectEndpoint, /^tcp:\/\/127\.0\.0\.1:\d+$/);
@@ -25,6 +32,11 @@ test('wildcard RouteMesh advertisement admits a loopback RID-fenced peer for nod
       builder.channel('mesh').client();
     });
     await caller.runtime.start();
+    await finishFixedRidHostStartup(
+      caller.runtime,
+      hostClock,
+      framework.ZLinkFrameworkRuntimeState.Preparing
+    );
     await waitForRouteMeshPeerReady(caller.runtime, 'mesh', 'node-b');
 
     assert.deepEqual(
@@ -47,17 +59,28 @@ test('wildcard RouteMesh advertisement admits a loopback RID-fenced peer for nod
   }
 });
 
-test('endpoint-only admitted RouteMesh peer is a node-direct target after handshake RID resolution', async () => {
+test('endpoint-only admitted RouteMesh peer is a node-direct target after handshake RID resolution', async (t) => {
+  const hostClock = fixedRidHostClock(t);
   const target = createTargetRuntime(ANY_LOOPBACK_PORT);
   let caller;
 
   try {
     await target.runtime.start();
+    await finishFixedRidHostStartup(
+      target.runtime,
+      hostClock,
+      framework.ZLinkFrameworkRuntimeState.Preparing
+    );
     const remoteEndpoint = boundEndpoint(target.runtime);
     caller = createCallerRuntime(ANY_LOOPBACK_PORT, builder => {
       builder.peerConnections().connect(remoteEndpoint);
     });
     await caller.runtime.start();
+    await finishFixedRidHostStartup(
+      caller.runtime,
+      hostClock,
+      framework.ZLinkFrameworkRuntimeState.Preparing
+    );
     await waitForRouteMeshPeerReady(caller.runtime, 'mesh', 'node-b');
 
     assert.deepEqual(
@@ -73,7 +96,8 @@ test('endpoint-only admitted RouteMesh peer is a node-direct target after handsh
   }
 });
 
-test('listener status reads the bound record during stop and clears it after teardown', async () => {
+test('listener status reads the bound record during stop and clears it after teardown', async (t) => {
+  const hostClock = fixedRidHostClock(t);
   const listeners = [
     ['routeMesh', 'status-mesh'],
     ['clientServer', 'status-work'],
@@ -83,6 +107,11 @@ test('listener status reads the bound record during stop and clears it after tea
   for (let round = 0; round < 10; round += 1) {
     const runtime = createAllListenerRuntime(round);
     await runtime.start();
+    await finishFixedRidHostStartup(
+      runtime,
+      hostClock,
+      framework.ZLinkFrameworkRuntimeState.Preparing
+    );
     for (const [kind, name] of listeners) {
       runtime.getListenerStatus(kind, name);
     }
@@ -126,6 +155,7 @@ function createAllListenerRuntime(round) {
   }
   class StatusSession {}
   const options = framework.createFrameworkOptions((builder) => {
+    builder.configureLocations().ownerLeaseFencingMarginMs(1);
     builder
       .addRouteMesh('status-mesh')
       .listen('tcp://127.0.0.1:0')
@@ -162,7 +192,10 @@ function createTargetRuntime(bind, options = {}) {
       }
     };
   }
-  const registration = framework.createFrameworkRegistration({ spotNodes: { mesh: node } });
+  const registration = framework.createFrameworkRegistration({
+    locations: { options: { ownerLeaseFencingMarginMs: 1 } },
+    spotNodes: { mesh: node }
+  });
   return {
     runtime: new framework.ZLinkFrameworkRuntimeHost({
       registration,
@@ -173,6 +206,7 @@ function createTargetRuntime(bind, options = {}) {
 
 function createCallerRuntime(bind, configure) {
   const options = framework.createFrameworkOptions((builder) => {
+    builder.configureLocations().ownerLeaseFencingMarginMs(1);
     const mesh = builder.addRouteMesh('mesh').listen(bind).routingId('node-a');
     configure(mesh);
   });

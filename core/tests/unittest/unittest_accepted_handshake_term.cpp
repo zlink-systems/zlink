@@ -8,22 +8,102 @@
 #include <future>
 #include <new>
 #include <thread>
+#if defined(_WIN32)
+#include <malloc.h>
+#endif
 
 namespace
 {
 std::atomic<size_t> live_allocations (0);
 }
 
-// Unit tests link the static test-core archive on every platform. Its ordinary
-// new/delete calls (including accepted engines) use these replacements.
-// The default nothrow overload delegates to the throwing overload below.
-void *operator new (size_t size_)
+// Unit tests link the static test-core archive on every platform. Keep every
+// allocation form in the same malloc/free family so ASan observes matching
+// allocation and deallocation origins.
+namespace
+{
+void *allocate (size_t size_)
 {
     void *const memory = std::malloc (size_ ? size_ : 1);
     if (!memory)
         throw std::bad_alloc ();
     live_allocations.fetch_add (1, std::memory_order_relaxed);
     return memory;
+}
+
+void *allocate_aligned (size_t size_, size_t alignment_)
+{
+#if defined(_WIN32)
+    void *const memory = _aligned_malloc (size_ ? size_ : 1, alignment_);
+#else
+    void *memory = NULL;
+    if (posix_memalign (&memory, alignment_, size_ ? size_ : 1) != 0)
+        memory = NULL;
+#endif
+    if (!memory)
+        throw std::bad_alloc ();
+    live_allocations.fetch_add (1, std::memory_order_relaxed);
+    return memory;
+}
+
+void free_aligned (void *memory_) noexcept
+{
+#if defined(_WIN32)
+    _aligned_free (memory_);
+#else
+    std::free (memory_);
+#endif
+}
+}
+
+void *operator new (size_t size_)
+{
+    return allocate (size_);
+}
+
+void *operator new[] (size_t size_)
+{
+    return allocate (size_);
+}
+
+void *operator new (size_t size_, const std::nothrow_t &) noexcept
+{
+    try {
+        return allocate (size_);
+    }
+    catch (...) {
+        return NULL;
+    }
+}
+
+void *operator new[] (size_t size_, const std::nothrow_t &) noexcept
+{
+    return ::operator new (size_, std::nothrow);
+}
+
+void *operator new (size_t size_, std::align_val_t alignment_)
+{
+    return allocate_aligned (size_, static_cast<size_t> (alignment_));
+}
+
+void *operator new[] (size_t size_, std::align_val_t alignment_)
+{
+    return ::operator new (size_, alignment_);
+}
+
+void *operator new (size_t size_, std::align_val_t alignment_, const std::nothrow_t &) noexcept
+{
+    try {
+        return allocate_aligned (size_, static_cast<size_t> (alignment_));
+    }
+    catch (...) {
+        return NULL;
+    }
+}
+
+void *operator new[] (size_t size_, std::align_val_t alignment_, const std::nothrow_t &) noexcept
+{
+    return ::operator new (size_, alignment_, std::nothrow);
 }
 
 void operator delete (void *memory_) noexcept
@@ -34,14 +114,42 @@ void operator delete (void *memory_) noexcept
     }
 }
 
-void *operator new[] (size_t size_)
-{
-    return ::operator new (size_);
-}
-
 void operator delete[] (void *memory_) noexcept
 {
     ::operator delete (memory_);
+}
+
+void operator delete (void *memory_, const std::nothrow_t &) noexcept
+{
+    ::operator delete (memory_);
+}
+
+void operator delete[] (void *memory_, const std::nothrow_t &) noexcept
+{
+    ::operator delete (memory_);
+}
+
+void operator delete (void *memory_, std::align_val_t) noexcept
+{
+    if (memory_) {
+        live_allocations.fetch_sub (1, std::memory_order_relaxed);
+        free_aligned (memory_);
+    }
+}
+
+void operator delete[] (void *memory_, std::align_val_t alignment_) noexcept
+{
+    ::operator delete (memory_, alignment_);
+}
+
+void operator delete (void *memory_, std::align_val_t alignment_, const std::nothrow_t &) noexcept
+{
+    ::operator delete (memory_, alignment_);
+}
+
+void operator delete[] (void *memory_, std::align_val_t alignment_, const std::nothrow_t &) noexcept
+{
+    ::operator delete (memory_, alignment_);
 }
 
 #if defined(__cpp_sized_deallocation)
@@ -53,6 +161,16 @@ void operator delete (void *memory_, size_t) noexcept
 void operator delete[] (void *memory_, size_t) noexcept
 {
     ::operator delete (memory_);
+}
+
+void operator delete (void *memory_, size_t, std::align_val_t alignment_) noexcept
+{
+    ::operator delete (memory_, alignment_);
+}
+
+void operator delete[] (void *memory_, size_t, std::align_val_t alignment_) noexcept
+{
+    ::operator delete (memory_, alignment_);
 }
 #endif
 

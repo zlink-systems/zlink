@@ -454,6 +454,7 @@ final class ZLinkActorJoinPrewarmIngressTest {
 
     private static DefaultZLinkFrameworkOptions hostOptions() {
         var options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.addLocationStore(
                 new systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore());
         options.addRelocationStore(new InMemoryRelocationStore());

@@ -465,6 +465,7 @@ final class ZLinkJoinedActorSendAdmissionTest {
             boolean hostsTable,
             ZLinkUserSpotExecutionMode executionMode) {
         var options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.configureDispatch()
                 .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
         options.addLocationStore(locations == null ? new ZLinkInMemoryLocationStore() : locations);

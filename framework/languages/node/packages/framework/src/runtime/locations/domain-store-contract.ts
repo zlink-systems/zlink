@@ -44,6 +44,14 @@ import type {
   ZLinkEndedOwnerReleaseIntent
 } from './internal-location-contracts';
 
+export enum ZLinkInternalMeshNodeWriteIntent {
+  FixedRidNewClaim = 'fixed_rid_new_claim',
+  FixedRidRenew = 'fixed_rid_renew',
+  RecoveryClaim = 'recovery_claim'
+}
+
+export type ZLinkMeshNodeWriteIntent = ZLinkLocationWriteIntent | ZLinkInternalMeshNodeWriteIntent;
+
 /**
  * Framework-private domain repository. Provider implementations never
  * implement this interface; the framework maps it to the opaque Store SPI.
@@ -56,7 +64,7 @@ export interface ZLinkDomainLocationStore {
 
   updateMeshNode(
     descriptor: ZLinkMeshNodeDescriptor,
-    intent: ZLinkLocationWriteIntent,
+    intent: ZLinkMeshNodeWriteIntent,
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteResult>;
   removeMeshNode(

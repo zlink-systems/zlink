@@ -156,6 +156,7 @@ export interface ZLinkNestFrameworkAdditionalOptions {
 export interface ZLinkLocationOptions {
     ownerLeaseRenewIntervalMs(value: number): this;
     ownerLeaseTtlMs(value: number): this;
+    storeOutageRetention(value: boolean): this;
     pollingIntervalMs(value: number): this;
     storeFailureGraceMs(value: number): this;
     ownerLeaseFencingMarginMs(value: number): this;
@@ -214,6 +215,10 @@ export type ZLinkNestProviderDiscoveryRoot = string | {
     readonly options?: ZLinkNestProviderDiscoveryOptions;
 };
 ```
+
+`ownerLeaseTtlMs` 기본값은 30초다(`30000` ms). `storeOutageRetention`은 startup-only bool option이며 기본값은 `false`다.
+보존 활성 조건·`false`의 admission 한도·domain 동일 설정 요구는
+[Location runtime §5.1](../../../05-location-relocation/01-location-runtime.ko.md#51-짧은-장애의-보존과-재참여)을 따른다.
 
 `disableImplicitHandlerAutoRegistration()`은 이 builder가 만드는 module에서 Nest provider metadata와
 role root를 scan해 handler를 자동 등록하는 동작을 끈다. 기본값은 자동 등록이다. 이 method를 호출해도

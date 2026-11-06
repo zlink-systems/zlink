@@ -30,6 +30,7 @@ final class ZLinkFrameworkRuntimeManualPeerTest {
 
         var targetOptions = new DefaultZLinkFrameworkOptions();
         targetOptions.addLocationStore(store);
+        targetOptions.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         var targetMesh =
                 targetOptions
                         .addRouteMesh(meshName)
@@ -41,11 +42,12 @@ final class ZLinkFrameworkRuntimeManualPeerTest {
         try (ZLinkFrameworkRuntime target =
                 ZLinkFrameworkRuntimeTestAccess.start(
                         targetOptions, new ZLinkJavaBackendAdapterFactory())) {
-            await(target::isReady, Duration.ofSeconds(3));
+            awaitReady(target);
             String targetEndpoint = target.monitoringMeshNode(meshName).status().localEndpoint();
 
             var sourceOptions = new DefaultZLinkFrameworkOptions();
             sourceOptions.addLocationStore(store);
+            sourceOptions.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
             var sourceMesh =
                     sourceOptions
                             .addRouteMesh(meshName)
@@ -58,7 +60,7 @@ final class ZLinkFrameworkRuntimeManualPeerTest {
             try (ZLinkFrameworkRuntime source =
                     ZLinkFrameworkRuntimeTestAccess.start(
                             sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
-                await(source::isReady, Duration.ofSeconds(3));
+                awaitReady(source);
                 ZLinkInternalMeshNode sourceNode = source.monitoringMeshNode(meshName);
                 long configuredIntentId = sourceNode.connectionIntentIds().getFirst();
 
@@ -91,5 +93,15 @@ final class ZLinkFrameworkRuntimeManualPeerTest {
             TimeUnit.MILLISECONDS.sleep(10);
         }
         assertTrue(condition.getAsBoolean(), "condition was not met within " + timeout);
+    }
+
+    private static void awaitReady(ZLinkFrameworkRuntime runtime) {
+        ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime).toCompletableFuture().join();
+        if (!runtime.isReady())
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                            .toCompletableFuture()
+                            .join());
+        assertTrue(runtime.isReady());
     }
 }

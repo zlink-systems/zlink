@@ -55,22 +55,33 @@ public final class ZLinkObjectServerDescriptorPublisher {
         long leaseGeneration = owner.leaseGeneration();
         Claim current = claim.get();
         boolean sameLease = current != null && current.leaseGeneration() == leaseGeneration;
-        ZLinkLocationWriteIntent intent =
-                sameLease && current.confirmed()
-                        ? ZLinkLocationWriteIntent.RENEW
-                        : ZLinkLocationWriteIntent.NEW_CLAIM;
+        boolean claimConfirmedInLifecycle = current != null && current.everConfirmed();
+        boolean sameAttemptPending =
+                sameLease && !claimConfirmedInLifecycle && !current.descriptors().isEmpty();
         // Location runtime §10: a claim whose result is unknown is sent again as the same claim.
         List<ZLinkMeshNodeDescriptor> descriptors =
-                sameLease && !current.confirmed()
-                        ? current.descriptors()
-                        : descriptors(owner, state);
+                sameAttemptPending ? current.descriptors() : descriptors(owner, state);
         Claim attempt =
-                intent == ZLinkLocationWriteIntent.NEW_CLAIM
-                        ? new Claim(leaseGeneration, descriptors, false)
-                        : current;
+                sameAttemptPending
+                        ? current
+                        : new Claim(leaseGeneration, descriptors, claimConfirmedInLifecycle);
         claim.compareAndSet(current, attempt);
         List<CompletionStage<?>> writes = new ArrayList<>();
         for (ZLinkMeshNodeDescriptor descriptor : descriptors) {
+            ZLinkDescriptorWriteIntent intent =
+                    claimConfirmedInLifecycle
+                            ? ZLinkLocationWriteIntent.RENEW
+                            : registration.meshNodes().stream()
+                                            .filter(
+                                                    candidate ->
+                                                            candidate
+                                                                    .meshName()
+                                                                    .equals(descriptor.meshName()))
+                                            .anyMatch(MeshNodeRegistration::hasExplicitRoutingId)
+                                    ? systems.zlink.framework.runtime.internal.locations
+                                            .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                            .FIXED_RID_NEW_CLAIM
+                                    : ZLinkLocationWriteIntent.NEW_CLAIM;
             writes.add(
                     CompletableFuture.completedFuture(null)
                             .thenCompose(
@@ -101,7 +112,8 @@ public final class ZLinkObjectServerDescriptorPublisher {
 
     public CompletionStage<Void> recoverAfterOwnerLease(
             ZLinkFrameworkRuntimeState state, ZLinkLocationOwnerToken previousOwner) {
-        if (previousOwner == null) {
+        Claim current = claim.get();
+        if (previousOwner == null || (current != null && current.everConfirmed())) {
             return publish(state);
         }
         List<CompletionStage<?>> removals = new ArrayList<>();
@@ -266,11 +278,12 @@ public final class ZLinkObjectServerDescriptorPublisher {
     }
 
     /**
-     * Records the lease generation and pending NewClaim descriptors until the Store confirms
-     * publication. Renew starts only after the claim is confirmed.
+     * Tracks pending descriptors and whether this publisher lifecycle has ever confirmed a claim.
      */
     private record Claim(
-            long leaseGeneration, List<ZLinkMeshNodeDescriptor> descriptors, boolean confirmed) {}
+            long leaseGeneration,
+            List<ZLinkMeshNodeDescriptor> descriptors,
+            boolean everConfirmed) {}
 
     /**
      * Location runtime §5 and §10: the publication result is unknown, so the host stays Preparing

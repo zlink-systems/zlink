@@ -172,6 +172,7 @@ final class ZLinkNewActorEntryCandidateTest {
             throws Exception {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(store);
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         var mesh =
                 options.addRouteMesh(MESH)
                         .listen("tcp://127.0.0.1:0")
@@ -186,7 +187,7 @@ final class ZLinkNewActorEntryCandidateTest {
                     "other", Other.class, OtherEntryFactory.class, f -> f.disableRelocation());
         }
         var runtime = ZLinkFrameworkRuntimeTestAccess.start(options);
-        await(runtime::isReady);
+        awaitReady(runtime);
         MeshNodeRegistration registration =
                 options.registration().meshNodes().stream()
                         .filter(node -> node.meshName().equals(MESH))
@@ -199,6 +200,7 @@ final class ZLinkNewActorEntryCandidateTest {
             ZLinkInMemoryProviderLocationStore store, String... endpoints) throws Exception {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(store);
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         var mesh =
                 options.addRouteMesh(MESH)
                         .listen("tcp://127.0.0.1:0")
@@ -208,18 +210,32 @@ final class ZLinkNewActorEntryCandidateTest {
             mesh.peerConnections().connect(endpoint);
         }
         var runtime = ZLinkFrameworkRuntimeTestAccess.start(options);
-        await(runtime::isReady);
+        awaitReady(runtime);
         return runtime;
+    }
+
+    private static void awaitReady(ZLinkFrameworkRuntime runtime) {
+        ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime).toCompletableFuture().join();
+        if (!runtime.isReady())
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                            .toCompletableFuture()
+                            .join());
+        assertTrue(runtime.isReady());
     }
 
     private static void awaitAdmitted(ZLinkFrameworkRuntime requester, int count) throws Exception {
         var node = requester.monitoringMeshNode(MESH);
-        await(
-                () ->
-                        node.peers().stream()
-                                        .filter(peer -> peer.state() == MeshPeerState.ADMITTED)
-                                        .count()
-                                == count);
+        try {
+            await(
+                    () ->
+                            node.peers().stream()
+                                            .filter(peer -> peer.state() == MeshPeerState.ADMITTED)
+                                            .count()
+                                    == count);
+        } catch (AssertionError failure) {
+            throw new AssertionError("peer states: " + node.peers(), failure);
+        }
     }
 
     private static void await(BooleanSupplier condition) throws Exception {

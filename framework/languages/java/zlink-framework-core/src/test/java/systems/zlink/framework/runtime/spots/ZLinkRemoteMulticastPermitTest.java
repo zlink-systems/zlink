@@ -56,6 +56,9 @@ final class ZLinkRemoteMulticastPermitTest {
             var store = new ZLinkInMemoryLocationStore();
 
             var targetOptions = new DefaultZLinkFrameworkOptions();
+            targetOptions
+                    .configureLocations()
+                    .setOwnerLeaseFencingMargin(java.time.Duration.ofNanos(1));
             targetOptions.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             targetOptions.addLocationStore(store);
             targetOptions.registration().inboundDispatch().setMaxQueuedApplicationJobs(1);
@@ -73,6 +76,7 @@ final class ZLinkRemoteMulticastPermitTest {
             try (ZLinkFrameworkRuntime target =
                     ZLinkFrameworkRuntimeTestAccess.start(
                             targetOptions, new ZLinkJavaBackendAdapterFactory())) {
+                awaitInitialFixedRidRetry(target);
                 for (int index = 0; index < SUBSCRIBERS; index++) {
                     var created =
                             target.spotManager()
@@ -86,6 +90,9 @@ final class ZLinkRemoteMulticastPermitTest {
                         target.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "game").endpoint();
 
                 var sourceOptions = new DefaultZLinkFrameworkOptions();
+                sourceOptions
+                        .configureLocations()
+                        .setOwnerLeaseFencingMargin(java.time.Duration.ofNanos(1));
                 sourceOptions.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
                 // Explicit peering supplies the remote topology. Separate stores keep discovery
                 // from concurrently creating a second peer connection in this permit test.
@@ -127,6 +134,7 @@ final class ZLinkRemoteMulticastPermitTest {
                 try (ZLinkFrameworkRuntime source =
                         ZLinkFrameworkRuntimeTestAccess.start(
                                 sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
+                    awaitInitialFixedRidRetry(source);
                     assertTrue(
                             targetReady.await(TIMEOUT_SECONDS, TimeUnit.SECONDS),
                             "target peer never ready");
@@ -160,6 +168,16 @@ final class ZLinkRemoteMulticastPermitTest {
             flowLogger.setLevel(previousLevel);
             flowLog.close();
         }
+    }
+
+    private static void awaitInitialFixedRidRetry(ZLinkFrameworkRuntime runtime) throws Exception {
+        ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                .toCompletableFuture()
+                .get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        assertTrue(
+                ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                        .toCompletableFuture()
+                        .get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
     }
 
     public static final class SubscriberSpot implements ZLinkSpot<ZLinkActor> {

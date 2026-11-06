@@ -44,6 +44,7 @@ final class ZLinkLocalAdmissionOrderTest {
         logger.setLevel(java.util.logging.Level.ALL);
         allHandled = new CompletableFuture<>();
         var options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(java.time.Duration.ofNanos(1));
         options.configureDispatch()
                 .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
         options.registration().inboundDispatch().setMaxQueuedApplicationJobs(1);
@@ -60,6 +61,13 @@ final class ZLinkLocalAdmissionOrderTest {
         try (var runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(
                         options, new ZLinkJavaBackendAdapterFactory())) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(5, java.util.concurrent.TimeUnit.SECONDS);
+            assertTrue(
+                    ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                            .toCompletableFuture()
+                            .get(5, java.util.concurrent.TimeUnit.SECONDS));
             runtime.spotManager()
                     .getOrCreate("room-a", "room")
                     .submit()

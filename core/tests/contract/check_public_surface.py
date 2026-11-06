@@ -43,14 +43,17 @@ TABLE_ONLY_MACROS = {
 def parse_c_surface(text):
     text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
     text = re.sub(r"//[^\n]*", " ", text)
+    # Conditional C++ enum bases do not change the C public surface.
+    text = re.sub(
+        r"^\s*#\s*(?:if|ifdef|ifndef|else|elif|endif)\b[^\n]*", " ", text, flags=re.M
+    )
+    enum_block = r"typedef\s+enum\s+\w+\s*(?::\s*[\w\s]+)?\{(.*?)\}\s*(zlink_\w+)\s*;"
     out = {kind: set() for kind in KINDS}
     for declaration in re.findall(r"ZLINK_EXPORT\s+([^;]+);", text, re.S):
         found = re.search(r"\b(zlink_[A-Za-z0-9_]+)\s*\(", declaration)
         if found:
             out["FUNC"].add(found.group(1))
-    for found in re.finditer(
-        r"typedef\s+enum\s+\w+\s*\{(.*?)\}\s*(zlink_\w+)\s*;", text, re.S
-    ):
+    for found in re.finditer(enum_block, text, re.S):
         out["ENUM_TYPE"].add(found.group(2))
         out["ENUMERATOR"].update(
             re.findall(r"\b(ZLINK_[A-Z0-9_]+)\s*(?==|,)", found.group(1))
@@ -70,10 +73,11 @@ def parse_c_surface(text):
             )
             if field:
                 out["FIELD"].add(f"{owner}.{field.group(1)}")
+    without_blocks = re.sub(enum_block, " ", text, flags=re.S)
     without_blocks = re.sub(
-        r"typedef\s+(?:enum|struct)(?:\s+\w+)?\s*\{.*?\}\s*zlink_\w+\s*;",
+        r"typedef\s+struct(?:\s+\w+)?\s*\{.*?\}\s*zlink_\w+\s*;",
         " ",
-        text,
+        without_blocks,
         flags=re.S,
     )
     for statement in re.findall(r"\btypedef\b.*?;", without_blocks, re.S):

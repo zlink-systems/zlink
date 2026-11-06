@@ -220,6 +220,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             PUSH_TERMINAL.get().complete(null);
                             releaseSettlement.complete(null);
                         }) {
+            awaitInitialFixedRidRetry(targetHost);
+            awaitInitialFixedRidRetry(sourceHost);
             ZLinkSpotRuntime targetSpots = (ZLinkSpotRuntime) targetHost.spotManager();
             ZLinkSpotRuntime sourceSpots = (ZLinkSpotRuntime) sourceHost.spotManager();
             ZLinkActorRuntime targetActors = (ZLinkActorRuntime) targetHost.actorManager();
@@ -1031,6 +1033,14 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         }
     }
 
+    private static void awaitInitialFixedRidRetry(ZLinkFrameworkRuntime runtime) throws Exception {
+        ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime).toCompletableFuture().get();
+        assertTrue(
+                ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)
+                        .toCompletableFuture()
+                        .get());
+    }
+
     private static final class JoinFailureDiagnostics extends java.util.logging.Handler
             implements AutoCloseable {
         private final java.util.logging.Logger logger =
@@ -1141,6 +1151,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             InMemoryRelocationStore relocations,
             Duration sourceRetention) {
         var options = new DefaultZLinkFrameworkOptions();
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         if (currentScenario == Scenario.NEXT_DEFERRED_JOIN)
             options.configureInboundDispatch().setMaxQueuedApplicationJobs(1);
         options.addLocationStore(locations);

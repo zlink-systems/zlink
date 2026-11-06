@@ -283,10 +283,10 @@ final class StreamSessionTest {
             stream.enableActorDispatch();
             stream.registerSession(ActorRelaySession.class);
             try (var actorHost =
-                            RuntimeTestSupport.startFramework(
+                            RuntimeTestSupport.startFixedRidFramework(
                                     actorOptions, new ZLinkJavaBackendAdapterFactory());
                     var sessionHost =
-                            RuntimeTestSupport.startFramework(
+                            RuntimeTestSupport.startFixedRidFramework(
                                     sessionOptions, new ZLinkJavaBackendAdapterFactory());
                     AutoCloseable completeDisconnectCallback = () -> release.complete(null)) {
                 assertEventually(actorHost::isReady);
@@ -398,7 +398,7 @@ final class StreamSessionTest {
                 var targetOptions =
                         retirementActorOptions(RETIREMENT_TARGET_NODE, locations, relocations);
                 try (var target =
-                        RuntimeTestSupport.startFramework(
+                        RuntimeTestSupport.startFixedRidFramework(
                                 targetOptions, new ZLinkJavaBackendAdapterFactory())) {
                     assertEventually(target::isReady);
                     assertMeshPeerReady(actorHost, RETIREMENT_TARGET_NODE);

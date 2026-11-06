@@ -241,6 +241,8 @@ class msg_t
 
     [[noreturn]] static void report_invalid (const char *what_);
 
+    static bool
+    release_content (content_t *content_, bool lmsg_owner_, int refs_, bool shared_ = true);
     static void call_dec_ref_on_slice (void *data_, void *hint_);
     zlink::atomic_counter_t *refcnt ();
 

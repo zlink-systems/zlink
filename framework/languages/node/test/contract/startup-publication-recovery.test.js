@@ -4,8 +4,10 @@ const framework = require('../../packages/framework/dist/internal');
 const { Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const nestjs = require('../../packages/nestjs/dist');
+const { fixedRidHostClock, finishFixedRidHostStartup } = require('../helpers/fixed-rid-host-clock');
 
-test('lost Preparing publication still prepares object authorities before Serving', async () => {
+test('lost Preparing publication still prepares object authorities before Serving', async (t) => {
+  const hostClock = fixedRidHostClock(t);
   const inner = new framework.ZLinkInMemoryProviderLocationStore();
   let lostWrite = false;
   let confirmationKey;
@@ -53,6 +55,7 @@ test('lost Preparing publication still prepares object authorities before Servin
     }
   }
   const builder = nestjs.zlinkFramework().addLocationStore(provider);
+  builder.configureLocations().ownerLeaseFencingMarginMs(1);
   builder
     .addRouteMesh('play')
     .listen('tcp://127.0.0.1:0')
@@ -69,6 +72,11 @@ test('lost Preparing publication still prepares object authorities before Servin
     abortOnError: false
   });
   try {
+    await finishFixedRidHostStartup(
+      app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME),
+      hostClock,
+      framework.ZLinkFrameworkRuntimeState.Preparing
+    );
     assert.equal(lostWrite, true);
     const host = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME);
     assert.ok(host.statefulAuthorityRoutes, 'object runtime must exist before Serving');
@@ -132,6 +140,9 @@ for (const applied of [false, true]) {
         await host.start();
         assert.equal(lostWrite, true);
         if (lostState === 'preparing') {
+          for await (const event of host.observe(observation.signal)) {
+            if (event.status.state === framework.ZLinkFrameworkRuntimeState.Serving) break;
+          }
           assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
           assert.equal(
             (await repository.listMeshNodes('play')).items[0].state,
