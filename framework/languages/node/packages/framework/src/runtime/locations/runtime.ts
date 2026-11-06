@@ -1,6 +1,10 @@
 import { ZLinkDescriptorPublicationUnconfirmedError } from './descriptor-publication';
 import { isIndeterminateLocationStoreFailure } from './location-store-failure';
 import { listAllMeshNodeDescriptors } from './location-store-pages';
+import {
+  ZLinkInternalMeshNodeWriteIntent,
+  type ZLinkMeshNodeWriteIntent
+} from './domain-store-contract';
 import { MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
 import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
 import {
@@ -688,7 +692,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
 
   async writeMeshNode(
     descriptor: Omit<ZLinkMeshNodeDescriptor, 'ownerId' | 'leaseGeneration' | 'updatedAt'>,
-    intent: ZLinkLocationWriteIntent,
+    intent: ZLinkMeshNodeWriteIntent,
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteResult> {
     const owner = this.ownerToken;
@@ -712,7 +716,8 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       )
     );
     if (
-      intent === ZLinkLocationWriteIntent.Renew &&
+      (intent === ZLinkLocationWriteIntent.Renew ||
+        intent === ZLinkInternalMeshNodeWriteIntent.FixedRidRenew) &&
       (result.status === ZLinkLocationWriteStatus.RejectedConflict ||
         result.status === ZLinkLocationWriteStatus.IgnoredStale)
     ) {
@@ -725,7 +730,9 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
           (writeSignal) =>
             this.stores.locationStore.updateMeshNode(
               stamped,
-              ZLinkLocationWriteIntent.NewClaim,
+              intent === ZLinkInternalMeshNodeWriteIntent.FixedRidRenew
+                ? ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+                : ZLinkLocationWriteIntent.NewClaim,
               writeSignal
             ),
           signal

@@ -29,6 +29,8 @@ const {
   internalFrameworkWireReply
 } = require('../../packages/framework/dist/runtime/framework-errors-internal');
 const { RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+const framework = require('../../packages/framework/dist');
+const { fixedRidHostClock, finishFixedRidHostStartup } = require('../helpers/fixed-rid-host-clock');
 
 const POLL_MS = 10;
 const OPERATION_TIMEOUT_MS = 5_000;
@@ -63,13 +65,15 @@ function newFactory(created) {
   };
 }
 
-test('new Actor creation is limited to nodes whose Entry Spot accepts the Actor type', async () => {
+test('new Actor creation is limited to nodes whose Entry Spot accepts the Actor type', async (t) => {
+  const hostClock = fixedRidHostClock(t);
   const provider = new ZLinkInMemoryProviderLocationStore();
   const createdOn = { entry: [], plain: [] };
   const apps = [];
   async function start(node, withEntry) {
     const builder = nestjs.zlinkFramework().addLocationStore(provider);
     builder.configureLocations().pollingIntervalMs(POLL_MS).routeCacheMaxAgeMs(0);
+    builder.configureLocations().ownerLeaseFencingMarginMs(1);
     const server = builder
       .addRouteMesh('play')
       .listen('tcp://127.0.0.1:0')
@@ -88,6 +92,11 @@ test('new Actor creation is limited to nodes whose Entry Spot accepts the Actor 
       logger: false,
       abortOnError: false
     });
+    await finishFixedRidHostStartup(
+      app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME),
+      hostClock,
+      framework.ZLinkFrameworkRuntimeState.Preparing
+    );
     apps.push(app);
     return app;
   }
@@ -138,13 +147,15 @@ test('new Actor creation is limited to nodes whose Entry Spot accepts the Actor 
   }
 });
 
-test('a target without the Entry Spot type refuses before the factory and the requester excludes it', async () => {
+test('a target without the Entry Spot type refuses before the factory and the requester excludes it', async (t) => {
+  const hostClock = fixedRidHostClock(t);
   const provider = new ZLinkInMemoryProviderLocationStore();
   const createdOn = { stale: [], good: [], plain: [] };
   const apps = [];
   async function start(node, withEntry) {
     const builder = nestjs.zlinkFramework().addLocationStore(provider);
     builder.configureLocations().pollingIntervalMs(POLL_MS).routeCacheMaxAgeMs(0);
+    builder.configureLocations().ownerLeaseFencingMarginMs(1);
     const server = builder
       .addRouteMesh('play')
       .listen('tcp://127.0.0.1:0')
@@ -160,6 +171,11 @@ test('a target without the Entry Spot type refuses before the factory and the re
       logger: false,
       abortOnError: false
     });
+    await finishFixedRidHostStartup(
+      app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME),
+      hostClock,
+      framework.ZLinkFrameworkRuntimeState.Preparing
+    );
     apps.push(app);
     return app;
   }

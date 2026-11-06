@@ -204,17 +204,19 @@ to npm `build`. Stop with the ■ Stop button.
 | `docker: Cannot connect to the Docker daemon` | Docker Desktop (or `dockerd`) is not running. Start it and try again |
 | `docker: Error response from daemon: ... port is already allocated` / `Bind for 127.0.0.1:6379 failed` | Another Redis owns 6379. Clear this tutorial's keys as shown below before reusing it, or start with a fresh Redis on 6379 |
 | `curl` returns `Connection refused` | The server (`npm run server`) is not up yet or has died. Check that terminal's log first |
-| Server fails to start after a forced stop | The previous owner lease can remain valid for up to 30 seconds ([default owner lease TTL](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#L670-L674)). Wait for it to expire, then start the Server again; a failed start does not retry. To restart immediately, stop earlier tutorial processes and clear this tutorial's keys with the command below |
+| A Server started with the same fixed routing id stays `Preparing` after a restart | If the previous MeshNode descriptor is absent after a normal stop, the Location Store waits 15 seconds by default (three times the 5-second lease fencing margin) from its first `Missing` observation before claiming. Keep the Server running; it retries on the owner lease renewal cycle and becomes `Ready` after the claim |
+| The Server fails to start with the same routing id after a forced stop | The previous owner lease can remain valid for up to 30 seconds ([default owner lease TTL](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#L670-L674)). Once the lease is invalid, a Fixed RID claim waits another 15 seconds by default from its first observation. Clearing Store keys does not skip this delay |
 | `EADDRINUSE` (port conflict) | Another process already holds one of the ports in "Ports" below. Stop it, or clean up another running instance of this tutorial first |
 | `npm error gyp ERR! ... ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core ... package prefix` (Windows) | An earlier framework release pins `@zlink-systems/framework` older than 0.18.1, so it still gets `zlink@1.2.0` — the win32-x64 prebuild (#656) ships from framework 0.18.1 (`zlink@1.2.1`) on. Get that version, or run it under WSL |
 | Same error (macOS) | `@zlink-systems/zlink@1.2.1` also has no `darwin-*` prebuild yet. Run it on Linux (x64) or Windows (0.18.1 on) |
 | `EBADENGINE` (Node version warning) | Node.js is older than 22. Upgrade per "Prerequisites" above |
 | `server listening` takes 20-45 seconds to appear | The project sits on a WSL 9p mount such as `/mnt/d`; module loading alone takes this long there. Moving it to a Linux filesystem (e.g. `~/`) cuts this down |
 
-When reusing Redis, stop any earlier instance of this tutorial before clearing its Location and
-Relocation Store records. Run the command for your shell before the [Run](#run) block, then omit
+To clear tutorial data from Redis, stop any earlier instance of this tutorial before clearing its
+Location and Relocation Store records. Run the command for your shell before the [Run](#run) block, then omit
 only its `docker run` line. These commands delete only keys under this tutorial's
-`zlink-tutorial-node:` prefix; they require `redis-cli` connected to the Redis on 6379.
+`zlink-tutorial-node:` prefix; they require `redis-cli` connected to the Redis on 6379. Clearing
+these keys does not shorten the Fixed RID restart delay.
 
 ```bash title="linux"
 redis-cli --scan --pattern 'zlink-tutorial-node:*' | while IFS= read -r key; do redis-cli DEL "$key" >/dev/null; done

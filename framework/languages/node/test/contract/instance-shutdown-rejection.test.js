@@ -8,6 +8,7 @@ const { Injectable, Module, Scope } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const framework = require('../../packages/framework/dist');
 const nestjs = require('../../packages/nestjs/dist');
+const { fixedRidHostClock, finishFixedRidHostStartup } = require('../helpers/fixed-rid-host-clock');
 
 if (process.env.ZLINK_TEST_FLOW_FILE)
   logs.setGlobalLoggerProvider({
@@ -66,7 +67,8 @@ class MemoryRelocationStore {
   }
 }
 
-test('Instance timer request rejected during app close completes once with ShuttingDown', async () => {
+test('Instance timer request rejected during app close completes once with ShuttingDown', async (t) => {
+  const hostClock = fixedRidHostClock(t);
   const entered = deferred();
   const release = deferred();
   const terminal = deferred();
@@ -107,7 +109,9 @@ test('Instance timer request rejected during app close completes once with Shutt
   Injectable()(PingHandler);
   Injectable()(RequestTimer);
   nestjs.zlinkSpotPacketHandler({ spot: () => ProbeSpot, packetName: 'Ping' })(PingHandler);
-  const builder = nestjs.zlinkFramework().options({ locations: { useInMemoryStores: true } });
+  const builder = nestjs.zlinkFramework().options({
+    locations: { useInMemoryStores: true, options: { ownerLeaseFencingMarginMs: 1 } }
+  });
   builder.addRelocationStore(new MemoryRelocationStore());
   builder.configureDispatch().messageFlow('detailed').traceSampleRate(1);
   builder
@@ -127,6 +131,11 @@ test('Instance timer request rejected during app close completes once with Shutt
     logger: false,
     abortOnError: false
   });
+  await finishFixedRidHostStartup(
+    app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME),
+    hostClock,
+    framework.ZLinkFrameworkRuntimeState.Preparing
+  );
   const runtime = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME);
   try {
     const outbound = app.get(nestjs.ZLINK_SPOT_OUTBOUND);

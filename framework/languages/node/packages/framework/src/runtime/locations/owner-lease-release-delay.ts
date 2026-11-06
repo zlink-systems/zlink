@@ -1,14 +1,23 @@
 import type { ZLinkLocationOwnerToken } from './internal-location-contracts';
+import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts';
 
-interface InvalidOwnerObservation {
-  readonly ownerId: string;
-  readonly leaseGeneration: bigint;
+export class ZLinkOwnerLeaseReleaseDelayPendingError extends ZLinkFrameworkException {
+  constructor() {
+    super(
+      ZLinkFrameworkErrorKind.Unavailable,
+      'Fixed RID claim is waiting for the previous owner lease release delay.'
+    );
+  }
+}
+
+interface ReleaseDelayObservation {
+  readonly owner: ZLinkLocationOwnerToken | undefined;
   readonly t0: number;
 }
 
-/** One local monotonic observation window for invalid owner tokens. */
+/** One local monotonic observation window for an invalid owner or missing descriptor. */
 export class ZLinkOwnerLeaseReleaseDelay {
-  private readonly observations = new Map<string, InvalidOwnerObservation>();
+  private readonly observations = new Map<string, ReleaseDelayObservation>();
 
   constructor(
     private readonly delayMs: number,
@@ -25,29 +34,37 @@ export class ZLinkOwnerLeaseReleaseDelay {
 
   allows(
     scope: string,
-    owner: ZLinkLocationOwnerToken,
-    ownerLeaseLive: boolean,
+    owner: ZLinkLocationOwnerToken | undefined,
+    ownerLeaseLive = false,
     observedAtMs = this.monotonicNowMs()
   ): boolean {
-    if (ownerLeaseLive) {
+    if (owner !== undefined && ownerLeaseLive) {
       this.observations.delete(scope);
       return true;
     }
 
     let observation = this.observations.get(scope);
-    if (
+    if (owner === undefined) {
+      if (observation?.owner !== undefined) {
+        observation = { owner: undefined, t0: observedAtMs };
+        this.observations.set(scope, observation);
+      }
+    } else if (
       observation === undefined ||
-      observation.ownerId !== owner.ownerId ||
-      observation.leaseGeneration !== owner.leaseGeneration
+      observation.owner?.ownerId !== owner.ownerId ||
+      observation.owner.leaseGeneration !== owner.leaseGeneration
     ) {
       observation = {
-        ownerId: owner.ownerId,
-        leaseGeneration: owner.leaseGeneration,
+        owner: { ownerId: owner.ownerId, leaseGeneration: owner.leaseGeneration },
         t0: observedAtMs
       };
       this.observations.set(scope, observation);
     }
-    return observedAtMs >= observation.t0 + this.delayMs;
+    if (observation === undefined) {
+      observation = { owner: undefined, t0: observedAtMs };
+      this.observations.set(scope, observation);
+    }
+    return this.delayElapsed(observation, observedAtMs);
   }
 
   clear(scope: string): void {
@@ -71,6 +88,10 @@ export class ZLinkOwnerLeaseReleaseDelay {
         this.observations.delete(scope);
       }
     }
+  }
+
+  private delayElapsed(observation: ReleaseDelayObservation, observedAtMs: number): boolean {
+    return observedAtMs >= observation.t0 + this.delayMs;
   }
 }
 

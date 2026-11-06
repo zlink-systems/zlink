@@ -38,6 +38,7 @@ const framework = require('../../packages/framework/dist');
 const nestjs = require('../../packages/nestjs/dist');
 const connector = require('../../packages/stream-connector/dist');
 const { createBrowserSafeStreamApp } = require('./helpers/browser-safe-stream-app');
+const { fixedRidHostClock, finishFixedRidHostStartup } = require('../helpers/fixed-rid-host-clock');
 const {
   ZLinkInMemoryProviderLocationStore
 } = require('../../packages/framework/dist/runtime/locations/in-memory-provider-location-store');
@@ -286,7 +287,8 @@ for (const variant of [
   test(
     `${variant} public Join and PlannedMaintenance preserve canonical Table inventory`,
     { timeout: RELOCATION_TEST_TIMEOUT_MS },
-    async () => {
+    async (t) => {
+      const hostClock = fixedRidHostClock(t);
       const provider = new ZLinkInMemoryProviderLocationStore();
       const restored = [];
       const blobs = new Map();
@@ -406,7 +408,8 @@ for (const variant of [
         const locations = builder
           .configureLocations()
           .pollingIntervalMs(OBSERVATION_INTERVAL_MS)
-          .routeCacheMaxAgeMs(0);
+          .routeCacheMaxAgeMs(0)
+          .ownerLeaseFencingMarginMs(1);
         if (variant === 'safe status') locations.messageFollowDurationMs(SOURCE_FOLLOW_DURATION_MS);
         const mesh = builder.addRouteMesh('play').listen('tcp://127.0.0.1:0').routingId(node);
         if (node === 'session') mesh.objects().client();
@@ -439,6 +442,11 @@ for (const variant of [
             ? await createBrowserSafeStreamApp(createApp, 'sessions')
             : await createApp();
         apps.push(app);
+        await finishFixedRidHostStartup(
+          app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME),
+          hostClock,
+          framework.ZLinkFrameworkRuntimeState.Preparing
+        );
         return app;
       }
       try {
@@ -1031,7 +1039,13 @@ async function membershipFailureFixture(backend) {
           },
           () => new Date(now)
         )
-      : new ZLinkLocationStoreRepository(provider, () => new Date(now));
+      : new ZLinkLocationStoreRepository(
+          provider,
+          () => new Date(now),
+          undefined,
+          undefined,
+          0
+        );
   const targets = {};
   for (const name of ['actor', 'spot']) {
     const ownerId = `${name}-owner`;

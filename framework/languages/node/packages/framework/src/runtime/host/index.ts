@@ -6,6 +6,7 @@ import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import { currentApplicationJobOrigin } from '../application-jobs/application-job-queue-scope';
 import { listAllMeshNodeDescriptors } from '../locations/location-store-pages';
 import { ZLinkDescriptorPublicationUnconfirmedError } from '../locations/descriptor-publication';
+import { ZLinkOwnerLeaseReleaseDelayPendingError } from '../locations/owner-lease-release-delay';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -1556,15 +1557,19 @@ export class ZLinkFrameworkRuntimeHost
       );
       startedLocationRuntime = locationRuntime;
       const locationStore = this.locationOwner.currentStores?.locationStore;
+      let preparingPublicationConfirmed = locationStore === undefined;
       if (locationStore !== undefined && locationRuntime?.ownerLeaseUsable !== false) {
-        await this.publishOrStayPreparing(locationRuntime, async (publishSignal) => {
-          await spotNodeRuntime!.startLocationAutoConnect(publishSignal);
-          await channelRuntime!.startLocationAutoConnect(publishSignal);
-          await spotNodeRuntime!.publishMeshNodeState(
-            ZLinkFrameworkRuntimeState.Preparing,
-            publishSignal
-          );
-        });
+        preparingPublicationConfirmed = await this.publishOrStayPreparing(
+          locationRuntime,
+          async (publishSignal) => {
+            await spotNodeRuntime!.startLocationAutoConnect(publishSignal);
+            await channelRuntime!.startLocationAutoConnect(publishSignal);
+            await spotNodeRuntime!.publishMeshNodeState(
+              ZLinkFrameworkRuntimeState.Preparing,
+              publishSignal
+            );
+          }
+        );
       }
       streamRuntime = new ZLinkStreamRuntimeManager({
         listenerRecords,
@@ -1588,7 +1593,10 @@ export class ZLinkFrameworkRuntimeHost
       this.streamRuntime = streamRuntime;
       // Location runtime §5: a host without an owner lease stays Preparing;
       // owner lease recovery enters Serving once it publishes descriptors.
-      if (locationRuntime === undefined || locationRuntime.ownerLeaseUsable) {
+      if (
+        preparingPublicationConfirmed &&
+        (locationRuntime === undefined || locationRuntime.ownerLeaseUsable)
+      ) {
         await this.publishOrStayPreparing(locationRuntime, (publishSignal) =>
           this.enterServing(spotNodeRuntime!, publishSignal)
         );
@@ -1809,7 +1817,11 @@ export class ZLinkFrameworkRuntimeHost
       await publish(signal);
       return true;
     } catch (error) {
-      if (runtime === undefined || !(error instanceof ZLinkDescriptorPublicationUnconfirmedError))
+      if (
+        runtime === undefined ||
+        (!(error instanceof ZLinkDescriptorPublicationUnconfirmedError) &&
+          !(error instanceof ZLinkOwnerLeaseReleaseDelayPendingError))
+      )
         throw error;
       this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
         'startup descriptor publication',

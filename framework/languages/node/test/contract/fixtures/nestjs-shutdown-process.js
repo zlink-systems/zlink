@@ -5,6 +5,7 @@ const { NestFactory } = require('@nestjs/core');
 const framework = require('../../../packages/framework/dist');
 const nestjs = require('../../../packages/nestjs/dist');
 const { RoutingId } = require('@zlink-systems/zlink');
+const { fixedRidHostClock, finishFixedRidHostStartup } = require('../../helpers/fixed-rid-host-clock');
 
 const mode = process.argv[2] ?? 'normal';
 const resources = new Map();
@@ -41,7 +42,10 @@ class InstanceSpot extends TimedSpot {}
 for (const type of [EntrySpot, UserSpot, InstanceSpot]) Injectable({ scope: Scope.TRANSIENT })(type);
 
 async function main() {
-  const builder = nestjs.zlinkFramework().options({ locations: { useInMemoryStores: true } });
+  const hostClock = fixedRidHostClock();
+  const builder = nestjs.zlinkFramework().options({
+    locations: { useInMemoryStores: true, options: { ownerLeaseFencingMarginMs: 1 } }
+  });
   builder.addRouteMesh('shutdown-test')
     .listen('tcp://127.0.0.1:0')
     .routingId('shutdown-node')
@@ -55,6 +59,11 @@ async function main() {
     providers: [EntrySpot, UserSpot, InstanceSpot, Tick]
   })(AppModule);
   const app = await NestFactory.createApplicationContext(AppModule, { logger: false, abortOnError: false });
+  await finishFixedRidHostStartup(
+    app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME),
+    hostClock,
+    framework.ZLinkFrameworkRuntimeState.Preparing
+  );
   const runtime = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME);
   await runtime.spotNodeRuntime.ensureEntryActivation('shutdown-test');
   await app.get(nestjs.ZLINK_SPOT_MANAGER).create('user').inMesh('shutdown-test').submit();

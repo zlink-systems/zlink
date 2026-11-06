@@ -35,6 +35,7 @@ import {
   ZLinkDispatchMessageKind
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import { ZLinkLocationWriteIntent, ZLinkLocationWriteStatus } from '../../contracts/Locations';
+import { ZLinkInternalMeshNodeWriteIntent } from '../locations/domain-store-contract';
 import type { ZLinkLocationOptionOverrides } from '../../contracts/Locations/Options';
 import type { ZLinkLocationOwnerToken } from '../../contracts/Locations/Writes';
 import { awaitWithAbort, createAbortError } from '../abort';
@@ -290,11 +291,9 @@ export class ZLinkSpotNodeRuntimeManager {
     }
     const meshAdapter = this.options.backendAdapterFactory.createMeshAdapter();
     for (const [spotNodeName, spotNode] of this.options.registration.spotNodes.entries()) {
+      const configuredRoutingId = configuredRoutingIdFor(spotNode);
       const routingId =
-        spotNode.routingId ??
-        spotNode.router?.routingId ??
-        spotNode.pubSub?.routingId ??
-        `${spotNode.routingIdPrefix ?? spotNodeName}-${randomUUID()}`;
+        configuredRoutingId ?? `${spotNode.routingIdPrefix ?? spotNodeName}-${randomUUID()}`;
       const bind = spotNode.router?.bind;
       if (bind === undefined) {
         throw new ZLinkConfigurationException(
@@ -577,11 +576,16 @@ export class ZLinkSpotNodeRuntimeManager {
       // Revision is issued before submission: an unconfirmed Store write may
       // already have applied, so the next publication must not reuse it.
       this.descriptorRevisionByMesh.set(meshName, descriptor.descriptorRevision);
+      const configuredRoutingId = configuredRoutingIdFor(registration);
       const result = await location.runtime.writeMeshNode(
         descriptor,
         previousRevision === 0n
-          ? ZLinkLocationWriteIntent.NewClaim
-          : ZLinkLocationWriteIntent.Renew,
+          ? configuredRoutingId === undefined
+            ? ZLinkLocationWriteIntent.NewClaim
+            : ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+          : configuredRoutingId === undefined
+            ? ZLinkLocationWriteIntent.Renew
+            : ZLinkInternalMeshNodeWriteIntent.FixedRidRenew,
         signal
       );
       if (result.status !== ZLinkLocationWriteStatus.Stored) {
@@ -1399,6 +1403,10 @@ interface DescriptorFactoryRegistration {
   readonly relocation?: {
     readonly kind: 'disabled' | 'recreate' | 'snapshot';
   };
+}
+
+function configuredRoutingIdFor(registration: ZLinkSpotNodeOptions) {
+  return registration.routingId ?? registration.router?.routingId ?? registration.pubSub?.routingId;
 }
 
 function effectiveUserSpotRegistrations(

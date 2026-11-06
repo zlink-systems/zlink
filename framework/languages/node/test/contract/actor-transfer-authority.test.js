@@ -82,7 +82,10 @@ test('successor resumes committed recovery only after the durable lease expires'
 
 test('framework host routes Core TransferControl records to the configured authority store', async () => {
   const registration = framework.createFrameworkRegistration({
-    locations: { useInMemoryStores: true }
+    locations: {
+      useInMemoryStores: true,
+      options: { ownerLeaseFencingMarginMs: 1 }
+    }
   });
   const host = new framework.ZLinkFrameworkRuntimeHost({ registration });
   const store = host.locationOwner.locationStore();

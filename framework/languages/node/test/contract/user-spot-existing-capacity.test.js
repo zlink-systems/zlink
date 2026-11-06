@@ -5,9 +5,15 @@ const test = require('node:test');
 const { Injectable, Module, Scope } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const nestjs = require('../../packages/nestjs/dist');
-const { ZLinkFrameworkErrorKind, ZLinkSpotCreateState } = require('../../packages/framework/dist');
+const {
+  ZLinkFrameworkErrorKind,
+  ZLinkFrameworkRuntimeState,
+  ZLinkSpotCreateState
+} = require('../../packages/framework/dist');
+const { fixedRidHostClock, finishFixedRidHostStartup } = require('../helpers/fixed-rid-host-clock');
 
-async function capacityOne(run) {
+async function capacityOne(run, t) {
+  const hostClock = fixedRidHostClock(t);
   let factoryCalls = 0;
   class Room {
     constructor() {
@@ -15,7 +21,9 @@ async function capacityOne(run) {
     }
   }
   Injectable({ scope: Scope.TRANSIENT })(Room);
-  const builder = nestjs.zlinkFramework().options({ locations: { useInMemoryStores: true } });
+  const builder = nestjs.zlinkFramework().options({
+    locations: { useInMemoryStores: true, options: { ownerLeaseFencingMarginMs: 1 } }
+  });
   builder
     .addRouteMesh('existing-capacity')
     .listen('tcp://127.0.0.1:0')
@@ -31,6 +39,11 @@ async function capacityOne(run) {
     abortOnError: false
   });
   try {
+    await finishFixedRidHostStartup(
+      app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME),
+      hostClock,
+      ZLinkFrameworkRuntimeState.Preparing
+    );
     const spots = app.get(nestjs.ZLINK_SPOT_MANAGER);
     const original = await spots.getOrCreate('room-1', 'room').inMesh('existing-capacity').submit();
     assert.equal(original.state, ZLinkSpotCreateState.Created);
@@ -41,15 +54,15 @@ async function capacityOne(run) {
   }
 }
 
-test('GetOrCreate returns the same Ready SpotRef when its target capacity is full', async () => {
+test('GetOrCreate returns the same Ready SpotRef when its target capacity is full', async (t) => {
   await capacityOne(async (spots, original) => {
     const existing = await spots.getOrCreate('room-1', 'room').inMesh('existing-capacity').submit();
     assert.equal(existing.state, ZLinkSpotCreateState.Existing);
     assert.deepEqual(existing.spot, original.spot);
-  });
+  }, t);
 });
 
-test('GetOrCreate still rejects another Spot ID when its target capacity is full', async () => {
+test('GetOrCreate still rejects another Spot ID when its target capacity is full', async (t) => {
   await capacityOne(async (spots) => {
     await assert.rejects(
       spots.getOrCreate('room-2', 'room').inMesh('existing-capacity').submit(),
@@ -57,7 +70,7 @@ test('GetOrCreate still rejects another Spot ID when its target capacity is full
         error.kind === ZLinkFrameworkErrorKind.Unavailable &&
         error.message.includes('No eligible User Spot placement target is ready.')
     );
-  });
+  }, t);
 });
 
 const internal = require('../../packages/framework/dist/internal');
@@ -86,6 +99,8 @@ function deferred() {
 }
 async function creationFixture(policy = 'disabled') {
   let now = new Date(1000);
+  let monotonicOffsetMs = 0;
+  const monotonicNowMs = () => performance.now() + monotonicOffsetMs;
   const entered = deferred(),
     released = deferred();
   const authorityEntered = deferred(),
@@ -153,7 +168,7 @@ async function creationFixture(policy = 'disabled') {
       return result;
     }
   }
-  const store = new Repository(provider, () => now);
+  const store = new Repository(provider, () => now, undefined, monotonicNowMs, 1);
   const lease = await store.claimOwnerLease('owner', 30000);
   assert.equal(lease.kind, 'claimed');
   const owner = lease.token;
@@ -183,8 +198,13 @@ async function creationFixture(policy = 'disabled') {
     leaseGeneration: owner.leaseGeneration,
     updatedAt: now
   };
+  await assert.rejects(
+    store.updateMeshNode(descriptor, internal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim),
+    (error) => error.kind === internal.ZLinkFrameworkErrorKind.Unavailable
+  );
+  monotonicOffsetMs += 3;
   assert.equal(
-    (await store.updateMeshNode(descriptor, ZLinkLocationWriteIntent.NewClaim)).status,
+    (await store.updateMeshNode(descriptor, internal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim)).status,
     internal.ZLinkLocationWriteStatus.Stored
   );
   let factoryCalls = 0;

@@ -49,9 +49,10 @@ async function fixture(
         new ZLinkInMemoryProviderLocationStore(() => now),
         () => now,
         undefined,
-        monotonicNowMs
+        monotonicNowMs,
+        1
       )
-    : new internal.ZLinkInMemoryLocationStore(() => now, monotonicNowMs);
+    : new internal.ZLinkInMemoryLocationStore(() => now, monotonicNowMs, 1);
   async function descriptor(ownerId, rid) {
     const lease = await store.claimOwnerLease(ownerId, 30000);
     assert.equal(lease.kind, 'claimed');
@@ -90,13 +91,28 @@ async function fixture(
         leaseGeneration: owner.leaseGeneration,
         updatedAt: now
       };
-    const claim = () => store.updateMeshNode(meshNode, ZLinkLocationWriteIntent.NewClaim);
+    const claim = () =>
+      store.updateMeshNode(meshNode, internal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim);
+    if (now.getTime() === 1000 && rid === 'node-a') {
+      await assert.rejects(
+        claim(),
+        (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+      );
+      clock.monotonicMs += 3;
+    }
     if (now.getTime() > 31_000 && rid === 'node-a') {
       await assert.rejects(
         claim(),
         (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
       );
-      clock.monotonicMs = 15_000;
+      clock.monotonicMs += 3;
+    }
+    if (now.getTime() > 31_000 && rid === 'node-b') {
+      await assert.rejects(
+        claim(),
+        (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+      );
+      clock.monotonicMs += 3;
     }
     const result = await claim();
     assert.equal(result.status, internal.ZLinkLocationWriteStatus.Stored);

@@ -2,6 +2,7 @@ const { inspectRuntime } = require('../../packages/framework/dist/runtime/intern
 const { createMeshHost } = require('./fixtures/mesh-host');
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { performance } = require('node:perf_hooks');
 const { resolveModuleProviders } = require('./helpers/nestjs-test-utils');
 
 const zlink = require('@zlink-systems/zlink');
@@ -572,6 +573,7 @@ test('framework host publishes every local descriptor after degraded startup rec
         options: {
           ownerLeaseRenewIntervalMs: 20,
           ownerLeaseRenewTimeoutMs: 5,
+          ownerLeaseFencingMarginMs: 1,
           pollingIntervalMs: 20
         }
       },
@@ -641,6 +643,7 @@ test('framework host without an owner lease stays Preparing until it publishes d
         options: {
           ownerLeaseRenewIntervalMs: 20,
           ownerLeaseRenewTimeoutMs: 5,
+          ownerLeaseFencingMarginMs: 1,
           pollingIntervalMs: 20
         }
       },
@@ -678,6 +681,36 @@ test('framework host without an owner lease stays Preparing until it publishes d
   }
 });
 
+test('an automatic RID host serves immediately when its descriptor is Missing', async t => {
+  t.mock.method(performance, 'now', () => 0);
+  const calls = [];
+  const host = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration({
+      locations: {
+        useInMemoryStores: true,
+        options: { ownerLeaseFencingMarginMs: 5 }
+      },
+      spotNodes: {
+        play: { router: { bind: 'tcp://127.0.0.1:0' } }
+      }
+    })
+  }, {
+    backendAdapterFactory: fakeBackendAdapterFactory(calls)
+  });
+  try {
+    await host.start();
+    assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
+    assert.equal(
+      host.locationOwner.currentStores.locationStore.ownerLeaseReleaseDelayForTesting
+        .observationCountForTesting,
+      0
+    );
+    assert.equal((await host.locationOwner.locationStore().listMeshNodes('play')).items.length, 1);
+  } finally {
+    await host.stop();
+  }
+});
+
 test('a Fixed RID host stays Preparing while its previous owner release delay is pending', async t => {
   let storeNow = Date.UTC(2026, 6, 3, 0, 0, 0);
   let monotonicMs = 0;
@@ -685,7 +718,10 @@ test('a Fixed RID host stays Preparing while its previous owner release delay is
   const inner = new framework.ZLinkInMemoryProviderLocationStore(() => new Date(storeNow));
   const seedStore = new framework.ZLinkLocationStoreRepository(
     inner,
-    () => new Date(storeNow)
+    () => new Date(storeNow),
+    undefined,
+    () => monotonicMs,
+    5
   );
   const previousOwner = await seedStore.claimOwnerLease('previous-fixed-owner', 100);
   assert.equal(previousOwner.kind, 'claimed');
@@ -714,10 +750,18 @@ test('a Fixed RID host stays Preparing while its previous owner release delay is
     leaseGeneration: previousOwner.token.leaseGeneration,
     updatedAt: new Date(storeNow)
   };
+  await assert.rejects(
+    seedStore.updateMeshNode(
+      previousDescriptor,
+      framework.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+    ),
+    { kind: framework.ZLinkFrameworkErrorKind.Unavailable }
+  );
+  monotonicMs = 15;
   assert.equal(
     (await seedStore.updateMeshNode(
       previousDescriptor,
-      framework.ZLinkLocationWriteIntent.NewClaim
+      framework.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
     )).status,
     framework.ZLinkLocationWriteStatus.Stored
   );
@@ -775,7 +819,7 @@ test('a Fixed RID host stays Preparing while its previous owner release delay is
       }
       throw new Error('host stopped before Fixed RID claim completed');
     })();
-    monotonicMs = 15;
+    monotonicMs = 30;
     assert.equal(await runtime.locationOwner.currentRuntime.renewOwnerLeaseOnce(), true);
     await serving;
     assert.equal(runtime.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
@@ -794,6 +838,120 @@ test('a Fixed RID host stays Preparing while its previous owner release delay is
   }
 });
 
+test('a Fixed RID host waits after normal stop when its descriptor is Missing', async t => {
+  const storeNow = Date.UTC(2026, 6, 3, 0, 0, 0);
+  let monotonicMs = 0;
+  let meshNodeMutations = 0;
+  t.mock.method(performance, 'now', () => monotonicMs);
+  const inner = new framework.ZLinkInMemoryProviderLocationStore(() => new Date(storeNow));
+  const provider = {
+    read: inner.read.bind(inner),
+    scan: inner.scan.bind(inner),
+    write(request, signal) {
+      if (request.mutations.some(mutation => mutation.key.value.startsWith('mesh-node\0'))) {
+        meshNodeMutations += 1;
+      }
+      return inner.write(request, signal);
+    }
+  };
+  const store = new framework.ZLinkLocationStoreRepository(
+    provider,
+    () => new Date(storeNow),
+    undefined,
+    () => monotonicMs,
+    5
+  );
+  const locations = {
+    storeInstance: provider,
+    options: {
+      ownerLeaseRenewIntervalMs: 1000,
+      ownerLeaseRenewTimeoutMs: 100,
+      ownerLeaseTtlMs: 60_000,
+      ownerLeaseFencingMarginMs: 5
+    }
+  };
+
+  const makeHost = () => new framework.ZLinkFrameworkRuntimeHost(
+    {
+      registration: framework.createFrameworkRegistration({
+        locations,
+        spotNodes: {
+          play: { router: { bind: 'tcp://local-play', routingId: 'fixed-restart-node' } }
+        }
+      })
+    },
+    { backendAdapterFactory: fakeBackendAdapterFactory([], rid('fixed-restart-node')) }
+  );
+  const renew = async host => {
+    const renewed = await host.locationOwner.currentRuntime.renewOwnerLeaseOnce();
+    return renewed;
+  };
+  let first;
+  let second;
+  try {
+    first = makeHost();
+    await first.start();
+    const releaseDelay = first.locationOwner.currentStores.locationStore.ownerLeaseReleaseDelayForTesting;
+    assert.equal(releaseDelay.delayMs, 15);
+    assert.equal(releaseDelay.observationCountForTesting, 1);
+    assert.equal([...releaseDelay.observations.values()][0].t0, 0);
+    if (first.status.state === framework.ZLinkFrameworkRuntimeState.Preparing) {
+      const recovery = waitForNextHostOwnerRecovery(first);
+      monotonicMs += 15;
+      assert.equal(await renew(first), true);
+      await recovery;
+      assert.equal(releaseDelay.observationCountForTesting, 0);
+      assert.ok(meshNodeMutations > 0);
+      assert.equal((await store.listMeshNodes('play')).items.length, 1);
+    }
+    assert.equal(first.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
+    await first.stop();
+    const [stoppedDescriptor] = (await store.listMeshNodes('play')).items;
+    assert.ok(stoppedDescriptor);
+    assert.equal(
+      await store.removeMeshNode(
+        { meshName: 'play', rid: rid('fixed-restart-node') },
+        {
+          ownerId: stoppedDescriptor.ownerId,
+          leaseGeneration: stoppedDescriptor.leaseGeneration
+        }
+      ),
+      framework.ZLinkLocationWriteStatus.Stored
+    );
+    assert.equal((await store.listMeshNodes('play')).items.length, 0);
+    const mutationsAfterNormalStop = meshNodeMutations;
+
+    second = makeHost();
+    await second.start();
+    assert.equal(second.status.state, framework.ZLinkFrameworkRuntimeState.Preparing);
+    assert.equal(meshNodeMutations, mutationsAfterNormalStop);
+    const t0 = monotonicMs;
+
+    const firstRetry = waitForNextHostOwnerRecovery(second);
+    assert.equal(await renew(second), true);
+    await firstRetry;
+    assert.equal(second.status.state, framework.ZLinkFrameworkRuntimeState.Preparing);
+    assert.equal(meshNodeMutations, mutationsAfterNormalStop);
+
+    monotonicMs = t0 + 14;
+    const earlyRetry = waitForNextHostOwnerRecovery(second);
+    assert.equal(await renew(second), true);
+    await earlyRetry;
+    assert.equal(second.status.state, framework.ZLinkFrameworkRuntimeState.Preparing);
+    assert.equal(meshNodeMutations, mutationsAfterNormalStop);
+
+    monotonicMs = t0 + 15;
+    const boundaryRetry = waitForNextHostOwnerRecovery(second);
+    assert.equal(await renew(second), true);
+    await boundaryRetry;
+    assert.equal(second.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
+    assert.ok(meshNodeMutations > mutationsAfterNormalStop);
+  } finally {
+    if (second !== undefined) await second.stop();
+    if (first !== undefined) await first.stop();
+  }
+});
+
 // Location runtime §5: the lease is held but the Store does not confirm the
 // descriptor write (provider error, or no answer within the renew timeout).
 // Startup ends in Preparing and the next renew publishes the descriptor.
@@ -804,6 +962,10 @@ for (const fault of ['error', 'noAnswer']) {
     const store = new framework.ZLinkLocationStoreRepository(inner, now);
     let descriptorFault = true;
     let faultedWrites = 0;
+    let notifyFirstFault;
+    let notifySecondFault;
+    const firstFault = new Promise(resolve => { notifyFirstFault = resolve; });
+    const secondFault = new Promise(resolve => { notifySecondFault = resolve; });
     const provider = {
       read: (key, signal) => inner.read(key, signal),
       scan: (request, signal) => inner.scan(request, signal),
@@ -813,6 +975,8 @@ for (const fault of ['error', 'noAnswer']) {
         );
         if (!descriptorFault || !meshNodeWrite) return inner.write(request, signal);
         faultedWrites += 1;
+        if (faultedWrites === 1) notifyFirstFault();
+        if (faultedWrites === 2) notifySecondFault();
         if (fault === 'error') return Promise.reject(new Error('descriptor write failed'));
         // No answer: pending until the fault clears, then the write applies.
         return new Promise(resolve => {
@@ -833,6 +997,7 @@ for (const fault of ['error', 'noAnswer']) {
           options: {
             ownerLeaseRenewIntervalMs: 20,
             ownerLeaseRenewTimeoutMs: 50,
+            ownerLeaseFencingMarginMs: 1,
             pollingIntervalMs: 20
           }
         },
@@ -850,14 +1015,20 @@ for (const fault of ['error', 'noAnswer']) {
     runtime.createSpotManagerOptions().metrics.recordLocationStoreError = operation =>
       locationStoreErrorOperations.push(operation);
     const runtimeTaskFailures = [];
+    let notifyRuntimeTaskFailure;
+    const runtimeTaskFailure = new Promise(resolve => { notifyRuntimeTaskFailure = resolve; });
     let removeRuntimeTaskFailureHandler;
 
     const observation = new AbortController();
     try {
       await runtime.start();
       removeRuntimeTaskFailureHandler = runtime.errorSink.onRuntimeTaskException(({ taskName }) =>
-        runtimeTaskFailures.push(taskName)
+        {
+          runtimeTaskFailures.push(taskName);
+          notifyRuntimeTaskFailure(taskName);
+        }
       );
+      await firstFault;
       assert.ok(faultedWrites > 0);
       assert.equal(runtime[inspectRuntime]().hasOwnerToken, true);
       assert.deepEqual(
@@ -878,7 +1049,8 @@ for (const fault of ['error', 'noAnswer']) {
       assert.equal(runtime.status.isReady, false);
       assert.equal((await store.listMeshNodes('play')).items.length, 0);
 
-      await waitForCondition(() => faultedWrites >= 2 && runtimeTaskFailures.length > 0);
+      const [secondTaskFailure] = await Promise.all([runtimeTaskFailure, secondFault]);
+      assert.equal(secondTaskFailure, 'startup descriptor publication');
       assert.deepEqual(
         {
           retryFailureTask: runtimeTaskFailures.at(-1),
@@ -916,8 +1088,10 @@ for (const fault of ['error', 'noAnswer']) {
   });
 }
 
-test('framework host does not overlap owner lease recovery attempts', async () => {
-  const scenario = recoverableHostScenario(1_000);
+test('framework host does not overlap owner lease recovery attempts', async t => {
+  let monotonicMs = 0;
+  t.mock.method(performance, 'now', () => monotonicMs);
+  const scenario = recoverableHostScenario(1_000, 1);
   const runtime = scenario.runtime;
   const recoveryCounts = {
     startStatefulAuthority: 0,
@@ -929,9 +1103,18 @@ test('framework host does not overlap owner lease recovery attempts', async () =
   let activeRecoveryAttempts = 0;
   let maximumActiveRecoveryAttempts = 0;
   let unblockRecoveryPublication;
+  let notifyPreparingPublication;
+  let notifyRecoveryComplete;
+  const preparingPublicationStarted = new Promise(resolve => {
+    notifyPreparingPublication = resolve;
+  });
   const recoveryPublicationGate = new Promise(resolve => {
     unblockRecoveryPublication = resolve;
   });
+  const armRecoveryCompletion = () => new Promise(resolve => {
+    notifyRecoveryComplete = resolve;
+  });
+  let recoveryComplete = armRecoveryCompletion();
   let removeRenewalObserver;
 
   try {
@@ -944,6 +1127,7 @@ test('framework host does not overlap owner lease recovery attempts', async () =
     spotNodeRuntime.publishMeshNodeState = async (state, ...args) => {
       if (state === framework.ZLinkFrameworkRuntimeState.Preparing) {
         preparingPublicationAttempts += 1;
+        notifyPreparingPublication();
         await recoveryPublicationGate;
       }
       return await publishMeshNodeState(state, ...args);
@@ -960,6 +1144,7 @@ test('framework host does not overlap owner lease recovery attempts', async () =
         await resumeOwnerLeaseOwnedWork(...args);
       } finally {
         activeRecoveryAttempts -= 1;
+        notifyRecoveryComplete();
       }
     };
 
@@ -993,15 +1178,22 @@ test('framework host does not overlap owner lease recovery attempts', async () =
 
     scenario.recover();
     await locationRuntime.renewOwnerLeaseOnce();
-    await waitForCondition(() => preparingPublicationAttempts === 1);
+    await preparingPublicationStarted;
     await locationRuntime.renewOwnerLeaseOnce();
     assert.ok(renewals >= 2);
     assert.equal(maximumActiveRecoveryAttempts, 1);
     assert.equal(preparingPublicationAttempts, 1);
 
+    const serving = observeRuntimeState(runtime, framework.ZLinkFrameworkRuntimeState.Serving);
     unblockRecoveryPublication();
-    await waitForCondition(() => runtime.status.state === framework.ZLinkFrameworkRuntimeState.Serving);
-    await waitForCondition(() => activeRecoveryAttempts === 0);
+    await recoveryComplete;
+    recoveryComplete = armRecoveryCompletion();
+    monotonicMs = 3;
+    await locationRuntime.renewOwnerLeaseOnce();
+    assert.equal(await serving.reached, true);
+    serving.controller.abort();
+    await recoveryComplete;
+    assert.equal(preparingPublicationAttempts, 2);
     assert.deepEqual(recoveryCounts, {
       startStatefulAuthority: 1,
       spotAutoConnect: 1,
@@ -1013,14 +1205,16 @@ test('framework host does not overlap owner lease recovery attempts', async () =
     removeRenewalObserver?.();
     scenario.recover();
     try {
-      await waitForCondition(() => activeRecoveryAttempts === 0);
+      if (activeRecoveryAttempts > 0) await recoveryComplete;
     } finally {
       await runtime.stop();
     }
   }
 });
 
-test('framework host whose descriptor is claimed by another owner fails startup', async () => {
+test('framework host whose descriptor is claimed by another owner fails startup', async t => {
+  let monotonicMs = 0;
+  t.mock.method(performance, 'now', () => monotonicMs);
   const now = () => new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new framework.ZLinkInMemoryProviderLocationStore(now);
   const createHost = () => new framework.ZLinkFrameworkRuntimeHost({
@@ -1030,6 +1224,7 @@ test('framework host whose descriptor is claimed by another owner fails startup'
         options: {
           ownerLeaseRenewIntervalMs: 20,
           ownerLeaseRenewTimeoutMs: 50,
+          ownerLeaseFencingMarginMs: 1,
           pollingIntervalMs: 20
         }
       },
@@ -1046,6 +1241,13 @@ test('framework host whose descriptor is claimed by another owner fails startup'
   const second = createHost();
   try {
     await first.start();
+    if (first.status.state === framework.ZLinkFrameworkRuntimeState.Preparing) {
+      const serving = observeRuntimeState(first, framework.ZLinkFrameworkRuntimeState.Serving);
+      monotonicMs = 3;
+      assert.equal(await first.locationOwner.currentRuntime.renewOwnerLeaseOnce(), true);
+      assert.equal(await serving.reached, true);
+      serving.controller.abort();
+    }
     await assert.rejects(second.start());
   } finally {
     await second.stop().catch(() => {});
@@ -1195,7 +1397,9 @@ test('degraded host rejects factory and restore confirmation until owner lease r
   }
 });
 
-test('degraded host rejects stateful target, relocation and peer capacity admission until owner lease recovery', async () => {
+test('degraded host rejects stateful target, relocation and peer capacity admission until owner lease recovery', async t => {
+  let monotonicMs = 0;
+  t.mock.method(performance, 'now', () => monotonicMs);
   const scenario = recoverableHostScenario();
   let targetCallbacks = 0;
   try {
@@ -1225,8 +1429,20 @@ test('degraded host rejects stateful target, relocation and peer capacity admiss
     // Preparing is Blocked/RuntimeNotReady (host relocation §3).
     assert.equal(blocked.reason, framework.ZLinkFrameworkRelocationReason.RuntimeNotReady);
 
+    const serving = observeRuntimeState(
+      scenario.runtime,
+      framework.ZLinkFrameworkRuntimeState.Serving
+    );
     scenario.recover();
-    await waitForCondition(() => scenario.runtime[inspectRuntime]().ownerLeaseUsable);
+    const initialRecovery = waitForNextHostOwnerRecovery(scenario.runtime);
+    assert.equal(await scenario.runtime.locationOwner.currentRuntime.renewOwnerLeaseOnce(), true);
+    await initialRecovery;
+    monotonicMs = 3;
+    const retryRecovery = waitForNextHostOwnerRecovery(scenario.runtime);
+    assert.equal(await scenario.runtime.locationOwner.currentRuntime.renewOwnerLeaseOnce(), true);
+    await retryRecovery;
+    assert.equal(await serving.reached, true);
+    serving.controller.abort();
     assert.equal(scenario.runtime.status.acceptingWork, true);
     assert.equal(scenario.runtime.spotNodeRuntime.options.peerAdmissionSealed('play'), false);
     await scenario.runtime.dispatchMeshRecord(() => 'remote',
@@ -1452,14 +1668,22 @@ async function resolveFrameworkRegistration(module) {
   return container.get(nestjs.ZLINK_FRAMEWORK_REGISTRATION);
 }
 
-test('concurrent relocation with a different deadline joins the running operation', async () => {
+test('concurrent relocation with a different deadline joins the running operation', async t => {
+  let monotonicMs = 0;
+  t.mock.method(performance, 'now', () => monotonicMs);
   const now = () => new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const provider = new framework.ZLinkInMemoryProviderLocationStore(now);
   const calls = [];
   const nodeRid = rid('node-join-deadline');
   const runtime = new framework.ZLinkFrameworkRuntimeHost({
     registration: framework.createFrameworkRegistration({
-      locations: { storeInstance: provider },
+      locations: {
+        storeInstance: provider,
+        options: {
+          ownerLeaseRenewIntervalMs: 1000,
+          ownerLeaseFencingMarginMs: 1
+        }
+      },
       spotNodes: {
         play: { router: { bind: 'tcp://127.0.0.1:9137', routingId: 'node-join-deadline' } }
       }
@@ -1468,8 +1692,15 @@ test('concurrent relocation with a different deadline joins the running operatio
     backendAdapterFactory: fakeBackendAdapterFactory(calls, nodeRid)
   });
 
-  await runtime.start();
   try {
+    await runtime.start();
+    if (runtime.status.state === framework.ZLinkFrameworkRuntimeState.Preparing) {
+      const serving = observeRuntimeState(runtime, framework.ZLinkFrameworkRuntimeState.Serving);
+      monotonicMs = 3;
+      assert.equal(await runtime.locationOwner.currentRuntime.renewOwnerLeaseOnce(), true);
+      assert.equal(await serving.reached, true);
+      serving.controller.abort();
+    }
     // Two concurrent relocations with the same mode and effective target
     // version but different deadlines. The join key is (mode, effective target
     // version) and excludes the deadline, so the second call joins the running
@@ -1502,7 +1733,7 @@ test('concurrent relocation with a different deadline joins the running operatio
   }
 });
 
-function recoverableHostScenario(ownerLeaseRenewIntervalMs = 20) {
+function recoverableHostScenario(ownerLeaseRenewIntervalMs = 20, ownerLeaseFencingMarginMs = 1) {
   const now = () => new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
   const inner = new framework.ZLinkInMemoryProviderLocationStore(now);
   let unavailable = true;
@@ -1528,6 +1759,7 @@ function recoverableHostScenario(ownerLeaseRenewIntervalMs = 20) {
         options: {
           ownerLeaseRenewIntervalMs,
           ownerLeaseRenewTimeoutMs: 5,
+          ownerLeaseFencingMarginMs,
           pollingIntervalMs: 20
         }
       },
@@ -1573,6 +1805,32 @@ async function waitForCondition(predicate) {
     await new Promise(resolve => setTimeout(resolve, 5));
   }
   throw new Error('Timed out waiting for the expected host state.');
+}
+
+function observeRuntimeState(runtime, state) {
+  const controller = new AbortController();
+  const reached = (async () => {
+    for await (const event of runtime.observe(controller.signal)) {
+      if (event.status.state === state) return true;
+    }
+    return false;
+  })();
+  return { controller, reached };
+}
+
+function waitForNextHostOwnerRecovery(host) {
+  const original = host.resumeOwnerLeaseOwnedWork.bind(host);
+  let resolve;
+  const completed = new Promise(done => { resolve = done; });
+  host.resumeOwnerLeaseOwnedWork = async (...args) => {
+    try {
+      return await original(...args);
+    } finally {
+      host.resumeOwnerLeaseOwnedWork = original;
+      resolve();
+    }
+  };
+  return completed;
 }
 
 function fakeBackendAdapterFactory(calls, nodeRid) {

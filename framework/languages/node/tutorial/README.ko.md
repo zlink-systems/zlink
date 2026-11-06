@@ -202,17 +202,18 @@ WebStorm에서 `tutorial/` project를 연다. npm tool window 또는 각 script�
 | `docker: Cannot connect to the Docker daemon` | Docker Desktop(또는 dockerd)이 실행 중이 아니다. 시작한 뒤 다시 실행한다 |
 | `docker: Error response from daemon: ... port is already allocated` / `Bind for 127.0.0.1:6379 failed` | 6379를 다른 Redis가 쓰고 있다. 아래와 같이 이 tutorial의 키를 삭제한 뒤 사용하거나, 6379에서 새 Redis를 실행한다 |
 | `curl`이 `Connection refused`를 반환한다 | Server(`npm run server`)가 아직 시작하지 않았거나 종료됐다. 해당 터미널의 로그를 확인한다 |
-| 강제 종료 후 Server가 시작하지 못한다 | 이전 owner lease는 최대 30초 동안 유효할 수 있다([owner lease TTL 기본값](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#L670-L674)). 만료될 때까지 기다린 뒤 Server를 다시 실행한다. 시작에 실패한 process는 자동으로 재시도하지 않는다. 즉시 다시 시작하려면 이전 tutorial process를 종료하고 아래 명령으로 이 tutorial의 키를 삭제한다 |
+| 같은 고정 routing id로 재시작한 Server가 `Preparing`에 머문다 | 정상 종료 뒤에도 이전 MeshNode descriptor가 없으면 Location Store가 `Missing`을 처음 관찰한 시점부터 기본 15초(lease fencing margin 5초의 3배)를 기다린 뒤 claim한다. 이 동안 Server를 계속 실행하면 renew 주기마다 다시 시도해 `Ready`가 된다 |
+| 강제 종료 뒤 같은 routing id Server의 시작에 실패한다 | 이전 owner lease는 최대 30초 동안 유효할 수 있다([owner lease TTL 기본값](https://github.com/zlink-systems/zlink/blob/main/framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#L670-L674)). lease가 무효가 된 뒤 Fixed RID claim은 최초 관찰부터 기본 15초를 더 기다린다. Store 키를 지워도 이 대기는 건너뛸 수 없다 |
 | `EADDRINUSE`(포트 충돌) | 아래 「포트」 표의 포트 중 하나를 다른 프로세스가 이미 쓰고 있다. 그 프로세스를 종료하거나 이 tutorial의 다른 실행 중인 인스턴스를 먼저 정리한다 |
 | `npm error gyp ERR! ... ZLINK_CORE_INSTALL_PREFIX must name an absolute installed Core ... package prefix`(Windows) | 이전 framework release가 고정한 `@zlink-systems/framework`가 아직 0.18.1 미만이라 `zlink@1.2.0`만 받는다 — win32-x64 prebuild(#656)는 framework 0.18.1(`zlink@1.2.1`)부터다. 그 버전으로 다시 받거나 WSL에서 실행한다 |
 | 위와 같은 오류(macOS) | `@zlink-systems/zlink@1.2.1`에도 아직 `darwin-*` prebuild가 없다. Linux(x64)나 Windows(0.18.1부터)에서 실행한다 |
 | `EBADENGINE`(Node 버전 경고) | Node.js 22 미만이다. 위 「전제 조건」대로 22 이상으로 올린다 |
 | `server listening`이 표시되기까지 20~45초가 걸린다 | 프로젝트가 `/mnt/d` 같은 WSL의 9p mount 위에 있으면 module load에 이 시간이 걸린다. Linux 파일 시스템(`~/` 등)으로 옮기면 줄어든다 |
 
-기존 Redis를 사용하려면 이전에 실행한 이 tutorial의 process를 먼저 종료하고 Location Store와
-Relocation Store의 기록을 삭제한다. 사용하는 셸에서 다음 명령을 실행한 뒤 [실행](#실행) 블록에서
+기존 Redis의 tutorial 데이터를 비우려면 이전에 실행한 이 tutorial의 process를 먼저 종료하고
+Location Store와 Relocation Store의 기록을 삭제한다. 사용하는 셸에서 다음 명령을 실행한 뒤 [실행](#실행) 블록에서
 `docker run` 행만 생략한다. 이 명령은 이 tutorial의 `zlink-tutorial-node:` 접두사에 속한 키만
-삭제하며, 6379의 Redis에 연결된 `redis-cli`가 필요하다.
+삭제하며, 6379의 Redis에 연결된 `redis-cli`가 필요하다. Fixed RID 재시작 대기는 이 키 삭제로 짧아지지 않는다.
 
 ```bash title="linux"
 redis-cli --scan --pattern 'zlink-tutorial-node:*' | while IFS= read -r key; do redis-cli DEL "$key" >/dev/null; done

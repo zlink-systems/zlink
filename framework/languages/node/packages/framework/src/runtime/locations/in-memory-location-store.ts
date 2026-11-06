@@ -18,7 +18,11 @@ import {
   matchesSpotLocation
 } from '../../location-store-integration';
 import { encodeAuthorityKey } from './authority-key-codec';
-import type { ZLinkDomainLocationStore } from './domain-store-contract';
+import {
+  ZLinkInternalMeshNodeWriteIntent,
+  type ZLinkDomainLocationStore,
+  type ZLinkMeshNodeWriteIntent
+} from './domain-store-contract';
 import { ZLinkInMemoryAuthorityStore } from './in-memory-authority-store';
 import {
   ZLinkFrameworkRuntimeState,
@@ -82,6 +86,7 @@ import { ZLinkLocationKeyCodec } from './key-codec';
 import { zlinkRuntimeDefaultLocationOptions } from '../../contracts/Locations/Options';
 import {
   ZLinkOwnerLeaseReleaseDelay,
+  ZLinkOwnerLeaseReleaseDelayPendingError,
   ownerLeaseReleaseDelayScope
 } from './owner-lease-release-delay';
 const MAX_LOCATION_GENERATION = 0x7fff_ffff_ffff_ffffn;
@@ -262,7 +267,8 @@ export class ZLinkInMemoryLocationStore
 
   async updateMeshNode(
     descriptor: ZLinkMeshNodeDescriptor,
-    intent: ZLinkLocationWriteIntent
+    intent: ZLinkMeshNodeWriteIntent,
+    _signal?: AbortSignal
   ): Promise<ZLinkLocationWriteResult> {
     validateMeshNodeDescriptor(descriptor);
     const key = meshNodeKey(descriptor.meshName, descriptor.rid);
@@ -281,9 +287,15 @@ export class ZLinkInMemoryLocationStore
       return rejectedConflict();
     }
     if (current === undefined) {
-      this.ownerLeaseReleaseDelay.clear(releaseDelayScope);
+      if (
+        intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim &&
+        !this.ownerLeaseReleaseDelay.allows(releaseDelayScope, undefined)
+      ) {
+        throw new ZLinkOwnerLeaseReleaseDelayPendingError();
+      }
       if (
         intent !== ZLinkLocationWriteIntent.NewClaim &&
+        intent !== ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim &&
         intent !== ZLinkLocationWriteIntent.Takeover
       )
         return ignoredStale();
@@ -291,6 +303,7 @@ export class ZLinkInMemoryLocationStore
       this.meshNodes.rows.set(key, { ...descriptor, updatedAt });
       this.meshNodes.generations.set(key, 1n);
       this.bump(ZLinkLocationKind.Peer, descriptor.meshName);
+      this.ownerLeaseReleaseDelay.clear(releaseDelayScope);
       return stored(1n, updatedAt);
     }
     const currentLease = this.leases.get(current.ownerId);
@@ -302,7 +315,7 @@ export class ZLinkInMemoryLocationStore
       currentLease !== undefined &&
       currentLease.token.leaseGeneration === current.leaseGeneration &&
       currentLease.leaseExpiresAt.getTime() > updatedAt.getTime();
-    if (intent === ZLinkLocationWriteIntent.NewClaim) {
+    if (intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim) {
       const claimAllowed = this.ownerLeaseReleaseDelay.allows(
         releaseDelayScope,
         currentOwner,
@@ -346,7 +359,8 @@ export class ZLinkInMemoryLocationStore
       return stored(this.meshNodes.generations.get(key) ?? 1n, current.updatedAt);
     }
     if (
-      intent === ZLinkLocationWriteIntent.NewClaim &&
+      (intent === ZLinkLocationWriteIntent.NewClaim ||
+        intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim) &&
       currentLease !== undefined &&
       currentLease.leaseExpiresAt.getTime() > updatedAt.getTime()
     ) {
@@ -1642,7 +1656,7 @@ function canTakeOver(
   currentLease: InMemoryOwnerLease | undefined,
   nextOwnerId: string,
   nextLeaseGeneration: bigint,
-  intent: ZLinkLocationWriteIntent,
+  intent: ZLinkMeshNodeWriteIntent,
   now: Date
 ): boolean {
   if (intent === ZLinkLocationWriteIntent.Takeover) {
@@ -1650,7 +1664,10 @@ function canTakeOver(
     // next owner's lease still fence concurrent stale writes.
     return true;
   }
-  if (intent !== ZLinkLocationWriteIntent.NewClaim) {
+  if (
+    intent !== ZLinkLocationWriteIntent.NewClaim &&
+    intent !== ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+  ) {
     return false;
   }
   const ownerGone =

@@ -56,7 +56,14 @@ import { ZLinkAggregateInventoryStore } from './aggregate-inventory-store';
 import { decodeAuthorityKey, encodeAuthorityKey } from './authority-key-codec';
 import { ZLinkInMemoryLocationStore } from './in-memory-location-store';
 import { PROVIDER_STORAGE_NAMESPACE_PREFIX, storeKey } from './in-memory-provider-location-store';
-import { ownerLeaseReleaseDelayScope } from './owner-lease-release-delay';
+import {
+  ZLinkInternalMeshNodeWriteIntent,
+  type ZLinkMeshNodeWriteIntent
+} from './domain-store-contract';
+import {
+  ZLinkOwnerLeaseReleaseDelayPendingError,
+  ownerLeaseReleaseDelayScope
+} from './owner-lease-release-delay';
 import {
   type ZLinkActorLocation,
   type ZLinkActorLocationFilter,
@@ -2424,7 +2431,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
 
   override async updateMeshNode(
     descriptor: ZLinkMeshNodeDescriptor,
-    intent: ZLinkLocationWriteIntent,
+    intent: ZLinkMeshNodeWriteIntent,
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteResult> {
     return this.observeStore('compare_exchange', () =>
@@ -2434,7 +2441,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
 
   private async updateMeshNodeRequest(
     descriptor: ZLinkMeshNodeDescriptor,
-    intent: ZLinkLocationWriteIntent,
+    intent: ZLinkMeshNodeWriteIntent,
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteResult> {
     const capacityRowKey = capacityKey(descriptor.meshName, String(descriptor.rid));
@@ -3111,7 +3118,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   private async updateDescriptor<T extends OwnedDescriptor>(
     rowKey: ZLinkStoreKey,
     descriptor: T,
-    intent: ZLinkLocationWriteIntent,
+    intent: ZLinkMeshNodeWriteIntent,
     revive: (descriptor: T) => T,
     same: (left: T, right: T) => boolean,
     canRenew: (current: T, next: T) => boolean,
@@ -3140,7 +3147,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const currentLease = await this.provider.read(ownerKey(stored.ownerId), signal);
       const currentLeaseGeneration = liveOwnerLeaseGeneration(currentLease);
       const currentOwnerLive = currentLeaseGeneration === stored.leaseGeneration;
-      if (intent === ZLinkLocationWriteIntent.NewClaim && releaseDelayScope !== undefined) {
+      if (
+        intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim &&
+        releaseDelayScope !== undefined
+      ) {
         const currentOwner = {
           ownerId: stored.ownerId,
           leaseGeneration: stored.leaseGeneration
@@ -3164,11 +3174,15 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         descriptor.leaseGeneration,
         currentLeaseGeneration
       );
-      const renew = intent === 2 && canRenew(stored, descriptor);
+      const renew =
+        (intent === 2 || intent === ZLinkInternalMeshNodeWriteIntent.FixedRidRenew) &&
+        canRenew(stored, descriptor);
       if (!takeover && !renew) {
         return {
           status:
-            intent === ZLinkLocationWriteIntent.NewClaim && currentLeaseGeneration !== undefined
+            (intent === ZLinkLocationWriteIntent.NewClaim ||
+              intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim) &&
+            currentLeaseGeneration !== undefined
               ? WriteStatus.RejectedConflict
               : WriteStatus.IgnoredStale,
           generation,
@@ -3176,11 +3190,16 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         };
       }
       if (takeover) generation += 1n;
-    } else if (intent === 2) {
-      if (releaseDelayScope !== undefined) this.ownerLeaseReleaseDelay.clear(releaseDelayScope);
+    } else if (intent === 2 || intent === ZLinkInternalMeshNodeWriteIntent.FixedRidRenew) {
       return rejected(lease.value.storeNow);
     } else {
-      if (releaseDelayScope !== undefined) this.ownerLeaseReleaseDelay.clear(releaseDelayScope);
+      if (
+        intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim &&
+        releaseDelayScope !== undefined &&
+        !this.ownerLeaseReleaseDelay.allows(releaseDelayScope, undefined)
+      ) {
+        throw new ZLinkOwnerLeaseReleaseDelayPendingError();
+      }
     }
 
     const result = await this.writeDescriptorWithReconciliation(
@@ -4946,7 +4965,7 @@ function liveOwnerLeaseGeneration(lease: ZLinkStoreReadResult): bigint | undefin
 }
 
 function canTakeOverStoredLocation(
-  intent: ZLinkLocationWriteIntent,
+  intent: ZLinkMeshNodeWriteIntent,
   currentOwnerId: string,
   currentLeaseGeneration: bigint,
   nextOwnerId: string,
@@ -4958,7 +4977,10 @@ function canTakeOverStoredLocation(
     // fences concurrent stale writes while the next owner lease is checked.
     return true;
   }
-  if (intent !== ZLinkLocationWriteIntent.NewClaim) {
+  if (
+    intent !== ZLinkLocationWriteIntent.NewClaim &&
+    intent !== ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+  ) {
     return false;
   }
   if (liveLeaseGeneration === undefined) return true;
