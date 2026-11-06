@@ -7,7 +7,7 @@
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
 
 #include <zlink/Contracts/Messaging/message.hpp>
-#include <zlink/framework/contracts/dispatch/task.hpp>
+#include <zlink/framework/contracts/dispatch/request_task.hpp>
 
 #include <chrono>
 #include <array>
@@ -35,16 +35,44 @@ namespace zlink::framework::runtime::foundation
 {
 
 using call_id_t = runtime::call_id_t;
-struct operation_completion_item_t;
-struct operation_registry_drain_state_t;
-
 struct operation_registry_state_t;
+
+// The pending entry carries the receiver and its admission phase together.
+// Copies share receiver ownership; synchronous codec projections add no task state.
+class completion_sink_t
+{
+  public:
+    completion_sink_t () = default;
+    completion_sink_t (std::nullptr_t) {}
+    template <typename TCallback>
+        requires (!std::is_same_v<std::decay_t<TCallback>, completion_sink_t>)
+    completion_sink_t (TCallback &&callback) : _complete (std::forward<TCallback> (callback))
+    {
+    }
+
+    template <typename TOwner, typename TInvoke>
+    completion_sink_t (std::shared_ptr<TOwner> owner, TInvoke invoke) :
+        _complete (std::move (owner), invoke)
+    {
+    }
+    explicit operator bool () const noexcept { return bool (_complete); }
+    completion_sink_t with_admission (std::shared_ptr<task_completion_source_t<void>> admitted) &&
+    {
+        _admitted = std::move (admitted);
+        return std::move (*this);
+    }
+    void operator() (operation_terminal_t terminal, result_t<zlink::message_t> payload) const;
+
+  private:
+    detail::request_callback_t<operation_terminal_t, result_t<zlink::message_t>> _complete;
+    std::shared_ptr<task_completion_source_t<void>> _admitted;
+};
 
 class operation_registry_t
 {
   public:
     using clock_t = std::chrono::steady_clock;
-    using callback_t = std::function<void (operation_terminal_t, result_t<zlink::message_t>)>;
+    using callback_t = completion_sink_t;
     using before_dispatch_t = std::function<void ()>;
     // The management budget reads this clock; tests inject a deterministic one.
     using now_t = clock_t::time_point (*) ();
