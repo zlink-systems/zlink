@@ -365,6 +365,7 @@ inline task_scheduler_t capture_native_continuation_scheduler ()
 
 // A registration settles only when resumption starts or its execution owner
 // cancels it. A queued result delivery therefore cannot revive a stopped turn.
+struct request_task_access_t;
 template <typename T> class task_shared_state_t;
 
 class task_wait_registration_t
@@ -607,6 +608,17 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
 
     virtual ~task_shared_state_t () = default;
 
+    // Embedded request stages alias the request allocation. Ordinary tasks keep
+    // the shared ownership established by their own allocation.
+    virtual std::shared_ptr<task_shared_state_t> shared_from_this ()
+    {
+        return std::enable_shared_from_this<task_shared_state_t>::shared_from_this ();
+    }
+    virtual std::weak_ptr<task_shared_state_t> weak_from_this () noexcept
+    {
+        return std::enable_shared_from_this<task_shared_state_t>::weak_from_this ();
+    }
+
     bool complete (result_t<T> result)
     {
         std::shared_ptr<task_wait_registration_t> continuations;
@@ -629,6 +641,7 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
         _ready.notify_all ();
         // Internal delivery defects terminate; the first result is already fixed.
         [&] () noexcept {
+            publish_terminal (*_result);
             for (auto *callback = terminal_callbacks.get (); callback;
                  callback = callback->next.get ()) {
                 callback->invoke (*_result);
@@ -713,7 +726,7 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
         {
             std::lock_guard lock (_mutex);
             if (!_result) {
-                owner_state = this->weak_from_this ();
+                owner_state = self;
                 struct observer_t
                 {
                     observer_t (std::weak_ptr<task_shared_state_t<T>> owner,
@@ -823,6 +836,8 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     }
 
   protected:
+    virtual void publish_terminal (const result_t<T> &) {}
+
     virtual void bind_wait_owner (const std::shared_ptr<task_wait_registration_t> &,
                                   const std::shared_ptr<task_wait_registration_t> &,
                                   std::weak_ptr<void>)
@@ -1058,6 +1073,8 @@ template <typename T> class task_completion_source_t
     template <typename U>
     friend std::shared_ptr<task_completion_source_t<U>> detail::make_task_completion_source ();
 
+    friend struct detail::request_task_access_t;
+
     // The shared-source allocation owns this wrapper and state. An empty-owner
     // alias avoids an ownership cycle; task() acquires the state's strong owner.
     explicit task_completion_source_t (detail::task_shared_state_t<T> *state) :
@@ -1268,6 +1285,7 @@ template <typename T> class task_t
     friend task_t<U> detail::with_task_resume_scheduler (task_t<U>, detail::task_scheduler_t);
     template <typename U, typename TStart> friend task_t<U> detail::yield_call (TStart &&);
     friend struct detail::task_result_access_t;
+    friend struct detail::request_task_access_t;
     friend class task_completion_source_t<T>;
     template <typename U> friend class request_task_t;
     template <typename U>
@@ -1367,6 +1385,7 @@ template <> class task_t<void>
     friend task_t<U> detail::with_task_resume_scheduler (task_t<U>, detail::task_scheduler_t);
     template <typename U, typename TStart> friend task_t<U> detail::yield_call (TStart &&);
     friend struct detail::task_result_access_t;
+    friend struct detail::request_task_access_t;
     friend class task_completion_source_t<void>;
     template <typename U> friend class request_task_t;
     template <typename U>
@@ -1411,6 +1430,10 @@ void observe_task_terminal (task_t<T> &task, TCallback &&callback)
 {
     if (const auto *ready = task._state.inline_result ()) {
         auto invoke = std::forward<TCallback> (callback);
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+        if (auto fault = test_creation_probe::task_terminal_context_fault.exchange (nullptr))
+            fault ();
+#endif
         const auto ambient = capture_ambient_context ();
         [&] () noexcept {
             const auto ambient_guard = enter_ambient_context (ambient);

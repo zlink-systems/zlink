@@ -1,16 +1,451 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include <gtest/gtest.h>
 #include "allocation_counter.hpp"
+#include "creation_counter.hpp"
+#include "runtime/channels/channel_runtime.hpp"
+#include "runtime/locations/in_memory_location_store.hpp"
+#include <zlink/framework.hpp>
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime_failure_fixture.hpp"
 #include <cstdio>
 #include <array>
 #include <atomic>
 #include <optional>
+#include <thread>
+namespace zlink::framework::detail::test_creation_probe
+{
+extern std::atomic<void (*) ()> node_admission_observer_fault;
+}
+
+namespace zlink::framework::runtime::mesh
+{
+struct raw_mesh_node_owner_test_access_t
+{
+    static void close_registry (raw_mesh_node_owner_t &owner) { owner._operations->shutdown (); }
+};
+}
+
 namespace
 {
 namespace fw = zlink::framework;
 using reply_t = fw::result_t<fw::runtime::messaging::message_parts_t>;
+
+// Exercise the real host/raw-owner bridge: registration and admission can
+// finish on different turns, but only the registry owns a registered delivery.
+struct request_receiver_mesh_t
+{
+    static auto configure (const std::string &rid)
+    {
+        auto state = fw::test::runtime_failure_fixture<fw::detail::mesh_node_builder_state_t> (
+          "receiver-terminal");
+        state->core_context = std::make_shared<zlink::context_t> ();
+        state->listen_endpoint = "tcp://127.0.0.1:0";
+        state->routing_id = zlink::routing_id_t::from (rid);
+        state->object_role = fw::object_role_t::server;
+        state->channels.emplace ("work",
+                                 fw::detail::mesh_channel_registration_t{100, {}, true, true});
+        return state;
+    }
+    explicit request_receiver_mesh_t (const std::string &rid,
+                                      std::shared_ptr<fw::location_repository_t> store = {}) :
+        runtime (configure (rid))
+    {
+        if (store)
+            runtime.configure_user_spot_operations (std::move (store), {});
+        runtime.start ().result ().value ();
+    }
+    ~request_receiver_mesh_t () { runtime.stop (); }
+    fw::request_task_t<int> request (const zlink::routing_id_t &target,
+                                     std::atomic<unsigned> &conversions,
+                                     std::chrono::milliseconds timeout = std::chrono::seconds (5))
+    {
+        return fw::detail::request_task_access_t::receive_public<int, reply_t> (
+          [&] (auto receiver) {
+              std::vector<zlink::message_t> parts{zlink::message_t::from (std::string ("request"))};
+              runtime.request_node_reply (target, std::move (parts), timeout, std::move (receiver));
+          },
+          [&conversions] (const fw::result_t<reply_t> &terminal) {
+              ++conversions;
+              if (!terminal)
+                  return fw::detail::result_access_t::failure<int> (terminal.exception ());
+              if (!terminal.value ())
+                  return fw::detail::result_access_t::failure<int> (terminal.value ().exception ());
+              return fw::result_t<int>::success (42);
+          });
+    }
+    void pump ()
+    {
+        runtime.dispatch_ready ([] (const auto &, const auto &, auto, auto) {}).result ().value ();
+    }
+    fw::detail::mesh_node_runtime_t runtime;
+};
+
+TEST (RequestCallAllocations, MeshReceiverImmediateRejectionHasNoRegistryDelivery)
+{
+    request_receiver_mesh_t source ("reject-source");
+    std::atomic<unsigned> conversions{0};
+    auto pending = source.request (zlink::routing_id_t::from ("unknown-target"), conversions);
+    auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+    EXPECT_EQ (pending.result ().error_kind (), fw::framework_error_kind_t::not_found);
+    EXPECT_EQ (physical.result ().error_kind (), fw::framework_error_kind_t::not_found);
+    source.runtime.stop ();
+    EXPECT_EQ (conversions.load (), 1u);
+}
+
+TEST (RequestCallAllocations, MeshReceiverNativeSubmitRejectionUsesRegistryDelivery)
+{
+    request_receiver_mesh_t source ("native-reject-source");
+    auto &raw = source.runtime.native_node ().transport ();
+    auto descriptor = raw.topology ().local_descriptor ();
+    const auto target = zlink::routing_id_t::from ("no-native-route");
+    descriptor.node_routing_id = target.to_bytes ();
+    descriptor.advertised_endpoint = "tcp://127.0.0.1:1";
+    ASSERT_EQ (raw.admit_peer (descriptor, target.to_bytes (), std::chrono::steady_clock::now ()),
+               fw::runtime::mesh::peer_admission_result_t::admitted);
+    // A known logical peer with no native route is an unavailable transport,
+    // rather than an unknown logical target (Framework error model section 3).
+    std::atomic<unsigned> conversions{0};
+    auto pending = source.request (target, conversions);
+    auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+    EXPECT_EQ (pending.result ().error_kind (), fw::framework_error_kind_t::unavailable);
+    EXPECT_EQ (physical.result ().error_kind (), fw::framework_error_kind_t::unavailable);
+    source.runtime.stop ();
+    EXPECT_EQ (conversions.load (), 1u);
+}
+
+struct capture_payload_t
+{
+    static constexpr const char *packet_name = "p";
+    int value = 42;
+};
+
+TEST (RequestCallAllocations, NodeAndChannelNameCaptureStorageBytes)
+{
+    namespace probe = fw::detail::test_creation_probe;
+    request_receiver_mesh_t source ("capture-source");
+    auto &raw = source.runtime.native_node ().transport ();
+    auto descriptor = raw.topology ().local_descriptor ();
+    const auto target = zlink::routing_id_t::from ("capture-target");
+    descriptor.node_routing_id = target.to_bytes ();
+    descriptor.advertised_endpoint = "tcp://127.0.0.1:1";
+    ASSERT_EQ (raw.admit_peer (descriptor, target.to_bytes (), std::chrono::steady_clock::now ()),
+               fw::runtime::mesh::peer_admission_result_t::admitted);
+    fw::serializer_registry_t serializers;
+    serializers.add<capture_payload_t> (
+      [] (const capture_payload_t &value) {
+          return fw::encoded_payload_t::from_string (std::to_string (value.value));
+      },
+      [] (const fw::encoded_payload_t &value) {
+          return capture_payload_t{std::stoi (value.to_string ())};
+      },
+      "x/y");
+    auto builder = fw::test::runtime_failure_builder ();
+    auto channel = fw::detail::channel_runtime_t::from (builder.message_bus ());
+    channel.bind_serializers (serializers);
+    channel.bind_mesh_node_transport (
+      "m", {}, [&] (const auto &rid, auto parts, auto timeout, auto receiver) {
+          source.runtime.request_node_reply (rid, std::move (parts).take_items (), timeout,
+                                             std::move (receiver));
+      });
+    channel.bind_mesh_channel_transport ("work", {}, [&] (auto, auto) {
+        return fw::request_task_t<reply_t> (fw::result_t<reply_t>::success (
+          reply_t::failure (fw::framework_error_kind_t::unavailable, "capture probe")));
+    });
+    auto client = builder.route_client (serializers);
+    for (const bool node : {true, false}) {
+        const auto captures = probe::request_capture_bytes.load ();
+        const auto values = probe::request_capture_value_bytes.load ();
+        const auto blocks = probe::request_block_bytes.load ();
+        const auto owners = probe::request_callback_owner_bytes.load ();
+        auto pending = (node ? client.request_to_node ("m", target, capture_payload_t{})
+                             : client.request_to_channel ("work", capture_payload_t{}))
+                         .async<capture_payload_t> ();
+        EXPECT_FALSE (pending.result ());
+        EXPECT_FALSE (fw::detail::request_task_access_t::physical_reply (pending).result ());
+        std::printf ("%s receiver captures=%zu values=%zu block=%zu callback-owner=%zu\n",
+                     node ? "node" : "channel-name",
+                     probe::request_capture_bytes.load () - captures,
+                     probe::request_capture_value_bytes.load () - values,
+                     probe::request_block_bytes.load () - blocks,
+                     probe::request_callback_owner_bytes.load () - owners);
+    }
+    source.runtime.stop ();
+}
+
+TEST (RequestCallAllocations, MeshReceiverDeadlineBeforeNativeStartDeliversOnce)
+{
+    request_receiver_mesh_t source ("deadline-source");
+    const auto target = zlink::routing_id_t::from ("not-ready");
+    source.runtime.expect_peer (target, "tcp://127.0.0.1:1", 1, "default");
+    std::atomic<unsigned> conversions{0};
+    auto pending = source.request (target, conversions);
+    auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+    EXPECT_FALSE (pending.admitted ().await_ready ());
+    EXPECT_FALSE (physical.await_ready ());
+    EXPECT_EQ (source.runtime.native_node ()
+                 .transport ()
+                 .expire_requests (std::chrono::steady_clock::now () + std::chrono::seconds (6))
+                 .result ()
+                 .value (),
+               1u);
+    EXPECT_EQ (pending.result ().error_kind (), fw::framework_error_kind_t::deadline_exceeded);
+    EXPECT_EQ (physical.result ().error_kind (), fw::framework_error_kind_t::deadline_exceeded);
+    source.runtime.stop ();
+    EXPECT_EQ (conversions.load (), 1u);
+}
+
+TEST (RequestCallAllocations, MeshReceiverShutdownPendingRetainsDeliveryAfterPublicHandleDrops)
+{
+    request_receiver_mesh_t source ("shutdown-source");
+    const auto target = zlink::routing_id_t::from ("not-ready");
+    source.runtime.expect_peer (target, "tcp://127.0.0.1:1", 1, "default");
+    std::atomic<unsigned> conversions{0};
+    auto physical = [&] {
+        auto pending = source.request (target, conversions);
+        EXPECT_FALSE (pending.admitted ().await_ready ());
+        return fw::detail::request_task_access_t::physical_reply (pending);
+    }();
+    source.runtime.stop ();
+    EXPECT_EQ (physical.result ().error_kind (), fw::framework_error_kind_t::shutting_down);
+    EXPECT_EQ (conversions.load (), 1u);
+}
+
+class held_mesh_nodes_t final : public fw::runtime::in_memory_location_repository_t
+{
+  public:
+    bool hold = false;
+    fw::task_completion_source_t<fw::location_page_t<fw::mesh_node_descriptor_t>> listed;
+    fw::task_t<fw::location_page_t<fw::mesh_node_descriptor_t>>
+    list_mesh_nodes (std::string mesh, fw::location_page_request_t page = {}) override
+    {
+        return hold ? listed.task ()
+                    : in_memory_location_repository_t::list_mesh_nodes (std::move (mesh),
+                                                                        std::move (page));
+    }
+};
+
+void unknown_node_observer_failure (bool shutdown, bool native_rejection = false)
+{
+    namespace probe = fw::detail::test_creation_probe;
+    auto store = std::make_shared<held_mesh_nodes_t> ();
+    request_receiver_mesh_t source (shutdown ? "unknown-shutdown" : "unknown-deadline", store);
+    store->hold = true;
+    const auto target = zlink::routing_id_t::from ("pending-classification");
+    std::atomic<unsigned> conversions{0};
+    auto pending = source.request (target, conversions);
+    auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+    EXPECT_FALSE (pending.admitted ().await_ready ());
+    if (native_rejection) {
+        auto &raw = source.runtime.native_node ().transport ();
+        auto descriptor = raw.topology ().local_descriptor ();
+        descriptor.node_routing_id = target.to_bytes ();
+        descriptor.advertised_endpoint = "tcp://127.0.0.1:1";
+        ASSERT_EQ (
+          raw.admit_peer (descriptor, target.to_bytes (), std::chrono::steady_clock::now ()),
+          fw::runtime::mesh::peer_admission_result_t::admitted);
+    } else
+        source.runtime.expect_peer (target, "tcp://127.0.0.1:1", 1, "default");
+    std::atomic<unsigned> public_results{0};
+    auto public_reply = fw::detail::request_task_access_t::public_reply (pending);
+    fw::detail::observe_task_terminal (public_reply, [&] (const auto &) { ++public_results; });
+    struct clear_fault_t
+    {
+        ~clear_fault_t () { probe::node_admission_observer_fault.store (nullptr); }
+    } clear_fault;
+    probe::node_admission_observer_fault.store (+[] { throw std::bad_alloc (); });
+    store->listed.complete (
+      fw::result_t<fw::location_page_t<fw::mesh_node_descriptor_t>>::success ({}));
+    EXPECT_FALSE (pending.result ());
+    // C1 already owns physical delivery, even when admission observation cannot be installed.
+    if (!native_rejection)
+        EXPECT_FALSE (physical.await_ready ());
+    if (shutdown || native_rejection)
+        source.runtime.stop ();
+    else
+        EXPECT_EQ (source.runtime.native_node ()
+                     .transport ()
+                     .expire_requests (std::chrono::steady_clock::now () + std::chrono::seconds (6))
+                     .result ()
+                     .value (),
+                   1u);
+    EXPECT_FALSE (physical.result ());
+    source.runtime.stop ();
+    EXPECT_EQ (conversions.load (), 1u);
+    EXPECT_EQ (public_results.load (), 1u);
+}
+
+TEST (RequestCallAllocations, UnknownNodeAdmissionObserverFailureAfterNativeRejectionDeliversOnce)
+{
+    unknown_node_observer_failure (false, true);
+}
+
+TEST (RequestCallAllocations, UnknownNodeAdmissionObserverFailureThenDeadlineDeliversOnce)
+{
+    unknown_node_observer_failure (false);
+}
+
+TEST (RequestCallAllocations, UnknownNodeAdmissionObserverFailureThenShutdownDeliversOnce)
+{
+    unknown_node_observer_failure (true);
+}
+
+TEST (RequestCallAllocations,
+      UnknownNodeAdmissionObserverSnapshotFailureAfterRegistryCloseDeliversOnce)
+{
+    namespace probe = fw::detail::test_creation_probe;
+    const auto deliveries = probe::request_deliveries.load ();
+    auto store = std::make_shared<held_mesh_nodes_t> ();
+    request_receiver_mesh_t source ("unknown-observer-snapshot", store);
+    store->hold = true;
+    const auto target = zlink::routing_id_t::from ("closed-registry-classification");
+    std::atomic<unsigned> conversions{0};
+    auto pending = source.request (target, conversions);
+    auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+    EXPECT_FALSE (pending.admitted ().await_ready ());
+
+    fw::runtime::mesh::raw_mesh_node_owner_test_access_t::close_registry (
+      source.runtime.native_node ().transport ());
+    std::atomic<unsigned> public_results{0};
+    auto public_reply = fw::detail::request_task_access_t::public_reply (pending);
+    fw::detail::observe_task_terminal (public_reply, [&] (const auto &) { ++public_results; });
+    struct clear_fault_t
+    {
+        ~clear_fault_t ()
+        {
+            zlink::framework::detail::test_creation_probe::node_admission_observer_context_fault
+              .store (nullptr);
+            zlink::framework::detail::test_creation_probe::task_terminal_context_fault.store (
+              nullptr);
+        }
+    } clear_fault;
+    probe::node_admission_observer_context_fault.store (+[] { throw std::bad_alloc (); });
+    store->listed.complete (
+      fw::result_t<fw::location_page_t<fw::mesh_node_descriptor_t>>::success ({}));
+
+    const auto public_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (!pending.await_ready () && std::chrono::steady_clock::now () < public_deadline)
+        std::this_thread::yield ();
+    ASSERT_TRUE (pending.await_ready ());
+    EXPECT_FALSE (pending.result ());
+    EXPECT_EQ (probe::node_admission_observer_context_fault.load (), nullptr);
+    EXPECT_EQ (probe::task_terminal_context_fault.load (), nullptr);
+
+    const auto physical_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (!physical.await_ready () && std::chrono::steady_clock::now () < physical_deadline)
+        std::this_thread::yield ();
+    const auto physical_ready = physical.await_ready ();
+    EXPECT_TRUE (physical_ready);
+    if (physical_ready)
+        EXPECT_FALSE (physical.result ());
+    source.runtime.stop ();
+    EXPECT_EQ (probe::request_deliveries.load () - deliveries, 1u);
+    EXPECT_EQ (conversions.load (), 1u);
+    EXPECT_EQ (public_results.load (), 1u);
+}
+
+TEST (RequestCallAllocations, MeshReceiverNormalReplyDeliversOnceAndIgnoresLaterExpiry)
+{
+    request_receiver_mesh_t source ("reply-source"), target ("reply-target");
+    source.runtime.connect_peer (target.runtime.status ().routing_id (),
+                                 target.runtime.status ().local_endpoint ());
+    const auto ready_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+    while (
+      (source.runtime.admitted_peer_count () == 0 || target.runtime.admitted_peer_count () == 0)
+      && std::chrono::steady_clock::now () < ready_deadline) {
+        source.pump ();
+        target.pump ();
+        std::this_thread::yield ();
+    }
+    ASSERT_GT (source.runtime.admitted_peer_count (), 0u);
+    ASSERT_GT (target.runtime.admitted_peer_count (), 0u);
+    std::atomic<unsigned> conversions{0};
+    auto pending = source.request (target.runtime.status ().routing_id (), conversions);
+    auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+    bool replied = false;
+    const auto reply_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+    while (!physical.await_ready () && std::chrono::steady_clock::now () < reply_deadline) {
+        target.runtime
+          .dispatch_ready ([&] (const auto &, const auto &record, auto, auto) {
+              const std::vector<zlink::message_t> parts{
+                zlink::message_t::from (std::string ("reply"))};
+              EXPECT_EQ (fw::runtime::host::reply (record.reply_token, parts),
+                         zlink::submit_result_t::ok);
+              replied = true;
+          })
+          .result ()
+          .value ();
+        source.pump ();
+        std::this_thread::yield ();
+    }
+    ASSERT_TRUE (replied);
+    ASSERT_TRUE (physical.await_ready ());
+    EXPECT_EQ (physical.result ().value (), 42);
+    EXPECT_EQ (pending.result ().value (), 42);
+    EXPECT_TRUE (pending.admitted ().result ());
+    EXPECT_EQ (source.runtime.native_node ()
+                 .transport ()
+                 .expire_requests (std::chrono::steady_clock::now () + std::chrono::seconds (6))
+                 .result ()
+                 .value (),
+               0u);
+    source.runtime.stop ();
+    target.runtime.stop ();
+    EXPECT_EQ (conversions.load (), 1u);
+}
+
+TEST (RequestCallAllocations, RejectedRegistryRegistrationKeepsUndeliveredCallback)
+{
+    using registry_t = fw::runtime::foundation::operation_registry_t;
+    fw::completion_owner_t owner;
+    registry_t registry;
+    EXPECT_EQ (registry.shutdown (), 0u);
+    unsigned deliveries = 0;
+    registry_t::callback_t callback = [&] (auto, auto) { ++deliveries; };
+    EXPECT_FALSE (registry.register_operation ({88, 1}, registry_t::clock_t::time_point::max (),
+                                               std::move (callback)));
+    ASSERT_TRUE (callback);
+    callback (fw::runtime::foundation::operation_terminal_t::transport_failed,
+              fw::result_t<zlink::message_t>::success ({}));
+    EXPECT_EQ (deliveries, 1u);
+}
+
+TEST (RequestCallAllocations, RegistryPublicationExceptionLeavesOnlyC1Delivery)
+{
+    using registry_t = fw::runtime::foundation::operation_registry_t;
+    fw::completion_owner_t owner;
+    registry_t registry (&registry_t::clock_t::now, [] { throw std::bad_alloc (); });
+    std::atomic<unsigned> conversions{0};
+    auto pending = fw::detail::request_task_access_t::receive_public<int, int> (
+      [&] (auto receiver) {
+          registry_t::callback_t callback (
+            receiver.complete.template capture<fw::runtime::foundation::operation_terminal_t,
+                                               fw::result_t<zlink::message_t>> (
+              [receiver = receiver.borrow ()] (auto, auto) {
+                  receiver.complete (fw::result_t<int>::failure (
+                    fw::framework_error_kind_t::unavailable, "registration publication failed"));
+              }));
+          EXPECT_THROW (registry.register_operation (
+                          {88, 2}, registry_t::clock_t::now () + std::chrono::seconds (5),
+                          std::move (callback).with_admission (receiver.admitted)),
+                        std::bad_alloc);
+          EXPECT_FALSE (callback);
+          EXPECT_EQ (registry.size (), 1u);
+          // The raw owner's exception path can fail C1, but has no receiver left
+          // to deliver independently after successful publication.
+          EXPECT_TRUE (registry.fail (
+            {88, 2}, fw::runtime::foundation::operation_terminal_t::transport_failed));
+      },
+      [&] (const fw::result_t<int> &terminal) {
+          ++conversions;
+          return terminal;
+      });
+    auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+    EXPECT_EQ (physical.result ().error_kind (), fw::framework_error_kind_t::unavailable);
+    EXPECT_EQ (pending.result ().error_kind (), fw::framework_error_kind_t::unavailable);
+    EXPECT_EQ (registry.shutdown (), 0u);
+    EXPECT_EQ (conversions.load (), 1u);
+}
 
 TEST (RequestCallAllocations, ReadyNodeReplyRegistersWithoutAConversionResultState)
 {

@@ -234,7 +234,7 @@ class raw_mesh_node_owner_t
     task_t<bool> request_to_node (std::span<const std::uint8_t> target_routing_id,
                                   const protocol::application_payload_t &application_payload,
                                   std::chrono::milliseconds timeout,
-                                  foundation::operation_registry_t::callback_t callback,
+                                  foundation::operation_registry_t::callback_t &&callback,
                                   std::optional<std::uint64_t> correlation = std::nullopt,
                                   std::shared_ptr<task_completion_source_t<void>> admitted = {});
     task_t<bool> request_to_channel (const std::string &channel_name,
@@ -256,7 +256,7 @@ class raw_mesh_node_owner_t
     bool register_prepared_local_operation (
       const local_operation_reservation_t &reservation,
       foundation::operation_registry_t::clock_t::time_point deadline,
-      foundation::operation_registry_t::callback_t callback,
+      foundation::operation_registry_t::callback_t &&callback,
       mesh_request_surface_t request_surface = mesh_request_surface_t::none);
     task_t<std::optional<foundation::call_id_t>> register_local_operation_async (
       foundation::operation_registry_t::clock_t::time_point deadline,
@@ -337,7 +337,7 @@ class raw_mesh_node_owner_t
       const protocol::actor_route_fence_t &target,
       const protocol::application_payload_t &application_payload,
       std::chrono::milliseconds timeout,
-      foundation::operation_registry_t::callback_t callback,
+      foundation::operation_registry_t::callback_t &&callback,
       std::optional<protocol::wire_operation_id_t> operation = std::nullopt,
       std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source =
         std::nullopt,
@@ -608,7 +608,7 @@ class raw_mesh_node_owner_t
       const std::function<zlink::message_t (std::uint64_t)> &header,
       const protocol::application_payload_t &application_payload,
       foundation::operation_registry_t::clock_t::time_point deadline,
-      foundation::operation_registry_t::callback_t callback,
+      foundation::operation_registry_t::callback_t &&callback,
       std::optional<std::uint64_t> correlation = std::nullopt,
       bool target_claimed = false,
       mesh_request_metric_t request_metric = {},
