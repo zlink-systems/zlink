@@ -7,6 +7,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 #include <unity.h>
 
 void setUp ()
@@ -123,8 +124,8 @@ void test_nested_views_preserve_extent_through_copy_and_move ()
     zlink::msg_t nested;
     zlink::msg_t copied;
     zlink::msg_t moved;
-    TEST_ASSERT_EQUAL_INT (
-      0, source.init_data (payload, 128, on_msg_view_test_free, &free_counter));
+    TEST_ASSERT_EQUAL_INT (0,
+                           source.init_data (payload, 128, on_msg_view_test_free, &free_counter));
     TEST_ASSERT_EQUAL_INT (0, view.init ());
     TEST_ASSERT_EQUAL_INT (0, nested.init ());
     TEST_ASSERT_EQUAL_INT (0, copied.init ());
@@ -154,6 +155,59 @@ void test_nested_views_preserve_extent_through_copy_and_move ()
     TEST_ASSERT_EQUAL_INT (1, free_counter);
 }
 
+//  Each worker destroys its slice pool at exit, so ASan/LSan checks both
+//  metadata disposal and payload disposal for the selected final-reference path.
+static void run_nested_view_release (int path_)
+{
+    unsigned char *payload = static_cast<unsigned char *> (std::malloc (128));
+    TEST_ASSERT_NOT_NULL (payload);
+    int free_counter = 0;
+    zlink::msg_t::content_t external_content;
+    zlink::msg_t source;
+    zlink::msg_t view;
+    zlink::msg_t nested;
+    TEST_ASSERT_EQUAL_INT (0, source.init_external_storage (&external_content, payload, 128,
+                                                            on_msg_view_test_free, &free_counter));
+    TEST_ASSERT_EQUAL_INT (0, view.init ());
+    TEST_ASSERT_EQUAL_INT (0, nested.init ());
+    TEST_ASSERT_EQUAL_INT (0, view.init_view (source, 8, 96));
+    TEST_ASSERT_EQUAL_INT (0, nested.init_view (view, 8, 64));
+    TEST_ASSERT_EQUAL_INT (0, source.close ());
+    TEST_ASSERT_EQUAL_INT (0, free_counter);
+
+    if (path_ == 2) {
+        TEST_ASSERT_EQUAL_INT (0, view.close ());
+        TEST_ASSERT_EQUAL_INT (0, free_counter);
+        TEST_ASSERT_EQUAL_INT (0, nested.close ());
+    } else {
+        TEST_ASSERT_EQUAL_INT (0, nested.close ());
+        TEST_ASSERT_EQUAL_INT (0, free_counter);
+        if (path_ == 0)
+            TEST_ASSERT_EQUAL_INT (0, view.close ());
+        else
+            TEST_ASSERT_FALSE (view.rm_refs (1));
+    }
+    TEST_ASSERT_EQUAL_INT (1, free_counter);
+}
+
+void test_nested_view_last_reference_close ()
+{
+    std::thread worker (run_nested_view_release, 0);
+    worker.join ();
+}
+
+void test_nested_view_last_reference_rm_refs ()
+{
+    std::thread worker (run_nested_view_release, 1);
+    worker.join ();
+}
+
+void test_nested_view_last_reference_callback ()
+{
+    std::thread worker (run_nested_view_release, 2);
+    worker.join ();
+}
+
 static void init_command_msg (zlink::msg_t &msg_, const size_t size_, const unsigned char flags_)
 {
     TEST_ASSERT_EQUAL_INT (0, msg_.init_size (size_));
@@ -180,7 +234,8 @@ void test_command_body_size_for_well_formed_commands ()
     TEST_ASSERT_EQUAL_PTR (static_cast<unsigned char *> (subscribe.data ()) + 10,
                            subscribe.command_body ());
     TEST_ASSERT_EQUAL_UINT (2, (unsigned int) cancel.command_body_size ());
-    TEST_ASSERT_EQUAL_PTR (static_cast<unsigned char *> (cancel.data ()) + 7, cancel.command_body ());
+    TEST_ASSERT_EQUAL_PTR (static_cast<unsigned char *> (cancel.data ()) + 7,
+                           cancel.command_body ());
 
     TEST_ASSERT_EQUAL_INT (0, cancel.close ());
     TEST_ASSERT_EQUAL_INT (0, subscribe.close ());
@@ -227,6 +282,9 @@ int main (void)
     RUN_TEST (test_init_view_invalid_range);
     RUN_TEST (test_init_view_from_zcmsg);
     RUN_TEST (test_nested_views_preserve_extent_through_copy_and_move);
+    RUN_TEST (test_nested_view_last_reference_close);
+    RUN_TEST (test_nested_view_last_reference_rm_refs);
+    RUN_TEST (test_nested_view_last_reference_callback);
     RUN_TEST (test_command_body_size_for_well_formed_commands);
     RUN_TEST (test_command_body_size_clamps_malformed_commands);
 

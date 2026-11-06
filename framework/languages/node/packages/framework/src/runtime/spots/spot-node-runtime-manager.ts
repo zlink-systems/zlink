@@ -35,12 +35,15 @@ import {
   ZLinkDispatchMessageKind
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import { ZLinkLocationWriteIntent, ZLinkLocationWriteStatus } from '../../contracts/Locations';
+import { ZLinkInternalMeshNodeWriteIntent } from '../locations/domain-store-contract';
+import { ZLinkOwnerLeaseReleaseDelayPendingError } from '../locations/owner-lease-release-delay';
 import type { ZLinkLocationOptionOverrides } from '../../contracts/Locations/Options';
 import type { ZLinkLocationOwnerToken } from '../../contracts/Locations/Writes';
 import { awaitWithAbort, createAbortError } from '../abort';
 import type { ZLinkActivationConcurrency } from '../activation-admission';
 import type { ZLinkRemoteBoundSessionTarget } from '../actors';
 import type { ZLinkActorHandoffPacket } from '../actors/actor-handoff';
+import { ZLinkConfigurationException } from '../../contracts/Configuration/ConfigurationException';
 import type {
   ZLinkBackendAdapterFactory,
   ZLinkBackendContext,
@@ -59,11 +62,7 @@ import {
   encodeChannelPublishEnvelopeParts,
   encodeChannelReplyParts
 } from '../channels/channel-envelope';
-import {
-  ZLinkConfigurationException,
-  type ZLinkFrameworkRegistration,
-  type ZLinkSpotNodeOptions
-} from '../configuration';
+import { type ZLinkFrameworkRegistration, type ZLinkSpotNodeOptions } from '../configuration';
 import type { ZLinkRuntimeEventPublisher } from '../diagnostics';
 import { runWithOutboundFlow } from '../diagnostics/flow-context';
 import type { ZLinkListenerRecords } from '../foundation/listener-records';
@@ -111,6 +110,14 @@ import type {
   ZLinkSpotActorTransferRuntime,
   ZLinkSpotBoundSessionRuntime
 } from './spot-runtime-ports';
+
+export class ZLinkMeshNodeDescriptorConflictException extends ZLinkConfigurationException {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ZLinkMeshNodeDescriptorConflictException';
+  }
+}
+
 const DEFAULT_SPOT_NODE_SHUTDOWN_TIMEOUT_MS = 1000;
 
 const ZLINK_SEND_DONT_WAIT = 1;
@@ -174,7 +181,6 @@ export class ZLinkSpotNodeRuntimeManager {
   // lease may require a NewClaim against an empty Store, while peers still
   // retain the monotonic revision from this MeshNode lifecycle.
   private readonly descriptorRevisionByMesh = new Map<string, bigint>();
-  private publishedOwnerToken?: ZLinkLocationOwnerToken;
   private readonly runtimePlacementWeights = new Map<string, number>();
   private readonly runtimeChannelWeights = new Map<string, Map<string, number>>();
   private readonly entrySpotIds = new Map<string, string>();
@@ -290,11 +296,9 @@ export class ZLinkSpotNodeRuntimeManager {
     }
     const meshAdapter = this.options.backendAdapterFactory.createMeshAdapter();
     for (const [spotNodeName, spotNode] of this.options.registration.spotNodes.entries()) {
+      const configuredRoutingId = configuredRoutingIdFor(spotNode);
       const routingId =
-        spotNode.routingId ??
-        spotNode.router?.routingId ??
-        spotNode.pubSub?.routingId ??
-        `${spotNode.routingIdPrefix ?? spotNodeName}-${randomUUID()}`;
+        configuredRoutingId ?? `${spotNode.routingIdPrefix ?? spotNodeName}-${randomUUID()}`;
       const bind = spotNode.router?.bind;
       if (bind === undefined) {
         throw new ZLinkConfigurationException(
@@ -486,13 +490,7 @@ export class ZLinkSpotNodeRuntimeManager {
     const location = this.locationAutoConnect;
     const owner = location?.runtime.currentOwnerToken;
     if (location === undefined || owner === undefined) return;
-    const ownerChanged =
-      this.publishedOwnerToken !== undefined && !sameOwnerToken(this.publishedOwnerToken, owner);
-    if (ownerChanged) {
-      // A descriptor confirmed under the previous lease must not supply
-      // cached population data for a new owner token.
-      this.publishedMeshNodeDescriptors.clear();
-    }
+    let releaseDelayPending: ZLinkOwnerLeaseReleaseDelayPendingError | undefined;
     for (const [meshName, registration] of this.options.registration.spotNodes) {
       if (selectedMeshName !== undefined && meshName !== selectedMeshName) continue;
       const node = this.meshNodes.get(meshName);
@@ -520,7 +518,10 @@ export class ZLinkSpotNodeRuntimeManager {
         const kindOrder = left.objectKind.localeCompare(right.objectKind);
         return kindOrder !== 0 ? kindOrder : left.stableType.localeCompare(right.stableType);
       });
-      const current = this.publishedMeshNodeDescriptors.get(meshName);
+      const published = this.publishedMeshNodeDescriptors.get(meshName);
+      // Publication belongs to a mesh lifecycle; cached population belongs to its lease.
+      const current =
+        published !== undefined && sameOwnerToken(published, owner) ? published : undefined;
       const previousRevision = this.descriptorRevisionByMesh.get(meshName) ?? 0n;
       const descriptor = {
         meshName,
@@ -577,15 +578,29 @@ export class ZLinkSpotNodeRuntimeManager {
       // Revision is issued before submission: an unconfirmed Store write may
       // already have applied, so the next publication must not reuse it.
       this.descriptorRevisionByMesh.set(meshName, descriptor.descriptorRevision);
-      const result = await location.runtime.writeMeshNode(
-        descriptor,
-        previousRevision === 0n
-          ? ZLinkLocationWriteIntent.NewClaim
-          : ZLinkLocationWriteIntent.Renew,
-        signal
-      );
+      const configuredRoutingId = configuredRoutingIdFor(registration);
+      // Fixed RID release delay applies until this lifecycle confirms its first publication.
+      const result = await location.runtime
+        .writeMeshNode(
+          descriptor,
+          configuredRoutingId !== undefined &&
+            published?.lifecycleGeneration !== descriptor.lifecycleGeneration
+            ? previousRevision === 0n
+              ? ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+              : ZLinkInternalMeshNodeWriteIntent.FixedRidRenew
+            : previousRevision === 0n
+              ? ZLinkLocationWriteIntent.NewClaim
+              : ZLinkLocationWriteIntent.Renew,
+          signal
+        )
+        .catch((error: unknown) => {
+          if (!(error instanceof ZLinkOwnerLeaseReleaseDelayPendingError)) throw error;
+          releaseDelayPending ??= error;
+          return undefined;
+        });
+      if (result === undefined) continue;
       if (result.status !== ZLinkLocationWriteStatus.Stored) {
-        throw new ZLinkConfigurationException(
+        throw new ZLinkMeshNodeDescriptorConflictException(
           `MeshNode '${meshName}' descriptor publication failed: ${result.status}.`
         );
       }
@@ -596,7 +611,7 @@ export class ZLinkSpotNodeRuntimeManager {
         updatedAt: result.updatedAt
       });
     }
-    this.publishedOwnerToken = owner;
+    if (releaseDelayPending !== undefined) throw releaseDelayPending;
   }
 
   private localDescriptorFields(
@@ -657,7 +672,6 @@ export class ZLinkSpotNodeRuntimeManager {
         meshName,
         maxBigInt(this.descriptorRevisionByMesh.get(meshName) ?? 0n, current.descriptorRevision)
       );
-      this.publishedOwnerToken = owner;
     }
     await this.publishMeshNodeState(state, signal, meshName);
   }
@@ -1399,6 +1413,10 @@ interface DescriptorFactoryRegistration {
   readonly relocation?: {
     readonly kind: 'disabled' | 'recreate' | 'snapshot';
   };
+}
+
+function configuredRoutingIdFor(registration: ZLinkSpotNodeOptions) {
+  return registration.routingId ?? registration.router?.routingId ?? registration.pubSub?.routingId;
 }
 
 function effectiveUserSpotRegistrations(

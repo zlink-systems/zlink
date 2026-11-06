@@ -394,6 +394,11 @@ export class DefaultLocationOptionsBuilder implements ZLinkLocationOptions {
     return this;
   }
 
+  storeOutageRetention(value: boolean): this {
+    this.options.storeOutageRetention = value;
+    return this;
+  }
+
   pollingIntervalMs(value: number): this {
     this.options.pollingIntervalMs = value;
     return this;

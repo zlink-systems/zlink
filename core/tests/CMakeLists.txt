@@ -1190,7 +1190,12 @@ if(UNIX)
     VALGRIND_EXECUTABLE
     valgrind
     HINTS "$ENV{HOME}/.local/bin")
-  if(VALGRIND_EXECUTABLE AND Python3_Interpreter_FOUND)
+  string(FIND
+    "${CMAKE_C_FLAGS} ${CMAKE_CXX_FLAGS} ${CMAKE_EXE_LINKER_FLAGS} ${CMAKE_SHARED_LINKER_FLAGS}"
+    "-fsanitize=" zlink_core_sanitizer_flag)
+  if(VALGRIND_EXECUTABLE AND Python3_Interpreter_FOUND
+      AND NOT ENABLE_ASAN AND NOT ENABLE_UBSAN AND NOT ENABLE_TSAN
+      AND zlink_core_sanitizer_flag EQUAL -1)
     add_test(
       NAME hotpath_gate
       COMMAND
