@@ -23,6 +23,7 @@ public sealed class ZLinkLocationOptions
  = TimeSpan.FromSeconds(5);
  public TimeSpan OwnerLeaseTtl { get; set; }
  = TimeSpan.FromSeconds(30);
+ public bool StoreOutageRetention { get; set; } = false;
  public TimeSpan PollingInterval { get; set; }
  = TimeSpan.FromSeconds(1);
  public TimeSpan StoreFailureGrace { get; set; }
@@ -47,6 +48,10 @@ public sealed class ZLinkLocationOptions
  = TimeSpan.FromSeconds(1);
 }
 ```
+
+`StoreOutageRetention` is a startup-only bool option, default `false`.
+Retention eligibility, the admission bound when `false`, and domain-wide identical settings follow
+[Location runtime §5.1](../../../05-location-relocation/01-location-runtime.en.md#51-retention-and-rejoining-after-a-short-outage).
 
 The signature of the root's `AddLocationStore(...)`,
 `AddRelocationStore(...)`, and `ConfigureLocations()` is owned by

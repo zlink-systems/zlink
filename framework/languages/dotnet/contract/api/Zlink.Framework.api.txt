@@ -1086,6 +1086,7 @@ assembly Zlink.Framework
     property System.TimeSpan RouteCacheMaxAge { get; set; } [nullability=read:not-null,write:not-null]
     property System.TimeSpan SessionRelocationSealTimeout { get; set; } [nullability=read:not-null,write:not-null]
     property System.TimeSpan StoreFailureGrace { get; set; } [nullability=read:not-null,write:not-null]
+    property System.Boolean StoreOutageRetention { get; set; } [nullability=read:not-null,write:not-null]
   type sealed-class Zlink.Framework.Contracts.Locations.ZLinkLocationPage<T> : System.IEquatable<Zlink.Framework.Contracts.Locations.ZLinkLocationPage<T>>
     generic T variance=invariant nullable=nullable
     ctor ZLinkLocationPage(System.Collections.Generic.IReadOnlyList<T> Items [nullability=read:not-null,write:not-null], System.String? ContinuationToken [nullability=read:nullable,write:nullable])
