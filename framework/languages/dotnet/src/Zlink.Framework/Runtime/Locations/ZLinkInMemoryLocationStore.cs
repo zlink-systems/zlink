@@ -31,6 +31,7 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
     private readonly TimeProvider _time;
     private readonly TimeSpan _ownerLeaseFencingMargin;
     private readonly ZLinkOwnerLeaseReleaseWait _ownerLeaseReleaseWait;
+    internal ZLinkOwnerLeaseReleaseWait OwnerLeaseReleaseWaitTestAccess => _ownerLeaseReleaseWait;
     private readonly Dictionary<string, ZLinkOwnerLease> _leases = [];
     private long _ownerLeaseGeneration;
     private readonly RowTable<ZLinkMeshNodeDescriptor> _meshNodes = new();
@@ -71,30 +72,43 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
                 new ZLinkMeshNodeDescriptorKey(descriptor.MeshName, descriptor.Rid)
             );
             var exists = _meshNodes.Rows.TryGetValue(key, out var current);
+            var isNewClaim =
+                intent
+                is ZLinkLocationWriteIntent.NewClaim
+                    or ZLinkLocationWriteIntent.FixedRidNewClaim;
+            ZLinkLocationOwnerToken? releaseWaitToken = null;
             if (exists)
-                _ownerLeaseReleaseWait.ForgetIfTokenChanged(
-                    key,
-                    new ZLinkLocationOwnerToken(current!.OwnerId, current.LeaseGeneration)
+            {
+                releaseWaitToken = new ZLinkLocationOwnerToken(
+                    current!.OwnerId,
+                    current.LeaseGeneration
                 );
+                _ownerLeaseReleaseWait.ForgetIfTokenChanged(key, releaseWaitToken);
+            }
             else
-                _ownerLeaseReleaseWait.Forget(key);
+                _ownerLeaseReleaseWait.ForgetIfTokenChanged(key, null);
             var currentOwnerLive =
                 exists
                 && MatchesLiveOwnerLease(
                     new ZLinkLocationOwnerToken(current!.OwnerId, current.LeaseGeneration),
                     now
                 );
+            if (isNewClaim && currentOwnerLive)
+                _ownerLeaseReleaseWait.ForgetIfTokenMatches(key, releaseWaitToken);
             _meshNodes.Generations.TryGetValue(key, out var last);
             if (
                 exists
-                && intent is ZLinkLocationWriteIntent.NewClaim or ZLinkLocationWriteIntent.Renew
+                && intent
+                    is ZLinkLocationWriteIntent.NewClaim
+                        or ZLinkLocationWriteIntent.FixedRidNewClaim
+                        or ZLinkLocationWriteIntent.Renew
                 && ZLinkLocationDescriptorComparison.SameExceptWriteTime(current!, descriptor)
             )
                 return ZLinkLocationWriteResult.Stored(last, current!.UpdatedAt);
-            if (intent == ZLinkLocationWriteIntent.NewClaim && currentOwnerLive)
+            if (isNewClaim && currentOwnerLive)
                 return ZLinkLocationWriteResult.RejectedConflict;
             if (
-                intent == ZLinkLocationWriteIntent.NewClaim
+                isNewClaim
                 && exists
                 && !_ownerLeaseReleaseWait.HasElapsed(
                     key,
@@ -102,7 +116,13 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
                     _ownerLeaseFencingMargin
                 )
             )
-                return ZLinkLocationWriteResult.IgnoredStale;
+                return ZLinkLocationWriteResult.ReleaseWaitPending;
+            if (
+                intent == ZLinkLocationWriteIntent.FixedRidNewClaim
+                && !exists
+                && !_ownerLeaseReleaseWait.HasElapsed(key, null, _ownerLeaseFencingMargin)
+            )
+                return ZLinkLocationWriteResult.ReleaseWaitPending;
             if (intent == ZLinkLocationWriteIntent.Takeover && currentOwnerLive)
                 return ZLinkLocationWriteResult.IgnoredStale;
             if (intent == ZLinkLocationWriteIntent.Renew)
@@ -130,7 +150,7 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
             );
             PublishEntrySpotIdNoLock(current, descriptor, key);
             BumpMeshNodeStamp(descriptor.MeshName);
-            _ownerLeaseReleaseWait.Forget(key);
+            _ownerLeaseReleaseWait.ForgetIfTokenMatches(key, releaseWaitToken);
             return ZLinkLocationWriteResult.Stored(generation, now);
         });
     }
@@ -155,6 +175,10 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
             _meshNodes.Rows.Remove(canonicalKey);
             RemoveEntrySpotIdClaimNoLock(row, canonicalKey);
             BumpMeshNodeStamp(key.MeshName);
+            _ownerLeaseReleaseWait.ForgetIfTokenMatches(
+                canonicalKey,
+                new ZLinkLocationOwnerToken(row.OwnerId, row.LeaseGeneration)
+            );
             return ZLinkLocationWriteStatus.Stored;
         });
     }
@@ -864,6 +888,10 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
                     -1
                 );
                 _authorities.Remove(pair.Key);
+                _ownerLeaseReleaseWait.ForgetIfTokenMatches(
+                    pair.Key,
+                    new ZLinkLocationOwnerToken(row.OwnerId, row.OwnerLeaseGeneration)
+                );
             }
             var removed = (long)owned.Length;
             return removed;

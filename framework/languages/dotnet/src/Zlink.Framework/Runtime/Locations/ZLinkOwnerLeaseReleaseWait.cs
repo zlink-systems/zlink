@@ -12,9 +12,11 @@ internal sealed class ZLinkOwnerLeaseReleaseWait(TimeProvider timeProvider)
         StringComparer.Ordinal
     );
 
+    internal int Count => _observations.Count;
+
     internal bool HasElapsed(
         string recordKey,
-        ZLinkLocationOwnerToken owner,
+        ZLinkLocationOwnerToken? owner,
         TimeSpan fencingMargin
     )
     {
@@ -29,21 +31,25 @@ internal sealed class ZLinkOwnerLeaseReleaseWait(TimeProvider timeProvider)
             && elapsed - fencingMargin - fencingMargin >= fencingMargin;
     }
 
-    internal void Observe(string recordKey, ZLinkLocationOwnerToken owner)
+    internal void Observe(string recordKey, ZLinkLocationOwnerToken? owner)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(recordKey);
         _ = ObserveCore(recordKey, owner);
     }
 
-    internal void Forget(string recordKey) => _observations.TryRemove(recordKey, out _);
+    internal void ForgetIfTokenMatches(string recordKey, ZLinkLocationOwnerToken? owner)
+    {
+        if (_observations.TryGetValue(recordKey, out var observed) && observed.Owner == owner)
+            _observations.TryRemove(new KeyValuePair<string, Observation>(recordKey, observed));
+    }
 
-    internal void ForgetIfTokenChanged(string recordKey, ZLinkLocationOwnerToken owner)
+    internal void ForgetIfTokenChanged(string recordKey, ZLinkLocationOwnerToken? owner)
     {
         if (_observations.TryGetValue(recordKey, out var observed) && observed.Owner != owner)
             _observations.TryRemove(new KeyValuePair<string, Observation>(recordKey, observed));
     }
 
-    private Observation ObserveCore(string recordKey, ZLinkLocationOwnerToken owner)
+    private Observation ObserveCore(string recordKey, ZLinkLocationOwnerToken? owner)
     {
         while (true)
         {
@@ -64,5 +70,5 @@ internal sealed class ZLinkOwnerLeaseReleaseWait(TimeProvider timeProvider)
         }
     }
 
-    private sealed record Observation(ZLinkLocationOwnerToken Owner, long Timestamp);
+    private sealed record Observation(ZLinkLocationOwnerToken? Owner, long Timestamp);
 }

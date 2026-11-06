@@ -505,7 +505,10 @@ internal sealed class ZLinkLocationAutoConnectHost
         }
         catch (Exception exception)
         {
-            if (Volatile.Read(ref _disposed) == 0)
+            if (
+                Volatile.Read(ref _disposed) == 0
+                && exception is not Zlink.Framework.Contracts.Errors.ZLinkConfigurationException
+            )
                 Interlocked.CompareExchange(ref _deferredStart, deferred, null);
             deferred.State.ErrorSink.ReportRuntimeTaskException(
                 "location-descriptor-publication",

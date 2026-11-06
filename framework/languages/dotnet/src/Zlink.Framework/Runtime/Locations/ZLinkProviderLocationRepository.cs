@@ -24,6 +24,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
     private readonly ZLinkOwnerLeaseReleaseWait _ownerLeaseReleaseWait = new(
         timeProvider ?? TimeProvider.System
     );
+    internal ZLinkOwnerLeaseReleaseWait OwnerLeaseReleaseWaitTestAccess => _ownerLeaseReleaseWait;
     private const string Prefix = "zlink:v11:";
     private const long MaximumGeneration = long.MaxValue;
     private const int MaximumDescriptorWriteRetries = 3;
@@ -314,7 +315,10 @@ internal sealed partial class ZLinkProviderLocationRepository(
             )
             .ConfigureAwait(false);
         if (result is ZLinkStoreWriteResult.Applied)
+        {
             _provider.ForgetCapacity(CapacityKey(key));
+            _ownerLeaseReleaseWait.ForgetIfTokenMatches(rowKey.Value, owner);
+        }
         return result is ZLinkStoreWriteResult.Applied
             ? ZLinkLocationWriteStatus.Stored
             : ZLinkLocationWriteStatus.IgnoredStale;
@@ -593,25 +597,34 @@ internal sealed partial class ZLinkProviderLocationRepository(
 
         var current = await _provider.ReadAsync(rowKey, cancellationToken).ConfigureAwait(false);
         ZLinkStoreCondition? predecessorOwnerCondition = null;
+        ZLinkLocationOwnerToken? releaseWaitToken = null;
         if (current is ZLinkStoreReadResult.Found found)
         {
             var record = DecodeDescriptor<T>(found.Value.Bytes);
             var storedOwner = record.OwnerId;
             var storedLeaseGeneration = record.LeaseGeneration;
             var storedOwnerToken = new ZLinkLocationOwnerToken(storedOwner, storedLeaseGeneration);
+            releaseWaitToken = storedOwnerToken;
             _ownerLeaseReleaseWait.ForgetIfTokenChanged(rowKey.Value, storedOwnerToken);
             var storedOwnerLease = await _provider
                 .ReadAsync(OwnerKey(storedOwner), cancellationToken)
                 .ConfigureAwait(false);
             var isMeshNodeClaim =
                 descriptor is ZLinkMeshNodeDescriptor
-                && intent == ZLinkLocationWriteIntent.NewClaim;
+                && intent
+                    is ZLinkLocationWriteIntent.NewClaim
+                        or ZLinkLocationWriteIntent.FixedRidNewClaim;
             var storedOwnerLive = isMeshNodeClaim
-                ? IsDescriptorOwnerLeaseLive(storedOwnerLease, storedOwner, storedLeaseGeneration)
+                ? IsOwnerLeaseLive(storedOwnerLease, storedOwnerToken)
                 : storedOwnerLease is ZLinkStoreReadResult.Found;
+            if (isMeshNodeClaim && storedOwnerLive)
+                _ownerLeaseReleaseWait.ForgetIfTokenMatches(rowKey.Value, storedOwnerToken);
             var isMeshNodeRetry =
                 descriptor is ZLinkMeshNodeDescriptor
-                && intent is ZLinkLocationWriteIntent.NewClaim or ZLinkLocationWriteIntent.Renew;
+                && intent
+                    is ZLinkLocationWriteIntent.NewClaim
+                        or ZLinkLocationWriteIntent.FixedRidNewClaim
+                        or ZLinkLocationWriteIntent.Renew;
             if (
                 (isMeshNodeRetry || intent == ZLinkLocationWriteIntent.NewClaim && storedOwnerLive)
                 && ZLinkLocationDescriptorComparison.SameExceptWriteTime(
@@ -623,7 +636,13 @@ internal sealed partial class ZLinkProviderLocationRepository(
                     VersionOf(found.Value.Version),
                     found.Value.StoreNow
                 );
-            if (intent == ZLinkLocationWriteIntent.NewClaim && storedOwnerLive)
+            if (
+                (
+                    intent
+                    is ZLinkLocationWriteIntent.NewClaim
+                        or ZLinkLocationWriteIntent.FixedRidNewClaim
+                ) && storedOwnerLive
+            )
                 return ZLinkLocationWriteResult.RejectedConflict;
             if (isMeshNodeClaim)
             {
@@ -634,7 +653,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
                         _ownerLeaseFencingMargin
                     )
                 )
-                    return ZLinkLocationWriteResult.IgnoredStale;
+                    return ZLinkLocationWriteResult.ReleaseWaitPending;
                 if (storedOwner != ownerId)
                     predecessorOwnerCondition = storedOwnerLease switch
                     {
@@ -664,7 +683,20 @@ internal sealed partial class ZLinkProviderLocationRepository(
         }
         else
         {
-            _ownerLeaseReleaseWait.Forget(rowKey.Value);
+            var missingMeshNodeClaim =
+                descriptor is ZLinkMeshNodeDescriptor
+                && intent == ZLinkLocationWriteIntent.FixedRidNewClaim;
+            if (missingMeshNodeClaim)
+            {
+                releaseWaitToken = null;
+                _ownerLeaseReleaseWait.ForgetIfTokenChanged(rowKey.Value, null);
+                if (
+                    !_ownerLeaseReleaseWait.HasElapsed(rowKey.Value, null, _ownerLeaseFencingMargin)
+                )
+                    return ZLinkLocationWriteResult.ReleaseWaitPending;
+            }
+            else
+                _ownerLeaseReleaseWait.ForgetIfTokenMatches(rowKey.Value, null);
             if (intent == ZLinkLocationWriteIntent.Renew)
                 return ZLinkLocationWriteResult.IgnoredStale;
         }
@@ -688,23 +720,8 @@ internal sealed partial class ZLinkProviderLocationRepository(
             result.Status == ZLinkLocationWriteStatus.Stored
             && descriptor is ZLinkMeshNodeDescriptor
         )
-            _ownerLeaseReleaseWait.Forget(rowKey.Value);
+            _ownerLeaseReleaseWait.ForgetIfTokenMatches(rowKey.Value, releaseWaitToken);
         return result;
-    }
-
-    private static bool IsDescriptorOwnerLeaseLive(
-        ZLinkStoreReadResult read,
-        string expectedOwnerId,
-        long expectedLeaseGeneration
-    )
-    {
-        if (read is not ZLinkStoreReadResult.Found found)
-            return false;
-        var owner = DecodeOwner(found.Value.Bytes);
-        if (owner.OwnerId != expectedOwnerId || found.Value.ExpiresAt is null)
-            throw new InvalidDataException("The Location Store owner lease record is invalid.");
-        return owner.LeaseGeneration == expectedLeaseGeneration
-            && found.Value.ExpiresAt > found.Value.StoreNow;
     }
 
     // The framework no longer keeps its own generation counter inside the

@@ -1062,10 +1062,12 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                 var claim = await lifecycle
                     .WriteMeshNodeDescriptorAsync(
                         unclaimed.Descriptor,
-                        ZLinkLocationWriteIntent.NewClaim
+                        Registration.RoutingId.Size > 0
+                            ? ZLinkLocationWriteIntent.FixedRidNewClaim
+                            : ZLinkLocationWriteIntent.NewClaim
                     )
                     .ConfigureAwait(false);
-                if (claim.Status == ZLinkLocationWriteStatus.IgnoredStale)
+                if (claim.Status == ZLinkLocationWriteStatus.ReleaseWaitPending)
                     return false;
                 if (claim.Status != ZLinkLocationWriteStatus.Stored)
                     throw new ZLinkConfigurationException(

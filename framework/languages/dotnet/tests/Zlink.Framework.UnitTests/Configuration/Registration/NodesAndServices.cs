@@ -6,6 +6,7 @@ using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Handlers;
+using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Streams;
 
@@ -24,6 +25,7 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
             {
                 options.DisableImplicitHandlerAutoRegistration();
                 options.AddLocationStore(store);
+                options.ConfigureLocations().OwnerLeaseFencingMargin = TimeSpan.FromTicks(1);
                 options
                     .AddRouteMesh("startup-conflict")
                     .Listen("tcp://127.0.0.1:*")
@@ -37,6 +39,19 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
         await owner.StartAsync();
         try
         {
+            Assert.True(
+                await owner
+                    .Services.GetRequiredService<ZLinkLocationRuntime>()
+                    .RenewOwnerLeaseOnceAsync()
+            );
+            using var startupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await foreach (
+                var observed in owner
+                    .Services.GetRequiredService<ZLinkFrameworkMaintenanceRuntime>()
+                    .ObserveAsync(startupTimeout.Token)
+            )
+                if (observed.Status.State == ZLinkFrameworkRuntimeState.Serving)
+                    break;
             var failure = await Assert.ThrowsAsync<ZLinkConfigurationException>(() =>
                 conflict.StartAsync()
             );
