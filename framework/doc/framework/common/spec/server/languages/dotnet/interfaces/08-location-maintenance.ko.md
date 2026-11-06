@@ -19,7 +19,7 @@ public sealed class ZLinkLocationOptions
  public TimeSpan OwnerLeaseRenewInterval { get; set; }
  = TimeSpan.FromSeconds(5);
  public TimeSpan OwnerLeaseTtl { get; set; }
- = TimeSpan.FromSeconds(15);
+ = TimeSpan.FromSeconds(30);
  public TimeSpan PollingInterval { get; set; }
  = TimeSpan.FromSeconds(1);
  public TimeSpan StoreFailureGrace { get; set; }

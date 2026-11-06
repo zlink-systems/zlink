@@ -295,6 +295,7 @@ public sealed partial class EntrySpotActorDispatchTests
         ReclaimedColdSpot.Initializations = 0;
         var node = new JoinedActivationNode();
         var blobs = new InMemoryRelocationStore();
+        var time = new ManualTimeProvider();
         CountingIntentStore? counter = null;
         var (runtime, _) = await CreateStartedRuntimeAsync(
             node,
@@ -302,6 +303,8 @@ public sealed partial class EntrySpotActorDispatchTests
             includeInstanceSpotRoute: true,
             instanceSpotType: typeof(ReclaimedColdSpot),
             relocationStore: blobs,
+            locationTimeProvider: time,
+            joinTimeProvider: time,
             locationStoreWrapper: inner =>
                 counter = new CountingIntentStore(inner, "ended-instance")
         );
@@ -442,6 +445,11 @@ public sealed partial class EntrySpotActorDispatchTests
                 .ToArray();
             foreach (var part in parts)
                 part.Dispose();
+            var waiting = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await target.ActivateAsync(Operation(99), null, payload, CancellationToken.None)
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, waiting.Kind);
+            time.Advance(TimeSpan.FromSeconds(15));
             if (policy == "disabled")
             {
                 var results = await Task.WhenAll(

@@ -3146,6 +3146,8 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
     )
     {
         var services = new ServiceCollection();
+        var fixedRidTime =
+            manualPeer is not null && timeProvider is null ? new ManualTimeProvider() : null;
         configureServices?.Invoke(services);
         if (canonicalTransportProbe is not null)
             services.AddSingleton<IZLinkBackendAdapterFactory>(
@@ -3167,8 +3169,12 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
         {
             if (timeProvider is not null)
                 options.UseTestTimeProvider(timeProvider);
+            else if (fixedRidTime is not null)
+                options.UseTestTimeProvider(fixedRidTime);
             options.AddLocationStore(locationStore);
             options.AddRelocationStore(relocationStore);
+            if (manualPeer is not null)
+                options.ConfigureLocations().OwnerLeaseFencingMargin = TimeSpan.FromMilliseconds(1);
             options.ConfigureLocations().PollingInterval =
                 pollingInterval ?? TimeSpan.FromMilliseconds(10);
             var mesh = options
@@ -3265,6 +3271,23 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
         try
         {
             await hosted.StartAsync(CancellationToken.None);
+            if (fixedRidTime is not null)
+            {
+                fixedRidTime.Advance(TimeSpan.FromMilliseconds(3));
+                Assert.True(
+                    await provider
+                        .GetRequiredService<ZLinkLocationRuntime>()
+                        .RenewOwnerLeaseOnceAsync()
+                );
+                using var startupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                await foreach (
+                    var observed in provider
+                        .GetRequiredService<ZLinkFrameworkMaintenanceRuntime>()
+                        .ObserveAsync(startupTimeout.Token)
+                )
+                    if (observed.Status.State == ZLinkFrameworkRuntimeState.Serving)
+                        break;
+            }
             return new RelocationBehaviorHost(provider, hosted);
         }
         catch
