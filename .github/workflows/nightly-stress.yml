@@ -42,8 +42,12 @@ jobs:
 
   cpp-sanitizers:
     name: C++ Core and Framework ASan plus UBSan
-    runs-on: ubuntu-24.04
+    # Same runner selection as framework-cpp.yml: the hosted image needed over
+    # 100 minutes for 355 of the 556 Framework sanitizer build steps.
+    runs-on: ${{ vars.ZLINK_CPP_LINUX_RUNNER && fromJSON(vars.ZLINK_CPP_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    timeout-minutes: 300
     env:
+      BUILD_PARALLEL: ${{ vars.ZLINK_CPP_BUILD_PARALLEL || '2' }}
       APT_CACHE_DIR: ${{ github.workspace }}/.cache/framework-cpp/apt
       VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.cache/framework-cpp/vcpkg-installed
       ZLINK_LOCAL_PACKAGE_ROOT: ${{ github.workspace }}/.artifacts/nightly-stress
@@ -68,7 +72,7 @@ jobs:
             -o Binary::apt::APT::Keep-Downloaded-Packages=true \
             install -y \
               build-essential cmake ninja-build git pkg-config curl \
-              clang libboost-all-dev libgtest-dev libgmock-dev liblz4-dev \
+              clang-19 libclang-rt-19-dev llvm-19 libboost-all-dev libgtest-dev libgmock-dev liblz4-dev \
               nlohmann-json3-dev libssl-dev protobuf-compiler libprotobuf-dev
 
       - name: Resolve the runner vcpkg
@@ -102,8 +106,8 @@ jobs:
 
       - name: Build ASan and UBSan Core
         env:
-          CC: clang
-          CXX: clang++
+          CC: clang-19
+          CXX: clang++-19
         run: |
           set -euo pipefail
           core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)"
@@ -118,17 +122,17 @@ jobs:
             -DBUILD_TESTS=ON \
             -DBUILD_BENCHMARKS=OFF \
             -DWITH_DOCS=OFF
-          cmake --build "${core_build}" --parallel 2
+          cmake --build "${core_build}" --parallel "${BUILD_PARALLEL}"
           cmake --install "${core_build}"
 
       - name: Build the checkout C++ binding with sanitizers
         env:
-          CC: clang
-          CXX: clang++
+          CC: clang-19
+          CXX: clang++-19
           CFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
           CXXFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
           LDFLAGS: -fsanitize=address,undefined
-          ZLINK_BINDING_BUILD_JOBS: "2"
+          ZLINK_BINDING_BUILD_JOBS: ${{ vars.ZLINK_CPP_BUILD_PARALLEL || '2' }}
         run: |
           set -euo pipefail
           core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)"
@@ -140,22 +144,27 @@ jobs:
       - name: Configure and build Framework C++ with sanitizers
         working-directory: framework/languages/cpp
         env:
-          CC: clang
-          CXX: clang++
+          CC: clang-19
+          CXX: clang++-19
           CFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
           CXXFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
           LDFLAGS: -fsanitize=address,undefined
         run: |
           set -euo pipefail
+          # Deep template instantiation under the sanitizers needs more than the
+          # default 8 MiB compiler stack.
+          ulimit -s "$(ulimit -H -s)"
           cmake --preset linux-ninja-release \
             -DZLINK_FRAMEWORK_CPP_TEST_PROBES=ON \
             -DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF \
             -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/.github/workflows/framework-cpp-system-toolchain.cmake" \
             -DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF \
             -DZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=OFF
-          cmake --build --preset linux-ninja-release --parallel 2
+          cmake --build --preset linux-ninja-release --parallel "${BUILD_PARALLEL}"
 
       - name: Run CTest suites and create sanitizer summary
+        env:
+          ASAN_SYMBOLIZER_PATH: /usr/lib/llvm-19/bin/llvm-symbolizer
         run: |
           python3 scripts/ci/sanitizer-summary.py \
             --suite core "${GITHUB_WORKSPACE}/.artifacts/nightly-stress/core-asan-ubsan" \
