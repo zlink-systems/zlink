@@ -724,7 +724,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         result.status === ZLinkLocationWriteStatus.IgnoredStale)
     ) {
       // Recovery creates an absent row with a Missing CAS condition. A found
-      // row follows the Fixed RID owner check and release delay in the store.
+      // row is rejected unless the first Fixed RID publication is still pending.
       result = await this.guardWrite(() =>
         this.writeDescriptor(
           (writeSignal) =>

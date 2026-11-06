@@ -68,8 +68,12 @@ export async function stopRuntimeParts(parts: ZLinkRuntimeStopParts): Promise<vo
   await runShutdownStep(errors, () => parts.locationSnapshot.lifecycle?.dispose());
   await runShutdownStep(errors, () => parts.locationSnapshot.runtime?.stop(parts.shutdownSignal));
   await Promise.allSettled(state.listenerTasks);
-  if (errors.every(isShutdownAbort)) await runShutdownStep(errors, () => state.dispose());
-  await disposeOwnedStores(parts.ownedStores, errors);
+  if (errors.every(isShutdownAbort)) {
+    await runShutdownStep(errors, async () => {
+      await state.dispose();
+      await disposeOwnedStores(parts.ownedStores, errors);
+    });
+  }
   const failures = errors.filter((error) => !isShutdownAbort(error));
   for (const failure of failures) {
     state.errorSink.reportRuntimeTaskException('framework shutdown', failure);

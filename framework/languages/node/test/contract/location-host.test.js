@@ -4,6 +4,7 @@ const { createRelayHost } = require('./fixtures/relay-host');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { performance } = require('node:perf_hooks');
+const { ZLinkInternalMeshNodeWriteIntent } = require('../../packages/framework/dist/runtime/locations/domain-store-contract');
 const { resolveModuleProviders } = require('./helpers/nestjs-test-utils');
 const {
   fixedRidHostClock,
@@ -981,10 +982,10 @@ for (const storage of ['provider', 'in-memory']) {
     const second = makeHost();
     let notifyCleanup;
     const cleanupCompleted = new Promise(resolve => { notifyCleanup = resolve; });
-    const stop = second.stop.bind(second);
-    second.stop = async (...args) => {
+    const shutdown = second.shutdown.bind(second);
+    second.shutdown = async (...args) => {
       try {
-        return await stop(...args);
+        return await shutdown(...args);
       } finally {
         notifyCleanup();
       }
@@ -1001,12 +1002,14 @@ for (const storage of ['provider', 'in-memory']) {
       await firstRecovery;
       assert.equal(first.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
 
+      const errorObserved = observeRuntimeState(second, framework.ZLinkFrameworkRuntimeState.Error);
       const secondRecovery = waitForNextHostOwnerRecovery(second);
       assert.equal(await second.locationOwner.currentRuntime.renewOwnerLeaseOnce(), true);
       await secondRecovery;
-      await new Promise(resolve => setImmediate(resolve));
-      assert.equal(second.status.state, framework.ZLinkFrameworkRuntimeState.Error);
+      assert.equal(await errorObserved.reached, true);
+      errorObserved.controller.abort();
       await cleanupCompleted;
+      assert.equal(second.status.state, framework.ZLinkFrameworkRuntimeState.Stopped);
       assert.equal(second.executionState, undefined);
       assert.equal(first.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
 
@@ -1057,7 +1060,7 @@ for (const storage of ['provider', 'in-memory']) {
 }
 
 for (const storage of ['provider', 'in-memory']) {
-  test(`P1 recovery restores Missing immediately and waits for an invalid foreign row (${storage})`, async t => {
+  test(`P1 recovery restores Missing immediately and rejects an invalid foreign row (${storage})`, async t => {
     const scenario = await fixedRidRegressionScenario(t, storage);
     const { host } = scenario.makeHost();
     try {
@@ -1079,17 +1082,154 @@ for (const storage of ['provider', 'in-memory']) {
         ...restored, ownerId: foreign.token.ownerId, leaseGeneration: foreign.token.leaseGeneration
       }, framework.ZLinkLocationWriteIntent.NewClaim)).status, framework.ZLinkLocationWriteStatus.Stored);
       assert.equal(await scenario.store.releaseOwnerLease(foreign.token), 'released');
-      for (const [advance, weight] of [[0, 42], [14, 43]]) {
-        scenario.advance(advance);
-        await assert.rejects(() => publishRegressionWeight(host, 'play', weight), {
-          kind: framework.ZLinkFrameworkErrorKind.Unavailable
-        });
-        assert.equal((await scenario.store.listMeshNodes('play')).items[0].ownerId, foreign.token.ownerId);
-      }
-      scenario.advance(1);
-      await publishRegressionWeight(host, 'play', 44);
-      assert.equal((await scenario.store.listMeshNodes('play')).items[0].ownerId, owner.ownerId);
+      const before = (await scenario.store.listMeshNodes('play')).items;
+      await assert.rejects(() => publishRegressionWeight(host, 'play', 42), /ignoredStale/u);
+      assert.deepEqual((await scenario.store.listMeshNodes('play')).items, before);
     } finally {
+      await host.stop();
+    }
+  });
+
+  for (const retry of ['none', 'stop', 'shutdown']) {
+    const fails = retry !== 'none';
+    test(`P1 stop before shutdown classifies ${fails ? `failed teardown then explicit ${retry}` : 'successful teardown'} (${storage})`, async t => {
+      const scenario = await fixedRidRegressionScenario(t, storage);
+      const calls = [];
+      const { host } = scenario.makeHost(calls);
+      const entered = deferredRegressionStep();
+      const release = deferredRegressionStep();
+      let attempts = 0;
+      let storeDisposes = 0;
+      if (scenario.provider) scenario.provider.dispose = async () => { storeDisposes++; };
+      let stopping;
+      let shuttingDown;
+      try {
+        await host.start();
+        scenario.advance(15);
+        await renewFixedRidRegressionHost(host);
+        const dispose = host.context.dispose.bind(host.context);
+        host.context.dispose = async () => {
+          attempts++;
+          entered.resolve();
+          await release.promise;
+          if (fails && attempts === 1) throw new Error('context dispose failed once');
+          await dispose();
+        };
+        stopping = host.stop();
+        const stopResult = Promise.allSettled([stopping]);
+        await entered.promise;
+        shuttingDown = host.shutdown();
+        const shutdownResult = Promise.allSettled([shuttingDown]);
+        release.resolve();
+        const [result] = await shutdownResult;
+        assert.equal(result.status, 'fulfilled', result.reason?.stack);
+        assert.deepEqual(result.value, {
+          outcome: fails ? framework.ZLinkFrameworkTerminationOutcome.ForceStopped : framework.ZLinkFrameworkTerminationOutcome.Stopped,
+          reason: fails ? framework.ZLinkFrameworkTerminationReason.TeardownFailed : framework.ZLinkFrameworkTerminationReason.None
+        });
+        assert.deepEqual(host.status.terminationResult, result.value);
+        assert.equal((await stopResult)[0].status, fails ? 'rejected' : 'fulfilled');
+        assert.equal(attempts, 1);
+        if (fails) {
+          await assert.rejects(() => host.start(), /cleanup must complete/u);
+          if (retry === 'stop') await host.stop();
+          else assert.deepEqual(await host.shutdown(), {
+            outcome: framework.ZLinkFrameworkTerminationOutcome.Stopped,
+            reason: framework.ZLinkFrameworkTerminationReason.None
+          });
+        }
+        assert.equal(attempts, fails ? 2 : 1);
+        assert.equal(calls.filter(call => call === 'spot:dispose').length, 1);
+        assert.equal(calls.filter(call => call === 'context:dispose').length, 1);
+        assert.equal(storeDisposes, scenario.provider ? 1 : 0);
+        assert.equal(host.executionState, undefined);
+        if (fails) {
+          await host.start();
+          assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Preparing);
+          scenario.advance(15);
+          await renewFixedRidRegressionHost(host);
+          assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
+        }
+      } finally {
+        release.resolve();
+        await Promise.allSettled([stopping, shuttingDown]);
+        await host.stop();
+      }
+    });
+  }
+
+  test(`P1 Serving recovery rejection observes Error Draining Stopped (${storage})`, async t => {
+    const scenario = await fixedRidRegressionScenario(t, storage);
+    const calls = [];
+    const { host } = scenario.makeHost(calls);
+    const states = [];
+    const cleanupStarted = deferredRegressionStep();
+    const shutdown = host.shutdown.bind(host);
+    host.shutdown = (...args) => {
+      const operation = shutdown(...args);
+      cleanupStarted.resolve(operation);
+      return operation;
+    };
+    const observation = new AbortController();
+    let observed;
+    try {
+      await host.start();
+      scenario.advance(15);
+      await renewFixedRidRegressionHost(host);
+      const runtime = host.locationOwner.currentRuntime;
+      const oldOwner = runtime.currentOwnerToken;
+      const [descriptor] = (await scenario.store.listMeshNodes('play')).items;
+      assert.equal(await scenario.store.removeMeshNode({ meshName: 'play', rid: descriptor.rid }, oldOwner), framework.ZLinkLocationWriteStatus.Stored);
+      const foreign = await scenario.store.claimOwnerLease('foreign-serving-owner', 60_000);
+      assert.equal(foreign.kind, 'claimed');
+      assert.equal((await scenario.store.updateMeshNode({
+        ...descriptor, ownerId: foreign.token.ownerId, leaseGeneration: foreign.token.leaseGeneration
+      }, framework.ZLinkLocationWriteIntent.NewClaim)).status, framework.ZLinkLocationWriteStatus.Stored);
+      assert.equal(await scenario.store.releaseOwnerLease(foreign.token), 'released');
+      const before = (await scenario.store.listMeshNodes('play')).items;
+      assert.equal(await scenario.store.releaseOwnerLease(oldOwner), 'released');
+      const publications = [];
+      const domainStore = host.locationOwner.locationStore();
+      const updateMeshNode = domainStore.updateMeshNode.bind(domainStore);
+      domainStore.updateMeshNode = async (next, ...args) => {
+        publications.push(next);
+        return await updateMeshNode(next, ...args);
+      };
+      observed = (async () => {
+        for await (const { status } of host.observe(observation.signal)) {
+          if (states.at(-1) !== status.state) states.push(status.state);
+        }
+      })();
+      await renewFixedRidRegressionHost(host);
+      const termination = await cleanupStarted.promise;
+      observation.abort();
+      await observed;
+      assert.deepEqual(states, [
+        framework.ZLinkFrameworkRuntimeState.Serving,
+        framework.ZLinkFrameworkRuntimeState.Error,
+        framework.ZLinkFrameworkRuntimeState.Draining,
+        framework.ZLinkFrameworkRuntimeState.Stopped
+      ]);
+      assert.deepEqual(termination, {
+        outcome: framework.ZLinkFrameworkTerminationOutcome.ForceStopped,
+        reason: framework.ZLinkFrameworkTerminationReason.TeardownFailed
+      });
+      assert.deepEqual(host.status.terminationResult, termination);
+      assert.ok(publications.length > 0);
+      assert.equal(publications[0].ownerId, oldOwner.ownerId);
+      assert.notEqual(publications[0].leaseGeneration, oldOwner.leaseGeneration);
+      assert.equal(publications[0].lifecycleGeneration, descriptor.lifecycleGeneration);
+      assert.deepEqual((await scenario.store.listMeshNodes('play')).items, before);
+      assert.equal(calls.filter(call => call === 'context:dispose').length, 1);
+      const writesAtStop = (await scenario.store.listMeshNodes('play')).items;
+      const publicationsAtStop = publications.length;
+      scenario.advance(60_001);
+      assert.equal(await runtime.renewOwnerLeaseOnce(), false);
+      assert.equal(publications.length, publicationsAtStop);
+      assert.deepEqual((await scenario.store.listMeshNodes('play')).items, writesAtStop);
+    } finally {
+      observation.abort();
+      await observed;
       await host.stop();
     }
   });
@@ -1223,7 +1363,7 @@ test('P1 conflict cleanup joins shutdown and concurrent public stop', async (t) 
     assert.equal(calls.filter((call) => call === 'spot:dispose').length, 1);
     assert.equal(calls.filter((call) => call === 'context:dispose').length, 1);
     assert.equal(ownedDisposes, 1);
-    assert.equal(loser.status.state, framework.ZLinkFrameworkRuntimeState.Error);
+    assert.equal(loser.status.state, framework.ZLinkFrameworkRuntimeState.Stopped);
   } finally {
     allowDrain.resolve();
     allowDispose.resolve();
@@ -1261,19 +1401,20 @@ test('P1 predecessor CAS loser enters Error and cannot republish after winner st
       const update = store.updateMeshNode.bind(store);
       store.updateMeshNode = async (...args) => {
         const result = await update(...args);
-        outcomes.set(host, result.status);
+        if (args[1] === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim && !outcomes.has(host)) outcomes.set(host, result.status);
         return result;
       };
     }
     const runtimes = new Map(hosts.map(host => [host, host.locationOwner.currentRuntime]));
     const cleanups = new Map(hosts.map(host => [host, deferredRegressionStep()]));
     for (const host of hosts) {
-      const stop = host.stop.bind(host);
-      host.stop = async () => {
-        try { await stop(); }
+      const shutdown = host.shutdown.bind(host);
+      host.shutdown = async () => {
+        try { return await shutdown(); }
         finally { cleanups.get(host).resolve(); }
       };
     }
+    const errorObservations = hosts.map(host => observeRuntimeState(host, framework.ZLinkFrameworkRuntimeState.Error));
     scenario.advance(15);
     const recoveries = hosts.map((host) => renewFixedRidRegressionHost(host));
     await bothSubmitted.promise;
@@ -1291,7 +1432,8 @@ test('P1 predecessor CAS loser enters Error and cannot republish after winner st
     );
     assert.ok(loser, 'one host must lose the CAS against the shared predecessor');
     const winner = hosts.find((host) => host !== loser);
-    assert.equal(loser.status.state, framework.ZLinkFrameworkRuntimeState.Error);
+    assert.equal(await errorObservations[hosts.indexOf(loser)].reached, true);
+    for (const observation of errorObservations) observation.controller.abort();
     const loserRuntime = runtimes.get(loser);
     const winnerOwner = winner.locationOwner.currentRuntime.currentOwnerToken;
     await cleanups.get(loser).promise;
@@ -1304,7 +1446,7 @@ test('P1 predecessor CAS loser enters Error and cannot republish after winner st
     const submissionsAtStop = submissions.length;
     scenario.advance(60_001);
     assert.equal(await loserRuntime.renewOwnerLeaseOnce(), false);
-    assert.equal(loser.status.state, framework.ZLinkFrameworkRuntimeState.Error);
+    assert.equal(loser.status.state, framework.ZLinkFrameworkRuntimeState.Stopped);
     assert.equal(submissions.length, submissionsAtStop);
     assert.equal((await scenario.store.listMeshNodes('play')).items.length, 0);
   } finally {

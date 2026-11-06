@@ -72,10 +72,22 @@ async function main() {
     'shutdown-test', 'instance', RoutingId.from('shutdown-instance')
   );
   assert.deepEqual(initialized.sort(), ['EntrySpot', 'InstanceSpot', 'UserSpot']);
+  let contextDisposes = 0;
+  const disposeContext = runtime.context.dispose.bind(runtime.context);
+  runtime.context.dispose = async () => {
+    contextDisposes++;
+    await disposeContext();
+  };
   const existing = mode === 'normal' ? undefined : runtime.shutdown({ deadlineMs: mode === 'deadline' ? 50 : 5000 });
+  const joined = existing === undefined ? undefined : runtime.shutdown();
   await app.close();
   const terminal = await runtime.shutdown();
-  if (existing) assert.equal(await existing, terminal);
+  if (existing) {
+    assert.equal(await existing, await joined, 'in-progress shutdown requests share their result');
+    assert.deepEqual(await existing, terminal, 'explicit cleanup preserves the drain outcome and reason');
+  }
+  assert.equal(runtime.executionState, undefined, 'explicit cleanup releases the remaining execution state');
+  assert.equal(contextDisposes, 1, 'successful context cleanup is shared');
   assert.equal(terminal.outcome, mode === 'normal' || mode === 'shared'
     ? framework.ZLinkFrameworkTerminationOutcome.Stopped : framework.ZLinkFrameworkTerminationOutcome.ForceStopped);
   assert.equal(terminal.reason, mode === 'failure'

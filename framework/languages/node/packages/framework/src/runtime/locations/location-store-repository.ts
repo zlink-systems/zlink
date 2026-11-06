@@ -3170,8 +3170,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const currentLeaseGeneration = liveOwnerLeaseGeneration(currentLease);
       const currentOwnerLive = currentLeaseGeneration === stored.leaseGeneration;
       if (
-        (intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim ||
-          intent === ZLinkInternalMeshNodeWriteIntent.RecoveryClaim) &&
+        intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim &&
         releaseDelayScope !== undefined &&
         stored.ownerId !== descriptor.ownerId
       ) {
@@ -5006,8 +5005,7 @@ function canTakeOverStoredLocation(
   }
   if (
     intent !== ZLinkLocationWriteIntent.NewClaim &&
-    intent !== ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim &&
-    intent !== ZLinkInternalMeshNodeWriteIntent.RecoveryClaim
+    intent !== ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
   ) {
     return false;
   }

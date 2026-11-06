@@ -317,8 +317,7 @@ export class ZLinkInMemoryLocationStore
       currentLease.token.leaseGeneration === current.leaseGeneration &&
       currentLease.leaseExpiresAt.getTime() > updatedAt.getTime();
     if (
-      (intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim ||
-        intent === ZLinkInternalMeshNodeWriteIntent.RecoveryClaim) &&
+      intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim &&
       current.ownerId !== descriptor.ownerId
     ) {
       const claimAllowed = this.ownerLeaseReleaseDelay.allows(
@@ -1667,8 +1666,7 @@ function canTakeOver(
   }
   if (
     intent !== ZLinkLocationWriteIntent.NewClaim &&
-    intent !== ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim &&
-    intent !== ZLinkInternalMeshNodeWriteIntent.RecoveryClaim
+    intent !== ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
   ) {
     return false;
   }

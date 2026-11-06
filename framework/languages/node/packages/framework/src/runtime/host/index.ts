@@ -1,5 +1,6 @@
 import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '../../contracts';
 import { RequestRuntime } from '../foundation/request-runtime';
+import { RuntimeDisposal } from '../disposal';
 import { inspectRuntime } from '../internal-observation';
 import { ZLinkProviderRelocationRepository } from '../locations/relocation-blob';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
@@ -299,6 +300,7 @@ export class ZLinkFrameworkRuntimeHost
   private relocationOperationKey?: string;
   private relocationOperationStartedAt?: number;
   private shutdownOperation?: Promise<ZLinkFrameworkTerminationResult>;
+  private teardown = new RuntimeDisposal();
   private shutdownOperationStartedAt?: number;
   private relocationTargetApplicationVersion?: bigint;
   private readonly runtimeObservers = new Set<RuntimeEventQueue<ZLinkFrameworkRuntimeStatus>>();
@@ -1086,7 +1088,8 @@ export class ZLinkFrameworkRuntimeHost
       this.runtimeDeadline = new Date(Date.now() + deadlineMs);
       this.relocationStopStarting?.abort(new Error('Shutdown requested.'));
       this.shutdownOperationStartedAt = performance.now();
-      this.shutdownOperation = this.runShutdown(deadlineMs);
+      const teardown = this.teardown.operation;
+      this.shutdownOperation = this.runShutdown(deadlineMs, teardown);
     }
     return waitForRuntimeOperation(this.shutdownOperation, options?.signal);
   }
@@ -1190,42 +1193,54 @@ export class ZLinkFrameworkRuntimeHost
     }
   }
 
-  private async runShutdown(deadlineMs: number): Promise<ZLinkFrameworkTerminationResult> {
+  private async runShutdown(
+    deadlineMs: number,
+    teardown?: Promise<void>
+  ): Promise<ZLinkFrameworkTerminationResult> {
     return await this.runWithShutdownDeadline(deadlineMs, async () => {
       const deadlineAtMs = performance.now() + deadlineMs;
+      const shutdownSignal = this.shutdownDeadline!.signal;
       try {
-        let drain: Awaited<ReturnType<ZLinkRouteMeshRuntimeCoordinator['shutdownHost']>>;
+        let drain: Awaited<ReturnType<ZLinkRouteMeshRuntimeCoordinator['shutdownHost']>> = {
+          kind: 'drained'
+        };
         try {
           this.admission.close();
           if (this.runtimeState === ZLinkFrameworkRuntimeState.Preparing) {
             this.executionState?.abortController.abort();
           }
           this.setRuntimeState(ZLinkFrameworkRuntimeState.Draining);
-          if (
-            this.relocationOperation !== undefined &&
-            this.relocationStopStarting?.signal.aborted === true
-          ) {
-            await this.relocationOperation;
-          }
-          // Seal application admission before the public status reports that the
-          // host no longer accepts work. This prevents status polling from racing
-          // with the coordinator's synchronous seal step.
-          const unscopedStreamDrain = this.streamRuntime?.notifyUnscopedServerDrain();
-          drain = await this.routeMeshCoordinator.shutdownHost(
-            this.runtimeDeadline!,
-            this.shutdownDeadline!.signal
-          );
-          await unscopedStreamDrain;
-          if (drain.kind === 'forceStopped' && drain.error !== undefined) {
-            this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
-              'host shutdown',
-              drain.error
+          if (teardown === undefined) {
+            if (
+              this.relocationOperation !== undefined &&
+              this.relocationStopStarting?.signal.aborted === true
+            ) {
+              await this.relocationOperation;
+            }
+            // Seal application admission before the public status reports that the
+            // host no longer accepts work. This prevents status polling from racing
+            // with the coordinator's synchronous seal step.
+            const unscopedStreamDrain = this.streamRuntime?.notifyUnscopedServerDrain();
+            drain = await this.routeMeshCoordinator.shutdownHost(
+              this.runtimeDeadline!,
+              shutdownSignal
             );
+            await unscopedStreamDrain;
+            if (drain.kind === 'forceStopped' && drain.error !== undefined) {
+              this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
+                'host shutdown',
+                drain.error
+              );
+            }
           }
         } finally {
-          await this.teardownRuntime();
+          this.setRuntimeState(ZLinkFrameworkRuntimeState.Draining);
+          await (teardown ?? this.teardownRuntime()).catch((error: unknown) => {
+            this.shutdownOperation = undefined;
+            throw error;
+          });
         }
-        if (this.shutdownDeadline!.signal.aborted || performance.now() >= deadlineAtMs) {
+        if (shutdownSignal.aborted || performance.now() >= deadlineAtMs) {
           throw createDeadlineExceededError('Shutdown resource cleanup exceeded its deadline.');
         }
         if (drain.kind === 'forceStopped') {
@@ -1244,7 +1259,7 @@ export class ZLinkFrameworkRuntimeHost
       } catch (error) {
         return this.completeTermination({
           outcome: ZLinkFrameworkTerminationOutcome.ForceStopped,
-          reason: isDeadlineExceededError(this.shutdownDeadline!.signal.reason ?? error)
+          reason: isDeadlineExceededError(shutdownSignal.reason ?? error)
             ? ZLinkFrameworkTerminationReason.DeadlineExceeded
             : ZLinkFrameworkTerminationReason.TeardownFailed
         });
@@ -1368,12 +1383,7 @@ export class ZLinkFrameworkRuntimeHost
   }
 
   private setRuntimeState(state: ZLinkFrameworkRuntimeState): void {
-    if (
-      this.runtimeState === state ||
-      (this.runtimeState === ZLinkFrameworkRuntimeState.Error &&
-        state === ZLinkFrameworkRuntimeState.Stopped)
-    )
-      return;
+    if (this.runtimeState === state) return;
     this.runtimeState = state;
     this.notifyTopologyHostStateChanged();
     this.publishCurrentRuntimeStatus();
@@ -1506,9 +1516,16 @@ export class ZLinkFrameworkRuntimeHost
 
   private async startCore(): Promise<void> {
     if (this.executionState !== undefined) {
+      if (this.teardown.started) {
+        throw new ZLinkFrameworkException(
+          ZLinkFrameworkErrorKind.ShuttingDown,
+          'Host cleanup must complete before restarting.'
+        );
+      }
       return;
     }
 
+    this.teardown = new RuntimeDisposal();
     this.shutdownOperation = undefined;
     this.shutdownOperationStartedAt = undefined;
     const previousLease = this.telemetryLease;
@@ -1653,22 +1670,25 @@ export class ZLinkFrameworkRuntimeHost
   }
 
   async stop(): Promise<void> {
-    this.shutdownOperation ??= this.teardownRuntime().then(() => ({
-      outcome: ZLinkFrameworkTerminationOutcome.Stopped,
-      reason: ZLinkFrameworkTerminationReason.None
-    }));
-    await this.shutdownOperation;
+    if (this.shutdownOperation !== undefined) {
+      await this.shutdownOperation;
+    } else {
+      this.setRuntimeState(ZLinkFrameworkRuntimeState.Draining);
+      await this.teardownRuntime();
+    }
     this.setRuntimeState(ZLinkFrameworkRuntimeState.Stopped);
   }
 
-  private async teardownRuntime(): Promise<void> {
-    retireTelemetryLease(this.telemetryLease);
-    this.requests.close(
-      new ZLinkFrameworkException(ZLinkFrameworkErrorKind.ShuttingDown, 'Host stopped.')
-    );
-    await this.runWithShutdownDeadline(DEFAULT_HOST_CONTROL_TIMEOUT_MS, async () =>
-      this.runLifecycle(() => this.stopCore())
-    );
+  private teardownRuntime(): Promise<void> {
+    return this.teardown.run(async () => {
+      retireTelemetryLease(this.telemetryLease);
+      this.requests.close(
+        new ZLinkFrameworkException(ZLinkFrameworkErrorKind.ShuttingDown, 'Host stopped.')
+      );
+      await this.runWithShutdownDeadline(DEFAULT_HOST_CONTROL_TIMEOUT_MS, async () =>
+        this.runLifecycle(() => this.stopCore())
+      );
+    });
   }
 
   runtimeMetricMeshSnapshots(): readonly ZLinkRuntimeMetricMeshSnapshot[] {
@@ -1778,12 +1798,15 @@ export class ZLinkFrameworkRuntimeHost
           this.runtimeOrPreStartErrorSink.reportRuntimeTaskException('owner lease recovery', error);
           if (error instanceof ZLinkMeshNodeDescriptorConflictException) {
             this.setRuntimeState(ZLinkFrameworkRuntimeState.Error);
-            return this.stop().catch((cleanupError) => {
-              this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
-                'owner lease recovery cleanup',
-                cleanupError
-              );
-            });
+            return Promise.resolve()
+              .then(() => this.shutdown())
+              .then(() => undefined)
+              .catch((cleanupError) => {
+                this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
+                  'owner lease recovery cleanup',
+                  cleanupError
+                );
+              });
           }
         })
         .finally(() => {
