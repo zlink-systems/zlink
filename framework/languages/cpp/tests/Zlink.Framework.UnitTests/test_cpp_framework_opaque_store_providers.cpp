@@ -13,6 +13,7 @@
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "../support/owner_lease_time_store.hpp"
 #include "../support/actor_authority_fixture.hpp"
+#include "../support/host_readiness.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/spots/spot_runtime.hpp"
@@ -903,6 +904,10 @@ class reclaim_scan_store_t final : public location_store_t
     }
     task_t<store_write_result_t> write (store_write_request_t request) override
     {
+        if (before_write) {
+            auto callback = std::exchange (before_write, {});
+            co_await callback ();
+        }
         if (before_member_write
             && std::any_of (request.mutations.begin (), request.mutations.end (),
                             [] (const auto &mutation) {
@@ -946,6 +951,7 @@ class reclaim_scan_store_t final : public location_store_t
     std::function<task_t<void> ()> after_read;
     std::function<task_t<void> ()> before_read;
     std::function<task_t<void> ()> before_member_write;
+    std::function<task_t<void> ()> before_write;
     std::function<task_t<void> ()> after_write;
     unsigned scans = 0;
     unsigned expired = 0;
@@ -1123,6 +1129,39 @@ TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
     if (scenario != "live" && scenario != "liveDescriptorGone")
         repository.release_owner_lease (old_owner).result ().value ();
     request.target = {"reclaim-mesh", node_rid_t::from_string ("reclaim-target"), 1, new_owner};
+    if (scenario == "concurrentReclaimDelete") {
+        EXPECT_FALSE (repository.reserve (request).result ());
+        EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 1u);
+        clock.advance (15s);
+        const auto &snapshot = std::get<authority_snapshot_t> (committed);
+        const auto authority_key = actor_authority_key (request.key.global_id);
+        task_completion_source_t<void> first_held;
+        task_completion_source_t<void> release_first;
+        opaque.before_write = [&] () -> task_t<void> {
+            first_held.complete (result_t<void>::success ());
+            co_await release_first.task ();
+        };
+        auto first =
+          repository.release_ended_reservation (authority_key, snapshot.store_version, {}, request);
+        first_held.task ().result ().value ();
+        task_completion_source_t<void> second_held;
+        task_completion_source_t<void> release_second;
+        opaque.before_write = [&] () -> task_t<void> {
+            second_held.complete (result_t<void>::success ());
+            co_await release_second.task ();
+        };
+        auto second =
+          repository.release_ended_reservation (authority_key, snapshot.store_version, {}, request);
+        second_held.task ().result ().value ();
+        EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 1u);
+        release_first.complete (result_t<void>::success ());
+        EXPECT_TRUE (first.result ().value ());
+        EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 0u);
+        release_second.complete (result_t<void>::success ());
+        EXPECT_FALSE (second.result ().value ());
+        EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 0u);
+        return;
+    }
     if (scenario == "delete" || scenario == "deleteMissing" || scenario == "lateDelete"
         || scenario == "staleMissingRead") {
         const auto waiting = repository.reserve (request).result ();
@@ -1358,7 +1397,8 @@ INSTANTIATE_TEST_SUITE_P (ProviderReadOrder,
                           ::testing::Values (std::make_tuple (true, "staleLiveRead"),
                                              std::make_tuple (true, "staleMissingRead"),
                                              std::make_tuple (true, "deleteMissing"),
-                                             std::make_tuple (true, "lateDelete")));
+                                             std::make_tuple (true, "lateDelete"),
+                                             std::make_tuple (true, "concurrentReclaimDelete")));
 
 class EndedSpotReclaimTest
     : public ::testing::TestWithParam<std::tuple<bool, placement_object_kind_t, std::string>>
@@ -6843,6 +6883,211 @@ TEST (CppFrameworkOpaqueLocationStore, DescriptorDeletionClearsOnlyDeletedTokenO
         // Missing observation belongs to the next lifecycle, not the deleted token.
         EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 1u);
     }
+}
+
+namespace
+{
+class readiness_runtime_t final : public zlink::framework::framework_runtime_t
+{
+  public:
+    explicit readiness_runtime_t (framework_runtime_state_t state) : state (state) {}
+    framework_runtime_status_t status () const override { return {.state = state}; }
+    void reset_capacity_metrics () override { ADD_FAILURE () << "unexpected capacity reset"; }
+    listener_status_t listener_status (listener_kind_t, std::string) const override
+    {
+        ADD_FAILURE () << "unexpected listener status query";
+        return {};
+    }
+    std::vector<http_listener_status_t> http_listener_statuses () const override
+    {
+        ADD_FAILURE () << "unexpected HTTP listener status query";
+        return {};
+    }
+    std::unique_ptr<runtime_observation_t> observe (
+      std::size_t,
+      std::function<void (const observed_status_t<framework_runtime_status_t> &)> observer) override
+    {
+        class observation_t final : public runtime_observation_t
+        {
+          public:
+            explicit observation_t (task_completion_source_t<void> &closed) : closed (closed) {}
+            void close () noexcept override { closed.complete (result_t<void>::success ()); }
+
+          private:
+            task_completion_source_t<void> &closed;
+        };
+        observer ({.status = {.state = framework_runtime_state_t::preparing}});
+        observer ({.status = status ()});
+        return std::make_unique<observation_t> (closed);
+    }
+    task_completion_source_t<void> closed;
+
+  private:
+    framework_runtime_state_t state;
+};
+}
+
+TEST (CppFrameworkHostReadiness, ServingCompletesAndClosesObservation)
+{
+    service_collection_t services;
+    auto runtime = std::make_unique<readiness_runtime_t> (framework_runtime_state_t::serving);
+    auto closed = runtime->closed.task ();
+    services.add_singleton<zlink::framework::framework_runtime_t> (std::move (runtime));
+    auto provider = services.build_provider ();
+    EXPECT_NO_THROW (zlink::framework::test::wait_for_serving (provider));
+    EXPECT_TRUE (closed.await_ready ());
+}
+
+TEST (CppFrameworkHostReadiness, StartupFailureCompletesAndClosesObservation)
+{
+    for (const auto state :
+         {framework_runtime_state_t::error, framework_runtime_state_t::stopped}) {
+        SCOPED_TRACE (static_cast<int> (state));
+        service_collection_t services;
+        auto runtime = std::make_unique<readiness_runtime_t> (state);
+        auto closed = runtime->closed.task ();
+        services.add_singleton<zlink::framework::framework_runtime_t> (std::move (runtime));
+        auto provider = services.build_provider ();
+        EXPECT_THROW (zlink::framework::test::wait_for_serving (provider), framework_exception_t);
+        EXPECT_TRUE (closed.await_ready ());
+    }
+}
+
+TEST (CppFrameworkOpaqueLocationStore, DescriptorDeleteClearsObservationCreatedDuringWrite)
+{
+    reclaim_scan_store_t opaque;
+    provider_location_repository_t repository (opaque);
+    location_reclaim_test_access_t clock;
+    clock.bind (repository);
+    repository.configure_reclaim_margin (0ms);
+    const auto old_owner = std::get<owner_lease_claimed_t> (
+                             repository.claim_owner_lease ("delete-old", 60s).result ().value ())
+                             .token;
+    const auto next_owner = std::get<owner_lease_claimed_t> (
+                              repository.claim_owner_lease ("delete-next", 60s).result ().value ())
+                              .token;
+    auto descriptor = review_mesh_descriptor (old_owner);
+    ASSERT_EQ (
+      repository.update_mesh_node (descriptor, location_write_intent_t::fixed_rid_new_claim)
+        .result ()
+        .value ()
+        .status,
+      location_write_status_t::stored);
+    repository.configure_reclaim_margin (5s);
+    repository.release_owner_lease (old_owner).result ().value ();
+    task_completion_source_t<void> held;
+    task_completion_source_t<void> release;
+    opaque.before_write = [&] () -> task_t<void> {
+        held.complete (result_t<void>::success ());
+        co_await release.task ();
+    };
+    auto deletion = repository.remove_mesh_node ({descriptor.mesh_name, descriptor.rid}, old_owner);
+    held.task ().result ().value ();
+    descriptor.owner_id = next_owner.owner_id;
+    descriptor.lease_generation = next_owner.lease_generation;
+    const auto waiting =
+      repository.update_mesh_node (descriptor, location_write_intent_t::fixed_rid_new_claim)
+        .result ();
+    EXPECT_TRUE (waiting);
+    if (waiting)
+        EXPECT_EQ (waiting.value ().status, location_write_status_t::waiting);
+    EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 1u);
+    release.complete (result_t<void>::success ());
+    EXPECT_EQ (deletion.result ().value (), location_write_status_t::stored);
+    EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 0u);
+    EXPECT_TRUE (
+      repository.list_mesh_nodes (descriptor.mesh_name).result ().value ().items.empty ());
+}
+
+TEST (CppFrameworkOpaqueLocationStore, LateDescriptorPublishKeepsReplacementTokenObservation)
+{
+    reclaim_scan_store_t opaque;
+    provider_location_repository_t repository (opaque);
+    location_reclaim_test_access_t clock;
+    clock.bind (repository);
+    repository.configure_reclaim_margin (0ms);
+    const auto old_owner = std::get<owner_lease_claimed_t> (
+                             repository.claim_owner_lease ("publish-old", 60s).result ().value ())
+                             .token;
+    const auto next_owner = std::get<owner_lease_claimed_t> (
+                              repository.claim_owner_lease ("publish-next", 60s).result ().value ())
+                              .token;
+    const auto contender =
+      std::get<owner_lease_claimed_t> (
+        repository.claim_owner_lease ("publish-contender", 60s).result ().value ())
+        .token;
+    auto descriptor = review_mesh_descriptor (old_owner);
+    ASSERT_EQ (
+      repository.update_mesh_node (descriptor, location_write_intent_t::fixed_rid_new_claim)
+        .result ()
+        .value ()
+        .status,
+      location_write_status_t::stored);
+    repository.configure_reclaim_margin (5s);
+    repository.release_owner_lease (old_owner).result ().value ();
+    descriptor.owner_id = contender.owner_id;
+    descriptor.lease_generation = contender.lease_generation;
+    ASSERT_EQ (
+      repository.update_mesh_node (descriptor, location_write_intent_t::fixed_rid_new_claim)
+        .result ()
+        .value ()
+        .status,
+      location_write_status_t::waiting);
+    clock.advance (15s);
+    task_completion_source_t<void> owner_read_held;
+    task_completion_source_t<void> release_owner_read;
+    opaque.after_read_key = {std::string ("owner-lease") + '\0' + old_owner.owner_id};
+    opaque.after_read = [&] () -> task_t<void> {
+        owner_read_held.complete (result_t<void>::success ());
+        co_await release_owner_read.task ();
+    };
+    auto replacement = descriptor;
+    replacement.owner_id = next_owner.owner_id;
+    replacement.lease_generation = next_owner.lease_generation;
+    auto publication =
+      repository.update_mesh_node (replacement, location_write_intent_t::fixed_rid_new_claim);
+    owner_read_held.task ().result ().value ();
+    task_completion_source_t<void> read_held;
+    task_completion_source_t<void> release_read;
+    opaque.before_read_key = {std::string ("mesh-node") + '\0' + descriptor.mesh_name + '\0'
+                              + descriptor.rid.to_hex ()};
+    opaque.before_read = [&] () -> task_t<void> {
+        read_held.complete (result_t<void>::success ());
+        co_await release_read.task ();
+    };
+    auto contender_claim =
+      repository.update_mesh_node (descriptor, location_write_intent_t::fixed_rid_new_claim);
+    read_held.task ().result ().value ();
+    task_completion_source_t<void> write_held;
+    task_completion_source_t<void> release_write;
+    opaque.after_write = [&] () -> task_t<void> {
+        write_held.complete (result_t<void>::success ());
+        co_await release_write.task ();
+    };
+    release_owner_read.complete (result_t<void>::success ());
+    write_held.task ().result ().value ();
+    repository.release_owner_lease (next_owner).result ().value ();
+    release_read.complete (result_t<void>::success ());
+    EXPECT_EQ (contender_claim.result ().value ().status, location_write_status_t::waiting);
+    EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 1u);
+    release_write.complete (result_t<void>::success ());
+    EXPECT_EQ (publication.result ().value ().status, location_write_status_t::stored);
+    EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 1u);
+    clock.advance (15s - 1ms);
+    EXPECT_EQ (
+      repository.update_mesh_node (descriptor, location_write_intent_t::fixed_rid_new_claim)
+        .result ()
+        .value ()
+        .status,
+      location_write_status_t::waiting);
+    clock.advance (1ms);
+    EXPECT_EQ (
+      repository.update_mesh_node (descriptor, location_write_intent_t::fixed_rid_new_claim)
+        .result ()
+        .value ()
+        .status,
+      location_write_status_t::stored);
+    EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 0u);
 }
 
 void verify_late_descriptor_live_read (bool observed_before)

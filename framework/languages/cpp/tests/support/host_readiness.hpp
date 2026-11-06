@@ -12,9 +12,14 @@ inline void wait_for_serving (service_provider_t &services)
       services.get_required<framework_runtime_t> ().observe (1, [serving] (const auto &event) {
           if (event.status.state == framework_runtime_state_t::serving)
               serving->complete (result_t<void>::success ());
+          else if (event.status.state == framework_runtime_state_t::error
+                   || event.status.state == framework_runtime_state_t::stopped)
+              serving->complete (result_t<void>::failure (framework_error_kind_t::invalid_operation,
+                                                          "Host startup ended before Serving"));
       });
-    serving->task ().result ().value ();
+    auto result = serving->task ().result ();
     observation->close ();
+    result.value ();
 }
 
 } // namespace zlink::framework::test
