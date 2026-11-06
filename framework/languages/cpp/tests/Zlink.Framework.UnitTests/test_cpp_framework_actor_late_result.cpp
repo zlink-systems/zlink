@@ -11,6 +11,7 @@
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 
 #include <gtest/gtest.h>
+#include "creation_counter.hpp"
 #include <zlink/Contracts/Core/context.hpp>
 #include <array>
 #include <atomic>
@@ -30,6 +31,13 @@ foundation::operation_registry_t::clock_t::time_point registry_now ()
 
 struct raw_mesh_node_owner_test_access_t
 {
+    static void close_registry (raw_mesh_node_owner_t &owner) { owner._operations->shutdown (); }
+    static void fail_publication (raw_mesh_node_owner_t &owner)
+    {
+        owner._operations = std::make_shared<foundation::operation_registry_t> (
+          &foundation::operation_registry_t::clock_t::now, [] { throw std::bad_alloc (); });
+    }
+
     static void inject_registry_clock (raw_mesh_node_owner_t &owner)
     {
         injected_registry_now =
@@ -128,6 +136,133 @@ namespace wire = rt::protocol;
 using namespace std::chrono_literals;
 using access = rt::actor_client_test_access_t;
 using terminal_t = fd::operation_terminal_t;
+
+class submitted_actor_receiver_t : public testing::Test
+{
+  protected:
+    std::mutex delay_mutex;
+    fw::detail::delay_owner_t delays{delay_mutex};
+    rt::in_memory_location_repository_t store;
+    rt::live_location_reader_t locations{store};
+    fw::serializer_registry_t serializers;
+    std::shared_ptr<fw::detail::mesh_node_runtime_t> runtime;
+    std::shared_ptr<fw::actor_client_t> client;
+    wire::actor_route_fence_t fence{"actor", 3, {'n'}, 1, 7, 11};
+
+    void SetUp () override
+    {
+        auto state =
+          fw::test::runtime_failure_fixture<fw::detail::mesh_node_builder_state_t> ("mesh");
+        state->listen_endpoint = "tcp://127.0.0.1:0";
+        state->routing_id = zlink::routing_id_t::from ("submitted-actor-source");
+        state->core_context = std::make_shared<zlink::context_t> ();
+        runtime = std::make_shared<fw::detail::mesh_node_runtime_t> (state);
+        runtime->start ().result ().value ();
+        serializers.add<std::string> (
+          [] (const std::string &value) { return fw::encoded_payload_t::from_string (value); },
+          [] (const fw::encoded_payload_t &value) { return value.to_string (); },
+          "application/json");
+        client = rt::make_actor_client (locations, serializers, {runtime}, {}, {}, delays);
+        access::cache (*client, fence);
+    }
+    void TearDown () override
+    {
+        runtime->stop ();
+        client.reset ();
+    }
+    void peer (bool ready)
+    {
+        auto &raw = runtime->native_node ().transport ();
+        auto descriptor = raw.topology ().local_descriptor ();
+        descriptor.node_routing_id = fence.target_node_routing_id;
+        descriptor.advertised_endpoint = "tcp://127.0.0.1:1";
+        EXPECT_EQ (raw.topology ().admit (descriptor, descriptor.node_routing_id,
+                                          std::chrono::steady_clock::now (),
+                                          ready ? wire::command::admit : wire::command::hello),
+                   rt::mesh::peer_admission_result_t::admitted);
+        if (!ready)
+            raw.expect_peer (descriptor);
+    }
+    void verify (terminal_t terminal, bool registered = true)
+    {
+        namespace probe = fw::detail::test_creation_probe;
+        const auto deliveries = probe::request_deliveries.load ();
+        const auto capture_bytes = probe::request_capture_bytes.load ();
+        const auto capture_values = probe::request_capture_value_bytes.load ();
+        const auto block_bytes = probe::request_block_bytes.load ();
+        const auto owner_bytes = probe::request_callback_owner_bytes.load ();
+        auto pending = client->request (fw::actor_id_t ("actor"), std::string ("request"))
+                         .timeout (5s)
+                         .async<std::string> ();
+        auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+        std::atomic_uint public_results{0};
+        std::promise<void> public_set;
+        auto published = public_set.get_future ();
+        auto public_reply = fw::detail::request_task_access_t::public_reply (pending);
+        fw::detail::observe_task_terminal (public_reply, [&] (const auto &) {
+            ++public_results;
+            public_set.set_value ();
+        });
+        if (terminal == terminal_t::timed_out) {
+            ASSERT_FALSE (pending.admitted ().await_ready ());
+            EXPECT_EQ (runtime->native_node ()
+                         .transport ()
+                         .expire_requests (std::chrono::steady_clock::now () + 6s)
+                         .result ()
+                         .value (),
+                       1u);
+        } else if (terminal == terminal_t::shutdown) {
+            ASSERT_FALSE (pending.admitted ().await_ready ());
+            runtime->stop ();
+        }
+        const auto result = pending.result ();
+        EXPECT_FALSE (result);
+        const auto received = physical.result ();
+        EXPECT_FALSE (received);
+        runtime->stop ();
+        EXPECT_EQ (probe::request_deliveries.load () - deliveries, 1u);
+        ASSERT_EQ (published.wait_for (2s), std::future_status::ready);
+        EXPECT_EQ (public_results.load (), 1u);
+        std::printf ("actor receiver registered=%d captures=%zu values=%zu block=%zu "
+                     "callback-owner=%zu deliveries=%zu\n",
+                     registered, probe::request_capture_bytes.load () - capture_bytes,
+                     probe::request_capture_value_bytes.load () - capture_values,
+                     probe::request_block_bytes.load () - block_bytes,
+                     probe::request_callback_owner_bytes.load () - owner_bytes,
+                     probe::request_deliveries.load () - deliveries);
+    }
+};
+
+TEST_F (submitted_actor_receiver_t, NativeAdmissionRejectionDeliversOnce)
+{
+    peer (true);
+    verify (terminal_t::transport_failed);
+}
+
+TEST_F (submitted_actor_receiver_t, TimeoutWhileAdmissionPendingDeliversOnce)
+{
+    peer (false);
+    verify (terminal_t::timed_out);
+}
+
+TEST_F (submitted_actor_receiver_t, ShutdownWhileAdmissionPendingDeliversOnce)
+{
+    peer (false);
+    verify (terminal_t::shutdown);
+}
+
+TEST_F (submitted_actor_receiver_t, PublicationExceptionDeliversPhysicalFailureOnce)
+{
+    peer (true);
+    rt::mesh::raw_mesh_node_owner_test_access_t::fail_publication (
+      runtime->native_node ().transport ());
+    verify (terminal_t::transport_failed);
+}
+
+TEST_F (submitted_actor_receiver_t, RejectionBeforeRegistrationDeliversOnce)
+{
+    verify (terminal_t::route_unavailable, false);
+}
 
 // The fake binding retains the same delivered-result callback as raw_route_port_t.
 // Explicit expiration and delivery order the test without a timer or sleep.
@@ -509,6 +644,65 @@ class local_actor_receiver_t : public testing::Test
         EXPECT_TRUE (retained.expired ());
     }
 };
+
+TEST_F (local_actor_receiver_t, RejectedLocalRegistrationDeliversPhysicalFailureOnce)
+{
+    namespace probe = fw::detail::test_creation_probe;
+    const auto deliveries = probe::request_deliveries.load ();
+    before_submit = [this] {
+        rt::mesh::raw_mesh_node_owner_test_access_t::close_registry (
+          runtime->native_node ().transport ());
+    };
+    auto pending = client->request (fw::actor_id_t ("actor"), std::string ("request"))
+                     .timeout (5s)
+                     .async<std::string> ();
+    std::atomic_uint public_results{0};
+    auto public_reply = fw::detail::request_task_access_t::public_reply (pending);
+    fw::detail::observe_task_terminal (public_reply, [&] (const auto &) { ++public_results; });
+    EXPECT_FALSE (pending.result ());
+    auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+    ASSERT_TRUE (physical.await_ready ());
+    EXPECT_FALSE (physical.result ());
+    runtime->stop ();
+    EXPECT_EQ (probe::request_deliveries.load () - deliveries, 1u);
+    EXPECT_EQ (public_results.load (), 1u);
+}
+
+TEST_F (local_actor_receiver_t, LocalCompletionSinkConstructionFailureDeliversPhysicalFailureOnce)
+{
+    namespace probe = fw::detail::test_creation_probe;
+    const auto deliveries = probe::request_deliveries.load ();
+    struct clear_fault_t
+    {
+        ~clear_fault_t ()
+        {
+            zlink::framework::detail::test_creation_probe::local_completion_sink_fault.store (
+              nullptr);
+        }
+    } clear_fault;
+    probe::local_completion_sink_fault.store (+[] { throw std::bad_alloc (); });
+
+    auto pending = client->request (fw::actor_id_t ("actor"), std::string ("request"))
+                     .timeout (5s)
+                     .async<std::string> ();
+    auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+    const auto public_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!pending.await_ready () && std::chrono::steady_clock::now () < public_deadline)
+        std::this_thread::yield ();
+    ASSERT_TRUE (pending.await_ready ());
+    EXPECT_FALSE (pending.result ());
+
+    const auto physical_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!physical.await_ready () && std::chrono::steady_clock::now () < physical_deadline)
+        std::this_thread::yield ();
+    const auto physical_ready = physical.await_ready ();
+    EXPECT_TRUE (physical_ready);
+    if (physical_ready)
+        EXPECT_FALSE (physical.result ());
+    runtime->stop ();
+    EXPECT_EQ (probe::request_deliveries.load () - deliveries, 1u);
+    EXPECT_EQ (probe::local_completion_sink_fault.load (), nullptr);
+}
 
 // Each request selects the old cache entry before the serializer runs. Replacing
 // that entry in the serializer gives a deterministic selection/submission boundary.
