@@ -1,8 +1,12 @@
+using System.Buffers.Binary;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Runtime.Codecs;
+using Zlink.Framework.Runtime.Messaging;
+using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -149,6 +153,299 @@ public sealed class ProtobufNativePayloadTests
         Assert.Equal(direct.Kind, borrowed.Kind);
         Assert.Equal(direct.Message, borrowed.Message);
         Assert.Equal(direct.InnerException?.GetType(), borrowed.InnerException?.GetType());
+    }
+
+#if DEBUG
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Node_request_writes_one_native_payload_and_one_wire_list(bool metadata)
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new Zlink.Framework.Runtime.Service.ZLinkManagedMeshNode(
+            context,
+            "native-wire-count"
+        );
+        using var payload = Message.From("payload");
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        var counts = new Dictionary<string, int>();
+        var disposed = 0;
+        ZLinkMessageParts.DisposingObserver.Value = _ => Interlocked.Increment(ref disposed);
+        ZLinkApplicationPayloadEnvelopeCodec.EncodingObserver.Value = name =>
+            counts[name] = counts.GetValueOrDefault(name) + 1;
+        try
+        {
+            await Record.ExceptionAsync(async () =>
+                await node.RequestToNodeDirectAsync(
+                    RoutingId.From("missing"),
+                    [payload],
+                    SendFlags.None,
+                    metadata ? new byte[] { 42 } : default,
+                    TimeSpan.FromSeconds(5),
+                    cancelled.Token
+                )
+            );
+            Assert.Equal(0, counts.GetValueOrDefault("packed-array"));
+            Assert.Equal(1, counts.GetValueOrDefault("packed-write"));
+            Assert.Equal(1, counts.GetValueOrDefault("wire-list"));
+            Assert.Equal(metadata ? 3 : 2, disposed);
+        }
+        finally
+        {
+            ZLinkApplicationPayloadEnvelopeCodec.EncodingObserver.Value = null;
+            ZLinkMessageParts.DisposingObserver.Value = null;
+        }
+    }
+#endif
+
+    public static IEnumerable<object[]> RequestWireCases() =>
+        from metadata in new[] { false, true }
+        from count in new[] { 1, 2, 3 }
+        from size in new[] { 0, 4096, 262144 }
+        select new object[] { metadata, count, size };
+
+    [Theory]
+    [MemberData(nameof(RequestWireCases))]
+    public void Native_request_matches_packed_wire(bool metadata, int count, int size)
+    {
+        var parts = Enumerable
+            .Range(0, count)
+            .Select(i => Message.From(new byte[size + i]))
+            .ToArray();
+        var meta = metadata ? new byte[] { 0, 42, 255 } : Array.Empty<byte>();
+        try
+        {
+            var expected = new List<byte[]>
+            {
+                ZLinkServiceWireCodec.EncodeApplication(
+                    ServiceWireConstants.Command.NodeRequest,
+                    ulong.MaxValue,
+                    null,
+                    metadata
+                ),
+            };
+            if (metadata)
+                expected.Add(meta);
+            expected.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
+            var actual = ZLinkManagedMeshNode.CreateApplicationWire(
+                ServiceWireConstants.Command.NodeRequest,
+                ulong.MaxValue,
+                null,
+                parts,
+                meta
+            );
+            try
+            {
+                Assert.Equal(expected.Count, actual.Count);
+                for (var i = 0; i < actual.Count; i++)
+                    Assert.Equal(expected[i], actual[i].ToArray());
+                Assert.True(
+                    ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
+                        actual[^1],
+                        out var view
+                    )
+                );
+                Assert.Equal(count, view.Count);
+                for (var i = 0; i < count; i++)
+                    Assert.True(parts[i].AsReadOnlySpan().SequenceEqual(view.GetSpan(i)));
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposeAll(actual);
+            }
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void Native_multipart_rejects_invalid_count_and_lengths(int field)
+    {
+        using var part = Message.From("body");
+        using var packed = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage([
+            part,
+        ]);
+        var bytes = packed.ToArray();
+        var offset = 5;
+        offset += 1 + bytes[offset];
+        offset += 1 + bytes[offset];
+        var payloadStart = offset + 4;
+        var at = field switch
+        {
+            0 => 1,
+            1 => offset,
+            2 => payloadStart,
+            _ => payloadStart + 4,
+        };
+        BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(at), uint.MaxValue);
+        using var invalid = Message.From(bytes);
+        Assert.False(
+            ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(invalid, out _)
+        );
+        Assert.False(
+            ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(bytes, out _)
+        );
+        Assert.False(
+            ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(invalid, out _)
+        );
+    }
+
+    [Theory]
+    [InlineData((byte)ServiceWireConstants.Command.NodeSend, 0UL, null)]
+    [InlineData((byte)ServiceWireConstants.Command.NodeRequest, ulong.MaxValue, null)]
+    [InlineData((byte)ServiceWireConstants.Command.ChannelSend, 0UL, "채널")]
+    [InlineData((byte)ServiceWireConstants.Command.ChannelRequest, 1UL, "channel")]
+    public void Native_application_header_shares_the_byte_writer(
+        byte commandValue,
+        ulong correlation,
+        string? channel
+    )
+    {
+        var command = (ServiceWireConstants.Command)commandValue;
+        foreach (var metadata in new[] { false, true })
+        {
+            using var header = ZLinkServiceWireCodec.EncodeApplicationMessage(
+                command,
+                correlation,
+                channel,
+                metadata
+            );
+            Assert.Equal(
+                ZLinkServiceWireCodec.EncodeApplication(command, correlation, channel, metadata),
+                header.ToArray()
+            );
+        }
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ZLinkServiceWireCodec.EncodeApplicationMessage(
+                command,
+                correlation == 0 ? 1UL : 0UL,
+                channel,
+                false
+            )
+        );
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ZLinkServiceWireCodec.EncodeApplication(
+                command,
+                correlation == 0 ? 1UL : 0UL,
+                channel,
+                false
+            )
+        );
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Durable_wire_is_disposed_once_before_submission(bool waitForReadiness)
+    {
+        using var cancellation = new CancellationTokenSource();
+        var wire = new[] { Message.From("owned-wire") };
+#if DEBUG
+        var disposed = 0;
+#endif
+        var attempts = 0;
+#if DEBUG
+        ZLinkMessageParts.DisposingObserver.Value = _ => Interlocked.Increment(ref disposed);
+#endif
+        try
+        {
+            if (!waitForReadiness)
+                cancellation.Cancel();
+            var clock = new ControllableTimeProvider();
+            var pending = ZLinkDurableRequest
+                .RequestAsync<string>(
+                    wire,
+                    clock.GetTimestamp(),
+                    TimeSpan.FromSeconds(5),
+                    (_, _, _) =>
+                    {
+                        attempts++;
+                        throw new InvalidOperationException();
+                    },
+                    cancellation.Token,
+                    () => new(1, 0, new TaskCompletionSource().Task),
+                    clock
+                )
+                .AsTask();
+            if (waitForReadiness)
+            {
+                Assert.False(pending.IsCompleted);
+#if DEBUG
+                Assert.Equal(0, disposed);
+#endif
+                cancellation.Cancel();
+            }
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+            Assert.Equal(0, attempts);
+#if DEBUG
+            Assert.Equal(1, disposed);
+#endif
+        }
+        finally
+        {
+#if DEBUG
+            ZLinkMessageParts.DisposingObserver.Value = null;
+#endif
+        }
+    }
+
+    [Fact]
+    public async Task Retired_request_disposes_a_late_native_reply_once()
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "late-native-reply");
+        using var cancellation = new CancellationTokenSource();
+        var physical = new TaskCompletionSource<IReadOnlyList<Message>>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task observation = Task.CompletedTask;
+#if DEBUG
+        var disposed = 0;
+        ZLinkMessageParts.DisposingObserver.Value = _ => Interlocked.Increment(ref disposed);
+#endif
+        try
+        {
+            var caller = node.RunDeadlineRequestAsync<IReadOnlyList<Message>>(
+                TimeSpan.FromSeconds(5),
+                cancellation.Token,
+                completion => completion.Parts,
+                (operation, _) =>
+                {
+                    observation = node.ObserveNativeDeadlineReplyAsync(
+                        operation,
+                        physical.Task,
+                        completion => completion.Parts
+                    );
+                    started.SetResult();
+                    return observation;
+                }
+            );
+            await started.Task;
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => caller);
+#if DEBUG
+            Assert.Equal(0, disposed);
+#endif
+            physical.SetResult([Message.From("late")]);
+            await observation;
+#if DEBUG
+            Assert.Equal(1, disposed);
+#endif
+        }
+        finally
+        {
+#if DEBUG
+            ZLinkMessageParts.DisposingObserver.Value = null;
+#endif
+        }
     }
 
     private const int AllocationPayloadSize = 1024;

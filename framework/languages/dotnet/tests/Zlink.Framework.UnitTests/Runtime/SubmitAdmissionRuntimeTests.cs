@@ -152,17 +152,33 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
             awaited,
             TimeSpan.FromSeconds(5)
         );
-        await node.CompleteNativeDurableRequestAsync(
-            target,
-            0UL,
-            pending,
-            new ReadOnlyMemory<byte>[] { "request"u8.ToArray() },
-            (_, _, _) =>
-                throw new Xunit.Sdk.XunitException("Rejected submission completed as a reply."),
-            default,
-            null,
-            null
-        );
+#if DEBUG
+        var disposed = 0;
+        ZLinkMessageParts.DisposingObserver.Value = _ => Interlocked.Increment(ref disposed);
+#endif
+        try
+        {
+            await node.CompleteNativeDurableRequestAsync(
+                target,
+                0UL,
+                pending,
+                new Message[] { Message.From("request") },
+                (_, _, _) =>
+                    throw new Xunit.Sdk.XunitException("Rejected submission completed as a reply."),
+                default,
+                null,
+                null
+            );
+#if DEBUG
+            Assert.Equal(1, disposed);
+#endif
+        }
+        finally
+        {
+#if DEBUG
+            ZLinkMessageParts.DisposingObserver.Value = null;
+#endif
+        }
         if (awaited)
         {
             var task = callerTask!;
@@ -189,13 +205,10 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData(ZlinkSubmitException.ErrorCode.Backpressured, false)]
-    [InlineData(ZlinkSubmitException.ErrorCode.Backpressured, true)]
-    [InlineData(ZlinkSubmitException.ErrorCode.NotConnected, false)]
-    [InlineData(ZlinkSubmitException.ErrorCode.NotConnected, true)]
+    [InlineData(ZlinkSubmitException.ErrorCode.Backpressured)]
+    [InlineData(ZlinkSubmitException.ErrorCode.NotConnected)]
     public async Task NativeRequest_PreservesTypedAdmissionFailure(
-        ZlinkSubmitException.ErrorCode code,
-        bool encodedWire
+        ZlinkSubmitException.ErrorCode code
     )
     {
         using var context = Systems.Zlink.Zlink.CreateContext();
@@ -209,19 +222,12 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
         // Access only Framework state. The socket double implements the public
         // binding contracts and never accesses binding implementation details.
         using var payload = Message.From("request");
-        var request = encodedWire
-            ? node.RequestDirectWireAsync(
-                RoutingId.From("peer"),
-                new ReadOnlyMemory<byte>[] { "request"u8.ToArray() },
-                TimeSpan.FromSeconds(5),
-                default
-            )
-            : node.RequestDirectWireAsync(
-                RoutingId.From("peer"),
-                new[] { payload },
-                TimeSpan.FromSeconds(5),
-                default
-            );
+        var request = node.RequestDirectWireAsync(
+            RoutingId.From("peer"),
+            new[] { payload },
+            TimeSpan.FromSeconds(5),
+            default
+        );
         var failure = await Assert.ThrowsAsync<ZlinkSubmitException>(() => request.AsTask());
         Assert.Same(expected, failure);
         Assert.Equal(1, socket.Submissions);
@@ -521,8 +527,15 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
         }
         Assert.Equal(SubmitResult.Backpressured, blocked.Result);
         using var request = Message.From(AdmissionPair.Payload(100));
+        var wire = ZLinkManagedMeshNode.CreateApplicationWire(
+            Systems.Zlink.Framework.Runtime.Protocol.ServiceWireConstants.Command.NodeRequest,
+            1,
+            null,
+            [request],
+            default
+        );
         var operation = new CountingRequestSubmitOperation(
-            pair.Client.Request().Message(request).Timeout(TimeSpan.FromSeconds(5))
+            pair.Client.Request().Messages(wire).Timeout(TimeSpan.FromSeconds(5))
         );
         var requestResult = StartPublicRequest(operation, TimeSpan.FromMilliseconds(100));
         var completion = requestResult.AsTask();
@@ -551,7 +564,14 @@ public sealed class SubmitAdmissionRuntimeTests : IAsyncLifetime
             await RecoverCapacityAsync();
         using var received = Received.Create();
         Assert.True(pair.Server.Recv(received));
-        Assert.Equal(AdmissionPair.Payload(100), received.SinglePartOrThrow().ToArray());
+        Assert.Equal(2, received.Parts.Count);
+        Assert.True(
+            ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
+                received.Parts[1],
+                out var payloadView
+            )
+        );
+        Assert.Equal(AdmissionPair.Payload(100), payloadView.GetSpan(0).ToArray());
         using var reply = Message.From("late-reply");
         received.Reply().Message(reply).Submit();
         Assert.True(

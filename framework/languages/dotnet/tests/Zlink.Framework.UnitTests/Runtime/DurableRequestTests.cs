@@ -138,7 +138,7 @@ public sealed class DurableRequestTests
         );
         var attempts = 0;
         var observations = 0;
-        var wire = new ReadOnlyMemory<byte>[] { new byte[] { 28, 1, 2 } };
+        var wire = new Message[] { Message.From(new byte[] { 28, 1, 2 }) };
         var request = ZLinkDurableRequest
             .RequestAsync(
                 wire,
@@ -147,6 +147,7 @@ public sealed class DurableRequestTests
                 (frames, remaining, token) =>
                 {
                     Assert.Same(wire, frames);
+                    ZLinkMessageParts.DisposeAll(frames);
                     Assert.True(remaining > TimeSpan.FromSeconds(3));
                     Assert.Equal(cancellation.Token, token);
                     attempts++;
@@ -213,7 +214,7 @@ public sealed class DurableRequestTests
         var attempts = 0;
         var failure = await Assert.ThrowsAsync<ZlinkSubmitException>(async () =>
             await ZLinkDurableRequest.RequestAsync(
-                Array.Empty<ReadOnlyMemory<byte>>(),
+                Array.Empty<Message>(),
                 Stopwatch.GetTimestamp(),
                 TimeSpan.FromSeconds(5),
                 (_, _, _) =>
@@ -236,7 +237,7 @@ public sealed class DurableRequestTests
         bool wasAdmitted
     )
     {
-        IReadOnlyList<ReadOnlyMemory<byte>> wire = [new byte[] { 28, 1, 47, 48, 49 }];
+        IReadOnlyList<Message> wire = [Message.From(new byte[] { 28, 1, 47, 48, 49 })];
         var time = new ControllableTimeProvider();
         var timeout = TimeSpan.FromSeconds(8);
         var started = time.GetTimestamp();
@@ -255,6 +256,7 @@ public sealed class DurableRequestTests
                 (frames, remaining, token) =>
                 {
                     Assert.Same(wire, frames);
+                    ZLinkMessageParts.DisposeAll(frames);
                     Assert.Equal(TimeSpan.FromSeconds(5), remaining);
                     Assert.Equal(cancellation.Token, token);
                     attempts++;
