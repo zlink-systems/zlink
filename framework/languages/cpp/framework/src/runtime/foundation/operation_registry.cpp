@@ -20,11 +20,31 @@
 namespace zlink::framework::runtime::foundation
 {
 
+void completion_sink_t::operator() (operation_terminal_t terminal,
+                                    result_t<zlink::message_t> payload) const
+{
+    if (_admitted && terminal != operation_terminal_t::completed) {
+        if (terminal == operation_terminal_t::cancelled)
+            _admitted->complete (detail::result_access_t::failure<void> (
+              detail::make_cancellation_exception ("request was cancelled")));
+        else
+            _admitted->complete (detail::boundary_failure<void> (
+              terminal == operation_terminal_t::timed_out  ? detail::boundary_error_t::timed_out
+              : terminal == operation_terminal_t::shutdown ? detail::boundary_error_t::shutdown
+                                                           : detail::boundary_error_t::disconnected,
+              "request ended before admission"));
+    }
+    _complete (terminal, std::move (payload));
+}
+
+struct operation_completion_item_t;
+struct operation_registry_drain_state_t;
+
 class operation_registry_state_t : public std::enable_shared_from_this<operation_registry_state_t>
 {
   public:
     using clock_t = std::chrono::steady_clock;
-    using callback_t = std::function<void (operation_terminal_t, result_t<zlink::message_t>)>;
+    using callback_t = operation_registry_t::callback_t;
     using before_dispatch_t = std::function<void ()>;
     // The management budget reads this clock; tests inject a deterministic one.
     using now_t = clock_t::time_point (*) ();

@@ -96,6 +96,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore, ForceStop2646SweepPreservesDescriptor
 {
     using namespace zlink::framework;
     in_memory_location_repository_t store;
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto owner = claim_owner (store, "cleanup-owner");
     const auto other = claim_owner (store, "other-owner");
     publish_mesh_node (store, "cleanup-node", owner);
@@ -146,6 +147,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
 {
     using namespace zlink::framework;
     in_memory_location_repository_t store;
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto owner_a = claim_owner (store, "owner-a");
     const auto owner_b = claim_owner (store, "owner-b");
     publish_mesh_node (store, "node-a", owner_a);
@@ -223,6 +225,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore, ActorCanJoinRelocatedSingleSpot)
     using namespace zlink::framework::runtime;
     using namespace zlink::framework::runtime::stateful;
     in_memory_location_repository_t store;
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto owner_a = claim_owner (store, "owner-a");
     const auto owner_b = claim_owner (store, "owner-b");
     publish_mesh_node (store, "node-a", owner_a);
@@ -318,6 +321,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore, DescriptorFencesCapabilityProfileAndP
 {
     using namespace zlink::framework;
     in_memory_location_repository_t store;
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto owner =
       std::get<owner_lease_claimed_t> (
         store.claim_owner_lease ("owner-target", std::chrono::seconds (15)).result ().value ())
@@ -355,6 +359,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore, AuthorityRestorePreservesIdentityWith
 {
     using namespace zlink::framework;
     in_memory_location_repository_t store;
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto owner = claim_owner (store, "restore-owner");
     publish_mesh_node (store, "restore-node", owner);
 
@@ -414,6 +419,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore, ReincarnateIssuesGenerationPairWithou
 {
     using namespace zlink::framework;
     in_memory_location_repository_t store;
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto owner = claim_owner (store, "reincarnate-owner");
     publish_mesh_node (store, "reincarnate-node", owner, 1);
     object_reserve_request_t request{
@@ -480,6 +486,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore,
     const auto max_revision =
       static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ());
     in_memory_location_repository_t store{max_revision - 2};
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto owner =
       std::get<owner_lease_claimed_t> (
         store.claim_owner_lease ("owner-max", std::chrono::seconds (15)).result ().value ())
@@ -516,6 +523,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore, CreationTerminalDedupesOnlyTheSameOpe
 {
     using namespace zlink::framework;
     in_memory_location_repository_t store;
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto owner = claim_owner (store, "creation-owner");
     publish_mesh_node (store, "creation-node", owner);
 
@@ -553,6 +561,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore, AggregateRequiresExactCapacityBundle)
 {
     using namespace zlink::framework;
     in_memory_location_repository_t store;
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto owner_a = claim_owner (store, "owner-a");
     const auto owner_b = claim_owner (store, "owner-b");
     publish_mesh_node (store, "node-a", owner_a);
@@ -647,6 +656,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore, AggregateMovesCapacityOnce)
 {
     using namespace zlink::framework;
     in_memory_location_repository_t store;
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto owner_a = claim_owner (store, "fence-source");
     const auto owner_b = claim_owner (store, "fence-target");
     publish_mesh_node (store, "fence-source-node", owner_a);
@@ -889,6 +899,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore, MaintainsOwnerLeasesAndUsesPollingWit
 TEST (ZLinkFrameworkInMemoryLocationStore, LiveMeshNodesExcludePreviousOwnerLeaseGeneration)
 {
     in_memory_location_repository_t store;
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto previous = claim_owner (store, "descriptor-owner");
     publish_mesh_node (store, "previous-node", previous);
     ASSERT_TRUE (std::holds_alternative<zlink::framework::owner_lease_released_t> (
@@ -1092,6 +1103,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore, FanoutPublisherPageStopsAtFourMiB)
 TEST (ZLinkFrameworkInMemoryLocationStore, SignedWeightBoundariesAreValidatedWithoutNarrowing)
 {
     in_memory_location_repository_t store;
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto owner = claim_owner (store, "weight-owner");
 
     auto upper = make_mesh_node ("weight-upper", owner);
@@ -1250,6 +1262,7 @@ TEST_P (InMemoryStoreContinuationDeathTest, MeshPublicationKeepsLeaseAndConflict
     ASSERT_EXIT (
       single_worker_store_child ([&] {
           in_memory_location_repository_t store;
+          store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
           const auto owner = claim_owner (store, "mesh-continuation");
           auto operation = [&] () -> task_t<void> {
               const auto result = co_await store.update_mesh_node (
@@ -1317,6 +1330,7 @@ TEST_P (InMemoryStoreContinuationDeathTest, SpotCreationKeepsCommitAndRollbackOf
     const bool pending = GetParam ();
     ASSERT_EXIT (single_worker_store_child ([&] {
                      in_memory_location_repository_t store;
+                     store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
                      const auto owner = claim_owner (store, "creation-continuation");
                      publish_mesh_node (store, "creation-node", owner);
                      const object_reserve_request_t request{

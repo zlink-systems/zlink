@@ -397,6 +397,37 @@ void verify_completion_callbacks_use_dispatcher ()
     assert (registry.shutdown () == 0);
 }
 
+void verify_completion_outlives_deadline_index ()
+{
+    using namespace std::chrono_literals;
+    injected_now = {};
+    injected_step = {};
+    foundation::operation_registry_t registry (&read_injected_clock);
+    std::latch entered (1), release (1);
+    auto captured = std::make_shared<int> (42);
+    std::weak_ptr<int> weak = captured;
+    assert (registry.register_operation (
+      {1010, 1}, injected_now + 30s, [captured, &entered, &release] (auto terminal, auto payload) {
+          entered.count_down ();
+          release.wait ();
+          assert (terminal == foundation::operation_terminal_t::completed);
+          assert (*captured == 42 && payload.value ().size () == 1024);
+      }));
+    captured.reset ();
+    assert (registry.complete ({1010, 1}, zlink::message_t::allocate (1024)));
+    entered.wait ();
+    assert (!registry.contains ({1010, 1}) && registry.size () == 0);
+    // Reuse the id while its original callback is blocked and its index still exists.
+    assert (registry.register_operation ({1010, 1}, injected_now + 30s, [] (auto, auto) {}));
+    injected_now += 256ms;
+    assert (registry.expire (injected_now).result ().value () == 0);
+    assert (registry.contains ({1010, 1}) && registry.index_size () == 1);
+    assert (!weak.expired ());
+    release.count_down ();
+    assert (registry.shutdown () == 1);
+    assert (weak.expired ());
+}
+
 void verify_request_deadline_index_contract ()
 {
     using namespace std::chrono_literals;
@@ -893,6 +924,7 @@ int main (int argc, char **argv)
         return 0;
     }
     zlink::framework::completion_owner_t owner;
+    verify_completion_outlives_deadline_index ();
     verify_completion_callbacks_use_dispatcher ();
     verify_shutdown_waits_for_callback_capture_destruction ();
     verify_independent_completion_turns (1);

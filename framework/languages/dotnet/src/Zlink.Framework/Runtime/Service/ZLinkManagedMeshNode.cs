@@ -12586,8 +12586,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return false;
     }
 
-    private long DeadlineNow() => _deadlineClock.Elapsed.Ticks;
-
     private bool DeadlineBudgetSpent() =>
         (_deadlineClock.Elapsed - _deadlineVisitStartedAt).TotalMilliseconds
         >= ZLinkReceiveBatchBudget.MaximumMilliseconds;
@@ -12619,8 +12617,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         _operationDeadlines.Visit(
             _deadlineVisitStartedAt.Ticks,
             VisitOperationDeadline,
-            DeadlineBudgetSpent,
-            DeadlineNow
+            DeadlineBudgetSpent
         );
         Volatile.Write(ref _nextDeadlineVisitTicks, _operationDeadlines.NextVisit);
         var waitUntil = ReadOperationWaitDeadline();

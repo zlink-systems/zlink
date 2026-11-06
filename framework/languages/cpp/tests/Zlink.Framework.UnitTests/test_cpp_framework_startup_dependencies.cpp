@@ -71,6 +71,8 @@ bool verify_spot_startup_metadata (bool supply_dependency)
     if (supply_dependency)
         app.advanced ().services ().add_scoped<startup_dependency_t> ();
     auto &options = app.add_zlink_framework ();
+    options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+    options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
     options.add_location_store (std::make_shared<runtime::in_memory_location_store_t> ());
     options.add_route_mesh ("metadata")
       .listen ("tcp://127.0.0.1:0")

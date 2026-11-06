@@ -12,6 +12,7 @@
 #include "runtime/mesh/service_mailbox.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include <cstdlib>
+#include <ctime>
 #include <new>
 #include <optional>
 #include <string>
@@ -476,3 +477,37 @@ TEST (EnvelopeAllocations, ClientKeepsOneOwningJsonDefault)
     EXPECT_FALSE (header->deadline);
 }
 } // namespace
+
+TEST (EnvelopeDeadline, IntegerUtcMatchesCalendarBoundaries)
+{
+    using namespace std::chrono;
+    // Reference the original formatter over the full system_clock date range,
+    // including leap centuries and negative fractional epochs.
+#if defined(_WIN32)
+    constexpr int first_year = 1970; // gmtime_s rejects negative time_t values.
+#else
+    constexpr int first_year = 1680;
+#endif
+    for (int year = first_year; year <= 2260; ++year) {
+        for (unsigned month = 1; month <= 12; ++month) {
+            for (int day : {1, 28}) {
+                for (int offset : {-1, 0, 1, 86399, 86400}) {
+                    const auto value = sys_days (std::chrono::year (year) / month / day)
+                                       + seconds (offset) + milliseconds (123);
+                    const auto truncated = time_point_cast<seconds> (value);
+                    const auto time = system_clock::to_time_t (truncated);
+                    std::tm utc{};
+#if defined(_WIN32)
+                    gmtime_s (&utc, &time);
+#else
+                    gmtime_r (&time, &utc);
+#endif
+                    char expected[64];
+                    const auto size =
+                      std::strftime (expected, sizeof (expected), "%Y-%m-%dT%H:%M:%SZ", &utc);
+                    ASSERT_EQ (msg::format_utc_deadline (value), std::string (expected, size));
+                }
+            }
+        }
+    }
+}

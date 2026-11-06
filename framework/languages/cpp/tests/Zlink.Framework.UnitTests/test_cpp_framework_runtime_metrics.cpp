@@ -337,8 +337,10 @@ void capacity_transitions ()
     fault_store_t store;
     auto monitoring = test::runtime_failure_monitoring ();
     provider_location_repository_t local (store, monitoring);
+    local.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     // A second host writes the same Store, with its own repository cache.
     provider_location_repository_t remote (store);
+    remote.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto owner = std::get<owner_lease_claimed_t> (
                          local.claim_owner_lease ("metrics-owner", 30s).result ().value ())
                          .token;
