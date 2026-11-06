@@ -175,6 +175,7 @@ async function runScenario(lease, scenario, index) {
     const spots = app.get(nestjs.ZLINK_SPOT_MANAGER, { strict: false });
     const actors = app.get(nestjs.ZLINK_ACTOR_MANAGER, { strict: false });
     const host = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false });
+    assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
     const runtime = app.get(nestjs.ZLINK_ROUTE_MESH_RUNTIME, { strict: false });
     const runtimeOptions = app.get(nestjs.ZLINK_ROUTE_MESH_RUNTIME_OPTIONS, { strict: false });
     const spotIds = [];

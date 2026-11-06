@@ -1,6 +1,11 @@
 import { ZLinkDescriptorPublicationUnconfirmedError } from './descriptor-publication';
+import { ZLinkOwnerLeaseReleaseDelayPendingError } from './owner-lease-release-delay';
 import { isIndeterminateLocationStoreFailure } from './location-store-failure';
 import { listAllMeshNodeDescriptors } from './location-store-pages';
+import {
+  ZLinkInternalMeshNodeWriteIntent,
+  type ZLinkMeshNodeWriteIntent
+} from './domain-store-contract';
 import { MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
 import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
 import {
@@ -228,6 +233,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     try {
       return await withTimeout(action, this.options.ownerLeaseRenewTimeoutMs, signal);
     } catch (error) {
+      if (error instanceof ZLinkOwnerLeaseReleaseDelayPendingError) throw error;
       if (!isIndeterminateLocationStoreFailure(error, signal)) throw error;
       throw new ZLinkDescriptorPublicationUnconfirmedError(error);
     }
@@ -688,7 +694,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
 
   async writeMeshNode(
     descriptor: Omit<ZLinkMeshNodeDescriptor, 'ownerId' | 'leaseGeneration' | 'updatedAt'>,
-    intent: ZLinkLocationWriteIntent,
+    intent: ZLinkMeshNodeWriteIntent,
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteResult> {
     const owner = this.ownerToken;
@@ -712,20 +718,22 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       )
     );
     if (
-      intent === ZLinkLocationWriteIntent.Renew &&
+      (intent === ZLinkLocationWriteIntent.Renew ||
+        intent === ZLinkInternalMeshNodeWriteIntent.FixedRidRenew) &&
       (result.status === ZLinkLocationWriteStatus.RejectedConflict ||
         result.status === ZLinkLocationWriteStatus.IgnoredStale)
     ) {
-      // A Store restart can remove the descriptor while retaining the
-      // in-process owner token. Renew cannot recreate an absent row, so use
-      // NewClaim as a bounded fallback. If another owner has recreated the
-      // row, NewClaim remains rejected and the caller keeps the conflict.
+      // Recovery creates an absent row with a Missing CAS condition and
+      // reclaims this owner's row from an earlier lease generation. A found
+      // row of another owner is rejected.
       result = await this.guardWrite(() =>
         this.writeDescriptor(
           (writeSignal) =>
             this.stores.locationStore.updateMeshNode(
               stamped,
-              ZLinkLocationWriteIntent.NewClaim,
+              intent === ZLinkInternalMeshNodeWriteIntent.FixedRidRenew
+                ? ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+                : ZLinkInternalMeshNodeWriteIntent.RecoveryClaim,
               writeSignal
             ),
           signal
