@@ -1,5 +1,5 @@
 import type { RoutingId } from '../../contracts/Common';
-import { ZLinkFrameworkErrorKind, ZLinkFrameworkException, ZLinkSpotKind } from '../../contracts';
+import { ZLinkSpotKind } from '../../contracts';
 import { ZLINK_MAX_IDENTITY_TEXT_BYTES } from '../../contracts/Common/CoreTypes';
 import {
   isValidPublicWeight,
@@ -315,18 +315,16 @@ export class ZLinkInMemoryLocationStore
       currentLease !== undefined &&
       currentLease.token.leaseGeneration === current.leaseGeneration &&
       currentLease.leaseExpiresAt.getTime() > updatedAt.getTime();
-    if (intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim) {
+    if (
+      intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim &&
+      current.ownerId !== descriptor.ownerId
+    ) {
       const claimAllowed = this.ownerLeaseReleaseDelay.allows(
         releaseDelayScope,
         currentOwner,
         currentOwnerLive
       );
-      if (!currentOwnerLive && !claimAllowed) {
-        throw new ZLinkFrameworkException(
-          ZLinkFrameworkErrorKind.Unavailable,
-          'Fixed RID claim is waiting for the previous owner lease release delay.'
-        );
-      }
+      if (!currentOwnerLive && !claimAllowed) throw new ZLinkOwnerLeaseReleaseDelayPendingError();
     }
     if (
       canTakeOver(

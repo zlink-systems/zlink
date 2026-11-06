@@ -20,7 +20,7 @@ async function finishFixedRidHostStartup(
   clock,
   preparingState,
   releaseDelayMs = 3,
-  maxRecoveries = host.options.registration.spotNodes.size + 1
+  maxRecoveries = 2
 ) {
   const runtime = host.locationOwner.currentRuntime;
   for (let attempt = 0; host.status.state === preparingState && attempt < maxRecoveries; attempt += 1) {

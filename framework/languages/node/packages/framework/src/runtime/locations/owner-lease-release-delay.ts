@@ -71,14 +71,31 @@ export class ZLinkOwnerLeaseReleaseDelay {
     this.observations.delete(scope);
   }
 
+  observation(scope: string): ReleaseDelayObservation | undefined {
+    return this.observations.get(scope);
+  }
+
+  clearIfUnchanged(scope: string, observation: ReleaseDelayObservation | undefined): void {
+    if (this.observations.get(scope) === observation) this.observations.delete(scope);
+  }
+
   clearAuthority(authorityKey: string): void {
     this.clear(ownerLeaseReleaseDelayScope.authority(authorityKey));
   }
 
-  clearUserSpotMembers(spotId: string, objectGeneration: bigint): void {
-    this.clearExcept(
-      ownerLeaseReleaseDelayScope.userSpotMembers(spotId, objectGeneration),
-      new Set()
+  clearAuthorityIfOwner(authorityKey: string, owner: ZLinkLocationOwnerToken): void {
+    this.clearIfOwner(ownerLeaseReleaseDelayScope.authority(authorityKey), owner);
+  }
+
+  clearUserSpotMemberIfOwner(
+    spotId: string,
+    objectGeneration: bigint,
+    authorityKey: string,
+    owner: ZLinkLocationOwnerToken
+  ): void {
+    this.clearIfOwner(
+      ownerLeaseReleaseDelayScope.userSpotMember(spotId, objectGeneration, authorityKey),
+      owner
     );
   }
 
@@ -92,6 +109,16 @@ export class ZLinkOwnerLeaseReleaseDelay {
 
   private delayElapsed(observation: ReleaseDelayObservation, observedAtMs: number): boolean {
     return observedAtMs >= observation.t0 + this.delayMs;
+  }
+
+  private clearIfOwner(scope: string, owner: ZLinkLocationOwnerToken): void {
+    const observation = this.observations.get(scope);
+    if (
+      observation?.owner?.ownerId === owner.ownerId &&
+      observation.owner.leaseGeneration === owner.leaseGeneration
+    ) {
+      this.observations.delete(scope);
+    }
   }
 }
 

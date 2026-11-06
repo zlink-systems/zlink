@@ -1,4 +1,5 @@
 import { ZLinkDescriptorPublicationUnconfirmedError } from './descriptor-publication';
+import { ZLinkOwnerLeaseReleaseDelayPendingError } from './owner-lease-release-delay';
 import { isIndeterminateLocationStoreFailure } from './location-store-failure';
 import { listAllMeshNodeDescriptors } from './location-store-pages';
 import {
@@ -232,6 +233,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     try {
       return await withTimeout(action, this.options.ownerLeaseRenewTimeoutMs, signal);
     } catch (error) {
+      if (error instanceof ZLinkOwnerLeaseReleaseDelayPendingError) throw error;
       if (!isIndeterminateLocationStoreFailure(error, signal)) throw error;
       throw new ZLinkDescriptorPublicationUnconfirmedError(error);
     }
