@@ -1034,10 +1034,10 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     /// attempt is retried by the next one, and a claimed descriptor is not
     /// claimed again.
     /// </summary>
-    internal async ValueTask StartOwnerBoundAsync()
+    internal async ValueTask<bool> StartOwnerBoundAsync()
     {
         if (Volatile.Read(ref _localRequestSource) is not null)
-            return;
+            return true;
         var lifecycle = _locationLifecycle;
         ZLinkServiceWireCodec.RequestSourceFence? localRequestSource = null;
         if (lifecycle is not null)
@@ -1062,14 +1062,20 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                 var claim = await lifecycle
                     .WriteMeshNodeDescriptorAsync(
                         unclaimed.Descriptor,
-                        ZLinkLocationWriteIntent.NewClaim
+                        Registration.RoutingId.Size > 0
+                            ? ZLinkLocationWriteIntent.FixedRidNewClaim
+                            : ZLinkLocationWriteIntent.NewClaim
                     )
                     .ConfigureAwait(false);
                 if (claim.Status != ZLinkLocationWriteStatus.Stored)
-                    throw new ZLinkConfigurationException(
-                        $"MeshNode '{Registration.SpotNodeName}' could not "
-                            + $"claim its descriptor: {claim.Status}."
-                    );
+                {
+                    if (claim.Status == ZLinkLocationWriteStatus.RejectedConflict)
+                        throw new ZLinkConfigurationException(
+                            $"MeshNode '{Registration.SpotNodeName}' could not "
+                                + $"claim its descriptor: {claim.Status}."
+                        );
+                    return false;
+                }
                 UpdateStartupState(unclaimed with { StoreGeneration = claim.Generation });
             }
         }
@@ -1089,6 +1095,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         if (localRequestSource is { } installed)
             Volatile.Write(ref _localRequestSource, new(installed));
         Node.ActivateIngress();
+        return true;
     }
 
     public async ValueTask InitializeEntrySpotAsync()

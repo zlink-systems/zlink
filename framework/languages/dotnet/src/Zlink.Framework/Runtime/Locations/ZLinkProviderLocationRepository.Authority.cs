@@ -451,6 +451,14 @@ internal sealed partial class ZLinkProviderLocationRepository
                 .ConfigureAwait(false);
             if (result is not ZLinkStoreWriteResult.Applied applied)
                 continue;
+            if (meta is null)
+                _ownerLeaseReleaseWait.ForgetIfTokenMatches(
+                    key.Value,
+                    new ZLinkLocationOwnerToken(
+                        current.Snapshot.OwnerId,
+                        current.Snapshot.OwnerLeaseGeneration
+                    )
+                );
             return meta is null
                 ? new ZLinkAuthorityCompareExchangeResult.Deleted(
                     applied.PutVersions.Values.Single().Value,
@@ -748,10 +756,17 @@ internal sealed partial class ZLinkProviderLocationRepository
                 .ReadAsync(OwnerKey(current.Snapshot.OwnerId), cancellationToken)
                 .ConfigureAwait(false),
         };
+        var currentOwner = new ZLinkLocationOwnerToken(
+            current.Snapshot.OwnerId,
+            current.Snapshot.OwnerLeaseGeneration
+        );
+        var ownerLive = IsOwnerLeaseLive(owners[current.Snapshot.OwnerId], currentOwner);
+        if (ownerLive)
+            _ownerLeaseReleaseWait.ForgetIfTokenMatches(current.Key.Value, currentOwner);
+        var releaseWaitElapsed = true;
         var descriptorRead = await _provider
             .ReadAsync(descriptorKey, cancellationToken)
             .ConfigureAwait(false);
-        var ownerLive = IsOwnerLeaseLive(owners[current.Snapshot.OwnerId], current.Snapshot);
         if (
             requiredOwner is { } owner
             && (
@@ -778,6 +793,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 );
         }
         IReadOnlyList<StoredAuthority> members = [];
+        string? endedUserSpotId = null;
         if (active)
         {
             if (current.Snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.UserSpot)
@@ -793,12 +809,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                         ZLinkFrameworkErrorKind.Unavailable,
                         "User Spot is not steady Ready."
                     );
-                members = await ReadEndedUserSpotMembersAsync(
-                        spot.SpotId,
-                        current.Snapshot.ObjectGeneration,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
+                endedUserSpotId = spot.SpotId;
             }
             else if (
                 current.Snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot
@@ -815,7 +826,25 @@ internal sealed partial class ZLinkProviderLocationRepository
                     ZLinkFrameworkErrorKind.Unavailable,
                     "Instance Spot is not steady Ready."
                 );
+            else if (
+                current.Snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.Actor
+                && !ZLinkActorAuthorityPayloadCodec.IsSteadyReady(current.Snapshot.Payload.Span)
+            )
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    "Actor is not steady Ready.",
+                    ZLinkRetryAdvice.RetryAfterStateChange
+                );
         }
+        if (active && !ownerLive)
+            _ownerLeaseReleaseWait.Observe(current.Key.Value, currentOwner);
+        if (endedUserSpotId is not null)
+            members = await ReadEndedUserSpotMembersAsync(
+                    endedUserSpotId,
+                    current.Snapshot.ObjectGeneration,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
         ZLinkStoreCondition descriptorCondition;
         if (descriptorRead is ZLinkStoreReadResult.Found descriptorFound)
         {
@@ -859,12 +888,20 @@ internal sealed partial class ZLinkProviderLocationRepository
                     .ConfigureAwait(false);
                 owners.Add(member.Snapshot.OwnerId, memberOwner);
             }
-            if (IsOwnerLeaseLive(memberOwner, member.Snapshot))
+            var memberOwnerToken = new ZLinkLocationOwnerToken(
+                member.Snapshot.OwnerId,
+                member.Snapshot.OwnerLeaseGeneration
+            );
+            if (IsOwnerLeaseLive(memberOwner, memberOwnerToken))
+            {
+                _ownerLeaseReleaseWait.ForgetIfTokenMatches(member.Key.Value, memberOwnerToken);
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Unavailable,
                     "User Spot still has a member with a live owner lease.",
                     ZLinkRetryAdvice.RetryAfterStateChange
                 );
+            }
+            _ownerLeaseReleaseWait.Observe(member.Key.Value, memberOwnerToken);
             conditions.Add(
                 new ZLinkStoreCondition.Version(AuthorityMetaKey(member.Key), member.Version)
             );
@@ -875,6 +912,29 @@ internal sealed partial class ZLinkProviderLocationRepository
                 read is ZLinkStoreReadResult.Found found
                     ? new ZLinkStoreCondition.Version(OwnerKey(ownerId), found.Value.Version)
                     : new ZLinkStoreCondition.Missing(OwnerKey(ownerId))
+            );
+        if (active && !ownerLive)
+        {
+            releaseWaitElapsed = _ownerLeaseReleaseWait.HasElapsed(
+                current.Key.Value,
+                currentOwner,
+                _ownerLeaseFencingMargin
+            );
+        }
+        foreach (var member in members)
+            releaseWaitElapsed &= _ownerLeaseReleaseWait.HasElapsed(
+                member.Key.Value,
+                new ZLinkLocationOwnerToken(
+                    member.Snapshot.OwnerId,
+                    member.Snapshot.OwnerLeaseGeneration
+                ),
+                _ownerLeaseFencingMargin
+            );
+        if (!releaseWaitElapsed)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                "The Location owner lease release wait has not elapsed.",
+                ZLinkRetryAdvice.RetryAfterStateChange
             );
         var capacities = new Dictionary<ZLinkStoreKey, StoredCapacity>();
         foreach (
@@ -927,22 +987,28 @@ internal sealed partial class ZLinkProviderLocationRepository
         var result = await _provider
             .WriteAsync(new ZLinkStoreWriteRequest(conditions, mutations), cancellationToken)
             .ConfigureAwait(false);
-        return result is ZLinkStoreWriteResult.Applied
-            ? StaleAuthorityReclaimResult.Reclaimed
-            : StaleAuthorityReclaimResult.Conflict;
+        if (result is not ZLinkStoreWriteResult.Applied)
+            return StaleAuthorityReclaimResult.Conflict;
+        _ownerLeaseReleaseWait.ForgetIfTokenMatches(current.Key.Value, currentOwner);
+        foreach (var member in members)
+            _ownerLeaseReleaseWait.ForgetIfTokenMatches(
+                member.Key.Value,
+                new ZLinkLocationOwnerToken(
+                    member.Snapshot.OwnerId,
+                    member.Snapshot.OwnerLeaseGeneration
+                )
+            );
+        return StaleAuthorityReclaimResult.Reclaimed;
     }
 
-    private static bool IsOwnerLeaseLive(
-        ZLinkStoreReadResult read,
-        ZLinkAuthoritySnapshot authority
-    )
+    private static bool IsOwnerLeaseLive(ZLinkStoreReadResult read, ZLinkLocationOwnerToken token)
     {
         if (read is not ZLinkStoreReadResult.Found found)
             return false;
         var owner = DecodeOwner(found.Value.Bytes);
-        if (owner.OwnerId != authority.OwnerId || found.Value.ExpiresAt is null)
+        if (owner.OwnerId != token.OwnerId || found.Value.ExpiresAt is null)
             throw new InvalidDataException("The Location Store owner lease record is invalid.");
-        return owner.LeaseGeneration == authority.OwnerLeaseGeneration
+        return owner.LeaseGeneration == token.LeaseGeneration
             && found.Value.ExpiresAt > found.Value.StoreNow;
     }
 
@@ -1289,6 +1355,13 @@ internal sealed partial class ZLinkProviderLocationRepository
                 .ConfigureAwait(false);
             if (result is ZLinkStoreWriteResult.Conflict)
                 continue;
+            _ownerLeaseReleaseWait.ForgetIfTokenMatches(
+                reservation.Key.Value,
+                new ZLinkLocationOwnerToken(
+                    current!.Snapshot.OwnerId,
+                    current.Snapshot.OwnerLeaseGeneration
+                )
+            );
             return new ZLinkObjectAbortResult.Aborted();
         }
     }
@@ -4432,6 +4505,7 @@ internal sealed partial class ZLinkProviderLocationRepository
     {
         const int MaximumProjectionReadAttempts = 8;
         var metaKey = AuthorityMetaKey(key);
+        var releaseWaitObservation = _ownerLeaseReleaseWait.Capture(key.Value);
         // The authority record is one opaque row (checklist C-2b): a single
         // read is already byte-atomic, so the old read-verify-retry loop
         // that reconciled a separately read payload key against this meta
@@ -4445,9 +4519,16 @@ internal sealed partial class ZLinkProviderLocationRepository
                 : new ZLinkStoreReadResult.Found(knownMeta);
             knownMeta = null;
             if (first is ZLinkStoreReadResult.Missing)
+            {
+                _ownerLeaseReleaseWait.ForgetIfUnchanged(key.Value, releaseWaitObservation);
                 return null;
+            }
             var found = ((ZLinkStoreReadResult.Found)first).Value;
             var meta = DecodeAuthorityMeta(found.Bytes);
+            _ownerLeaseReleaseWait.ForgetIfTokenChanged(
+                key.Value,
+                new ZLinkLocationOwnerToken(meta.OwnerId, meta.OwnerLeaseGeneration)
+            );
             ReadOnlyMemory<byte> payloadBytes = meta.Payload;
             if (projectCommittedAggregate && meta.AggregateFence is { } aggregateFence)
             {

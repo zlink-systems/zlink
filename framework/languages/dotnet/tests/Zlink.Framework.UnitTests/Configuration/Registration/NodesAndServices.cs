@@ -6,6 +6,7 @@ using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Handlers;
+using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Streams;
 
@@ -24,6 +25,7 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
             {
                 options.DisableImplicitHandlerAutoRegistration();
                 options.AddLocationStore(store);
+                options.ConfigureLocations().OwnerLeaseFencingMargin = TimeSpan.FromTicks(1);
                 options
                     .AddRouteMesh("startup-conflict")
                     .Listen("tcp://127.0.0.1:*")
@@ -37,6 +39,19 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
         await owner.StartAsync();
         try
         {
+            Assert.True(
+                await owner
+                    .Services.GetRequiredService<ZLinkLocationRuntime>()
+                    .RenewOwnerLeaseOnceAsync()
+            );
+            using var startupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await foreach (
+                var observed in owner
+                    .Services.GetRequiredService<ZLinkFrameworkMaintenanceRuntime>()
+                    .ObserveAsync(startupTimeout.Token)
+            )
+                if (observed.Status.State == ZLinkFrameworkRuntimeState.Serving)
+                    break;
             var failure = await Assert.ThrowsAsync<ZLinkConfigurationException>(() =>
                 conflict.StartAsync()
             );
@@ -1269,7 +1284,7 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
         var options = new ZLinkLocationOptions();
 
         Assert.Equal(TimeSpan.FromSeconds(5), options.OwnerLeaseRenewInterval);
-        Assert.Equal(TimeSpan.FromSeconds(15), options.OwnerLeaseTtl);
+        Assert.Equal(TimeSpan.FromSeconds(30), options.OwnerLeaseTtl);
         Assert.Equal(TimeSpan.FromSeconds(5), options.OwnerLeaseFencingMargin);
         Assert.Equal(TimeSpan.FromSeconds(3), options.OwnerLeaseRenewTimeout);
         Assert.Equal(TimeSpan.FromSeconds(15), options.RouteCacheMaxAge);
@@ -1298,6 +1313,7 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
             new ServiceCollection().AddZLinkFramework(options =>
             {
                 var locations = options.ConfigureLocations();
+                locations.OwnerLeaseTtl = TimeSpan.FromSeconds(15);
                 locations.OwnerLeaseRenewInterval = TimeSpan.FromSeconds(1);
                 locations.OwnerLeaseRenewTimeout = TimeSpan.FromSeconds(8);
             })

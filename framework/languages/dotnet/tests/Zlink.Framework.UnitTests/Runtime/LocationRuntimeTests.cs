@@ -25,6 +25,12 @@ public sealed class LocationRuntimeTests
             : new ZLinkInMemoryLocationStore(time);
         var flaky = new OutageLeaseStore(store);
         var options = new ZLinkLocationOptions { StoreOutageRetention = retention };
+        var admissionLifetime = options.OwnerLeaseTtl - options.OwnerLeaseFencingMargin;
+        var outageLifetime = retention
+            ? options.OwnerLeaseTtl
+                + options.OwnerLeaseFencingMargin
+                + options.OwnerLeaseFencingMargin
+            : admissionLifetime;
         await using var runtime = new ZLinkLocationRuntime(options, flaky, time);
         Assert.True(await runtime.RenewOwnerLeaseOnceAsync());
         Assert.Throws<InvalidOperationException>(() => options.StoreOutageRetention = !retention);
@@ -36,7 +42,7 @@ public sealed class LocationRuntimeTests
         );
         Assert.Equal(TimeSpan.FromSeconds(1).Ticks, episode.ObservedAt);
         Assert.Equal(0, episode.LeaseOperationStartedAt);
-        Assert.Equal(TimeSpan.FromSeconds(retention ? 25 : 10), episode.Lifetime);
+        Assert.Equal(outageLifetime, episode.Lifetime);
         // Admission keeps its existing deadline, including when retention is enabled.
         time.AdvanceMonotonic(episode.Lifetime - TimeSpan.FromSeconds(1) - TimeSpan.FromTicks(1));
         Assert.False(runtime.GetHealthSnapshot().StoreOutage!.Discarded);
@@ -60,16 +66,15 @@ public sealed class LocationRuntimeTests
             ? new ZLinkProviderLocationRepository(new ZLinkInMemoryProviderLocationStore(time))
             : new ZLinkInMemoryLocationStore(time);
         var flaky = new OutageLeaseStore(store);
-        await using var runtime = new ZLinkLocationRuntime(
-            new ZLinkLocationOptions { StoreOutageRetention = true },
-            flaky,
-            time
-        );
+        var options = new ZLinkLocationOptions { StoreOutageRetention = true };
+        await using var runtime = new ZLinkLocationRuntime(options, flaky, time);
         Assert.True(await runtime.RenewOwnerLeaseOnceAsync());
         time.AdvanceMonotonic(TimeSpan.FromSeconds(1));
         flaky.Fail = true;
         Assert.False(await runtime.RenewOwnerLeaseOnceAsync());
-        time.AdvanceMonotonic(TimeSpan.FromSeconds(23));
+        time.AdvanceMonotonic(
+            options.OwnerLeaseTtl - options.OwnerLeaseFencingMargin - TimeSpan.FromSeconds(2)
+        );
         flaky.Fail = false;
         Assert.True(await runtime.RenewOwnerLeaseOnceAsync());
         Assert.Null(runtime.GetHealthSnapshot().StoreOutage);
@@ -102,11 +107,8 @@ public sealed class LocationRuntimeTests
             ? new ZLinkProviderLocationRepository(new ZLinkInMemoryProviderLocationStore(time))
             : new ZLinkInMemoryLocationStore(time);
         var flaky = new OutageLeaseStore(store) { HoldClaim = true };
-        await using var runtime = new ZLinkLocationRuntime(
-            new ZLinkLocationOptions { StoreOutageRetention = true },
-            flaky,
-            time
-        );
+        var options = new ZLinkLocationOptions { StoreOutageRetention = true };
+        await using var runtime = new ZLinkLocationRuntime(options, flaky, time);
         var lateClaim = runtime.RenewOwnerLeaseOnceAsync().AsTask();
         await flaky.ClaimStarted.Task;
         flaky.HoldClaim = false;
@@ -123,10 +125,22 @@ public sealed class LocationRuntimeTests
         await Assert.ThrowsAsync<ZLinkOwnerLeaseClaimRejectedException>(() => confirmation);
         var episode = runtime.GetHealthSnapshot().StoreOutage;
         Assert.NotNull(episode);
+        var retentionLifetime =
+            options.OwnerLeaseTtl
+            + options.OwnerLeaseFencingMargin
+            + options.OwnerLeaseFencingMargin;
+        Assert.Equal(0, episode.LeaseOperationStartedAt);
+        Assert.Equal(retentionLifetime, episode.Lifetime);
         flaky.ReleaseClaim.TrySetResult();
         Assert.True(await lateClaim);
         Assert.Equal(episode, runtime.GetHealthSnapshot().StoreOutage);
-        time.AdvanceMonotonic(TimeSpan.FromSeconds(24));
+        time.AdvanceMonotonic(
+            retentionLifetime
+                - time.GetElapsedTime(episode.LeaseOperationStartedAt)
+                - TimeSpan.FromTicks(1)
+        );
+        Assert.False(runtime.GetHealthSnapshot().StoreOutage!.Discarded);
+        time.AdvanceMonotonic(TimeSpan.FromTicks(1));
         Assert.True(runtime.GetHealthSnapshot().StoreOutage!.Discarded);
     }
 
@@ -140,9 +154,11 @@ public sealed class LocationRuntimeTests
             ? new ZLinkProviderLocationRepository(new ZLinkInMemoryProviderLocationStore(time))
             : new ZLinkInMemoryLocationStore(time);
         var flaky = new OutageLeaseStore(store);
-        await using var runtime = new ZLinkLocationRuntime(new ZLinkLocationOptions(), flaky, time);
+        var options = new ZLinkLocationOptions();
+        var admissionLifetime = options.OwnerLeaseTtl - options.OwnerLeaseFencingMargin;
+        await using var runtime = new ZLinkLocationRuntime(options, flaky, time);
         Assert.True(await runtime.RenewOwnerLeaseOnceAsync());
-        time.AdvanceMonotonic(TimeSpan.FromSeconds(9));
+        time.AdvanceMonotonic(admissionLifetime - TimeSpan.FromSeconds(1));
         flaky.HoldRenew = true;
         var lateRenew = runtime.RenewOwnerLeaseOnceAsync().AsTask();
         await flaky.RenewStarted.Task;
@@ -225,11 +241,8 @@ public sealed class LocationRuntimeTests
             ? new ZLinkProviderLocationRepository(new ZLinkInMemoryProviderLocationStore(time))
             : new ZLinkInMemoryLocationStore(time);
         var flaky = new OutageLeaseStore(store) { HoldClaim = true };
-        await using var runtime = new ZLinkLocationRuntime(
-            new ZLinkLocationOptions { StoreOutageRetention = retention },
-            flaky,
-            time
-        );
+        var options = new ZLinkLocationOptions { StoreOutageRetention = retention };
+        await using var runtime = new ZLinkLocationRuntime(options, flaky, time);
         var initialClaim = runtime.RenewOwnerLeaseOnceAsync().AsTask();
         await flaky.ClaimStarted.Task;
         time.AdvanceMonotonic(TimeSpan.FromSeconds(2));
@@ -244,7 +257,11 @@ public sealed class LocationRuntimeTests
         Assert.NotNull(episode);
         Assert.Equal(0, episode.LeaseOperationStartedAt);
         Assert.Equal(TimeSpan.FromSeconds(5).Ticks, episode.ObservedAt);
-        var cutoff = TimeSpan.FromSeconds(retention ? 25 : 10);
+        var cutoff = retention
+            ? options.OwnerLeaseTtl
+                + options.OwnerLeaseFencingMargin
+                + options.OwnerLeaseFencingMargin
+            : options.OwnerLeaseTtl - options.OwnerLeaseFencingMargin;
         Assert.Equal(cutoff, episode.Lifetime);
         time.AdvanceMonotonic(cutoff - TimeSpan.FromSeconds(5) - TimeSpan.FromTicks(1));
         Assert.False(runtime.GetHealthSnapshot().StoreOutage!.Discarded);
@@ -284,11 +301,13 @@ public sealed class LocationRuntimeTests
             ? new ZLinkProviderLocationRepository(new ZLinkInMemoryProviderLocationStore(time))
             : new ZLinkInMemoryLocationStore(time);
         var flaky = new OutageLeaseStore(store);
-        await using var runtime = new ZLinkLocationRuntime(new ZLinkLocationOptions(), flaky, time);
+        var options = new ZLinkLocationOptions();
+        var admissionLifetime = options.OwnerLeaseTtl - options.OwnerLeaseFencingMargin;
+        await using var runtime = new ZLinkLocationRuntime(options, flaky, time);
         Assert.True(await runtime.RenewOwnerLeaseOnceAsync());
         flaky.Fail = true;
         Assert.False(await runtime.RenewOwnerLeaseOnceAsync());
-        time.Clock.AdvanceMonotonic(TimeSpan.FromSeconds(10));
+        time.Clock.AdvanceMonotonic(admissionLifetime);
         Assert.True(runtime.GetHealthSnapshot().StoreOutage!.Discarded);
     }
 

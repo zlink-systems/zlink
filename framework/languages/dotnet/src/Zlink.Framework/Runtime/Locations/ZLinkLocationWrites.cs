@@ -5,6 +5,7 @@ internal enum ZLinkLocationWriteIntent
     NewClaim = 1,
     Renew = 2,
     Takeover = 3,
+    FixedRidNewClaim = 4,
 }
 
 /// <summary>
@@ -16,6 +17,7 @@ internal enum ZLinkLocationWriteStatus
     Stored = 1,
     IgnoredStale = 2,
     RejectedConflict = 3,
+    ReleaseWaitPending = 4,
 }
 
 /// <summary>
@@ -34,6 +36,9 @@ internal sealed record ZLinkLocationWriteResult(
 
     public static ZLinkLocationWriteResult RejectedConflict { get; } =
         new(ZLinkLocationWriteStatus.RejectedConflict, 0, default);
+
+    public static ZLinkLocationWriteResult ReleaseWaitPending { get; } =
+        new(ZLinkLocationWriteStatus.ReleaseWaitPending, 0, default);
 
     public static ZLinkLocationWriteResult Stored(ulong generation, DateTimeOffset updatedAt) =>
         new(ZLinkLocationWriteStatus.Stored, generation, updatedAt);
