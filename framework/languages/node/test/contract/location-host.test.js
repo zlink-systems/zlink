@@ -882,6 +882,14 @@ test('a Serving Fixed RID host republishes its descriptor after its own lease ge
     assert.ok(oldOwner);
     assert.equal(before.ownerId, oldOwner.ownerId);
     assert.equal(before.leaseGeneration, oldOwner.leaseGeneration);
+    assert.equal(
+      await runtime.locationOwner.locationStore().removeMeshNode(
+        { meshName: 'play', rid: rid('fixed-recovery-node') },
+        oldOwner
+      ),
+      framework.ZLinkLocationWriteStatus.Stored
+    );
+    assert.equal((await runtime.locationOwner.locationStore().listMeshNodes('play')).items.length, 0);
 
     storeNow += 60_001;
     clock.advance(60_001);
@@ -902,6 +910,117 @@ test('a Serving Fixed RID host republishes its descriptor after its own lease ge
     await runtime.stop();
   }
 });
+
+for (const storage of ['provider', 'in-memory']) {
+  test(`a Fixed RID publication conflict moves the losing host to Error (${storage})`, async t => {
+    let storeNow = Date.UTC(2026, 6, 3, 0, 0, 0);
+    const clock = fixedRidHostClock(t);
+    const provider =
+      storage === 'provider'
+        ? new framework.ZLinkInMemoryProviderLocationStore(() => new Date(storeNow))
+        : undefined;
+    const sharedStore =
+      storage === 'provider'
+        ? new framework.ZLinkLocationStoreRepository(
+            provider,
+            () => new Date(storeNow),
+            undefined,
+            () => performance.now(),
+            5
+          )
+        : new framework.ZLinkInMemoryLocationStore(
+            () => new Date(storeNow),
+            () => performance.now(),
+            5
+          );
+    await seedFixedRidDescriptor(
+      sharedStore,
+      'play',
+      'fixed-race-node',
+      'expired-fixed-owner',
+      storeNow
+    );
+    storeNow += 101;
+
+    const locations = {
+      ...(storage === 'provider' ? { storeInstance: provider } : { useInMemoryStores: true }),
+      options: {
+        ownerLeaseRenewIntervalMs: 20_000,
+        ownerLeaseTtlMs: 60_000,
+        ownerLeaseFencingMarginMs: 5,
+        ownerLeaseRenewTimeoutMs: 3_000,
+        pollingIntervalMs: 60_000
+      }
+    };
+    const makeHost = () => {
+      const host = new framework.ZLinkFrameworkRuntimeHost({
+        registration: framework.createFrameworkRegistration({
+          locations,
+          spotNodes: {
+            play: { router: { bind: 'tcp://local-play', routingId: 'fixed-race-node' } }
+          }
+        })
+      }, { backendAdapterFactory: fakeBackendAdapterFactory([], rid('fixed-race-node')) });
+      if (storage === 'in-memory') {
+        host.locationOwner.stores = {
+          locationStore: sharedStore,
+          authorityStore: sharedStore,
+          clientServerStore: sharedStore,
+          fanoutStore: sharedStore,
+          peerStore: sharedStore,
+          spotStore: sharedStore,
+          actorStore: sharedStore,
+          routeStore: sharedStore,
+          ownerLeaseStore: sharedStore
+        };
+      }
+      return host;
+    };
+    const first = makeHost();
+    const second = makeHost();
+    let notifyCleanup;
+    const cleanupCompleted = new Promise(resolve => { notifyCleanup = resolve; });
+    const stop = second.stop.bind(second);
+    second.stop = async (...args) => {
+      try {
+        return await stop(...args);
+      } finally {
+        notifyCleanup();
+      }
+    };
+    try {
+      await first.start();
+      await second.start();
+      assert.equal(first.status.state, framework.ZLinkFrameworkRuntimeState.Preparing);
+      assert.equal(second.status.state, framework.ZLinkFrameworkRuntimeState.Preparing);
+
+      const firstRecovery = waitForNextHostOwnerRecovery(first);
+      clock.advance(15);
+      assert.equal(await first.locationOwner.currentRuntime.renewOwnerLeaseOnce(), true);
+      await firstRecovery;
+      assert.equal(first.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
+
+      const secondRecovery = waitForNextHostOwnerRecovery(second);
+      assert.equal(await second.locationOwner.currentRuntime.renewOwnerLeaseOnce(), true);
+      await secondRecovery;
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(second.status.state, framework.ZLinkFrameworkRuntimeState.Error);
+      await cleanupCompleted;
+      assert.equal(second.executionState, undefined);
+      assert.equal(first.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
+
+      const [descriptor] = (await first.locationOwner.locationStore().listMeshNodes('play')).items;
+      assert.ok(descriptor);
+      assert.equal(
+        descriptor.ownerId,
+        first.locationOwner.currentRuntime.currentOwnerToken.ownerId
+      );
+    } finally {
+      await second.stop();
+      await first.stop();
+    }
+  });
+}
 
 test('Fixed RID startup observes every mesh before the shared release-delay boundary', async t => {
   let storeNow = Date.UTC(2026, 6, 3, 0, 0, 0);

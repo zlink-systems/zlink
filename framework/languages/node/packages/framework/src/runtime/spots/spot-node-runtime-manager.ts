@@ -43,6 +43,7 @@ import { awaitWithAbort, createAbortError } from '../abort';
 import type { ZLinkActivationConcurrency } from '../activation-admission';
 import type { ZLinkRemoteBoundSessionTarget } from '../actors';
 import type { ZLinkActorHandoffPacket } from '../actors/actor-handoff';
+import { ZLinkConfigurationException } from '../../contracts/Configuration/ConfigurationException';
 import type {
   ZLinkBackendAdapterFactory,
   ZLinkBackendContext,
@@ -61,11 +62,7 @@ import {
   encodeChannelPublishEnvelopeParts,
   encodeChannelReplyParts
 } from '../channels/channel-envelope';
-import {
-  ZLinkConfigurationException,
-  type ZLinkFrameworkRegistration,
-  type ZLinkSpotNodeOptions
-} from '../configuration';
+import { type ZLinkFrameworkRegistration, type ZLinkSpotNodeOptions } from '../configuration';
 import type { ZLinkRuntimeEventPublisher } from '../diagnostics';
 import { runWithOutboundFlow } from '../diagnostics/flow-context';
 import type { ZLinkListenerRecords } from '../foundation/listener-records';
@@ -113,6 +110,14 @@ import type {
   ZLinkSpotActorTransferRuntime,
   ZLinkSpotBoundSessionRuntime
 } from './spot-runtime-ports';
+
+export class ZLinkMeshNodeDescriptorConflictException extends ZLinkConfigurationException {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ZLinkMeshNodeDescriptorConflictException';
+  }
+}
+
 const DEFAULT_SPOT_NODE_SHUTDOWN_TIMEOUT_MS = 1000;
 
 const ZLINK_SEND_DONT_WAIT = 1;
@@ -579,16 +584,17 @@ export class ZLinkSpotNodeRuntimeManager {
       // already have applied, so the next publication must not reuse it.
       this.descriptorRevisionByMesh.set(meshName, descriptor.descriptorRevision);
       const configuredRoutingId = configuredRoutingIdFor(registration);
+      // Fixed RID release delay applies until this lifecycle confirms its first publication.
       const result = await location.runtime
         .writeMeshNode(
           descriptor,
-          previousRevision === 0n
-            ? configuredRoutingId === undefined
+          configuredRoutingId !== undefined && this.publishedOwnerToken === undefined
+            ? previousRevision === 0n
+              ? ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+              : ZLinkInternalMeshNodeWriteIntent.FixedRidRenew
+            : previousRevision === 0n
               ? ZLinkLocationWriteIntent.NewClaim
-              : ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
-            : configuredRoutingId === undefined
-              ? ZLinkLocationWriteIntent.Renew
-              : ZLinkInternalMeshNodeWriteIntent.FixedRidRenew,
+              : ZLinkLocationWriteIntent.Renew,
           signal
         )
         .catch((error: unknown) => {
@@ -598,9 +604,11 @@ export class ZLinkSpotNodeRuntimeManager {
         });
       if (result === undefined) continue;
       if (result.status !== ZLinkLocationWriteStatus.Stored) {
-        throw new ZLinkConfigurationException(
-          `MeshNode '${meshName}' descriptor publication failed: ${result.status}.`
-        );
+        const message = `MeshNode '${meshName}' descriptor publication failed: ${result.status}.`;
+        if (result.status === ZLinkLocationWriteStatus.RejectedConflict) {
+          throw new ZLinkMeshNodeDescriptorConflictException(message);
+        }
+        throw new ZLinkConfigurationException(message);
       }
       this.publishedMeshNodeDescriptors.set(meshName, {
         ...descriptor,

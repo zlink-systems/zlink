@@ -7,6 +7,7 @@ import { currentApplicationJobOrigin } from '../application-jobs/application-job
 import { listAllMeshNodeDescriptors } from '../locations/location-store-pages';
 import { ZLinkDescriptorPublicationUnconfirmedError } from '../locations/descriptor-publication';
 import { ZLinkOwnerLeaseReleaseDelayPendingError } from '../locations/owner-lease-release-delay';
+import { ZLinkMeshNodeDescriptorConflictException } from '../spots/spot-node-runtime-manager';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -1735,7 +1736,10 @@ export class ZLinkFrameworkRuntimeHost
     this.cachedLocationSpotRouteResolver = undefined;
     this.listenerRecords.clear();
     this.lifecycleSink?.push('framework:stopped');
-    if (this.shutdownOperation === undefined) {
+    if (
+      this.shutdownOperation === undefined &&
+      this.runtimeState !== ZLinkFrameworkRuntimeState.Error
+    ) {
       this.setRuntimeState(ZLinkFrameworkRuntimeState.Stopped);
     }
   }
@@ -1757,6 +1761,15 @@ export class ZLinkFrameworkRuntimeHost
         .catch((error) => {
           runtime.closeOwnerLeaseAdmission(error);
           this.runtimeOrPreStartErrorSink.reportRuntimeTaskException('owner lease recovery', error);
+          if (error instanceof ZLinkMeshNodeDescriptorConflictException) {
+            this.setRuntimeState(ZLinkFrameworkRuntimeState.Error);
+            return this.stop().catch((cleanupError) => {
+              this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
+                'owner lease recovery cleanup',
+                cleanupError
+              );
+            });
+          }
         })
         .finally(() => {
           recoveryOperation = undefined;
