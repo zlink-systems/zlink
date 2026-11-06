@@ -21,6 +21,8 @@ int main ()
     auto conflict = app_t::create ();
     for (auto *app : {&owner, &conflict}) {
         auto &options = app->add_zlink_framework ();
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (store);
         options.add_route_mesh ("startup-conflict")
           .listen ("tcp://127.0.0.1:0")

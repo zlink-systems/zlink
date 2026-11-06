@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include <zlink/json.hpp>
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/host_readiness.hpp"
 #include "../support/location_reclaim_clock.hpp"
 
 #include "runtime/locations/in_memory_location_store.hpp"
@@ -128,6 +129,7 @@ void seed_mesh_node (in_memory_location_repository_t &store,
                      zlink::framework::framework_runtime_state_t state =
                        zlink::framework::framework_runtime_state_t::serving)
 {
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto claim =
       store.claim_owner_lease (owner_id, std::chrono::seconds (30)).result ().value ();
     const auto *claimed = std::get_if<zlink::framework::owner_lease_claimed_t> (&claim);
@@ -158,6 +160,11 @@ void seed_mesh_node (in_memory_location_repository_t &store,
 class test_location_repository_t : public zlink::framework::location_repository_t
 {
   public:
+    test_location_repository_t ()
+    {
+        _inner.configure_reclaim_margin (std::chrono::milliseconds::zero ());
+    }
+
     bool fail_authority_queries = false;
 
     void set_authority (std::string key, zlink::framework::authority_snapshot_t snapshot)
@@ -1212,6 +1219,15 @@ class descriptor_owner_lease_client_t final : public zlink::framework::hosted_se
 
     zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
     {
+        _worker = std::jthread ([this, services] () mutable {
+            zlink::framework::test::wait_for_serving (services);
+            execute (services).result ().value ();
+        });
+        co_return;
+    }
+
+    zlink::framework::task_t<void> execute (zlink::framework::service_provider_t &services)
+    {
         auto user_flow = observe_request_flow (_user_spot_id, 0);
         try {
             auto user = services.get_required<zlink::framework::spot_manager_t> ()
@@ -1299,6 +1315,9 @@ class descriptor_owner_lease_client_t final : public zlink::framework::hosted_se
     std::string _user_spot_id;
     std::string _instance_spot_id;
     std::shared_ptr<zlink::framework::tests::owner_lease_time_store_t> _observed_store;
+
+  private:
+    std::jthread _worker;
 };
 
 struct descriptor_owner_lease_result_t
@@ -1338,6 +1357,7 @@ descriptor_owner_lease_result_t run_descriptor_owner_lease_selection (
     std::shared_ptr<owner_lease_time_store_t> observed_store;
     if (lease_view) {
         provider_location_repository_t seeder (*inner);
+        seeder.configure_reclaim_margin (std::chrono::milliseconds::zero ());
         const auto claimed =
           seeder.claim_owner_lease ("stale-target-owner", std::chrono::seconds (30))
             .result ()
@@ -1388,6 +1408,8 @@ descriptor_owner_lease_result_t run_descriptor_owner_lease_selection (
       std::make_shared<zlink::framework::runtime::in_memory_relocation_store_t> ();
     descriptor_owner_lease_client_t *client = nullptr;
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (public_store);
         options.add_relocation_store (relocation_store);
         options.add_route_mesh ("lease-target-mesh")
@@ -1493,6 +1515,15 @@ class user_spot_manager_client_t final : public zlink::framework::hosted_service
 
     zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
     {
+        _worker = std::jthread ([this, services] () mutable {
+            zlink::framework::test::wait_for_serving (services);
+            execute (services).result ().value ();
+        });
+        co_return;
+    }
+
+    zlink::framework::task_t<void> execute (zlink::framework::service_provider_t &services)
+    {
         try {
             auto &manager = services.get_required<zlink::framework::spot_manager_t> ();
             const auto rid = zlink::framework::spot_id_t ("local-user-spot");
@@ -1534,6 +1565,9 @@ class user_spot_manager_client_t final : public zlink::framework::hosted_service
 
   private:
     zlink::framework::app_t *_app;
+
+  private:
+    std::jthread _worker;
 };
 
 class successive_user_spot_delivery_client_t final : public zlink::framework::hosted_service_t
@@ -1542,6 +1576,15 @@ class successive_user_spot_delivery_client_t final : public zlink::framework::ho
     explicit successive_user_spot_delivery_client_t (zlink::framework::app_t &app) : _app (&app) {}
 
     zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
+    {
+        _worker = std::jthread ([this, services] () mutable {
+            zlink::framework::test::wait_for_serving (services);
+            execute (services).result ().value ();
+        });
+        co_return;
+    }
+
+    zlink::framework::task_t<void> execute (zlink::framework::service_provider_t &services)
     {
         try {
             auto &manager = services.get_required<zlink::framework::spot_manager_t> ();
@@ -1596,6 +1639,9 @@ class successive_user_spot_delivery_client_t final : public zlink::framework::ho
 
   private:
     zlink::framework::app_t *_app;
+
+  private:
+    std::jthread _worker;
 };
 
 class generated_user_spot_collision_client_t final : public zlink::framework::hosted_service_t
@@ -2554,6 +2600,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, RejectsMalformedActorAuthorityPayloa
 TEST (ZLinkFrameworkStoreLocationResolvers, ResolverFiltersExpiredMeshNodeDescriptors)
 {
     in_memory_location_repository_t store;
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     seed_mesh_node (store, "owner-live", "mesh-a", "node-live", "tcp://127.0.0.1:7001");
     const auto expired = claim_test_owner (store, "owner-expired", std::chrono::milliseconds (20));
     ASSERT_EQ (location_write_status_t::stored,
@@ -2673,6 +2720,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
 TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeQueryProjectsMeshNodeDescriptors)
 {
     in_memory_location_repository_t store;
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto owner = claim_test_owner (store, "owner-a");
     for (const auto &[rid, state] :
          std::vector<std::pair<std::string, zlink::framework::framework_runtime_state_t>>{
@@ -2720,6 +2768,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeQueryProjectsMeshNodeDescript
 TEST (ZLinkFrameworkStoreLocationResolvers, ServiceSummaryCountsReleasedOwnerAsStopped)
 {
     in_memory_location_repository_t store;
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto live_owner = claim_test_owner (store, "owner-live");
     const auto released_owner = claim_test_owner (store, "owner-released");
     for (const auto &[rid, owner] :
@@ -2765,6 +2814,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeQueryProjectsExactAndPagedObj
 {
     using namespace zlink::framework;
     in_memory_location_repository_t store;
+    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto owner = claim_test_owner (store, "owner-objects");
     const auto unavailable_owner = claim_test_owner (store, "owner-unavailable");
     const auto publish_node = [&] (const location_owner_token_t &token, const std::string &rid) {
@@ -3208,6 +3258,8 @@ TEST (ZLinkFrameworkStoreLocationResolvers, PublicSpotManagerUsesLocationReserva
     user_spot_manager_client_t *client = nullptr;
 
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (store);
         auto node = options.add_route_mesh ("spot-mesh");
         node.set_object_role (zlink::framework::object_role_t::server)
@@ -3237,6 +3289,8 @@ TEST (ZLinkFrameworkStoreLocationResolvers, SuccessiveUserSpotAcceptsItsCurrentA
     successive_user_spot_delivery_client_t *client = nullptr;
 
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (store);
         options.add_route_mesh ("spot-fence-mesh")
           .set_object_role (zlink::framework::object_role_t::server)
@@ -3321,6 +3375,8 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ContextOnlySpotFactoryReceivesExactF
     auto destruction_count = std::make_shared<std::atomic<int>> (0);
 
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (store);
         auto node = options.add_route_mesh ("context-mesh");
         node.set_object_role (zlink::framework::object_role_t::server)
@@ -3390,6 +3446,15 @@ class ended_user_reclaim_client_t final : public zlink::framework::hosted_servic
     {
     }
     zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
+    {
+        _worker = std::jthread ([this, services] () mutable {
+            zlink::framework::test::wait_for_serving (services);
+            execute (services).result ().value ();
+        });
+        co_return;
+    }
+
+    zlink::framework::task_t<void> execute (zlink::framework::service_provider_t &services)
     {
         namespace fw = zlink::framework;
         namespace rt = fw::runtime;
@@ -3465,6 +3530,9 @@ class ended_user_reclaim_client_t final : public zlink::framework::hosted_servic
     zlink::framework::app_t *app;
     bool allowed;
     std::atomic_int *factories;
+
+  private:
+    std::jthread _worker;
 };
 
 static void verify_ended_user_policy_source (bool provider, unsigned policy)
@@ -3531,6 +3599,8 @@ static void verify_ended_user_policy_source (bool provider, unsigned policy)
       [repository] (fw::service_provider_t &) { return repository; },
       fw::service_lifetime_t::singleton);
     app.add_zlink_framework ([&] (fw::zlink_framework_options_t &options) {
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (opaque);
         options.add_relocation_store (std::make_shared<rt::in_memory_relocation_store_t> ());
         auto request = options.add_route_mesh ("request-mesh");
@@ -3598,6 +3668,8 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
       },
       zlink::framework::service_lifetime_t::singleton);
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (public_store);
         auto node = options.add_route_mesh ("spot-collision-mesh");
         node.set_object_role (zlink::framework::object_role_t::server)
@@ -3639,6 +3711,8 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
       },
       zlink::framework::service_lifetime_t::singleton);
     app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (public_store);
         auto node = options.add_route_mesh ("source-cleanup-mesh");
         node.set_object_role (zlink::framework::object_role_t::server)
@@ -3926,10 +4000,12 @@ TEST (ZLinkFrameworkStoreLocationResolvers, SameEndpointUsesRidAndOwnerLease)
         for (const auto &rid : {"remote", "local"}) {
             SCOPED_TRACE (std::string (rid) + (live ? " live" : " expired"));
             in_memory_location_repository_t seed;
+            seed.configure_reclaim_margin (std::chrono::milliseconds::zero ());
             seed_mesh_node (seed, "owner", "mesh", rid, "tcp://shared:1");
             auto descriptor = seed.list_mesh_nodes ("mesh", {}).result ().value ().items.front ();
             runtime::in_memory_location_store_t inner;
             runtime::provider_location_repository_t writer (inner);
+            writer.configure_reclaim_margin (std::chrono::milliseconds::zero ());
             const auto claim =
               writer.claim_owner_lease ("owner", std::chrono::seconds (30)).result ().value ();
             descriptor.lease_generation =
@@ -3944,6 +4020,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, SameEndpointUsesRidAndOwnerLease)
                                                  ? owner_lease_time_store_t::lease_view_t::live
                                                  : owner_lease_time_store_t::lease_view_t::expired);
             runtime::provider_location_repository_t repository (observed);
+            repository.configure_reclaim_margin (std::chrono::milliseconds::zero ());
             runtime::live_location_reader_t reader (repository);
             auto sources = reader.poll_mesh_sources ("mesh").result ().value ();
             ASSERT_EQ (1u, sources->size ());
@@ -4134,6 +4211,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
       AutoConnectRetainsExistingMaintenanceMeshPipeUntilDescriptorRetires)
 {
     auto store = std::make_shared<in_memory_location_repository_t> ();
+    store->configure_reclaim_margin (std::chrono::milliseconds::zero ());
     location_options_t options;
     options.polling_interval = std::chrono::milliseconds (20);
     options.owner_lease_renew_interval = std::chrono::milliseconds (50);
@@ -4555,6 +4633,8 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
     auto app = fw::app_t::create ();
     app.add_zlink_framework ([&] (fw::zlink_framework_options_t &options) {
         options.handler_coroutine_workers (2);
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (store);
         options.add_route_mesh ("yielding-spot-mesh")
           .set_object_role (fw::object_role_t::server)
@@ -4607,6 +4687,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
 
     fw::runtime::in_memory_location_store_t provider;
     fw::runtime::provider_location_repository_t repository (provider);
+    repository.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto claim = repository.claim_owner_lease ("owner-1", 30s).result ().value ();
     const auto *claimed = std::get_if<fw::owner_lease_claimed_t> (&claim);
     ASSERT_NE (claimed, nullptr);

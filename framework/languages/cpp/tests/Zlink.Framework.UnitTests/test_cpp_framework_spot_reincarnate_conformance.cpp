@@ -1221,6 +1221,8 @@ void configure_app (zf::app_t &app,
                   evidence->followup_arrived.reset ();
               }
           });
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (store);
         options.add_relocation_store (relocations);
         options.add_route_mesh (mesh)

@@ -60,6 +60,20 @@ namespace zlink::framework::runtime
 
 namespace
 {
+location_write_intent_t mesh_new_claim_intent (
+  const std::vector<std::shared_ptr<detail::mesh_node_builder_state_t>> &registrations,
+  const mesh_node_descriptor_t &descriptor)
+{
+    return std::any_of (registrations.begin (), registrations.end (),
+                        [&descriptor] (const auto &registration) {
+                            return registration->mesh_name == descriptor.mesh_name
+                                   && registration->routing_id == descriptor.rid
+                                   && !registration->automatic_routing_id_prefix;
+                        })
+             ? location_write_intent_t::fixed_rid_new_claim
+             : location_write_intent_t::new_claim;
+}
+
 bool requires_location_owner_state (const mesh::service_mailbox_record_t &record)
 {
     if (record.application) {
@@ -3241,8 +3255,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             }
             if (owner) {
                 const auto written = co_await _location_runtime->descriptor_write_confirmed ([&] {
-                    return _location_store->update_mesh_node (descriptor,
-                                                              location_write_intent_t::new_claim);
+                    return _location_store->update_mesh_node (
+                      descriptor, mesh_new_claim_intent (_registrations, descriptor));
                 });
                 if (written)
                     _published_mesh_nodes.push_back ({descriptor.mesh_name, descriptor.rid});
@@ -3487,7 +3501,9 @@ bool mesh_node_host_service_t::publish_descriptor_state (framework_runtime_state
                 if (state == framework_runtime_state_t::draining) {
                     _published_mesh_descriptors.erase (_published_mesh_descriptors.begin ()
                                                        + index);
-                    _published_mesh_nodes.erase (_published_mesh_nodes.begin () + index);
+                    std::erase_if (_published_mesh_nodes, [&current] (const auto &key) {
+                        return key.mesh_name == current.mesh_name && key.rid == current.rid;
+                    });
                     continue;
                 }
                 return false;
@@ -3563,10 +3579,10 @@ task_t<bool> mesh_node_host_service_t::republish_after_store_recovery (
         if (!first_publication)
             ++descriptor.descriptor_revision;
         const auto written = co_await _location_runtime->descriptor_write_confirmed (
-          [store = _location_store, descriptor, first_publication] {
-              return store->update_mesh_node (descriptor, first_publication
-                                                            ? location_write_intent_t::new_claim
-                                                            : location_write_intent_t::renew);
+          [store = _location_store, descriptor,
+           write_intent = first_publication ? mesh_new_claim_intent (_registrations, descriptor)
+                                            : location_write_intent_t::renew] {
+              return store->update_mesh_node (descriptor, write_intent);
           },
           std::chrono::steady_clock::now, cancellation, deadline);
         if (!written || cancellation.stop_requested ())

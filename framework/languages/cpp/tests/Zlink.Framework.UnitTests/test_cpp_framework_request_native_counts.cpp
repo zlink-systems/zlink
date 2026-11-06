@@ -415,6 +415,8 @@ TEST (RequestNativeCounts, AppRelayMovesItsOwnedPayloadIntoDelivery)
     app.add_hosted_service (std::move (capture));
     app.use_metric_provider (opentelemetry::metrics::Provider::GetMeterProvider ());
     auto &options = app.add_zlink_framework ();
+    options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+    options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
     options.add_location_store (std::make_shared<fw::runtime::in_memory_location_store_t> ());
     options.add_route_mesh ("relay-copy-count")
       .set_object_role (fw::object_role_t::none)

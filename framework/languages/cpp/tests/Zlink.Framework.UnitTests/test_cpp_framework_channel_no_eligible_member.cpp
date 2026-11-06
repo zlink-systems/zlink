@@ -98,6 +98,8 @@ TEST (CppFrameworkChannelNoEligibleMember, PublicRouteMeshWeightZeroEndsUnavaila
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto server = fw::app_t::create ();
     server.add_zlink_framework ([store] (fw::zlink_framework_options_t &options) {
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (store);
         auto mesh = options.add_route_mesh ("selection-zero");
         mesh.set_routing_id (zlink::routing_id_t::from ("selection-zero-server"));
@@ -116,6 +118,8 @@ TEST (CppFrameworkChannelNoEligibleMember, PublicRouteMeshWeightZeroEndsUnavaila
     ASSERT_FALSE (endpoint.empty ());
     auto client = fw::app_t::create ();
     client.add_zlink_framework ([store, &endpoint] (fw::zlink_framework_options_t &options) {
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (store);
         auto mesh = options.add_route_mesh ("selection-zero");
         mesh.set_routing_id (zlink::routing_id_t::from ("selection-zero-client"));

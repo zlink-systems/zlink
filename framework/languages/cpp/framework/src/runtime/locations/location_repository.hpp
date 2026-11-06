@@ -15,6 +15,7 @@
 
 #include <array>
 #include <functional>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <chrono>
@@ -616,35 +617,71 @@ class location_repository_t
 
   protected:
     // Location runtime §6.1: one observation per record and exact owner token.
-    // Only this observation storage needs synchronization across provider continuations.
-    bool reclaim_wait_elapsed (const std::string &key,
-                               const location_owner_token_t &owner,
-                               bool owner_live)
+    // Capture the sequence before Store I/O; older continuations cannot replace newer observations.
+    std::uint64_t reclaim_read_sequence ()
     {
         const std::lock_guard lock (_reclaim_mutex);
+        return ++_reclaim_sequence;
+    }
+
+    bool
+    reclaim_wait_elapsed (const std::string &key,
+                          const location_owner_token_t &owner,
+                          bool owner_live,
+                          std::uint64_t read_sequence = std::numeric_limits<std::uint64_t>::max ())
+    {
+        const std::lock_guard lock (_reclaim_mutex);
+        if (read_sequence == std::numeric_limits<std::uint64_t>::max ())
+            read_sequence = ++_reclaim_sequence;
+        auto found = _reclaim_observations.find (key);
+        if (found != _reclaim_observations.end () && found->second.sequence > read_sequence) {
+            if (owner_live || found->second.owner.owner_id != owner.owner_id
+                || found->second.owner.lease_generation != owner.lease_generation)
+                return false;
+            read_sequence = found->second.sequence;
+        }
         if (owner_live) {
             _reclaim_observations.erase (key);
             return false;
         }
         const auto now = _reclaim_now ();
-        const auto found =
-          _reclaim_observations.try_emplace (key, reclaim_observation_t{owner, now}).first;
-        if (found->second.owner.owner_id != owner.owner_id
-            || found->second.owner.lease_generation != owner.lease_generation)
-            found->second = {owner, now};
+        if (found == _reclaim_observations.end ())
+            found =
+              _reclaim_observations.emplace (key, reclaim_observation_t{owner, now, read_sequence})
+                .first;
+        else if (found->second.owner.owner_id != owner.owner_id
+                 || found->second.owner.lease_generation != owner.lease_generation)
+            found->second = {owner, now, read_sequence};
+        else
+            found->second.sequence = read_sequence;
         // Divide elapsed time rather than multiplying a potentially large configured margin.
         return std::chrono::duration_cast<std::chrono::milliseconds> (now - found->second.at) / 3
                >= _reclaim_margin;
     }
 
-    void retain_reclaim_observation (const std::string &key,
-                                     std::optional<location_owner_token_t> owner = std::nullopt)
+    void retain_reclaim_observation (
+      const std::string &key,
+      std::optional<location_owner_token_t> owner = std::nullopt,
+      std::uint64_t read_sequence = std::numeric_limits<std::uint64_t>::max ())
     {
         const std::lock_guard lock (_reclaim_mutex);
         const auto found = _reclaim_observations.find (key);
-        if (found != _reclaim_observations.end ()
+        if (found != _reclaim_observations.end () && found->second.sequence <= read_sequence
             && (!owner || found->second.owner.owner_id != owner->owner_id
                 || found->second.owner.lease_generation != owner->lease_generation))
+            _reclaim_observations.erase (found);
+    }
+
+    void remove_reclaim_observation (
+      const std::string &key,
+      const location_owner_token_t &owner,
+      std::uint64_t read_sequence = std::numeric_limits<std::uint64_t>::max ())
+    {
+        const std::lock_guard lock (_reclaim_mutex);
+        const auto found = _reclaim_observations.find (key);
+        if (found != _reclaim_observations.end () && found->second.sequence <= read_sequence
+            && found->second.owner.owner_id == owner.owner_id
+            && found->second.owner.lease_generation == owner.lease_generation)
             _reclaim_observations.erase (found);
     }
 
@@ -653,9 +690,11 @@ class location_repository_t
     {
         location_owner_token_t owner;
         std::chrono::steady_clock::time_point at;
+        std::uint64_t sequence;
     };
     std::mutex _reclaim_mutex;
     std::map<std::string, reclaim_observation_t> _reclaim_observations;
+    std::uint64_t _reclaim_sequence = 0;
     std::chrono::milliseconds _reclaim_margin{detail::default_owner_lease_fencing_margin};
     std::function<std::chrono::steady_clock::time_point ()> _reclaim_now{
       std::chrono::steady_clock::now};

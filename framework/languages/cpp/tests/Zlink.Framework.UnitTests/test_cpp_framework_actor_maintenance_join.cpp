@@ -1169,6 +1169,8 @@ void configure (host_t &host,
           }
           obs->changed.notify_all ();
       });
+    options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+    options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
     options.add_location_store (store);
     options.add_relocation_store (relocations);
     auto mesh = options.add_route_mesh (mesh_name);
@@ -1317,6 +1319,8 @@ void configure_session (host_t &host,
       .use_file (std::string (session_rid) + ".flow")
       .set_min_level (fw::log_level_t::debug);
     options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::detailed);
+    options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+    options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
     options.add_location_store (store);
     options.add_relocation_store (relocations);
     options.add_route_mesh (mesh_name)
@@ -1468,6 +1472,7 @@ void user_spot_authority_qualification (user_spot_authority_case_t scenario)
     const bool retained = scenario == user_spot_authority_case_t::expired_retained;
     auto inner = std::make_shared<in_memory_location_store_t> ();
     provider_location_repository_t original (*inner);
+    original.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     constexpr auto owner_lease_ttl = 60s;
     const auto claimed =
       original.claim_owner_lease ("expired-ready-owner", owner_lease_ttl).result ();
@@ -1811,6 +1816,7 @@ struct relay_peer_pair_t
         fw::runtime::mesh::service_object_role_t::server,
       fw::runtime::stateful::accepted_record_authority_resolver_t authority = {})
     {
+        source_store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
         const auto make = [] (const char *rid, std::uint64_t generation,
                               fw::runtime::mesh::service_object_role_t role,
                               std::future<void> &destroyed) {
@@ -2343,6 +2349,8 @@ TEST (ActorMaintenanceJoin, ConsecutiveDeferredJoinsDoNotHoldTargetSpotDuringCap
     // target Host and its Spot callback gate remain available for P2.
     const auto configure_public = [&] (host_t &host, const char *rid) {
         auto &options = host.app.add_zlink_framework ();
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (store);
         options.add_relocation_store (relocations);
         host.app.logging ().use_file (std::string (rid) + ".flow");
@@ -3523,6 +3531,7 @@ struct native_intake_fixture_t
       fw::dispatch_options_t dispatch = {},
       fw::runtime::stateful::accepted_record_authority_resolver_t authority = {})
     {
+        source_store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
         fw::runtime::host::host_options_t options;
         options.core_context = core_context;
         options.mesh.descriptor = {mesh_name,
@@ -4877,37 +4886,35 @@ class intake_store_t final : public fw::location_store_t
     {
         if (capture_key)
             *capture_key = key.value;
-        auto actual = inner.read (key).result ().value ();
+        auto actual = co_await inner.read (key);
         const bool infrastructure = fw::detail::current_infrastructure_wait ();
         int expected = 1;
         if (infrastructure && std::this_thread::get_id () != releaser
             && key.value == authority_store_key && stage.compare_exchange_strong (expected, 0)) {
             authority_value = std::move (actual);
             observe (0);
-            return authority_source.task ();
+            co_return co_await authority_source.task ();
         }
         expected = 3;
         if (std::this_thread::get_id () == releaser
             && stage.compare_exchange_strong (expected, 0)) {
             lease_value = std::move (actual);
             observe (2);
-            return lease_source.task ();
+            co_return co_await lease_source.task ();
         }
-        return fw::task_t<fw::store_read_result_t> (
-          fw::result_t<fw::store_read_result_t>::success (std::move (actual)));
+        co_return actual;
     }
     fw::task_t<fw::store_scan_result_t> scan (fw::store_scan_request_t request) override
     {
-        auto actual = inner.scan (std::move (request)).result ().value ();
+        auto actual = co_await inner.scan (std::move (request));
         int expected = 2;
         if (std::this_thread::get_id () == releaser
             && stage.compare_exchange_strong (expected, 0)) {
             nodes_value = std::move (actual);
             observe (1);
-            return nodes_source.task ();
+            co_return co_await nodes_source.task ();
         }
-        return fw::task_t<fw::store_scan_result_t> (
-          fw::result_t<fw::store_scan_result_t>::success (std::move (actual)));
+        co_return actual;
     }
     fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t request) override
     {
@@ -5295,6 +5302,11 @@ class observed_location_store_t final : public fw::location_store_t
 class accepted_source_repository_t final : public fw::runtime::in_memory_location_repository_t
 {
   public:
+    accepted_source_repository_t ()
+    {
+        configure_reclaim_margin (std::chrono::milliseconds::zero ());
+    }
+
     std::optional<fw::owner_lease_read_result_t> lease_override;
     int mesh_reads = 0, lease_reads = 0;
     fw::task_t<fw::location_page_t<fw::mesh_node_descriptor_t>>
@@ -7119,6 +7131,8 @@ TEST (ActorMaintenanceJoin, ReboundActorReturnsWithCurrentSession)
     release_callbacks_t release{evidence};
     const auto configure_public = [&] (host_t &host, const char *rid) {
         auto &options = host.app.add_zlink_framework ();
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (store);
         options.add_relocation_store (relocations);
         host.app.logging ().use_file (std::string (rid) + ".flow");

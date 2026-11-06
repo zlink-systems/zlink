@@ -112,6 +112,8 @@ void contract ()
     metric_test::provider_t first (false), second (false), rejected (false);
     auto app = app_t::create ();
     app.add_zlink_framework ([] (auto &options) {
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (std::make_shared<metric_test::store_t> ());
         options.add_route_mesh ("provider-mesh")
           .listen ("tcp://127.0.0.1:0")

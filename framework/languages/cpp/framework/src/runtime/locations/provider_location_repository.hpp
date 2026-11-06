@@ -427,10 +427,13 @@ class provider_location_repository_t final : public location_repository_t
                 co_return co_await cancelled<authority_compare_exchange_result_t> ();
             check_deadline ();
             const auto row_key = key_authority (key.value);
+            const auto read_sequence = reclaim_read_sequence ();
             auto current = co_await _store.read (row_key);
             auto *found = std::get_if<store_found_t> (&current);
-            if (!found)
+            if (!found) {
+                retain_reclaim_observation (row_key.value, std::nullopt, read_sequence);
                 co_return co_await authority_conflict (std::move (current));
+            }
             if (co_await authority_mutation_locked_async (key.value))
                 co_return authority_compare_exchange_result_t{
                   authority_conflict_t{co_await read_authority_value_async (key.value)}};
@@ -582,6 +585,7 @@ class provider_location_repository_t final : public location_repository_t
                     co_return co_await authority_conflict (std::move (current), membership_failure);
             }
             check_deadline ();
+            const auto delete_sequence = reclaim_read_sequence ();
             auto written = co_await write_async (
               std::move (write_request), nullptr, {}, "compare_exchange",
               operation_deadline.value_or (std::chrono::steady_clock::time_point::max ()));
@@ -592,9 +596,11 @@ class provider_location_repository_t final : public location_repository_t
                     continue;
                 co_return co_await authority_conflict (co_await _store.read (row_key));
             }
-            if (std::holds_alternative<authority_delete_t> (mutation))
+            if (std::holds_alternative<authority_delete_t> (mutation)) {
+                remove_reclaim_observation (row_key.value, snapshot.owner, delete_sequence);
                 co_return authority_compare_exchange_result_t{
                   authority_deleted_t{snapshot.store_version, applied->store_now}};
+            }
             snapshot.store_now = applied->store_now;
             snapshot.store_version = version_of (*applied, row_key);
             co_return authority_compare_exchange_result_t{authority_stored_t{std::move (snapshot)}};
@@ -795,6 +801,7 @@ class provider_location_repository_t final : public location_repository_t
 
         auto creation_target = request.target;
         const auto authority_key = key_authority (object_key (request.key));
+        const auto read_sequence = reclaim_read_sequence ();
         auto authority = co_await _store.read (authority_key);
         const auto store_now = std::holds_alternative<store_found_t> (authority)
                                  ? std::get<store_found_t> (authority).value.store_now
@@ -806,11 +813,11 @@ class provider_location_repository_t final : public location_repository_t
                 framework_error_kind_t::deadline_exceeded, "Object creation deadline expired")));
         std::optional<authority_snapshot_t> decoded_current;
         if (!std::holds_alternative<store_found_t> (authority))
-            retain_reclaim_observation (authority_key.value);
+            retain_reclaim_observation (authority_key.value, std::nullopt, read_sequence);
         if (const auto *found = std::get_if<store_found_t> (&authority)) {
             decoded_current =
               decode_authority (found->value.bytes, found->value.version, found->value.store_now);
-            retain_reclaim_observation (authority_key.value, decoded_current->owner);
+            retain_reclaim_observation (authority_key.value, decoded_current->owner, read_sequence);
             if (!authority_matches_creation_type (*decoded_current, request))
                 co_return object_reserve_result_t{
                   object_type_mismatch_t{std::move (*decoded_current)}};
@@ -829,7 +836,7 @@ class provider_location_repository_t final : public location_repository_t
             if (reclaim_version && found->value.version.value != reclaim_version->value)
                 co_return object_reserve_result_t{object_reserve_conflict_t{std::move (current)}};
             const auto reclaim = co_await try_reclaim_reserved_authority_async (
-              authority_key, *found, current, &request, cancellation);
+              authority_key, *found, current, read_sequence, &request, cancellation);
             if (reclaim == stale_authority_reclaim_result_t::reclaimed
                 || reclaim == stale_authority_reclaim_result_t::conflict) {
                 reclaim_version = reclaim == stale_authority_reclaim_result_t::conflict
@@ -943,6 +950,7 @@ class provider_location_repository_t final : public location_repository_t
     try_reclaim_reserved_authority_async (store_key_t authority_key,
                                           store_found_t stored_authority,
                                           authority_snapshot_t current,
+                                          std::uint64_t read_sequence,
                                           const object_reserve_request_t *request = nullptr,
                                           std::stop_token cancellation = {},
                                           const location_owner_token_t *required_owner = nullptr)
@@ -966,20 +974,15 @@ class provider_location_repository_t final : public location_repository_t
             owner_live = owner_lease_is_live (lease, current.owner);
             stale_owner_condition = version_condition (owner_key, found->value.version);
         }
-        const bool wait_elapsed =
-          !active || reclaim_wait_elapsed (authority_key.value, current.owner, owner_live);
         if (required_owner && (!owner_live || !same_owner (current.owner, *required_owner)))
             co_return stale_authority_reclaim_result_t::recovery_required;
         std::vector<authority_entry_t> members;
         std::optional<store_condition_t> authority_lock_condition;
         std::vector<store_condition_t> member_lock_conditions;
         if (active) {
-            if (owner_live)
+            if (owner_live) {
+                reclaim_wait_elapsed (authority_key.value, current.owner, true, read_sequence);
                 co_return stale_authority_reclaim_result_t::owner_live;
-            if (!wait_elapsed) {
-                const auto observed = co_await _store.read (authority_key);
-                if (!matches_store_version (observed, stored_authority.value.version))
-                    co_return stale_authority_reclaim_result_t::conflict;
             }
             const auto mutation_locked = co_await authority_mutation_locked_async (
               object_key (request->key), &authority_lock_condition.emplace ());
@@ -1056,6 +1059,14 @@ class provider_location_repository_t final : public location_repository_t
                                                  "Instance Spot is not steady Ready");
             }
         }
+        const bool wait_elapsed =
+          !active
+          || reclaim_wait_elapsed (authority_key.value, current.owner, false, read_sequence);
+        if (!wait_elapsed) {
+            const auto observed = co_await _store.read (authority_key);
+            if (!matches_store_version (observed, stored_authority.value.version))
+                co_return stale_authority_reclaim_result_t::conflict;
+        }
         const auto descriptor_key = key_mesh (
           current.allocation.target.mesh_name,
           zlink::routing_id_t::from (std::string (current.allocation.target.node_rid.value ())));
@@ -1109,13 +1120,13 @@ class provider_location_repository_t final : public location_repository_t
                     throw framework_exception_t (framework_error_kind_t::data_lost,
                                                  "Location Store owner lease record is invalid");
                 if (owner_lease_is_live (lease, member_owner)) {
-                    retain_reclaim_observation (member_key.value);
+                    reclaim_wait_elapsed (member_key.value, member_owner, true, read_sequence);
                     throw framework_exception_t (
                       framework_error_kind_t::unavailable,
                       "User Spot still has a member with a live owner lease");
                 }
             }
-            if (!reclaim_wait_elapsed (member_key.value, member_owner, false)) {
+            if (!reclaim_wait_elapsed (member_key.value, member_owner, false, read_sequence)) {
                 const auto observed = co_await _store.read (member_key);
                 if (!matches_store_version (observed,
                                             store_version_t{member.snapshot.store_version}))
@@ -1202,6 +1213,7 @@ class provider_location_repository_t final : public location_repository_t
             throw framework_exception_t (
               framework_error_kind_t::unavailable,
               "User Spot member release exceeds one Location Store batch");
+        const auto delete_sequence = reclaim_read_sequence ();
         const auto result = co_await await_result (write_async (std::move (write_request)));
         if (request)
             record_instance_takeover (
@@ -1211,9 +1223,10 @@ class provider_location_repository_t final : public location_repository_t
                           : "lost");
         const auto written = result.value ();
         if (std::holds_alternative<store_write_applied_t> (written)) {
-            retain_reclaim_observation (authority_key.value);
+            remove_reclaim_observation (authority_key.value, current.owner, delete_sequence);
             for (const auto &member : members)
-                retain_reclaim_observation (key_authority (member.key.value).value);
+                remove_reclaim_observation (key_authority (member.key.value).value,
+                                            member.snapshot.owner, delete_sequence);
         }
         co_return std::holds_alternative<store_write_applied_t> (written)
           ? stale_authority_reclaim_result_t::reclaimed
@@ -1246,6 +1259,7 @@ class provider_location_repository_t final : public location_repository_t
                 && std::chrono::system_clock::now () >= request->operation_deadline)
                 throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
                                              "Object authority release deadline expired");
+            const auto read_sequence = reclaim_read_sequence ();
             const auto read = co_await _store.read (row_key);
             const auto *found = std::get_if<store_found_t> (&read);
             if (!found || found->value.version.value != expected_store_version)
@@ -1261,7 +1275,7 @@ class provider_location_repository_t final : public location_repository_t
                     co_return false;
             }
             const auto reclaimed = co_await try_reclaim_reserved_authority_async (
-              row_key, *found, current, request ? &*request : nullptr, cancellation,
+              row_key, *found, current, read_sequence, request ? &*request : nullptr, cancellation,
               required_owner ? &*required_owner : nullptr);
             if (reclaimed == stale_authority_reclaim_result_t::conflict)
                 continue;
@@ -3144,6 +3158,9 @@ class provider_location_repository_t final : public location_repository_t
                        location_write_intent_t intent,
                        std::function<bool (const json_t &)> immutable_fields_equal)
     {
+        const auto read_sequence = reclaim_read_sequence ();
+        const bool mesh = record.at (location_record_fields::descriptor)
+                            .contains (location_record_fields::meshName);
         const auto lease_key = key_owner (owner_id);
         auto lease = co_await _store.read (lease_key);
         const auto *live_lease = std::get_if<store_found_t> (&lease);
@@ -3178,13 +3195,12 @@ class provider_location_repository_t final : public location_repository_t
             const auto previous_owner = co_await _store.read (key_owner (stored_owner));
             const auto *previous_lease = std::get_if<store_found_t> (&previous_owner);
             const auto previous_owner_live =
-              previous_lease && previous_lease->value.expires_at
-              && *previous_lease->value.expires_at > previous_lease->value.store_now
-              && owner_generation (previous_lease->value.bytes) == stored_lease;
+              previous_lease
+              && owner_lease_is_live (decode_owner_lease (*previous_lease),
+                                      {stored_owner, stored_lease});
             if (intent == location_write_intent_t::new_claim
-                || (intent == location_write_intent_t::renew
-                    && record.at (location_record_fields::descriptor)
-                         .contains (location_record_fields::meshName))) {
+                || intent == location_write_intent_t::fixed_rid_new_claim
+                || (intent == location_write_intent_t::renew && mesh)) {
                 auto previous = stored;
                 auto requested = record;
                 previous.at (location_record_fields::descriptor)
@@ -3196,28 +3212,28 @@ class provider_location_repository_t final : public location_repository_t
                 requested.at (location_record_fields::descriptor)
                   .erase (location_record_fields::updatedAtEpochMs);
                 if (previous == requested) {
-                    retain_reclaim_observation (row_key.value);
+                    retain_reclaim_observation (row_key.value, std::nullopt, read_sequence);
                     co_return location_write_result_t::stored (
                       static_cast<std::int64_t> (provider_generation_known ? provider_generation
                                                                            : 1),
                       found->value.store_now);
                 }
             }
-            if (intent == location_write_intent_t::new_claim && previous_owner_live) {
-                retain_reclaim_observation (row_key.value);
+            if ((intent == location_write_intent_t::new_claim
+                 || intent == location_write_intent_t::fixed_rid_new_claim)
+                && previous_owner_live) {
+                retain_reclaim_observation (row_key.value, std::nullopt, read_sequence);
                 co_return location_write_result_t{
                   location_write_status_t::rejected_conflict, 0, {}};
             }
-            if (intent == location_write_intent_t::new_claim
-                && record.at (location_record_fields::descriptor)
-                     .contains (location_record_fields::meshName)
-                && !reclaim_wait_elapsed (row_key.value, {stored_owner, stored_lease}, false)) {
+            if (intent == location_write_intent_t::fixed_rid_new_claim
+                && !reclaim_wait_elapsed (row_key.value, {stored_owner, stored_lease}, false,
+                                          read_sequence)) {
                 const auto observed = co_await _store.read (row_key);
                 if (!matches_store_version (observed, found->value.version))
                     co_return location_write_result_t{
                       location_write_status_t::ignored_stale, 0, {}};
-                throw framework_exception_t (framework_error_kind_t::unavailable,
-                                             "Fixed RID owner lease observation is still waiting");
+                co_return location_write_result_t{location_write_status_t::waiting, 0, {}};
             }
             if (intent == location_write_intent_t::takeover && previous_owner_live)
                 co_return location_write_result_t{location_write_status_t::ignored_stale, 0, {}};
@@ -3236,7 +3252,11 @@ class provider_location_repository_t final : public location_repository_t
             generation = provider_generation_known ? provider_generation + 1 : 1;
             row_condition = version_condition (row_key, found->value.version);
         } else {
-            retain_reclaim_observation (row_key.value);
+            if (intent == location_write_intent_t::fixed_rid_new_claim) {
+                if (!reclaim_wait_elapsed (row_key.value, {}, false, read_sequence))
+                    co_return location_write_result_t{location_write_status_t::waiting, 0, {}};
+            } else
+                retain_reclaim_observation (row_key.value, std::nullopt, read_sequence);
             if (intent == location_write_intent_t::renew)
                 co_return location_write_result_t{location_write_status_t::ignored_stale, 0, {}};
             row_condition = missing_condition (row_key);
@@ -3245,9 +3265,10 @@ class provider_location_repository_t final : public location_repository_t
         store_write_request_t write_request{
           {owner_condition ({owner_id, lease_generation}), std::move (row_condition)},
           {store_put_t{row_key, std::move (encoded), std::nullopt}}};
+        const auto write_sequence = reclaim_read_sequence ();
         auto result = co_await write_async (std::move (write_request));
         if (const auto *applied = std::get_if<store_write_applied_t> (&result)) {
-            retain_reclaim_observation (row_key.value);
+            retain_reclaim_observation (row_key.value, std::nullopt, write_sequence);
             co_return location_write_result_t::stored (static_cast<std::int64_t> (generation),
                                                        applied->store_now);
         }
@@ -3260,10 +3281,13 @@ class provider_location_repository_t final : public location_repository_t
                        std::chrono::steady_clock::time_point deadline =
                          std::chrono::steady_clock::time_point::max ())
     {
+        const auto read_sequence = reclaim_read_sequence ();
         auto current = co_await _store.read (row_key);
         const auto *found = std::get_if<store_found_t> (&current);
-        if (!found)
+        if (!found) {
+            remove_reclaim_observation (row_key.value, owner, read_sequence);
             co_return location_write_status_t::ignored_stale;
+        }
         const auto record =
           parse_canonical_record (found->value.bytes, location_record_fields::descriptor);
         if (record_owner_id (record) != owner.owner_id
@@ -3273,9 +3297,11 @@ class provider_location_repository_t final : public location_repository_t
                                              {store_delete_t{row_key}}};
         auto result = co_await write_async (std::move (result_request), nullptr, {},
                                             "compare_exchange", deadline);
-        co_return std::holds_alternative<store_write_applied_t> (result)
-          ? location_write_status_t::stored
-          : location_write_status_t::ignored_stale;
+        if (std::holds_alternative<store_write_applied_t> (result)) {
+            remove_reclaim_observation (row_key.value, owner, read_sequence);
+            co_return location_write_status_t::stored;
+        }
+        co_return location_write_status_t::ignored_stale;
     }
 
     template <typename T, typename TDecode>
@@ -4128,17 +4154,19 @@ class provider_location_repository_t final : public location_repository_t
 
     task_t<authority_read_result_t> read_authority_value_async (std::string key)
     {
+        const auto read_sequence = reclaim_read_sequence ();
         auto current = co_await _store.read (key_authority (key));
         if (const auto *found = std::get_if<store_found_t> (&current)) {
             auto snapshot = co_await effective_authority_async (
               key, found->value.bytes, found->value.version, found->value.store_now);
             retain_reclaim_observation (key_authority (key).value,
-                                        snapshot ? std::optional{snapshot->owner} : std::nullopt);
+                                        snapshot ? std::optional{snapshot->owner} : std::nullopt,
+                                        read_sequence);
             if (snapshot)
                 co_return authority_read_result_t{std::move (*snapshot)};
             co_return authority_read_result_t{authority_missing_t{found->value.store_now}};
         }
-        retain_reclaim_observation (key_authority (key).value);
+        retain_reclaim_observation (key_authority (key).value, std::nullopt, read_sequence);
         co_return authority_read_result_t{
           authority_missing_t{std::get<store_missing_t> (current).store_now}};
     }

@@ -69,7 +69,8 @@ class in_memory_location_repository_t : public location_repository_t
                   location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
 
             if (found != _mesh_nodes.end ()
-                && (intent == location_write_intent_t::new_claim
+                && ((intent == location_write_intent_t::new_claim
+                     || intent == location_write_intent_t::fixed_rid_new_claim)
                     || intent == location_write_intent_t::renew)
                 && same_mesh_node_descriptor (found->second, descriptor)) {
                 retain_reclaim_observation ("mesh:" + key);
@@ -78,21 +79,23 @@ class in_memory_location_repository_t : public location_repository_t
                   found->second.updated_at));
             }
 
-            if (intent == location_write_intent_t::new_claim) {
-                if (found != _mesh_nodes.end ()) {
-                    const location_owner_token_t previous{found->second.owner_id,
-                                                          found->second.lease_generation};
-                    const bool live = owner_token_is_live (previous, now);
-                    const bool elapsed = reclaim_wait_elapsed ("mesh:" + key, previous, live);
-                    if (live)
-                        return completed (location_write_result_t{
-                          location_write_status_t::rejected_conflict, 0, {}});
-                    if (!elapsed)
-                        throw framework_exception_t (
-                          framework_error_kind_t::unavailable,
-                          "Fixed RID owner lease observation is still waiting");
-                } else
-                    retain_reclaim_observation ("mesh:" + key);
+            if ((intent == location_write_intent_t::new_claim
+                 || intent == location_write_intent_t::fixed_rid_new_claim)) {
+                const location_owner_token_t previous =
+                  found == _mesh_nodes.end ()
+                    ? location_owner_token_t{}
+                    : location_owner_token_t{found->second.owner_id,
+                                             found->second.lease_generation};
+                const bool live =
+                  found != _mesh_nodes.end () && owner_token_is_live (previous, now);
+                const bool elapsed = intent != location_write_intent_t::fixed_rid_new_claim
+                                     || reclaim_wait_elapsed ("mesh:" + key, previous, live);
+                if (live)
+                    return completed (
+                      location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
+                if (!elapsed)
+                    return completed (
+                      location_write_result_t{location_write_status_t::waiting, 0, {}});
             } else if (intent == location_write_intent_t::renew) {
                 if (found == _mesh_nodes.end () || found->second.owner_id != descriptor.owner_id
                     || found->second.lease_generation != descriptor.lease_generation
@@ -131,11 +134,17 @@ class in_memory_location_repository_t : public location_repository_t
         return _lane
           .run ([&] {
               const auto found = _mesh_nodes.find (mesh_node_key (key.mesh_name, key.rid));
-              if (found == _mesh_nodes.end () || found->second.owner_id != owner.owner_id
+              if (found == _mesh_nodes.end ()) {
+                  remove_reclaim_observation ("mesh:" + mesh_node_key (key.mesh_name, key.rid),
+                                              owner);
+                  return completed (location_write_status_t::ignored_stale);
+              }
+              if (found->second.owner_id != owner.owner_id
                   || found->second.lease_generation != owner.lease_generation)
                   return completed (location_write_status_t::ignored_stale);
               remove_entry_spot_id_claim (found->second, mesh_node_key (key.mesh_name, key.rid));
               _mesh_nodes.erase (found);
+              remove_reclaim_observation ("mesh:" + mesh_node_key (key.mesh_name, key.rid), owner);
               return completed (location_write_status_t::stored);
           })
           .get ();
@@ -507,6 +516,8 @@ class in_memory_location_repository_t : public location_repository_t
             auto found = _authorities.find (key.value);
             if (found == _authorities.end ()
                 || found->second.store_version != expected_store_version) {
+                if (found == _authorities.end ())
+                    retain_reclaim_observation (key.value);
                 authority_read_result_t current =
                   found == _authorities.end () ? authority_read_result_t{authority_missing_t{now}}
                                                : authority_read_result_t{found->second};
@@ -545,6 +556,7 @@ class in_memory_location_repository_t : public location_repository_t
                 const auto store_version = next_store_version ();
                 apply_capacity_bundle (_active_by_placement, found->second.allocation.target,
                                        found->second.allocation.capacity_bundle, false);
+                remove_reclaim_observation (key.value, found->second.owner);
                 _authorities.erase (found);
                 return completed (
                   authority_compare_exchange_result_t{authority_deleted_t{store_version, now}});
@@ -1381,9 +1393,10 @@ class in_memory_location_repository_t : public location_repository_t
             return false;
         const auto &target = snapshot.allocation.target;
         const bool owner_live = owner_token_is_live (snapshot.owner, now);
-        const bool wait_elapsed = !active || reclaim_wait_elapsed (key, snapshot.owner, owner_live);
-        if (active && owner_live)
+        if (active && owner_live) {
+            reclaim_wait_elapsed (key, snapshot.owner, true);
             return false;
+        }
         std::vector<std::string> members;
         if (authority_mutation_locked_on_lane (key)) {
             if (active)
@@ -1412,7 +1425,6 @@ class in_memory_location_repository_t : public location_repository_t
                     || spot->stable_type != request->intent.stable_type)
                     throw framework_exception_t (framework_error_kind_t::unavailable,
                                                  "User Spot is not steady Ready");
-                members = ended_spot_members_on_lane (key, snapshot, spot->spot_id, now);
             } else if (snapshot.allocation.object_kind == placement_object_kind_t::instance_spot) {
                 const auto spot = decode_instance_spot_authority_payload (snapshot.payload);
                 if (!spot || spot->state != instance_spot_authority_state_t::ready
@@ -1422,6 +1434,9 @@ class in_memory_location_repository_t : public location_repository_t
                                                  "Instance Spot is not steady Ready");
             }
         }
+        const bool wait_elapsed = !active || reclaim_wait_elapsed (key, snapshot.owner, false);
+        if (active && snapshot.allocation.object_kind == placement_object_kind_t::user_spot)
+            members = ended_spot_members_on_lane (key, snapshot, request->key.global_id, now);
         if (!wait_elapsed)
             throw framework_exception_t (framework_error_kind_t::unavailable,
                                          "Owner lease release observation is still waiting");
