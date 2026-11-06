@@ -1288,6 +1288,8 @@ int app_bound_session_sender_keeps_arguments_alive_after_route_lookup_suspends (
     const auto framework_node_rid = node_rid_t::from_string (node_id);
     const auto node_rid = zlink::routing_id_t::from (node_id);
     app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
+        options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+        options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
         options.add_location_store (
           std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
         options.add_route_mesh ("bound-session-lifetime-mesh")

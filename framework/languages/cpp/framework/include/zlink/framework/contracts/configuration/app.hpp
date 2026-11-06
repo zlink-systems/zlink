@@ -27,6 +27,7 @@ namespace zlink::framework
 namespace detail
 {
 class app_state_t;
+struct app_test_access_t;
 } // namespace detail
 
 class app_t;
@@ -106,6 +107,7 @@ class app_t
 
   private:
     friend class app_advanced_t;
+    friend struct detail::app_test_access_t;
 
     task_t<relocation_result_t> relocate_async (relocation_options_t options,
                                                 std::stop_token wait_cancellation);

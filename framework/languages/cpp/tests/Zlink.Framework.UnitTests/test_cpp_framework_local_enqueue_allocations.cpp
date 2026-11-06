@@ -271,6 +271,7 @@ struct stateful_spot_fixture_t
     {
         using namespace fw;
         using namespace fw::runtime;
+        store->configure_reclaim_margin (std::chrono::milliseconds::zero ());
         const auto lease = std::make_shared<const location_owner_token_t> (
           std::get<owner_lease_claimed_t> (
             store->claim_owner_lease ("local-owner", std::chrono::seconds (60)).result ().value ())

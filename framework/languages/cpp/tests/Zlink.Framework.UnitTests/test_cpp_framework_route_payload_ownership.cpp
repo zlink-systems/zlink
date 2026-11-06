@@ -528,6 +528,8 @@ TEST (RouteHandlerBoundary, HostedOrdinaryHandoffAllowsSameAndSubsequentClaims)
     app.advanced ().services ().add_factory<suspended_route_handler_t> (
       [&] (service_provider_t &) { return std::make_unique<suspended_route_handler_t> (state); });
     auto &options = app.add_zlink_framework ();
+    options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+    options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
     options.add_location_store (std::make_shared<runtime::in_memory_location_store_t> ());
     options.add_route_mesh ("route-proof-infrastructure")
       .listen ("tcp://127.0.0.1:0")
@@ -748,6 +750,8 @@ TEST (RouteHandlerBoundary, HostStopWaitsForPhysicalOrdinaryHandlerTerminal)
         return std::unique_ptr<host_stop_route_handler_t> (new host_stop_route_handler_t{state});
     });
     auto &options = app.add_zlink_framework ();
+    options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
+    options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
     options.add_location_store (std::make_shared<runtime::in_memory_location_store_t> ());
     options.add_route_mesh ("route-stop-infrastructure")
       .listen ("tcp://127.0.0.1:0")

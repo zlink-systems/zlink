@@ -17,14 +17,16 @@ enum class location_write_intent_t
 {
     new_claim = 1,
     renew = 2,
-    takeover = 3
+    takeover = 3,
+    fixed_rid_new_claim = 4
 };
 
 enum class location_write_status_t
 {
     stored = 1,
     ignored_stale = 2,
-    rejected_conflict = 3
+    rejected_conflict = 3,
+    waiting = 4
 };
 
 struct location_write_result_t

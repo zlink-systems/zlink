@@ -659,6 +659,10 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             co_return published;
         }
         catch (const std::exception &error) {
+            if (const auto *failure = dynamic_cast<const framework_exception_t *> (&error);
+                failure && failure->kind () == framework_error_kind_t::not_configured)
+                _startup_publication.complete (
+                  detail::result_access_t::failure<bool> (std::current_exception ()));
             _runtime->record_runtime_failure (error.what ());
             co_return false;
         }
