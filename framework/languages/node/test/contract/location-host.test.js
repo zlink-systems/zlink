@@ -1150,7 +1150,7 @@ for (const storage of ['provider', 'in-memory']) {
 
   for (const retry of ['none', 'stop', 'shutdown']) {
     const fails = retry !== 'none';
-    test(`P1 stop before shutdown classifies ${fails ? `failed teardown then explicit ${retry}` : 'successful teardown'} (${storage})`, async t => {
+    test(`P1 stop before shutdown classifies ${fails ? `failed teardown with ${retry} after shutdown retry` : 'successful teardown'} (${storage})`, async t => {
       const scenario = await fixedRidRegressionScenario(t, storage);
       const calls = [];
       const { host } = scenario.makeHost(calls);
@@ -1187,22 +1187,17 @@ for (const storage of ['provider', 'in-memory']) {
         });
         assert.deepEqual(host.status.terminationResult, result.value);
         assert.equal((await stopResult)[0].status, fails ? 'rejected' : 'fulfilled');
-        assert.equal(attempts, 1);
-        if (fails) {
-          await assert.rejects(() => host.start(), /cleanup must complete/u);
-          if (retry === 'stop') await host.stop();
-          else assert.deepEqual(await host.shutdown(), {
-            outcome: framework.ZLinkFrameworkTerminationOutcome.Stopped,
-            reason: framework.ZLinkFrameworkTerminationReason.None
-          });
-        }
         assert.equal(attempts, fails ? 2 : 1);
+        if (fails) {
+          if (retry === 'stop') await host.stop();
+          if (retry === 'shutdown') assert.deepEqual(await host.shutdown(), result.value);
+        }
         assert.equal(calls.filter(call => call === 'spot:dispose').length, 1);
         assert.equal(calls.filter(call => call === 'context:dispose').length, 1);
         assert.equal(
           storeDisposes,
-          scenario.provider ? (fails && retry !== 'none' ? 2 : 1) : 0
-        ); // #3923: a retried teardown disposes stores again
+          scenario.provider ? (fails ? 2 : 1) : 0
+        ); // #3923: shutdown retries teardown and disposes the owned store again
         assert.equal(host.executionState, undefined);
         if (fails) {
           await host.start();
@@ -1218,6 +1213,52 @@ for (const storage of ['provider', 'in-memory']) {
       }
     });
   }
+
+  test(`P1 shutdown retry failure can be completed by a later shutdown (${storage})`, async t => {
+    const scenario = await fixedRidRegressionScenario(t, storage);
+    const calls = [];
+    const { host } = scenario.makeHost(calls);
+    let contextDisposes = 0;
+    let storeDisposes = 0;
+    if (scenario.provider) scenario.provider.dispose = async () => { storeDisposes++; };
+    try {
+      await host.start();
+      scenario.advance(15);
+      await renewFixedRidRegressionHost(host);
+      const disposeContext = host.context.dispose.bind(host.context);
+      host.context.dispose = async () => {
+        contextDisposes++;
+        if (contextDisposes <= 2) throw new Error('context dispose failed twice');
+        await disposeContext();
+      };
+
+      const first = await host.shutdown();
+      assert.deepEqual(first, {
+        outcome: framework.ZLinkFrameworkTerminationOutcome.ForceStopped,
+        reason: framework.ZLinkFrameworkTerminationReason.TeardownFailed
+      });
+      assert.deepEqual(host.status.terminationResult, first);
+      assert.equal(contextDisposes, 2);
+      assert.equal(storeDisposes, scenario.provider ? 2 : 0); // #3923: both teardown attempts dispose the owned store
+      assert.notEqual(host.executionState, undefined);
+      await assert.rejects(() => host.start(), /cleanup must complete/u);
+
+      assert.deepEqual(await host.shutdown(), {
+        outcome: framework.ZLinkFrameworkTerminationOutcome.Stopped,
+        reason: framework.ZLinkFrameworkTerminationReason.None
+      });
+      assert.equal(contextDisposes, 3);
+      assert.equal(storeDisposes, scenario.provider ? 3 : 0); // #3923: explicit retry disposes the owned store again
+      assert.equal(host.executionState, undefined);
+      await host.start();
+      assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Preparing);
+      scenario.advance(15);
+      await renewFixedRidRegressionHost(host);
+      assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
+    } finally {
+      await host.stop();
+    }
+  });
 
   test(`P1 Serving recovery rejection observes Error Draining Stopped (${storage})`, async t => {
     const scenario = await fixedRidRegressionScenario(t, storage);
@@ -1571,8 +1612,13 @@ test('P1 shutdown disposes an owned store when context disposal fails', async t 
       outcome: framework.ZLinkFrameworkTerminationOutcome.ForceStopped,
       reason: framework.ZLinkFrameworkTerminationReason.TeardownFailed
     });
-    assert.equal(contextDisposes, 1);
-    assert.equal(storeDisposes, 1);
+    assert.equal(
+      contextDisposes,
+      2,
+      `context dispose attempts=${contextDisposes}; executionState=${host.executionState === undefined ? 'released' : 'retained'}`
+    );
+    assert.equal(storeDisposes, 2); // #3923: same shutdown retries owned-store disposal
+    assert.equal(host.executionState, undefined);
   } finally {
     await host.stop();
   }

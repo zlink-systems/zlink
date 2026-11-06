@@ -76,6 +76,7 @@ async function main() {
   const disposeContext = runtime.context.dispose.bind(runtime.context);
   runtime.context.dispose = async () => {
     contextDisposes++;
+    if (mode === 'failure' && contextDisposes === 1) throw new Error('context dispose failed once');
     await disposeContext();
   };
   const existing = mode === 'normal' ? undefined : runtime.shutdown({ deadlineMs: mode === 'deadline' ? 50 : 5000 });
@@ -87,7 +88,8 @@ async function main() {
     assert.deepEqual(await existing, terminal, 'explicit cleanup preserves the drain outcome and reason');
   }
   assert.equal(runtime.executionState, undefined, 'explicit cleanup releases the remaining execution state');
-  assert.equal(contextDisposes, 1, 'successful context cleanup is shared');
+  assert.equal(contextDisposes, mode === 'failure' ? 2 : 1,
+    mode === 'failure' ? 'failed context cleanup is retried within shutdown' : 'successful context cleanup is shared');
   assert.equal(terminal.outcome, mode === 'normal' || mode === 'shared'
     ? framework.ZLinkFrameworkTerminationOutcome.Stopped : framework.ZLinkFrameworkTerminationOutcome.ForceStopped);
   assert.equal(terminal.reason, mode === 'failure'

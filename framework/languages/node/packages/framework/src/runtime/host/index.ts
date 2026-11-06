@@ -1235,8 +1235,17 @@ export class ZLinkFrameworkRuntimeHost
           }
         } finally {
           this.setRuntimeState(ZLinkFrameworkRuntimeState.Draining);
-          await (teardown ?? this.teardownRuntime()).catch((error: unknown) => {
-            this.shutdownOperation = undefined;
+          await (teardown ?? this.teardownRuntime()).catch(async (error: unknown) => {
+            // A failed cleanup gets one more attempt before the result is final.
+            // Only a cleanup that still failed leaves shutdown open to a retry.
+            if (
+              !(await this.teardownRuntime().then(
+                () => true,
+                () => false
+              ))
+            ) {
+              this.shutdownOperation = undefined;
+            }
             throw error;
           });
         }
