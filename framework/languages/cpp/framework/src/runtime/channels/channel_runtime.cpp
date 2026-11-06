@@ -1403,11 +1403,6 @@ publisher_t::publisher_t (message_bus_t bus) : _bus (std::move (bus))
 {
 }
 
-route_send_call_t::route_send_call_t (std::string packet_name, submit_fn_t submit) :
-    _packet_name (std::move (packet_name)), _submit (std::move (submit))
-{
-}
-
 route_send_call_t &route_send_call_t::metadata (std::string key, std::string value)
 {
     _metadata[std::move (key)] = std::move (value);
@@ -1416,17 +1411,18 @@ route_send_call_t &route_send_call_t::metadata (std::string key, std::string val
 
 task_t<void> route_send_call_t::async ()
 {
-    if (!_submission->try_claim ()) {
-        return task_t<void> (result_t<void>::failure (
-          framework_error_kind_t::protocol_error, "route send call has already been submitted"));
-    }
     if (!_submit) {
         return task_t<void> (
           result_t<void>::failure (framework_error_kind_t::protocol_error,
                                    "route send call is not bound to a route client"));
     }
-    // The bound transport boundary completes this task with the public result.
-    return _submit (_packet_name, _metadata);
+    const auto submission = _submit;
+    if (!submission->once.try_claim ()) {
+        return task_t<void> (result_t<void>::failure (
+          framework_error_kind_t::protocol_error, "route send call has already been submitted"));
+    }
+    // Copies share the callable and its single-use decision, without a second allocation.
+    return submission->submit (_packet_name, _metadata);
 }
 
 route_client_t::route_client_t () = default;
