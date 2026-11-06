@@ -1,3 +1,4 @@
+import { inspectRuntime } from '../internal-observation';
 import { ZLinkDescriptorPublicationUnconfirmedError } from './descriptor-publication';
 import { ZLinkOwnerLeaseReleaseDelayPendingError } from './owner-lease-release-delay';
 import { isIndeterminateLocationStoreFailure } from './location-store-failure';
@@ -175,6 +176,32 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   private ownerToken?: ZLinkLocationOwnerToken;
   private lastOwnerToken?: ZLinkLocationOwnerToken;
   private ownerLeaseDeadlineMs?: number;
+  private lastSuccessfulLease?: {
+    readonly startedAtMs: number;
+    readonly admissionDeadlineMs: number;
+    readonly owner: ZLinkLocationOwnerToken;
+  };
+  private storeOutage?: {
+    readonly startedAtMs: number;
+    readonly cutoffMs: number;
+    readonly owner: ZLinkLocationOwnerToken;
+    discarded: boolean;
+  };
+  private storeOutageTimer: unknown;
+
+  [inspectRuntime]() {
+    return {
+      lastSuccessfulLeaseStartedAtMs: this.lastSuccessfulLease?.startedAtMs,
+      storeOutage:
+        this.storeOutage === undefined
+          ? undefined
+          : {
+              startedAtMs: this.storeOutage.startedAtMs,
+              cutoffMs: this.storeOutage.cutoffMs,
+              discarded: this.storeOutage.discarded
+            }
+    };
+  }
 
   ownerLeaseHealthy = false;
   ownerLeaseRenewedAt?: Date;
@@ -384,6 +411,10 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       this.clearTimer(this.heartbeatTimer);
       this.heartbeatTimer = undefined;
     }
+    if (this.storeOutageTimer !== undefined) {
+      this.clearTimer(this.storeOutageTimer);
+      this.storeOutageTimer = undefined;
+    }
     this.leaseOperationStartedAtMs = 0;
     this.ownerLeaseDeadlineMs = undefined;
     await this.cleanupOwner(signal);
@@ -431,18 +462,22 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     }
 
     try {
+      const renewingOwner = this.ownerToken;
       const renewStartedAtMs = this.monotonicNowMs();
       this.leaseOperationStartedAtMs = renewStartedAtMs;
       const result = await withTimeout(
         (renewSignal) =>
           this.stores.ownerLeaseStore.renewOwnerLease(
-            this.ownerToken as ZLinkLocationOwnerToken,
+            renewingOwner,
             this.options.ownerLeaseTtlMs,
             renewSignal
           ),
         this.options.ownerLeaseRenewTimeoutMs,
         signal
-      );
+      ).catch((error: unknown) => {
+        this.observeStoreOutage(error, signal);
+        throw error;
+      });
       const renewCompletedAtMs = this.monotonicNowMs();
       if (result.kind !== 'renewed') {
         // The provider may have been restarted with an empty store. The
@@ -468,6 +503,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         result.leaseExpiresAt,
         result.storeNow
       );
+      this.recordSuccessfulLease(renewStartedAtMs, renewingOwner, true);
       this.lastError = undefined;
       for (const handler of this.ownerLeaseRenewedHandlers) {
         handler(result, wasOwnerLeaseUsable);
@@ -524,6 +560,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         claim.leaseExpiresAt,
         claim.storeNow
       );
+      this.recordSuccessfulLease(claimStartedAtMs, claim.token, false);
       this.lastError = undefined;
       for (const handler of this.ownerLeaseRenewedHandlers) {
         handler(
@@ -626,6 +663,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         cleanupSignal
       );
     } catch (confirmationError) {
+      if (!cancelled) this.observeStoreOutage(confirmationError, cleanupSignal);
       this.recordFailure(errorMessage(confirmationError));
       if (cancelled) throw new ZLinkOwnerCleanupError(confirmationError);
       throw originalError instanceof ZLinkOwnerLeaseClaimError ? originalError : confirmationError;
@@ -655,6 +693,71 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       leaseExpiresAt: confirmed.leaseExpiresAt,
       storeNow: confirmed.storeNow
     };
+  }
+
+  private observeStoreOutage(error: unknown, signal?: AbortSignal): void {
+    if (!this.started || !isIndeterminateLocationStoreFailure(error, signal)) return;
+    const lease = this.lastSuccessfulLease;
+    if (this.storeOutage !== undefined || lease === undefined) return;
+    const cutoffMs = this.options.storeOutageRetention
+      ? lease.startedAtMs +
+        this.options.ownerLeaseTtlMs +
+        2 * this.options.ownerLeaseFencingMarginMs
+      : lease.admissionDeadlineMs;
+    this.storeOutage = {
+      startedAtMs: this.monotonicNowMs(),
+      cutoffMs,
+      owner: lease.owner,
+      discarded: false
+    };
+    this.latchStoreOutage();
+  }
+
+  private latchStoreOutage(): void {
+    const outage = this.storeOutage;
+    if (outage === undefined || outage.discarded) return;
+    if (this.monotonicNowMs() >= outage.cutoffMs) {
+      outage.discarded = true;
+      if (this.storeOutageTimer !== undefined) this.clearTimer(this.storeOutageTimer);
+      this.storeOutageTimer = undefined;
+      return;
+    }
+    this.storeOutageTimer = this.setTimer(() => {
+      this.storeOutageTimer = undefined;
+      this.latchStoreOutage();
+    }, outage.cutoffMs - this.monotonicNowMs());
+  }
+
+  private recordSuccessfulLease(
+    startedAtMs: number,
+    owner: ZLinkLocationOwnerToken,
+    renewal: boolean
+  ): void {
+    const outage = this.storeOutage;
+    if (outage !== undefined) {
+      // A completion applied at T cannot undo expiry even if its callback runs first.
+      if (this.monotonicNowMs() >= outage.cutoffMs) this.latchStoreOutage();
+      if (
+        outage.discarded ||
+        !renewal ||
+        owner.ownerId !== outage.owner.ownerId ||
+        owner.leaseGeneration !== outage.owner.leaseGeneration
+      )
+        return;
+      if (this.storeOutageTimer !== undefined) this.clearTimer(this.storeOutageTimer);
+      this.storeOutageTimer = undefined;
+      this.storeOutage = undefined;
+    }
+    if (
+      this.lastSuccessfulLease === undefined ||
+      startedAtMs >= this.lastSuccessfulLease.startedAtMs
+    ) {
+      this.lastSuccessfulLease = {
+        startedAtMs,
+        admissionDeadlineMs: this.ownerLeaseDeadlineMs!,
+        owner
+      };
+    }
   }
 
   private setOwnerLeaseDeadline(

@@ -443,6 +443,7 @@ export declare function ZLinkHandlerGroup(groupName: string): ClassDecorator;
 export interface ZLinkLocationOptionValues {
  readonly ownerLeaseRenewIntervalMs: number;
  readonly ownerLeaseTtlMs: number;
+ readonly storeOutageRetention: boolean;
  readonly pollingIntervalMs: number;
  readonly storeFailureGraceMs: number;
  readonly ownerLeaseFencingMarginMs: number;
@@ -484,6 +485,10 @@ export interface ZLinkInboundDispatchOptions {
 }
 
 ```
+
+`ownerLeaseTtlMs` 기본값은 30초다(`30000` ms). `storeOutageRetention`은 startup-only bool option이며 기본값은 `false`다.
+보존 활성 조건·`false`의 admission 한도·domain 동일 설정 요구는
+[Location runtime §5.1](../../../05-location-relocation/01-location-runtime.ko.md#51-짧은-장애의-보존과-재참여)을 따른다.
 
 네 진단 수준은 비활성화, 오류만 기록, 주요 전이 기록, 상세 진단을 각각 뜻한다. Startup에서 지정하지 않은
 diagnostics level의 기본값은 `"errors"`다. Dispatch configuration의 diagnostics member는 level, sampling rate와 message size 포함

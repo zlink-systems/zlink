@@ -299,12 +299,18 @@ typedef enum zlink_poller_source_kind_t
 } zlink_poller_source_kind_t;
 
 typedef enum zlink_send_flags_t
+#ifdef __cplusplus
+    : unsigned int
+#endif
 {
     ZLINK_SEND_FLAGS_NONE = 0,
     ZLINK_SEND_FLAGS_DONTWAIT = 0x0001u
 } zlink_send_flags_t;
 
 typedef enum zlink_recv_flags_t
+#ifdef __cplusplus
+    : unsigned int
+#endif
 {
     ZLINK_RECV_FLAGS_NONE = 0,
     ZLINK_RECV_FLAGS_DONTWAIT = 0x0001u
