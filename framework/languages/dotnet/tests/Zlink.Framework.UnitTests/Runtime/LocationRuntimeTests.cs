@@ -2,12 +2,408 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.AspNetCore;
+using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class LocationRuntimeTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task StoreOutageRetention_Latches_At_Original_Cutoff_Without_Turns(
+        bool provider,
+        bool retention
+    )
+    {
+        var time = new ControllableTimeProvider();
+        IZLinkLocationRepository store = provider
+            ? new ZLinkProviderLocationRepository(new ZLinkInMemoryProviderLocationStore(time))
+            : new ZLinkInMemoryLocationStore(time);
+        var flaky = new OutageLeaseStore(store);
+        var options = new ZLinkLocationOptions { StoreOutageRetention = retention };
+        await using var runtime = new ZLinkLocationRuntime(options, flaky, time);
+        Assert.True(await runtime.RenewOwnerLeaseOnceAsync());
+        Assert.Throws<InvalidOperationException>(() => options.StoreOutageRetention = !retention);
+        time.AdvanceMonotonic(TimeSpan.FromSeconds(1));
+        flaky.Fail = true;
+        Assert.False(await runtime.RenewOwnerLeaseOnceAsync());
+        var episode = Assert.IsType<ZLinkStoreOutageEpisode>(
+            runtime.GetHealthSnapshot().StoreOutage
+        );
+        Assert.Equal(TimeSpan.FromSeconds(1).Ticks, episode.ObservedAt);
+        Assert.Equal(0, episode.LeaseOperationStartedAt);
+        Assert.Equal(TimeSpan.FromSeconds(retention ? 25 : 10), episode.Lifetime);
+        // Admission keeps its existing deadline, including when retention is enabled.
+        time.AdvanceMonotonic(episode.Lifetime - TimeSpan.FromSeconds(1) - TimeSpan.FromTicks(1));
+        Assert.False(runtime.GetHealthSnapshot().StoreOutage!.Discarded);
+        time.AdvanceMonotonic(TimeSpan.FromTicks(1));
+        Assert.True(runtime.GetHealthSnapshot().StoreOutage!.Discarded);
+        Assert.False(runtime.IsOwnerAdmissionOpen);
+        flaky.Fail = false;
+        Assert.True(await runtime.RenewOwnerLeaseOnceAsync());
+        Assert.True(runtime.IsOwnerAdmissionOpen);
+        Assert.True(runtime.GetHealthSnapshot().StoreOutage!.Discarded);
+        Assert.Equal(episode.Lifetime, runtime.GetHealthSnapshot().StoreOutage!.Lifetime);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StoreOutageRetention_Renewal_Before_T_Closes_Episode(bool provider)
+    {
+        var time = new ControllableTimeProvider();
+        IZLinkLocationRepository store = provider
+            ? new ZLinkProviderLocationRepository(new ZLinkInMemoryProviderLocationStore(time))
+            : new ZLinkInMemoryLocationStore(time);
+        var flaky = new OutageLeaseStore(store);
+        await using var runtime = new ZLinkLocationRuntime(
+            new ZLinkLocationOptions { StoreOutageRetention = true },
+            flaky,
+            time
+        );
+        Assert.True(await runtime.RenewOwnerLeaseOnceAsync());
+        time.AdvanceMonotonic(TimeSpan.FromSeconds(1));
+        flaky.Fail = true;
+        Assert.False(await runtime.RenewOwnerLeaseOnceAsync());
+        time.AdvanceMonotonic(TimeSpan.FromSeconds(23));
+        flaky.Fail = false;
+        Assert.True(await runtime.RenewOwnerLeaseOnceAsync());
+        Assert.Null(runtime.GetHealthSnapshot().StoreOutage);
+        time.AdvanceMonotonic(TimeSpan.FromSeconds(1));
+        Assert.Null(runtime.GetHealthSnapshot().StoreOutage);
+        Assert.Equal(0, time.ActiveTimerCount);
+    }
+
+    [Fact]
+    public async Task StoreOutageRetention_Default_And_Definitive_Response_Do_Not_Open_Episode()
+    {
+        Assert.False(new ZLinkLocationOptions().StoreOutageRetention);
+        var time = new ControllableTimeProvider();
+        var flaky = new OutageLeaseStore(new ZLinkInMemoryLocationStore(time));
+        await using var runtime = new ZLinkLocationRuntime(new ZLinkLocationOptions(), flaky, time);
+        Assert.True(await runtime.RenewOwnerLeaseOnceAsync());
+        flaky.Stale = true;
+        Assert.False(await runtime.RenewOwnerLeaseOnceAsync());
+        Assert.Null(runtime.GetHealthSnapshot().StoreOutage);
+        Assert.Equal(0, time.ActiveTimerCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StoreOutageRetention_Read_Failure_Freezes_T_Across_Late_Claim(bool provider)
+    {
+        var time = new ControllableTimeProvider();
+        IZLinkLocationRepository store = provider
+            ? new ZLinkProviderLocationRepository(new ZLinkInMemoryProviderLocationStore(time))
+            : new ZLinkInMemoryLocationStore(time);
+        var flaky = new OutageLeaseStore(store) { HoldClaim = true };
+        await using var runtime = new ZLinkLocationRuntime(
+            new ZLinkLocationOptions { StoreOutageRetention = true },
+            flaky,
+            time
+        );
+        var lateClaim = runtime.RenewOwnerLeaseOnceAsync().AsTask();
+        await flaky.ClaimStarted.Task;
+        flaky.HoldClaim = false;
+        flaky.ConflictClaim = true;
+        flaky.HoldRead = true;
+        var confirmation = runtime.RenewOwnerLeaseOnceAsync().AsTask();
+        await flaky.ReadStarted.Task;
+        flaky.ConflictClaim = false;
+        flaky.HoldRead = false;
+        Assert.True(await runtime.RenewOwnerLeaseOnceAsync());
+        time.AdvanceMonotonic(TimeSpan.FromSeconds(1));
+        flaky.FailRead = true;
+        flaky.ReleaseRead.TrySetResult();
+        await Assert.ThrowsAsync<ZLinkOwnerLeaseClaimRejectedException>(() => confirmation);
+        var episode = runtime.GetHealthSnapshot().StoreOutage;
+        Assert.NotNull(episode);
+        flaky.ReleaseClaim.TrySetResult();
+        Assert.True(await lateClaim);
+        Assert.Equal(episode, runtime.GetHealthSnapshot().StoreOutage);
+        time.AdvanceMonotonic(TimeSpan.FromSeconds(24));
+        Assert.True(runtime.GetHealthSnapshot().StoreOutage!.Discarded);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StoreOutageRetention_Late_Renew_Cannot_Undo_Original_T(bool provider)
+    {
+        var time = new ControllableTimeProvider();
+        IZLinkLocationRepository store = provider
+            ? new ZLinkProviderLocationRepository(new ZLinkInMemoryProviderLocationStore(time))
+            : new ZLinkInMemoryLocationStore(time);
+        var flaky = new OutageLeaseStore(store);
+        await using var runtime = new ZLinkLocationRuntime(new ZLinkLocationOptions(), flaky, time);
+        Assert.True(await runtime.RenewOwnerLeaseOnceAsync());
+        time.AdvanceMonotonic(TimeSpan.FromSeconds(9));
+        flaky.HoldRenew = true;
+        var lateRenew = runtime.RenewOwnerLeaseOnceAsync().AsTask();
+        await flaky.RenewStarted.Task;
+        flaky.Fail = true;
+        Assert.False(await runtime.RenewOwnerLeaseOnceAsync());
+        var episode = runtime.GetHealthSnapshot().StoreOutage;
+        time.AdvanceMonotonic(TimeSpan.FromSeconds(1));
+        Assert.True(runtime.GetHealthSnapshot().StoreOutage!.Discarded);
+        flaky.ReleaseRenew.TrySetResult();
+        Assert.True(await lateRenew);
+        Assert.True(runtime.IsOwnerAdmissionOpen);
+        Assert.Equal(episode! with { Discarded = true }, runtime.GetHealthSnapshot().StoreOutage);
+    }
+
+    [Fact]
+    public async Task StoreOutageRetention_Missing_Read_And_Conflict_Are_Definitive()
+    {
+        var time = new ControllableTimeProvider();
+        var flaky = new OutageLeaseStore(new ZLinkInMemoryLocationStore(time))
+        {
+            ConflictClaim = true,
+            HoldRead = true,
+        };
+        await using var runtime = new ZLinkLocationRuntime(new ZLinkLocationOptions(), flaky, time);
+        var confirmation = runtime.RenewOwnerLeaseOnceAsync().AsTask();
+        await flaky.ReadStarted.Task;
+        flaky.ConflictClaim = false;
+        flaky.HoldRead = false;
+        Assert.True(await runtime.RenewOwnerLeaseOnceAsync());
+        flaky.MissingRead = true;
+        flaky.ReleaseRead.TrySetResult();
+        await Assert.ThrowsAsync<ZLinkOwnerLeaseClaimRejectedException>(() => confirmation);
+        Assert.Null(runtime.GetHealthSnapshot().StoreOutage);
+        Assert.Equal(0, time.ActiveTimerCount);
+    }
+
+    [Fact]
+    public async Task StoreOutageRetention_General_Store_Read_Failure_Does_Not_Open_Episode()
+    {
+        var time = new ControllableTimeProvider();
+        var services = new ServiceCollection();
+        services.AddZLinkFramework(builder =>
+        {
+            builder.UseTestTimeProvider(time);
+            builder.UseTestLocationStore();
+        });
+        await using var provider = services.BuildServiceProvider();
+        var runtime = provider.GetRequiredService<ZLinkLocationRuntime>();
+        var health = provider.GetRequiredService<ZLinkLocationStoreHealth>();
+        Assert.True(await runtime.RenewOwnerLeaseOnceAsync());
+        await Assert.ThrowsAsync<TimeoutException>(() =>
+            ZLinkLocationStoreRead
+                .ExecuteAsync<ZLinkOwnerLeaseReadResult>(
+                    health,
+                    "read",
+                    default,
+                    _ =>
+                        ValueTask.FromException<ZLinkOwnerLeaseReadResult>(
+                            new TimeoutException("read failed")
+                        )
+                )
+                .AsTask()
+        );
+        Assert.Null(runtime.GetHealthSnapshot().StoreOutage);
+        Assert.Equal(0, time.ActiveTimerCount);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task StoreOutageRetention_Uses_Request_Start_And_Injected_Timeout(
+        bool provider,
+        bool retention
+    )
+    {
+        var time = new ControllableTimeProvider();
+        IZLinkLocationRepository store = provider
+            ? new ZLinkProviderLocationRepository(new ZLinkInMemoryProviderLocationStore(time))
+            : new ZLinkInMemoryLocationStore(time);
+        var flaky = new OutageLeaseStore(store) { HoldClaim = true };
+        await using var runtime = new ZLinkLocationRuntime(
+            new ZLinkLocationOptions { StoreOutageRetention = retention },
+            flaky,
+            time
+        );
+        var initialClaim = runtime.RenewOwnerLeaseOnceAsync().AsTask();
+        await flaky.ClaimStarted.Task;
+        time.AdvanceMonotonic(TimeSpan.FromSeconds(2));
+        flaky.ReleaseClaim.TrySetResult();
+        Assert.True(await initialClaim);
+        flaky.HoldRenew = true;
+        var renew = runtime.RenewOwnerLeaseOnceAsync().AsTask();
+        await flaky.RenewStarted.Task;
+        time.AdvanceMonotonic(TimeSpan.FromSeconds(3));
+        Assert.False(await renew);
+        var episode = runtime.GetHealthSnapshot().StoreOutage;
+        Assert.NotNull(episode);
+        Assert.Equal(0, episode.LeaseOperationStartedAt);
+        Assert.Equal(TimeSpan.FromSeconds(5).Ticks, episode.ObservedAt);
+        var cutoff = TimeSpan.FromSeconds(retention ? 25 : 10);
+        Assert.Equal(cutoff, episode.Lifetime);
+        time.AdvanceMonotonic(cutoff - TimeSpan.FromSeconds(5) - TimeSpan.FromTicks(1));
+        Assert.False(runtime.GetHealthSnapshot().StoreOutage!.Discarded);
+        time.AdvanceMonotonic(TimeSpan.FromTicks(1));
+        Assert.True(runtime.GetHealthSnapshot().StoreOutage!.Discarded);
+        flaky.ReleaseRenew.TrySetResult();
+    }
+
+    [Fact]
+    public async Task StoreOutageRetention_Builder_Option_Is_Frozen_At_Startup()
+    {
+        var services = new ServiceCollection();
+        ZLinkLocationOptions configured = null!;
+        services.AddZLinkFramework(builder =>
+        {
+            builder.UseTestTimeProvider(new ControllableTimeProvider());
+            builder.UseTestLocationStore();
+            configured = builder.ConfigureLocations();
+            Assert.False(configured.StoreOutageRetention);
+            configured.StoreOutageRetention = true;
+        });
+        await using var provider = services.BuildServiceProvider();
+        var runtime = provider.GetRequiredService<ZLinkLocationRuntime>();
+        await runtime.StartAsync(RoutingId.From("retention-startup"));
+        Assert.True(configured.StoreOutageRetention);
+        Assert.Throws<InvalidOperationException>(() => configured.StoreOutageRetention = false);
+        await runtime.StopAsync();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StoreOutageRetention_Deadline_Does_Not_Inherit_Owner_Lane(bool provider)
+    {
+        var time = new ContextCapturingTimeProvider();
+        IZLinkLocationRepository store = provider
+            ? new ZLinkProviderLocationRepository(new ZLinkInMemoryProviderLocationStore(time))
+            : new ZLinkInMemoryLocationStore(time);
+        var flaky = new OutageLeaseStore(store);
+        await using var runtime = new ZLinkLocationRuntime(new ZLinkLocationOptions(), flaky, time);
+        Assert.True(await runtime.RenewOwnerLeaseOnceAsync());
+        flaky.Fail = true;
+        Assert.False(await runtime.RenewOwnerLeaseOnceAsync());
+        time.Clock.AdvanceMonotonic(TimeSpan.FromSeconds(10));
+        Assert.True(runtime.GetHealthSnapshot().StoreOutage!.Discarded);
+    }
+
+    private sealed class ContextCapturingTimeProvider : TimeProvider
+    {
+        internal ControllableTimeProvider Clock { get; } = new();
+
+        public override DateTimeOffset GetUtcNow() => Clock.GetUtcNow();
+
+        public override long GetTimestamp() => Clock.GetTimestamp();
+
+        public override long TimestampFrequency => Clock.TimestampFrequency;
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period
+        )
+        {
+            var context = ExecutionContext.Capture();
+            return Clock.CreateTimer(
+                _ =>
+                {
+                    if (context is null)
+                        callback(state);
+                    else
+                        ExecutionContext.Run(context, _ => callback(state), null);
+                },
+                null,
+                dueTime,
+                period
+            );
+        }
+    }
+
+    private sealed class OutageLeaseStore(IZLinkLocationRepository inner)
+        : ZLinkLocationStoreTestDouble
+    {
+        internal bool Fail;
+        internal bool Stale;
+        internal bool HoldClaim;
+        internal bool HoldRenew;
+        internal bool ConflictClaim;
+        internal bool HoldRead;
+        internal bool FailRead;
+        internal bool MissingRead;
+        internal TaskCompletionSource ReadStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ReleaseRead { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource RenewStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ReleaseRenew { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override async ValueTask<ZLinkOwnerLeaseReadResult> ReadOwnerLeaseAsync(
+            string ownerId,
+            CancellationToken cancellationToken = default
+        )
+        {
+            if (HoldRead)
+            {
+                ReadStarted.TrySetResult();
+                await ReleaseRead.Task;
+            }
+            if (FailRead)
+                throw new InvalidOperationException("Provider read failed");
+            if (MissingRead)
+                return new ZLinkOwnerLeaseReadResult.Missing();
+            return await inner.ReadOwnerLeaseAsync(ownerId, cancellationToken);
+        }
+
+        internal TaskCompletionSource ClaimStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ReleaseClaim { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override async ValueTask<ZLinkOwnerLeaseClaimResult> ClaimOwnerLeaseAsync(
+            string ownerId,
+            TimeSpan leaseTtl,
+            CancellationToken cancellationToken = default
+        )
+        {
+            if (ConflictClaim)
+                return new ZLinkOwnerLeaseClaimResult.Conflict();
+            var result = await inner.ClaimOwnerLeaseAsync(ownerId, leaseTtl, cancellationToken);
+            if (HoldClaim)
+            {
+                ClaimStarted.TrySetResult();
+                await ReleaseClaim.Task;
+            }
+            return result;
+        }
+
+        public override async ValueTask<ZLinkOwnerLeaseRenewResult> RenewOwnerLeaseAsync(
+            ZLinkLocationOwnerToken token,
+            TimeSpan leaseTtl,
+            CancellationToken cancellationToken = default
+        )
+        {
+            if (Fail)
+                throw new TimeoutException("Store unavailable");
+            if (Stale)
+                return new ZLinkOwnerLeaseRenewResult.Stale();
+            var result = await inner.RenewOwnerLeaseAsync(token, leaseTtl, cancellationToken);
+            if (HoldRenew)
+            {
+                RenewStarted.TrySetResult();
+                await ReleaseRenew.Task;
+            }
+            return result;
+        }
+    }
+
     [Fact]
     public async Task ForceStop2646_Expired_Stop_Closes_Local_Heartbeat_Without_Store_Work()
     {
