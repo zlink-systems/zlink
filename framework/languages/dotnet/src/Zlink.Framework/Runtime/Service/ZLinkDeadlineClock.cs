@@ -1,14 +1,11 @@
-using Zlink.Framework.Runtime.Execution;
-using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
-
 namespace Zlink.Framework.Runtime.Service;
 
 // Wire admission preserves the existing UTC high-water boundary. Once an
 // operation is admitted, its local deadline and retention use elapsed time.
+// The operation owner serializes every UTC acceptance; elapsed reads are stateless.
 internal sealed class ZLinkDeadlineClock
 {
     private readonly TimeProvider _timeProvider;
-    private readonly ZLinkStateLane _lane = new();
     private DateTimeOffset _observedUtc;
     private long _observedTimestamp;
 
@@ -21,21 +18,16 @@ internal sealed class ZLinkDeadlineClock
 
     internal long GetUnixTimeMilliseconds()
     {
-        return AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                var wallUtc = _timeProvider.GetUtcNow();
-                var timestamp = _timeProvider.GetTimestamp();
-                var elapsed = _timeProvider.GetElapsedTime(_observedTimestamp, timestamp);
-                if (elapsed < TimeSpan.Zero)
-                    elapsed = TimeSpan.Zero;
+        var wallUtc = _timeProvider.GetUtcNow();
+        var timestamp = _timeProvider.GetTimestamp();
+        var elapsed = _timeProvider.GetElapsedTime(_observedTimestamp, timestamp);
+        if (elapsed < TimeSpan.Zero)
+            elapsed = TimeSpan.Zero;
 
-                var monotonicUtc = _observedUtc.Add(elapsed);
-                _observedUtc = wallUtc > monotonicUtc ? wallUtc : monotonicUtc;
-                _observedTimestamp = timestamp;
-                return _observedUtc.ToUnixTimeMilliseconds();
-            })
-        );
+        var monotonicUtc = _observedUtc.Add(elapsed);
+        _observedUtc = wallUtc > monotonicUtc ? wallUtc : monotonicUtc;
+        _observedTimestamp = timestamp;
+        return _observedUtc.ToUnixTimeMilliseconds();
     }
 
     internal TimeSpan Elapsed => _timeProvider.GetElapsedTime(0, _timeProvider.GetTimestamp());

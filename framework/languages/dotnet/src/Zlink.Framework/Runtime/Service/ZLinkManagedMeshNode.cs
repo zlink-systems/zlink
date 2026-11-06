@@ -679,6 +679,21 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         // lifetime signal without running cancellation cleanup on this lane.
         // Record cleanup before transport teardown so the caller's finally
         // delivers the taken terminal even when that teardown throws.
+        cleanup += RunOperation(() =>
+        {
+            Action? deliver = null;
+            foreach (var operation in _operations.Values)
+                if (operation.LogicalTarget == target)
+                    deliver += TakeEndedNativeRequest(
+                        operation,
+                        default,
+                        new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.Unavailable,
+                            "Durable request target lifecycle ended."
+                        )
+                    );
+            return deliver;
+        });
         if (PeerConnectionIntentRemoved is { } listeners)
             foreach (Func<RoutingId, Action?> listener in listeners.GetInvocationList())
                 cleanup += listener(target);
@@ -5614,7 +5629,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         PendingOperation? preparedOperation = null,
         CancellationToken callerCancellation = default,
         ZLinkRequestAdmission? requestAdmission = null,
-        ulong? originalDeadlineUnixMs = null
+        ulong? originalDeadlineUnixMs = null,
+        Action<PendingOperation>? start = null
     )
     {
         var operation =
@@ -5639,29 +5655,31 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ValueTask<(
             ulong Correlation,
             PendingOperation Operation,
-            bool WakeReceiveOwner,
             Task<ManagedRequestCompletion>? Completion
         )> registering;
         try
         {
             var startedAt = _deadlineTimeProvider.GetTimestamp();
             var started = _deadlineClock.Elapsed;
-            var deadline =
-                absoluteDeadline
-                ?? (managedTimeout is { } budget ? started + budget : TimeSpan.MaxValue);
-            var deadlineUnixMs = managedTimeout is not null
-                ? checked(
-                    (ulong)(
-                        _deadlineClock.GetUnixTimeMilliseconds()
-                        + Math.Ceiling((deadline - started).TotalMilliseconds)
-                    )
-                )
-                : 0;
-            operation.DeadlineStartTimestamp = startedAt;
-            operation.DeadlineTimeout = managedTimeout is not null ? deadline - started : default;
-            operation.DeadlineUnixMs = originalDeadlineUnixMs ?? deadlineUnixMs;
             registering = _operationLane.RunAsync(() =>
             {
+                var deadline =
+                    absoluteDeadline
+                    ?? (managedTimeout is { } budget ? started + budget : TimeSpan.MaxValue);
+                var deadlineUnixMs = managedTimeout is not null
+                    ? checked(
+                        (ulong)(
+                            _deadlineClock.GetUnixTimeMilliseconds()
+                            + Math.Ceiling((deadline - _deadlineClock.Elapsed).TotalMilliseconds)
+                        )
+                    )
+                    : 0;
+                operation.DeadlineStartTimestamp = startedAt;
+                operation.DeadlineTimeout = managedTimeout is not null
+                    ? deadline - started
+                    : default;
+                operation.DeadlineUnixMs = originalDeadlineUnixMs ?? deadlineUnixMs;
+
                 if (IsDisposing || _state == MeshNodeState.Stopped)
                     throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.ShuttingDown,
@@ -5685,6 +5703,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 }
                 if (!_operations.TryAdd(operationId.Low, operation))
                     throw new InvalidOperationException("The operation id was reused.");
+                bool wakeReceiveOwner;
                 try
                 {
                     if (IsRelocatableRequest(kind))
@@ -5698,15 +5717,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                                 "The relocation reply operation id was reused."
                             );
                     }
-                    var wakeReceiveOwner = IndexOperationDeadline(operation);
-                    if (callerCancellation.IsCancellationRequested)
-                        CancelCaller();
-                    return (
-                        Correlation: operationId.Low,
-                        Operation: operation,
-                        WakeReceiveOwner: wakeReceiveOwner,
-                        Completion: completion
-                    );
+                    wakeReceiveOwner = IndexOperationDeadline(operation);
                 }
                 catch (Exception error)
                 {
@@ -5721,10 +5732,36 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     return (
                         Correlation: operationId.Low,
                         Operation: operation,
-                        WakeReceiveOwner: false,
                         Completion: completion
                     );
                 }
+                ZLinkStateLane.ObserveWork("registered");
+                try
+                {
+                    if (callerCancellation.IsCancellationRequested)
+                        CancelCaller();
+                    if (wakeReceiveOwner)
+                        SignalReceiveOwner();
+                    if (
+                        start is not null
+                        && _operations.TryGetValue(operationId.Low, out var current)
+                        && ReferenceEquals(current, operation)
+                        && operation.Deadline > _deadlineClock.Elapsed
+                    )
+                        start(operation);
+                }
+                catch (Exception error)
+                {
+                    if (awaitCompletion)
+                        FailNativeDeadline(operation, error);
+                    else
+                    {
+                        TryRemoveOperation(pair);
+                        RemoveRelocationReplyOperationUnderLock(operation, rememberTerminal: false);
+                        throw;
+                    }
+                }
+                return (Correlation: operationId.Low, Operation: operation, Completion: completion);
             });
         }
         catch (Exception error)
@@ -5734,7 +5771,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         // An uncontended lane completes synchronously; only a contended one pays for
         // an async state machine.
         return registering.IsCompletedSuccessfully
-            ? new(CompleteOperationRegistration(registering.Result, awaitCompletion))
+            ? new(registering.Result)
             : AwaitOperationRegistrationAsync(registering, operation, completion, awaitCompletion);
     }
 
@@ -5746,7 +5783,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ValueTask<(
             ulong Correlation,
             PendingOperation Operation,
-            bool WakeReceiveOwner,
             Task<ManagedRequestCompletion>? Completion
         )> registering,
         PendingOperation operation,
@@ -5757,7 +5793,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         (
             ulong Correlation,
             PendingOperation Operation,
-            bool WakeReceiveOwner,
             Task<ManagedRequestCompletion>? Completion
         ) registered;
         try
@@ -5768,7 +5803,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             return FailOperationRegistration(operation, completion, awaitCompletion, error);
         }
-        return CompleteOperationRegistration(registered, awaitCompletion);
+        return registered;
     }
 
     private (
@@ -5791,53 +5826,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
         }
         return (operation.OperationId.Low, operation, completion);
-    }
-
-    private (
-        ulong Correlation,
-        PendingOperation Operation,
-        Task<ManagedRequestCompletion>? Completion
-    ) CompleteOperationRegistration(
-        (
-            ulong Correlation,
-            PendingOperation Operation,
-            bool WakeReceiveOwner,
-            Task<ManagedRequestCompletion>? Completion
-        ) registered,
-        bool awaitCompletion
-    )
-    {
-        if (registered.WakeReceiveOwner)
-        {
-            try
-            {
-                SignalReceiveOwner();
-            }
-            catch (Exception error)
-            {
-                if (awaitCompletion)
-                    FailNativeDeadline(registered.Operation, error);
-                else
-                {
-                    TryRemoveOperation(
-                        new KeyValuePair<ulong, PendingOperation>(
-                            registered.Correlation,
-                            registered.Operation
-                        )
-                    );
-                    RunOperation(() =>
-                        RemoveRelocationReplyOperationUnderLock(
-                            registered.Operation,
-                            rememberTerminal: false
-                        )
-                    );
-                    registered.Operation.Complete();
-                    registered.Operation.Completed(null);
-                    throw;
-                }
-            }
-        }
-        return (registered.Correlation, registered.Operation, registered.Completion);
     }
 
     public MeshOperationId AllocateOperationId() => NextStandaloneOperationId();
@@ -9007,8 +8995,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     ingressOwner.Dispose();
                 return;
             }
-            var localDeadline = _deadlineClock.FromUnixTimeMilliseconds(
-                checked((long)deadlineUnixMs)
+            var localDeadline = RunOperation(() =>
+                _deadlineClock.FromUnixTimeMilliseconds(checked((long)deadlineUnixMs))
             );
             if (localDeadline <= _deadlineClock.Elapsed)
             {
@@ -9452,8 +9440,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     ingressOwner.Dispose();
                 return;
             }
-            var localDeadline = _deadlineClock.FromUnixTimeMilliseconds(
-                checked((long)operation.DeadlineUnixMs)
+            var localDeadline = RunOperation(() =>
+                _deadlineClock.FromUnixTimeMilliseconds(checked((long)operation.DeadlineUnixMs))
             );
             if (localDeadline <= _deadlineClock.Elapsed)
             {
@@ -10455,45 +10443,51 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     internal ZLinkPeerRouteObservation ObservePeerRoute(
         RoutingId target,
         ulong lifecycleGeneration = 0
-    ) =>
-        RunState(() =>
+    ) => RunState(() => ObservePeerRouteUnderOwner(target, lifecycleGeneration, out _));
+
+    private ZLinkPeerRouteObservation ObservePeerRouteUnderOwner(
+        RoutingId target,
+        ulong lifecycleGeneration,
+        out ZLinkMeshDirectPeer? directPeer
+    )
+    {
+        var generation = _selectedRoutes.GenerationOf(target);
+        var ready =
+            generation != 0
+            && _peersByRid.TryGetValue(target, out var peer)
+            && peer.Admitted
+            && peer.RouteGeneration == generation
+            && (lifecycleGeneration == 0 || peer.LifecycleGeneration == lifecycleGeneration);
+        directPeer = ready ? _channelSelection.DirectPeer(target) : null;
+        ConnectionAttempt? attempt = null;
+        string? endpoint = null;
+        if (!ready)
         {
-            var generation = _selectedRoutes.GenerationOf(target);
-            var ready =
-                generation != 0
-                && _peersByRid.TryGetValue(target, out var peer)
-                && peer.Admitted
-                && peer.RouteGeneration == generation
-                && (lifecycleGeneration == 0 || peer.LifecycleGeneration == lifecycleGeneration);
-            ConnectionAttempt? attempt = null;
-            string? endpoint = null;
-            if (!ready)
-            {
-                if (_peerExpectations.TryGetValue(target, out var expectation))
-                    endpoint = expectation.Endpoint;
-                foreach (var intent in _peersByIntent.Values)
-                    if (intent.ExpectedRid == target || intent.ResolvedRid == target)
+            if (_peerExpectations.TryGetValue(target, out var expectation))
+                endpoint = expectation.Endpoint;
+            foreach (var intent in _peersByIntent.Values)
+                if (intent.ExpectedRid == target || intent.ResolvedRid == target)
+                {
+                    endpoint = intent.Endpoint;
+                    break;
+                }
+            if (endpoint is not null)
+                foreach (var row in _connectionAttempts)
+                    if (string.Equals(row.Endpoint, endpoint, StringComparison.Ordinal))
                     {
-                        endpoint = intent.Endpoint;
+                        attempt = row;
                         break;
                     }
-                if (endpoint is not null)
-                    foreach (var row in _connectionAttempts)
-                        if (string.Equals(row.Endpoint, endpoint, StringComparison.Ordinal))
-                        {
-                            attempt = row;
-                            break;
-                        }
-            }
-            return new ZLinkPeerRouteObservation(
-                generation,
-                ready ? generation : 0,
-                _channelSelectionChanged.Task,
-                attempt,
-                endpoint,
-                _connectionAttempts
-            );
-        });
+        }
+        return new ZLinkPeerRouteObservation(
+            generation,
+            ready ? generation : 0,
+            _channelSelectionChanged.Task,
+            attempt,
+            endpoint,
+            _connectionAttempts
+        );
+    }
 
     internal RoutingId? EndRouteAdmissionUnderLock(RouterRoute ended)
     {
@@ -11164,6 +11158,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             FailNativeDeadline(operation, error);
         }
         DisposeParts(replyParts);
+        ZLinkStateLane.ObserveWork("late-reply-cleanup");
     }
 
     private static IReadOnlyList<Message> DecodeDeadlineReply(ManagedRequestCompletion result)
@@ -11306,6 +11301,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 var socket = _socket;
                 if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
                     throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
+                ZLinkStateLane.ObserveWork("native-submit");
                 request = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
                     socket.Request(target).Messages(messages).Timeout(timeout),
                     timeout,
@@ -11485,6 +11481,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 };
             };
             // Every constructor caller enters this node's state lane once.
+            ZLinkStateLane.ObserveWork("intent-observer");
             node.PeerConnectionIntentRemoved += _onIntentRemoved;
         }
 
@@ -11559,95 +11556,187 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         Exception? failure = null;
         try
         {
-            using var ownedLifetime =
-                suppliedLifetime is null && timeout > _deadlineTimeProvider.GetElapsedTime(started)
-                    ? await _lane
-                        .RunAsync(() => new NativeDurableRequestLifetime(this, target))
-                        .ConfigureAwait(false)
-                    : null;
-            var lifetime = suppliedLifetime ?? ownedLifetime;
-            requestAdmission ??= new ZLinkRequestAdmission();
-            if (ownerOperation is not null)
-                reply = decodeReply(
-                    await ProduceAsync(ownerOperation, null, pendingToken).ConfigureAwait(false)
-                );
-            else
-                reply = await RunDeadlineRequestAsync(
-                        timeout - _deadlineTimeProvider.GetElapsedTime(started),
-                        cancellationToken,
-                        Decode,
-                        (pending, terminal) =>
-                            ObserveNativeDeadlineReplyAsync(
-                                pending,
-                                ProduceAsync(pending, terminal, cancellationToken),
-                                Decode
-                            ),
-                        absoluteDeadline,
-                        requestAdmission: requestAdmission
-                    )
-                    .ConfigureAwait(false);
-
-            async Task<IReadOnlyList<Message>> ProduceAsync(
-                PendingOperation pending,
-                Task? terminal,
-                CancellationToken token
-            )
+            if (ownerOperation is null && suppliedLifetime is null)
             {
-                lifetime?.Bind(() =>
-                    ownerOperation is null
-                        ? TakeEndedNativeRequest(pending, default, lifetime.CreateEndedFailure())
-                        : TakeEndedNativeRequest(
-                            pending,
-                            new ManagedRequestCompletion(
-                                RequestResult.NotConnected,
-                                Array.Empty<Message>(),
-                                0
-                            )
-                        )
-                );
-                using var shutdown = (_stop?.Token ?? default).Register(() =>
-                    CompleteManagedOperation(
-                        pending,
-                        RequestResult.Terminated,
-                        0,
-                        Array.Empty<Message>()
-                    )
-                );
-                var frames =
-                    Interlocked.Exchange(ref ownedWire, null)
-                    ?? throw new OperationCanceledException(token);
-                return await ZLinkDurableRequest
-                    .RequestAsync(
-                        frames,
-                        pending.DeadlineStartTimestamp,
-                        pending.DeadlineTimeout,
-                        (frames, remaining, attemptToken) =>
-                        {
-                            ZLinkMeshDirectPeer peer;
-                            try
+                requestAdmission ??= new ZLinkRequestAdmission();
+                var operation = new PendingOperation<TReply>(
+                    NextStandaloneOperationId(),
+                    MeshOperationKind.NodeRequest,
+                    _localRequestSourceFence,
+                    Decode
+                )
+                {
+                    LogicalTarget = target,
+                };
+                var completion = operation.Completion;
+                // Hand registration to its owner before releasing selection. An intent
+                // retirement queues behind it; this turn never waits for that owner.
+                var registering = await _lane
+                    .RunAsync(() =>
+                    {
+                        var route = ObservePeerRouteUnderOwner(
+                            target,
+                            targetNodeGeneration,
+                            out var peer
+                        );
+                        var initial = true;
+                        return CreateOperationAsync(
+                            operation.Kind,
+                            operation.OperationId,
+                            awaitCompletion: true,
+                            managedTimeout: timeout - _deadlineTimeProvider.GetElapsedTime(started),
+                            absoluteDeadline: absoluteDeadline,
+                            preparedOperation: operation,
+                            callerCancellation: cancellationToken,
+                            requestAdmission: requestAdmission,
+                            start: pending =>
                             {
-                                peer = RequireDirectPeer(target, targetNodeGeneration);
+                                var frames = Interlocked.Exchange(ref ownedWire, null)!;
+                                _ = ObserveProgressAsync(
+                                    pending,
+                                    ObserveNativeDeadlineReplyAsync(
+                                        (PendingOperation<TReply>)pending,
+                                        ZLinkDurableRequest
+                                            .RequestAsync(
+                                                frames,
+                                                pending.DeadlineStartTimestamp,
+                                                pending.DeadlineTimeout,
+                                                (parts, remaining, token) =>
+                                                    SubmitNativeWireAsync(
+                                                        peer!.PhysicalRoutingId,
+                                                        parts,
+                                                        pending.Deadline - _deadlineClock.Elapsed,
+                                                        token,
+                                                        peer.Liveness,
+                                                        requestAdmission
+                                                    ),
+                                                cancellationToken,
+                                                () =>
+                                                {
+                                                    if (initial)
+                                                    {
+                                                        initial = false;
+                                                        return route;
+                                                    }
+                                                    return RunState(() =>
+                                                        ObservePeerRouteUnderOwner(
+                                                            target,
+                                                            targetNodeGeneration,
+                                                            out peer
+                                                        )
+                                                    );
+                                                },
+                                                _deadlineTimeProvider,
+                                                completion
+                                            )
+                                            .AsTask(),
+                                        Decode
+                                    )
+                                );
                             }
-                            catch
-                            {
-                                DisposeParts(frames);
-                                throw;
-                            }
-                            return SubmitNativeWireAsync(
-                                peer.PhysicalRoutingId,
-                                frames,
-                                pending.Deadline - _deadlineClock.Elapsed,
-                                attemptToken,
-                                peer.Liveness,
-                                requestAdmission
-                            );
-                        },
-                        token,
-                        () => ObservePeerRoute(target, targetNodeGeneration),
-                        _deadlineTimeProvider,
-                        terminal
-                    )
+                        );
+                    })
                     .ConfigureAwait(false);
+                await registering.ConfigureAwait(false);
+                reply = await completion.ConfigureAwait(false);
+            }
+            else
+            {
+                using var ownedLifetime =
+                    suppliedLifetime is null
+                    && timeout > _deadlineTimeProvider.GetElapsedTime(started)
+                        ? await _lane
+                            .RunAsync(() => new NativeDurableRequestLifetime(this, target))
+                            .ConfigureAwait(false)
+                        : null;
+                var lifetime = suppliedLifetime ?? ownedLifetime;
+                requestAdmission ??= new ZLinkRequestAdmission();
+                if (ownerOperation is not null)
+                    reply = decodeReply(
+                        await ProduceAsync(ownerOperation, null, pendingToken).ConfigureAwait(false)
+                    );
+                else
+                    reply = await RunDeadlineRequestAsync(
+                            timeout - _deadlineTimeProvider.GetElapsedTime(started),
+                            cancellationToken,
+                            Decode,
+                            (pending, terminal) =>
+                                ObserveNativeDeadlineReplyAsync(
+                                    pending,
+                                    ProduceAsync(pending, terminal, cancellationToken),
+                                    Decode
+                                ),
+                            absoluteDeadline,
+                            requestAdmission: requestAdmission
+                        )
+                        .ConfigureAwait(false);
+
+                async Task<IReadOnlyList<Message>> ProduceAsync(
+                    PendingOperation pending,
+                    Task? terminal,
+                    CancellationToken token
+                )
+                {
+                    lifetime?.Bind(() =>
+                        ownerOperation is null
+                            ? TakeEndedNativeRequest(
+                                pending,
+                                default,
+                                lifetime.CreateEndedFailure()
+                            )
+                            : TakeEndedNativeRequest(
+                                pending,
+                                new ManagedRequestCompletion(
+                                    RequestResult.NotConnected,
+                                    Array.Empty<Message>(),
+                                    0
+                                )
+                            )
+                    );
+                    using var shutdown = (_stop?.Token ?? default).Register(() =>
+                        CompleteManagedOperation(
+                            pending,
+                            RequestResult.Terminated,
+                            0,
+                            Array.Empty<Message>()
+                        )
+                    );
+                    var frames =
+                        Interlocked.Exchange(ref ownedWire, null)
+                        ?? throw new OperationCanceledException(token);
+                    return await ZLinkDurableRequest
+                        .RequestAsync(
+                            frames,
+                            pending.DeadlineStartTimestamp,
+                            pending.DeadlineTimeout,
+                            (frames, remaining, attemptToken) =>
+                            {
+                                ZLinkMeshDirectPeer peer;
+                                try
+                                {
+                                    peer = RequireDirectPeer(target, targetNodeGeneration);
+                                }
+                                catch
+                                {
+                                    DisposeParts(frames);
+                                    throw;
+                                }
+                                return SubmitNativeWireAsync(
+                                    peer.PhysicalRoutingId,
+                                    frames,
+                                    pending.Deadline - _deadlineClock.Elapsed,
+                                    attemptToken,
+                                    peer.Liveness,
+                                    requestAdmission
+                                );
+                            },
+                            token,
+                            () => ObservePeerRoute(target, targetNodeGeneration),
+                            _deadlineTimeProvider,
+                            terminal
+                        )
+                        .ConfigureAwait(false);
+                }
             }
         }
         catch (Exception error)
@@ -14058,6 +14147,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             RequestSource = requestSource;
         }
 
+        internal RoutingId LogicalTarget { get; set; }
         internal MeshOperationId OperationId { get; }
         internal MeshOperationKind Kind { get; }
         internal ZLinkServiceWireCodec.RequestSourceFence RequestSource { get; }

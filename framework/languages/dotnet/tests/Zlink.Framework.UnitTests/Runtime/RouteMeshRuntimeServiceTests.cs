@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -8,6 +9,69 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class RouteMeshRuntimeServiceTests
 {
+#if DEBUG
+    [Fact]
+    public async Task Public_ready_RequestToNode_uses_two_turns_and_no_intent_observer()
+    {
+        await using var target = await RuntimeFixture.StartAsync(
+            ZLinkMeshNodeObjectRole.Server,
+            listenEndpoint: "tcp://127.0.0.1:0"
+        );
+        await using var source = await RuntimeFixture.StartManualAsync(
+            ZLinkMeshNodeObjectRole.Client,
+            target.LocalNodeRid,
+            target.ListenEndpoint
+        );
+        await WaitForStatusAsync(source.Runtime, status => status.ReadyPeerCount == 1);
+        // Warm the typed registry before observing the submission boundary.
+        await Record.ExceptionAsync(async () =>
+            await source
+                .RouteClient.RequestToNode(
+                    RuntimeFixture.MeshName,
+                    target.LocalNodeRid,
+                    new RouteProbe("warm")
+                )
+                .Async<RouteProbe>()
+        );
+        var entries = new ConcurrentQueue<Zlink.Framework.Runtime.Execution.ZLinkStateLane>();
+        var stages =
+            new ConcurrentQueue<(
+                string Name,
+                Zlink.Framework.Runtime.Execution.ZLinkStateLane? Lane
+            )>();
+        Zlink.Framework.Runtime.Execution.ZLinkStateLane.WorkObserver.Value = (stage, lane) =>
+        {
+            if (stage == "lane-entry")
+                entries.Enqueue(lane!);
+            else
+                stages.Enqueue((stage, lane));
+        };
+        ValueTask<RouteProbe> request;
+        try
+        {
+            request = source
+                .RouteClient.RequestToNode(
+                    RuntimeFixture.MeshName,
+                    target.LocalNodeRid,
+                    new RouteProbe("count")
+                )
+                .Async<RouteProbe>();
+        }
+        finally
+        {
+            Zlink.Framework.Runtime.Execution.ZLinkStateLane.WorkObserver.Value = null;
+        }
+        await Record.ExceptionAsync(async () => await request);
+        Assert.Equal(2, entries.Count);
+        Assert.Equal(2, entries.Distinct().Count());
+        Assert.DoesNotContain(stages, stage => stage.Name == "intent-observer");
+        Assert.Same(
+            Assert.Single(stages, stage => stage.Name == "registered").Lane,
+            Assert.Single(stages, stage => stage.Name == "native-submit").Lane
+        );
+    }
+#endif
+
     [Fact]
     public async Task Capacity_Metrics_Use_Store_Commit_Instead_Of_Local_Actor_Count()
     {
