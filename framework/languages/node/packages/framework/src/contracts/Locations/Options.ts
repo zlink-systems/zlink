@@ -3,6 +3,7 @@ import type { ZLinkLocationOptionValues } from '../RouteMesh';
 export interface ZLinkLocationOptions {
   ownerLeaseRenewIntervalMs(value: number): this;
   ownerLeaseTtlMs(value: number): this;
+  storeOutageRetention(value: boolean): this;
   pollingIntervalMs(value: number): this;
   storeFailureGraceMs(value: number): this;
   ownerLeaseFencingMarginMs(value: number): this;
@@ -25,6 +26,7 @@ export const zlinkRuntimeDefaultLocationOptions: Readonly<
 > = {
   ownerLeaseRenewIntervalMs: 5000,
   ownerLeaseTtlMs: 30000,
+  storeOutageRetention: false,
   pollingIntervalMs: 1000,
   listPageSize: 100,
   storeFailureGraceMs: 30000,
