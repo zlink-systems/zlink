@@ -1,0 +1,12 @@
+all_scopes: false
+checking_base_sha: 213e579f52939d637ea39edd3bfc9d31e15752f6
+previous_check_retries: []
+previous_failed_batches: []
+pull_requests:
+  - number: 3993
+    scopes: []
+  - number: 3995
+    scopes: []
+  - number: 3997
+    scopes: []
+scopes: []
