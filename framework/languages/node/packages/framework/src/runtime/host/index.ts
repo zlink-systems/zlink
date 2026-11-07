@@ -396,6 +396,7 @@ export class ZLinkFrameworkRuntimeHost
     this.admission = (
       factories?.createAdmissionGate ?? ((ownerOpen) => new ZLinkRuntimeAdmissionGate(ownerOpen))
     )(() => this.ownerAdmissionOpen());
+    this.admission.setExecutionRuntime(() => this.locationOwner.currentRuntime);
     this.backendAdapterFactory = resolveBackendAdapterFactory(internalOptions);
     this.lifecycleSink = options.lifecycleSink;
     this.runtimeEventPublisher =
@@ -1980,6 +1981,10 @@ export class ZLinkFrameworkRuntimeHost
           metrics: this.metrics,
           onReady: (target, route) => {
             activationNode.registerInstanceIntent(target.stableType, route);
+            const activation = spotManager?.activations.activationForClose(
+              meshName,
+              target.targetSpotId
+            );
             this.locationOwner.currentLifecycle?.trackInstanceSpot({
               meshName,
               spotId: target.targetSpotId,
@@ -1991,6 +1996,7 @@ export class ZLinkFrameworkRuntimeHost
               ownerId: route.ownerId,
               ownerLeaseGeneration: route.leaseGeneration,
               storeVersion: route.storeVersion,
+              executionOwner: activation === undefined ? undefined : new WeakRef(activation.spot),
               deactivate: async () => {
                 await spotManager?.close(meshName, target.targetSpotId as never);
               }
@@ -2883,6 +2889,10 @@ export class ZLinkFrameworkRuntimeHost
   private actorRuntimeOptionsFactory(): ZLinkActorRuntimeOptionsFactory {
     return new ZLinkActorRuntimeOptionsFactory({
       requests: this.requests,
+      discardActorActivation: (actor) => {
+        this.spotNodeRuntime?.discardActorActivation(actor);
+        this.spotManager?.discardActorActivation(actor);
+      },
       terminateActorActivation: (actor, terminal) =>
         this.spotNodeRuntime?.terminateActorActivation(actor, terminal) ?? terminal(),
       registration: this.options.registration,

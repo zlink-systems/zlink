@@ -56,6 +56,30 @@ export class ZLinkLocationLifecycle {
     this.runtime.addOwnershipLostHandler(this.ownershipLostHandler);
   }
 
+  bindActorExecution(actorId: string, owner: object): void {
+    this.actorClaims.bindExecution(actorId, owner);
+  }
+
+  bindSpotExecution(meshName: string, spotId: RoutingId, owner: object): void {
+    this.spotClaims.bindExecution(meshName, spotId, owner);
+  }
+
+  trackExecution(owner: object, steadyReady: () => boolean, discard: () => void): void {
+    this.runtime.trackExecution?.(owner, steadyReady, discard);
+  }
+
+  forgetExecution(owner: object): void {
+    this.runtime.forgetExecution?.(owner);
+  }
+
+  discardSteadyExecution(owner: object): boolean {
+    return this.runtime.discardSteadyExecution?.(owner) ?? false;
+  }
+
+  discardExecution(owner: object): void {
+    this.runtime.discardExecution?.(owner);
+  }
+
   dispose(): void {
     this.runtime.removeOwnershipLostHandler(this.ownershipLostHandler);
   }

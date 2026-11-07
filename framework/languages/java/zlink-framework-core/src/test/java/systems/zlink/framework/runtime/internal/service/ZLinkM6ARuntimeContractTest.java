@@ -18,6 +18,49 @@ import java.util.ArrayList;
 import java.util.List;
 
 final class ZLinkM6ARuntimeContractTest {
+    @org.junit.jupiter.api.RepeatedTest(100)
+    void requestSelectionUsesThePreparedCandidatesUntilTopologyChanges() {
+        var topology =
+                new ZLinkServiceTopologyRegistry(descriptor("mesh", "local", 1, 1, List.of(), 100));
+        var changes = new java.util.concurrent.atomic.AtomicInteger();
+        topology.observeChanges(changes::incrementAndGet);
+        topology.admit(
+                descriptor(
+                        "mesh",
+                        "first",
+                        1,
+                        1,
+                        List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 1)),
+                        100),
+                "first-route",
+                ServiceWireConstants.COMMAND_ADMIT);
+        int prepared = changes.get();
+        for (int request = 0; request < 10; request++) {
+            assertEquals(
+                    RoutingId.from("first"),
+                    topology.selectReadyChannel("orders")
+                            .orElseThrow()
+                            .descriptor()
+                            .nodeRoutingId());
+        }
+        assertEquals(prepared, changes.get(), "selection does not rebuild topology plans");
+        assertTrue(topology.disconnect(RoutingId.from("first"), "first-route"));
+        topology.admit(
+                descriptor(
+                        "mesh",
+                        "second",
+                        1,
+                        1,
+                        List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 1)),
+                        100),
+                "second-route",
+                ServiceWireConstants.COMMAND_ADMIT);
+        assertEquals(
+                RoutingId.from("second"),
+                topology.selectReadyChannel("orders").orElseThrow().descriptor().nodeRoutingId());
+        assertTrue(changes.get() > prepared);
+    }
+
     @Test
     void topologySelectionUsesCurrentMembershipAfterTheReadinessCallback() {
         var topology =

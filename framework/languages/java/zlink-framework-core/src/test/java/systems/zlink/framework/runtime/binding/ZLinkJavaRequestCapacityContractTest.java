@@ -29,6 +29,70 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 
 final class ZLinkJavaRequestCapacityContractTest {
+    @org.junit.jupiter.api.RepeatedTest(100)
+    void bindingReplyMovesItsOriginalFrameToTheCompletionOwner() {
+        var request = new PendingRequest(SubmitResult.OK);
+        var delivered =
+                new java.util.concurrent.atomic.AtomicReference<
+                        systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived>();
+        try (var outbound = Message.from("request");
+                var frame = Message.from("reply")) {
+            ZLinkJavaSocketSupport.submitRequestTo(
+                    request,
+                    List.of(outbound),
+                    Duration.ofSeconds(1),
+                    null,
+                    null,
+                    (received, failure) -> {
+                        assertNull(failure);
+                        delivered.set(received);
+                    });
+            request.completeReply(List.of(frame));
+            try (var received = delivered.get()) {
+                assertSame(
+                        frame,
+                        received.parts().getFirst(),
+                        "the completion owner receives the original binding frame");
+                assertEquals("reply", frame.toUtf8String());
+            }
+        }
+    }
+
+    @org.junit.jupiter.api.RepeatedTest(100)
+    void bindingReceiveKeepsItsOriginalPayloadBufferUntilTheRecordCloses() {
+        try (var nativeRecord =
+                new systems.zlink.contracts.messaging.Received(
+                        systems.zlink.contracts.core.RoutingId.from("source"),
+                        new Message[] {Message.from("Request"), Message.from("payload")})) {
+            long address =
+                    java.lang.foreign.MemorySegment.ofBuffer(
+                                    nativeRecord.parts().get(1).dataBuffer())
+                            .address();
+            try (var received = ZLinkJavaSocketSupport.fromReceived(nativeRecord)) {
+                assertEquals(
+                        14,
+                        systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget
+                                .bytesOf(received.parts()));
+                assertEquals(
+                        7,
+                        systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget
+                                .bytesOf(
+                                        java.util.Arrays.asList(
+                                                null, nativeRecord.parts().get(1))));
+                assertEquals(
+                        address,
+                        java.lang.foreign.MemorySegment.ofBuffer(
+                                        systems.zlink.framework.runtime.internal.service
+                                                .ZLinkFrameworkMultipartView.buffer(
+                                                received.parts(), 1))
+                                .address());
+                assertEquals("payload", nativeRecord.parts().get(1).toUtf8String());
+            }
+            assertThrows(
+                    IllegalStateException.class, () -> nativeRecord.parts().get(1).dataBuffer());
+        }
+    }
+
     private final ZLinkServiceOperationRegistry operations =
             new ZLinkServiceOperationRegistry(
                     new IllegalStateException("closed"), ZLinkJavaSocketSupport::requestTimeout);

@@ -186,8 +186,68 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     readonly cutoffMs: number;
     readonly owner: ZLinkLocationOwnerToken;
     discarded: boolean;
+    readonly retained: Set<object>;
   };
+  private readonly discardedExecutions = new WeakSet<object>();
+  private readonly executions = new Map<
+    object,
+    {
+      readonly steadyReady: () => boolean;
+      readonly discard: () => void;
+    }
+  >();
   private storeOutageTimer: unknown;
+
+  trackExecution(owner: object, steadyReady: () => boolean, discard: () => void): void {
+    if (!this.discardedExecutions.has(owner) && !this.executions.has(owner))
+      this.executions.set(owner, { steadyReady, discard });
+  }
+
+  forgetExecution(owner: object): void {
+    this.executions.delete(owner);
+    this.storeOutage?.retained.delete(owner);
+  }
+
+  discardExecution(owner: object): void {
+    const execution = this.executions.get(owner);
+    this.discardedExecutions.add(owner);
+    this.forgetExecution(owner);
+    execution?.discard();
+  }
+
+  discardSteadyExecution(owner: object): boolean {
+    if (this.executions.get(owner)?.steadyReady() !== true) return false;
+    this.discardExecution(owner);
+    return true;
+  }
+
+  private retainedExecutions(): ReadonlySet<object> | undefined {
+    const outage = this.storeOutage;
+    if (outage !== undefined && this.monotonicNowMs() >= outage.cutoffMs) this.latchStoreOutage();
+    return this.options.storeOutageRetention && outage !== undefined && !outage.discarded
+      ? outage.retained
+      : undefined;
+  }
+
+  executionAllowed(owner: object | undefined): boolean {
+    const admissionOpen =
+      this.started &&
+      this.ownerToken !== undefined &&
+      this.ownerLeaseHealthy &&
+      this.storeOutage === undefined;
+    const retained = admissionOpen ? undefined : this.retainedExecutions();
+    if (owner !== undefined && this.discardedExecutions.has(owner)) return false;
+    return (
+      admissionOpen ||
+      this.ownerLeaseUsable ||
+      (owner !== undefined && retained?.has(owner) === true)
+    );
+  }
+
+  get boundExecutionUsable(): boolean {
+    const retained = this.retainedExecutions();
+    return this.ownerLeaseUsable || (retained !== undefined && retained.size > 0);
+  }
 
   [inspectRuntime]() {
     return {
@@ -708,7 +768,12 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       startedAtMs: this.monotonicNowMs(),
       cutoffMs,
       owner: lease.owner,
-      discarded: false
+      discarded: false,
+      retained: new Set(
+        [...this.executions]
+          .filter(([, execution]) => execution.steadyReady())
+          .map(([owner]) => owner)
+      )
     };
     this.latchStoreOutage();
   }
@@ -720,6 +785,8 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       outage.discarded = true;
       if (this.storeOutageTimer !== undefined) this.clearTimer(this.storeOutageTimer);
       this.storeOutageTimer = undefined;
+      for (const owner of [...outage.retained]) this.discardSteadyExecution(owner);
+      outage.retained.clear();
       return;
     }
     this.storeOutageTimer = this.setTimer(() => {

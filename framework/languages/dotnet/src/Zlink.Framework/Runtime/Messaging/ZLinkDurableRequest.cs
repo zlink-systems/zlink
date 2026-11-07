@@ -16,6 +16,31 @@ internal static class ZLinkDurableRequest
         Task? terminal = null
     )
     {
+        var physical = await AdmitAsync(
+                wire,
+                startTimestamp,
+                timeout,
+                submit,
+                cancellationToken,
+                observeRoute,
+                timeProvider,
+                terminal
+            )
+            .ConfigureAwait(false);
+        return await physical.ConfigureAwait(false);
+    }
+
+    internal static async ValueTask<TReply> AdmitAsync<TReply>(
+        IReadOnlyList<Message> wire,
+        long startTimestamp,
+        TimeSpan timeout,
+        Func<IReadOnlyList<Message>, TimeSpan, CancellationToken, TReply> submit,
+        CancellationToken cancellationToken,
+        Func<ZLinkPeerRouteObservation> observeRoute,
+        TimeProvider? timeProvider = null,
+        Task? terminal = null
+    )
+    {
         var transferred = false;
         try
         {
@@ -106,7 +131,7 @@ internal static class ZLinkDurableRequest
                 }
                 // The submit callback owns the list even when it throws synchronously.
                 transferred = true;
-                return await submit(wire, remaining, cancellationToken).ConfigureAwait(false);
+                return submit(wire, remaining, cancellationToken);
             }
         }
         finally

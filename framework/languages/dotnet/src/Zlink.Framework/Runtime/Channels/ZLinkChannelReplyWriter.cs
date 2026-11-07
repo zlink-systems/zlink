@@ -34,9 +34,16 @@ internal static class ZLinkChannelReplyWriter
     public static ZLinkEnvelopeHeader CreateReplyHeader(
         ZLinkMessageKind kind,
         string channelName,
-        ZLinkEnvelopeHeader request
+        ZLinkEnvelopeHeader request,
+        ZLinkEnvelopeHeader? prepared = null
     )
     {
+        if (prepared is not null)
+            return prepared with
+            {
+                ChannelName = channelName,
+                CorrelationId = request.CorrelationId,
+            };
         return new ZLinkEnvelopeHeader(
             kind,
             channelName,

@@ -20,7 +20,10 @@ internal sealed record ZLinkHandlerEndpointDescriptor(
     bool HasCancellationToken,
     IReadOnlySet<string> Groups,
     string? ExplicitChannelName
-);
+)
+{
+    internal ZLinkEnvelopeHeader? ReplyHeader { get; set; }
+}
 
 internal sealed record ZLinkRouteHandlerEndpointDescriptor(
     ZLinkMessageKind Kind,

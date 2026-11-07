@@ -30,6 +30,24 @@ export class ZLinkSpotSerialExecutor {
   private readonly timerSerials = new Map<string, ZLinkSpotSerialTurnExecutor>();
   readonly actorExecutors = new Map<string, ZLinkActorSerialExecutor>();
   private executionBarrier: ZLinkExecutionBarrier | undefined;
+  private captureActorExecutionPolicy?: (
+    actorId: string
+  ) => (owner: object | undefined) => boolean | undefined;
+  private captureActorExecutionOwner?: (actorId: string) => object | undefined;
+
+  setActorExecutionPolicy(
+    capture: (actorId: string) => (owner: object | undefined) => boolean | undefined,
+    captureOwner?: (actorId: string) => object | undefined
+  ): void {
+    this.captureActorExecutionPolicy = capture;
+    this.captureActorExecutionOwner = captureOwner;
+    for (const [actorId, executor] of this.actorExecutors)
+      executor.scheduler.setExecutionPolicy(
+        () => capture(actorId),
+        () => captureOwner?.(actorId)
+      );
+  }
+
   private closing = false;
   private closePromise: Promise<void> | undefined;
   private preparation?: {
@@ -172,6 +190,19 @@ export class ZLinkSpotSerialExecutor {
     return this.spotSerial.execute(operation, { ...workOptions, lane: 'lifecycle' });
   }
 
+  discardActor(actorId: string, error: unknown): void {
+    this.actorExecutors.get(actorId)?.scheduler.discardPendingApplication(error);
+    this.actorSerials.get(actorId)?.discardPendingApplication(error);
+  }
+
+  discardPendingApplication(error: unknown): void {
+    this.spotSerial.discardPendingApplication(error);
+    for (const serial of this.actorSerials.values()) serial.discardPendingApplication(error);
+    for (const serial of this.timerSerials.values()) serial.discardPendingApplication(error);
+    for (const executor of this.actorExecutors.values())
+      executor.scheduler.discardPendingApplication(error);
+  }
+
   async terminateActor(actorId: string, terminal: () => Promise<void>): Promise<void> {
     const executor = this.actorExecutor(actorId);
     await executor.close();
@@ -216,6 +247,11 @@ export class ZLinkSpotSerialExecutor {
         this.executionMode === ZLinkUserSpotExecutionMode.SpotWide
           ? this.spotSerial.createActorExecutor(actorId, this.sourceSpotId, this.actorOptions)
           : new ZLinkActorSerialExecutor(actorId, this.sourceSpotId, this.actorOptions);
+      if (this.captureActorExecutionPolicy !== undefined)
+        executor.scheduler.setExecutionPolicy(
+          () => this.captureActorExecutionPolicy!(actorId),
+          () => this.captureActorExecutionOwner?.(actorId)
+        );
       this.actorExecutors.set(actorId, executor);
     }
     return executor;

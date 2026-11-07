@@ -12,6 +12,7 @@ import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOption
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLaneTestAccess;
@@ -389,19 +390,22 @@ final class ZLinkChannelSubmitTurnTest {
                                 if (method.getName().equals("requestToChannel")) {
                                     timeout.set((Duration) args[3]);
                                     var operations = (ZLinkServiceOperationRegistry) args[4];
-                                    return operations.submit(
+                                    operations.<ZLinkBackendReceived>submitTerminal(
                                             (UUID) args[5],
                                             (Duration) args[3],
-                                            () -> {
+                                            terminal -> {
                                                 assertEquals(
                                                         1,
                                                         operations.pendingCount(),
                                                         "registration precedes binding submission");
                                                 calls.incrementAndGet();
                                                 binding.run();
-                                                return CompletableFuture.failedFuture(TERMINAL);
+                                                terminal.accept(null, TERMINAL);
+                                                return null;
                                             },
-                                            ignored -> {});
+                                            ignored -> {},
+                                            (ZLinkServiceOperationRegistry.Operation<?>) args[7]);
+                                    return null;
                                 }
                                 if (method.getName().equals("sendToChannel")) {
                                     calls.incrementAndGet();
