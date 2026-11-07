@@ -352,7 +352,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                                     .thenCompose(
                                             result -> {
                                                 submitted.put(key, result);
-                                signal();
+                                                signal();
                                                 if (afterWrite != null) afterWrite.run();
                                                 if (loseWrites.remove(key))
                                                     return CompletableFuture.failedFuture(
@@ -494,7 +494,9 @@ final class ZLinkP4RuntimeRecoveryTest {
             awaitCondition(expected + " store reads, saw " + reads, () -> reads >= expected);
         }
 
-        /** Waits until the Preserve CAS count reaches {@code expected}; fails after the deadline. */
+        /**
+         * Waits until the Preserve CAS count reaches {@code expected}; fails after the deadline.
+         */
         synchronized void awaitWrites(int expected) {
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
             while (writes < expected) {
