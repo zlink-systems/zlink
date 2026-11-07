@@ -461,6 +461,9 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         }
 
         private void discardCore() {
+            // After stop or close, host shutdown owns the remaining object cleanup; check() keeps
+            // answering SHUTTING_DOWN and the cleanup record stays untouched.
+            if (!started) return;
             Runnable action = cleanup.getAndSet(null);
             if (action == null) return;
             StoreOutage episode = outage;

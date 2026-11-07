@@ -1247,6 +1247,7 @@ final class ZLinkP4RuntimeRecoveryTest {
         try (var f = new RuntimeFixture(provider)) {
             var disposed = new java.util.concurrent.atomic.AtomicInteger();
             var calls = new java.util.concurrent.atomic.AtomicInteger();
+            CompletionStage<Boolean> recovery = null;
             var queue =
                     new systems.zlink.framework.execution.ZLinkSerialExecutionQueue(
                             Runnable::run,
@@ -1277,7 +1278,7 @@ final class ZLinkP4RuntimeRecoveryTest {
             if (recovering) {
                 f.at(35, 0);
                 f.publication = new CompletableFuture<>();
-                f.runtime.renewOwnerLeaseOnce();
+                recovery = f.runtime.renewOwnerLeaseOnce();
                 f.awaitPublications(1);
             }
             var pending =
@@ -1300,6 +1301,23 @@ final class ZLinkP4RuntimeRecoveryTest {
             assertEquals(0, calls.get());
             assertEquals(0, disposed.get(), "host shutdown owns remaining object cleanup");
             f.publication.complete(null);
+            if (recovery != null) {
+                // The recovery continuation that was in flight at close runs now; host shutdown
+                // still owns the object cleanup.
+                try {
+                    await(recovery);
+                } catch (RuntimeException expectedAfterClose) {
+                    // The recovery may end exceptionally once the runtime stopped.
+                }
+                assertEquals(0, disposed.get(), "a late recovery never runs the host's cleanup");
+                assertEquals(
+                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                        assertThrows(
+                                        systems.zlink.framework.errors.ZLinkFrameworkException
+                                                .class,
+                                        () -> a.check(true))
+                                .kind());
+            }
             queue.close();
         }
     }
@@ -1321,7 +1339,10 @@ final class ZLinkP4RuntimeRecoveryTest {
                 f.runtime.close();
                 held.complete(late);
                 await(recovery);
-                assertEquals(1, disposed.get());
+                assertEquals(
+                        0,
+                        disposed.get(),
+                        "host shutdown owns remaining object cleanup after close");
                 assertEquals(0, applied.get());
                 var failure =
                         assertThrows(
