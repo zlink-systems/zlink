@@ -1,3 +1,4 @@
+import { validateAuthorityMutation } from './in-memory-authority-store';
 import { macrotaskBoundary } from '../abort';
 import type { ZLinkRuntimeMetrics } from '../diagnostics/runtime-metrics';
 import { routingIdsEqual, toBackendRoutingId } from '../routing-id';
@@ -397,6 +398,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     mutation: ZLinkAuthorityMutation,
     signal?: AbortSignal
   ): Promise<ZLinkAuthorityCompareExchangeResult> {
+    if (mutation.kind === 'rebindOwnerLease') validateAuthorityMutation(mutation);
     if (mutation.kind !== 'delete') {
       validatePayloadSize(mutation.payload, 'Authority payload');
     }
@@ -429,9 +431,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (mutation.kind === 'rebindOwnerLease') {
         if (
           mutation.expectedOwner.ownerId !== record.snapshot.ownerId ||
-          mutation.expectedOwner.leaseGeneration !== record.snapshot.ownerLeaseGeneration ||
-          mutation.targetOwner.ownerId !== record.snapshot.ownerId ||
-          mutation.targetOwner.leaseGeneration === record.snapshot.ownerLeaseGeneration
+          mutation.expectedOwner.leaseGeneration !== record.snapshot.ownerLeaseGeneration
         ) {
           return { kind: 'conflict', current: snapshot };
         }
@@ -448,7 +448,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             meshName: record.snapshot.allocation.descriptor.meshName,
             nodeRid: record.snapshot.allocation.descriptor.rid,
             nodeLifecycleGeneration: record.snapshot.allocation.descriptorLifecycleGeneration,
-            owner: mutation.targetOwner
+            owner: mutation.targetOwner,
+            generationTransition: 'preserve'
           }) === undefined
         ) {
           return { kind: 'conflict', current: snapshot };
@@ -4798,6 +4799,7 @@ function liveTargetDescriptor(
     readonly nodeRid: unknown;
     readonly nodeLifecycleGeneration: bigint;
     readonly owner: ZLinkLocationOwnerToken;
+    readonly generationTransition?: 'preserve';
   }
 ): ZLinkMeshNodeDescriptor | undefined {
   if (leaseRead.kind === 'missing') return undefined;
@@ -4811,7 +4813,8 @@ function liveTargetDescriptor(
     routingIdsEqual(descriptor.rid, toBackendRoutingId(target.nodeRid)) &&
     descriptor.lifecycleGeneration === target.nodeLifecycleGeneration &&
     descriptor.ownerId === target.owner.ownerId &&
-    descriptor.leaseGeneration === target.owner.leaseGeneration &&
+    (target.generationTransition === 'preserve' ||
+      descriptor.leaseGeneration === target.owner.leaseGeneration) &&
     descriptor.objectRole === ZLinkObjectRole.Server &&
     lease.ownerId === target.owner.ownerId &&
     BigInt(lease.leaseGeneration) === target.owner.leaseGeneration &&

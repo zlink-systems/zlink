@@ -3114,6 +3114,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_use_zlink_gtest_main(test_cpp_framework_request_encoder_allocations)
   target_sources(test_cpp_framework_request_encoder_allocations PRIVATE
     tests/support/allocation_counter.cpp)
+  add_zlink_framework_test(test_cpp_framework_request_wire_identity
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_request_wire_identity.cpp
+    "framework-unit;framework-contract;framework-regression;messaging" "unit")
+  target_use_zlink_gtest_main(test_cpp_framework_request_wire_identity)
+  target_include_directories(test_cpp_framework_request_wire_identity PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_compile_definitions(test_cpp_framework_request_wire_identity PRIVATE
+    ZLINK_REQUEST_WIRE_FIXTURE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/request-wire-main-213e579f52.json")
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT ZLINK_FRAMEWORK_CPP_SHARED)
     add_zlink_framework_test(test_cpp_framework_request_native_counts
       tests/Zlink.Framework.UnitTests/test_cpp_framework_request_native_counts.cpp

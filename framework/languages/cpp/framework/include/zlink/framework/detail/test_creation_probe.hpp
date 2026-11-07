@@ -17,7 +17,6 @@ inline std::atomic_size_t request_capture_value_bytes{0};
 inline std::atomic_size_t request_block_bytes{0};
 inline std::atomic_size_t request_callback_owner_bytes{0};
 extern std::atomic<void (*) ()> local_completion_sink_fault;
-extern std::atomic<void (*) ()> node_admission_observer_context_fault;
 inline std::atomic<void (*) ()> task_terminal_context_fault{nullptr};
 } // namespace zlink::framework::detail::test_creation_probe
 #endif

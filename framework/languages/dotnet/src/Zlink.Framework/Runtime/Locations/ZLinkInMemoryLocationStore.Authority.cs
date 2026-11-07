@@ -197,12 +197,41 @@ internal sealed partial class ZLinkInMemoryLocationStore
 
             var put = (ZLinkAuthorityMutation.Put)mutation;
             ValidateAuthorityPayload(put.Payload);
-            ValidateAuthorityMutation(put);
+            ZLinkAuthorityMutation.Validate(put);
+            if (
+                put.GenerationTransition == ZLinkAuthorityGenerationTransition.NewOwner
+                && !IsAllocationCapacityValid(
+                    put.TargetAllocation!.ObjectKind,
+                    put.TargetAllocation.StableType,
+                    put.TargetAllocation.Capacity
+                )
+            )
+                throw new ArgumentException(
+                    "The authority allocation is inconsistent.",
+                    nameof(mutation)
+                );
+            if (!ZLinkAuthorityMutation.MatchesPreservedOwner(current, put))
+                return new ZLinkAuthorityCompareExchangeResult.Conflict(
+                    new ZLinkAuthorityReadResult.Found(current with { StoreNow = now })
+                );
             var needsOwner =
                 put.GenerationTransition == ZLinkAuthorityGenerationTransition.NewOwner;
-            var requiredOwner = needsOwner
-                ? put.TargetOwner!.Value
-                : new ZLinkLocationOwnerToken(current.OwnerId, current.OwnerLeaseGeneration);
+            var requiredOwner =
+                put.TargetOwner
+                ?? new ZLinkLocationOwnerToken(current.OwnerId, current.OwnerLeaseGeneration);
+            if (
+                put.GenerationTransition == ZLinkAuthorityGenerationTransition.Preserve
+                && put.TargetOwner is not null
+                && (
+                    !_meshNodes.Rows.TryGetValue(
+                        ZLinkLocationKeyCodec.EncodeMeshNodeKey(current.Allocation.Descriptor),
+                        out var descriptor
+                    ) || !ZLinkAuthorityMutation.MatchesPreservedDescriptor(current, descriptor)
+                )
+            )
+                return new ZLinkAuthorityCompareExchangeResult.Conflict(
+                    new ZLinkAuthorityReadResult.Found(current with { StoreNow = now })
+                );
             if (!MatchesLiveOwnerLease(requiredOwner, now))
             {
                 return new ZLinkAuthorityCompareExchangeResult.Conflict(
@@ -1611,45 +1640,6 @@ internal sealed partial class ZLinkInMemoryLocationStore
     {
         if (payload.Length > (int)ServiceWireConstants.AuthorityEnvelopeBytes)
             throw new ArgumentOutOfRangeException(nameof(payload));
-    }
-
-    private static void ValidateAuthorityMutation(ZLinkAuthorityMutation.Put put)
-    {
-        var preserve =
-            put.GenerationTransition
-            is ZLinkAuthorityGenerationTransition.Preserve
-                or ZLinkAuthorityGenerationTransition.Reincarnate;
-        var newOwner = put.GenerationTransition == ZLinkAuthorityGenerationTransition.NewOwner;
-        if (!preserve && !newOwner)
-            throw new ArgumentOutOfRangeException(nameof(put));
-        if (
-            preserve
-                && (
-                    put.TargetOwner is not null
-                    || put.TargetAllocation is not null
-                    || put.TargetAuthorityOwnerGeneration != 0
-                )
-            || newOwner
-                && (
-                    put.TargetOwner is null
-                    || put.TargetAllocation
-                        is not {
-                            State: ZLinkPlacementAllocationState.Active,
-                            DescriptorLifecycleGeneration: > 0
-                        } allocation
-                    || !IsAllocationCapacityValid(
-                        allocation.ObjectKind,
-                        allocation.StableType,
-                        allocation.Capacity
-                    )
-                )
-            || put.TargetOwner is { } owner
-                && (string.IsNullOrWhiteSpace(owner.OwnerId) || owner.LeaseGeneration <= 0)
-        )
-            throw new ArgumentException(
-                "Authority mutation transition, expectation, and target owner are inconsistent.",
-                nameof(put)
-            );
     }
 
     private static void ValidateReservationRequest(ZLinkObjectReservationRequest request)

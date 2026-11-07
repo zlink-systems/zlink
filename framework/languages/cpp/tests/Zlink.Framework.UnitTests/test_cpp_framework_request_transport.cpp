@@ -230,8 +230,8 @@ TEST (RequestCallAllocations, UnknownLookupRetainsOwnerCancellationAcrossRuntime
     // Cancellation §5.1 ends this owner's wait, without replacing the producer's result.
     auto pending =
       fw::detail::request_task_access_t::receive_public<transport_reply_t> ([&] (auto receiver) {
-          runtime.request_node_reply (target, std::move (parts).take_items (),
-                                      std::chrono::seconds (1), std::move (receiver));
+          runtime.request_node_reply (target, std::move (parts), std::chrono::seconds (1),
+                                      std::move (receiver));
       });
     auto physical = fw::detail::request_task_access_t::physical_reply (pending);
     ASSERT_EQ (store->calls, 1u);

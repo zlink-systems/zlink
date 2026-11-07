@@ -952,8 +952,6 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         if (_entryDispatchPump is { } entryDispatchPump)
             await CaptureAsync(entryDispatchPump.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(_taskRunner.StopAsync).ConfigureAwait(false);
-        if (_nodeRouteDispatcher is { } nodeRouteDispatcher)
-            await CaptureAsync(nodeRouteDispatcher.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(_spots.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(_bundles.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(DisposeEntrySpotAsync).ConfigureAwait(false);
@@ -1044,18 +1042,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         if (lifecycle is not null)
         {
             var owner = lifecycle.OwnerToken;
-            ((IZLinkBackendAuthorityObserver)Node).SetLocalOwnerLeaseGeneration(
-                checked((ulong)owner.LeaseGeneration)
-            );
-            var fence = new ZLinkServiceWireCodec.RequestSourceFence(
-                owner.OwnerId,
-                checked((ulong)owner.LeaseGeneration),
-                Node.RoutingId,
-                Node.MeshStatus().LifecycleGeneration
-            );
-            var sourceObserver = (IZLinkBackendRequestSourceFenceObserver)Node;
-            sourceObserver.SetLocalRequestSourceFence(fence);
-            sourceObserver.ObserveRequestSourceFence(fence);
+            var fence = InstallOwnerFence(owner);
             localRequestSource = fence;
 
             if (StartupState is { StoreGeneration: 0 } unclaimed)
@@ -1097,6 +1084,31 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             Volatile.Write(ref _localRequestSource, new(installed));
         Node.ActivateIngress();
         return true;
+    }
+
+    internal void RefreshOwnerFence(ZLinkLocationOwnerToken owner)
+    {
+        if (Volatile.Read(ref _localRequestSource) is not null)
+            Volatile.Write(ref _localRequestSource, new(InstallOwnerFence(owner)));
+    }
+
+    private ZLinkServiceWireCodec.RequestSourceFence InstallOwnerFence(
+        ZLinkLocationOwnerToken owner
+    )
+    {
+        ((IZLinkBackendAuthorityObserver)Node).SetLocalOwnerLeaseGeneration(
+            checked((ulong)owner.LeaseGeneration)
+        );
+        var fence = new ZLinkServiceWireCodec.RequestSourceFence(
+            owner.OwnerId,
+            checked((ulong)owner.LeaseGeneration),
+            Node.RoutingId,
+            Node.MeshStatus().LifecycleGeneration
+        );
+        var observer = (IZLinkBackendRequestSourceFenceObserver)Node;
+        observer.SetLocalRequestSourceFence(fence);
+        observer.ObserveRequestSourceFence(fence);
+        return fence;
     }
 
     public async ValueTask InitializeEntrySpotAsync()

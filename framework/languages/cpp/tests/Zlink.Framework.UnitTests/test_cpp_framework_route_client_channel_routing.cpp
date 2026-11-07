@@ -949,8 +949,13 @@ TEST (CppFrameworkRouteClientChannelRouting, SpotSenderPublicationRetriesWithout
       [action = publication_copy_action_t ([&] {
            if (std::exchange (compete, false)) {
                ++competing_publications;
-               state->publish_node_transports (
-                 [] (auto &index) { index.route_channels.insert ("concurrent-route"); });
+               state->publish_node_transports ([] (auto &index) {
+                   index.nodes.emplace (
+                     "concurrent-route",
+                     detail::channel_runtime_state_t::node_transport_index_t::entry_t{
+                       std::shared_ptr<detail::route_channel_runtime_t>{},
+                       detail::prepare_request_channel ("concurrent-route")});
+               });
                EXPECT_TRUE (state->spot_mesh_requesters.contains ("retry"));
                signalled = true;
                prepared.set_value ();
@@ -991,7 +996,7 @@ TEST (CppFrameworkRouteClientChannelRouting, SpotSenderPublicationRetriesWithout
         prepared_future.get ();
         const auto before =
           std::atomic_load_explicit (&state->node_transports, std::memory_order_acquire);
-        EXPECT_TRUE (before->route_channels.contains ("concurrent-route"));
+        EXPECT_TRUE (before->nodes.contains ("concurrent-route"));
         EXPECT_FALSE (before->spot_mesh_senders.contains ("retry"));
     }
     binder.join ();
@@ -999,7 +1004,7 @@ TEST (CppFrameworkRouteClientChannelRouting, SpotSenderPublicationRetriesWithout
         std::rethrow_exception (bind_error);
     const auto index =
       std::atomic_load_explicit (&state->node_transports, std::memory_order_acquire);
-    ASSERT_TRUE (index->route_channels.contains ("concurrent-route"));
+    ASSERT_TRUE (index->nodes.contains ("concurrent-route"));
     ASSERT_TRUE (index->spot_mesh_senders.contains ("existing"));
     ASSERT_TRUE (index->spot_mesh_senders.contains ("retry"));
     EXPECT_EQ (competing_publications, 1u);
@@ -1068,20 +1073,22 @@ TEST (CppFrameworkRouteClientChannelRouting, BothRouteInitializersPublishAfterPr
             EXPECT_TRUE (state->route_channels.contains ("published"));
             EXPECT_TRUE (state->route_channels.at ("published")->running ());
             EXPECT_EQ (std::atomic_load (&state->node_transports), before);
-            EXPECT_FALSE (before->route_channels.contains ("published"));
+            EXPECT_FALSE (before->nodes.contains ("published"));
         }
         initializer.join ();
         if (initialization_error)
             std::rethrow_exception (initialization_error);
         const auto after = std::atomic_load (&state->node_transports);
-        EXPECT_TRUE (after->route_channels.contains ("published"));
+        EXPECT_TRUE (after->nodes.contains ("published"));
+        EXPECT_EQ (std::get<std::shared_ptr<detail::route_channel_runtime_t>> (
+                     after->nodes.at ("published").transport),
+                   state->route_channels.at ("published"));
         EXPECT_TRUE (after->spot_mesh_senders.contains ("existing"));
-        EXPECT_FALSE (before->route_channels.contains ("published"));
+        EXPECT_FALSE (before->nodes.contains ("published"));
         manager.initialize_route_channels (std::vector<std::string>{"published"});
         EXPECT_EQ (std::atomic_load (&state->node_transports), after);
         channel.close ();
-        EXPECT_TRUE (
-          std::atomic_load (&state->node_transports)->route_channels.contains ("published"));
+        EXPECT_TRUE (std::atomic_load (&state->node_transports)->nodes.contains ("published"));
     }
 }
 

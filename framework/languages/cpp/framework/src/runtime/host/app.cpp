@@ -2629,8 +2629,7 @@ void app_t::_apply_zlink_framework ()
             const zlink::routing_id_t &target, runtime::messaging::message_parts_t parts,
             std::chrono::milliseconds timeout,
             detail::request_receiver_t<result_t<runtime::messaging::message_parts_t>> receiver) {
-              mesh->request_node_reply (target, std::move (parts).take_items (), timeout,
-                                        std::move (receiver));
+              mesh->request_node_reply (target, std::move (parts), timeout, std::move (receiver));
           });
         for (const auto &channel_name : mesh->channel_names ()) {
             channel_runtime.bind_mesh_channel_transport (

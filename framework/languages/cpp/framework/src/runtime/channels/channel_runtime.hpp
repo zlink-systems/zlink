@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
+#include <variant>
+
 #include <boost/asio/awaitable.hpp>
 
 #include <zlink/framework/contracts/channels/channel.hpp>
@@ -18,6 +20,7 @@
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
+#include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 
 #include <cstdint>
@@ -182,14 +185,28 @@ class channel_runtime_state_t
         mesh_node_request_t request;
     };
     using mesh_node_transport_ptr_t = std::shared_ptr<const mesh_node_transport_t>;
+    using node_transport_t = std::
+      variant<std::monostate, std::shared_ptr<route_channel_runtime_t>, mesh_node_transport_ptr_t>;
     // Node direct and Spot send transports by name, published when a route channel
     // is initialized or a MeshNode or Spot transport is bound. Submit reads with
     // one atomic load (08-messaging-hot-path E2: prepared at change time). A
-    // route channel name takes precedence and is resolved on the lane.
+    // route channel name takes precedence and is retained when the index is published.
     struct node_transport_index_t
     {
-        std::set<std::string> route_channels;
-        std::map<std::string, mesh_node_transport_ptr_t> mesh_nodes;
+        struct entry_t
+        {
+            using request_encoder_t =
+              runtime::messaging::message_parts_t (runtime::messaging::client_call_codec_t::*) (
+                runtime::messaging::envelope_header_t,
+                encoded_payload_t,
+                std::shared_ptr<const request_type_plan_t>,
+                std::shared_ptr<const prepared_header_fragment_t>) const;
+            node_transport_t transport;
+            prepared_header_fragment_t channel;
+            request_encoder_t encode_request =
+              &runtime::messaging::client_call_codec_t::encode_payload_parts;
+        };
+        std::map<std::string, entry_t> nodes;
         std::map<std::string, spot_mesh_send_t> spot_mesh_senders;
     };
     std::shared_ptr<const node_transport_index_t> node_transports =

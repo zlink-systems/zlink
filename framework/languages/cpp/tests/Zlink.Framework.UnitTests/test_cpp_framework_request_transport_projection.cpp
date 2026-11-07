@@ -13,10 +13,6 @@
 #include <atomic>
 #include <optional>
 #include <thread>
-namespace zlink::framework::detail::test_creation_probe
-{
-extern std::atomic<void (*) ()> node_admission_observer_fault;
-}
 
 namespace zlink::framework::runtime::mesh
 {
@@ -63,7 +59,9 @@ struct request_receiver_mesh_t
         return fw::detail::request_task_access_t::receive_public<int, reply_t> (
           [&] (auto receiver) {
               std::vector<zlink::message_t> parts{zlink::message_t::from (std::string ("request"))};
-              runtime.request_node_reply (target, std::move (parts), timeout, std::move (receiver));
+              runtime.request_node_reply (
+                target, fw::runtime::messaging::message_parts_t (std::move (parts)), timeout,
+                std::move (receiver));
           },
           [&conversions] (const fw::result_t<reply_t> &terminal) {
               ++conversions;
@@ -145,8 +143,7 @@ TEST (RequestCallAllocations, NodeAndChannelNameCaptureStorageBytes)
     channel.bind_serializers (serializers);
     channel.bind_mesh_node_transport (
       "m", {}, [&] (const auto &rid, auto parts, auto timeout, auto receiver) {
-          source.runtime.request_node_reply (rid, std::move (parts).take_items (), timeout,
-                                             std::move (receiver));
+          source.runtime.request_node_reply (rid, std::move (parts), timeout, std::move (receiver));
       });
     channel.bind_mesh_channel_transport ("work", {}, [&] (auto, auto) {
         return fw::request_task_t<reply_t> (fw::result_t<reply_t>::success (
@@ -225,9 +222,8 @@ class held_mesh_nodes_t final : public fw::runtime::in_memory_location_repositor
     }
 };
 
-void unknown_node_observer_failure (bool shutdown, bool native_rejection = false)
+void unknown_node_submission_terminal (bool shutdown, bool native_rejection = false)
 {
-    namespace probe = fw::detail::test_creation_probe;
     auto store = std::make_shared<held_mesh_nodes_t> ();
     request_receiver_mesh_t source (shutdown ? "unknown-shutdown" : "unknown-deadline", store);
     store->hold = true;
@@ -249,54 +245,69 @@ void unknown_node_observer_failure (bool shutdown, bool native_rejection = false
     std::atomic<unsigned> public_results{0};
     auto public_reply = fw::detail::request_task_access_t::public_reply (pending);
     fw::detail::observe_task_terminal (public_reply, [&] (const auto &) { ++public_results; });
-    struct clear_fault_t
-    {
-        ~clear_fault_t () { probe::node_admission_observer_fault.store (nullptr); }
-    } clear_fault;
-    probe::node_admission_observer_fault.store (+[] { throw std::bad_alloc (); });
     store->listed.complete (
       fw::result_t<fw::location_page_t<fw::mesh_node_descriptor_t>>::success ({}));
-    EXPECT_FALSE (pending.result ());
-    // C1 already owns physical delivery, even when admission observation cannot be installed.
-    if (!native_rejection)
+    if (native_rejection) {
+        // The classification continuation submits asynchronously after list completion.
+        ASSERT_FALSE (pending.result ());
+        ASSERT_TRUE (pending.admitted ().await_ready ());
+        ASSERT_FALSE (physical.result ());
+    } else {
+        auto &raw = source.runtime.native_node ().transport ();
+        const auto registration_deadline =
+          std::chrono::steady_clock::now () + std::chrono::seconds (2);
+        while (raw.pending_operation_count () == 0 && !pending.admitted ().await_ready ()
+               && std::chrono::steady_clock::now () < registration_deadline) {
+            source.pump ();
+            std::this_thread::yield ();
+        }
+        ASSERT_EQ (raw.pending_operation_count (), 1u);
+        EXPECT_FALSE (pending.admitted ().await_ready ());
         EXPECT_FALSE (physical.await_ready ());
-    if (shutdown || native_rejection)
-        source.runtime.stop ();
-    else
-        EXPECT_EQ (source.runtime.native_node ()
-                     .transport ()
-                     .expire_requests (std::chrono::steady_clock::now () + std::chrono::seconds (6))
-                     .result ()
-                     .value (),
-                   1u);
+        if (shutdown)
+            source.runtime.stop ();
+        else
+            EXPECT_EQ (
+              raw.expire_requests (std::chrono::steady_clock::now () + std::chrono::seconds (6))
+                .result ()
+                .value (),
+              1u);
+    }
+    // Binding owns native rejection classification; all stages retain that failure.
+    EXPECT_FALSE (pending.result ());
+    EXPECT_FALSE (pending.admitted ().result ());
     EXPECT_FALSE (physical.result ());
+    const auto expected = native_rejection ? pending.admitted ().result ().error_kind ()
+                          : shutdown       ? fw::framework_error_kind_t::shutting_down
+                                           : fw::framework_error_kind_t::deadline_exceeded;
+    EXPECT_EQ (pending.result ().error_kind (), expected);
+    EXPECT_EQ (pending.admitted ().result ().error_kind (), expected);
+    EXPECT_EQ (physical.result ().error_kind (), expected);
     source.runtime.stop ();
     EXPECT_EQ (conversions.load (), 1u);
     EXPECT_EQ (public_results.load (), 1u);
 }
 
-TEST (RequestCallAllocations, UnknownNodeAdmissionObserverFailureAfterNativeRejectionDeliversOnce)
+TEST (RequestCallAllocations, UnknownNodeNativeRejectionDeliversOnce)
 {
-    unknown_node_observer_failure (false, true);
+    unknown_node_submission_terminal (false, true);
 }
 
-TEST (RequestCallAllocations, UnknownNodeAdmissionObserverFailureThenDeadlineDeliversOnce)
+TEST (RequestCallAllocations, UnknownNodeDeadlineDeliversOnce)
 {
-    unknown_node_observer_failure (false);
+    unknown_node_submission_terminal (false);
 }
 
-TEST (RequestCallAllocations, UnknownNodeAdmissionObserverFailureThenShutdownDeliversOnce)
+TEST (RequestCallAllocations, UnknownNodeShutdownDeliversOnce)
 {
-    unknown_node_observer_failure (true);
+    unknown_node_submission_terminal (true);
 }
 
-TEST (RequestCallAllocations,
-      UnknownNodeAdmissionObserverSnapshotFailureAfterRegistryCloseDeliversOnce)
+TEST (RequestCallAllocations, UnknownNodeRegistryCloseDeliversOnce)
 {
-    namespace probe = fw::detail::test_creation_probe;
-    const auto deliveries = probe::request_deliveries.load ();
+    const auto deliveries = fw::detail::test_creation_probe::request_deliveries.load ();
     auto store = std::make_shared<held_mesh_nodes_t> ();
-    request_receiver_mesh_t source ("unknown-observer-snapshot", store);
+    request_receiver_mesh_t source ("unknown-registry-close", store);
     store->hold = true;
     const auto target = zlink::routing_id_t::from ("closed-registry-classification");
     std::atomic<unsigned> conversions{0};
@@ -304,22 +315,12 @@ TEST (RequestCallAllocations,
     auto physical = fw::detail::request_task_access_t::physical_reply (pending);
     EXPECT_FALSE (pending.admitted ().await_ready ());
 
+    source.runtime.expect_peer (target, "tcp://127.0.0.1:1", 1, "default");
     fw::runtime::mesh::raw_mesh_node_owner_test_access_t::close_registry (
       source.runtime.native_node ().transport ());
     std::atomic<unsigned> public_results{0};
     auto public_reply = fw::detail::request_task_access_t::public_reply (pending);
     fw::detail::observe_task_terminal (public_reply, [&] (const auto &) { ++public_results; });
-    struct clear_fault_t
-    {
-        ~clear_fault_t ()
-        {
-            zlink::framework::detail::test_creation_probe::node_admission_observer_context_fault
-              .store (nullptr);
-            zlink::framework::detail::test_creation_probe::task_terminal_context_fault.store (
-              nullptr);
-        }
-    } clear_fault;
-    probe::node_admission_observer_context_fault.store (+[] { throw std::bad_alloc (); });
     store->listed.complete (
       fw::result_t<fw::location_page_t<fw::mesh_node_descriptor_t>>::success ({}));
 
@@ -328,8 +329,8 @@ TEST (RequestCallAllocations,
         std::this_thread::yield ();
     ASSERT_TRUE (pending.await_ready ());
     EXPECT_FALSE (pending.result ());
-    EXPECT_EQ (probe::node_admission_observer_context_fault.load (), nullptr);
-    EXPECT_EQ (probe::task_terminal_context_fault.load (), nullptr);
+    EXPECT_EQ (pending.admitted ().result ().error_kind (),
+               fw::framework_error_kind_t::shutting_down);
 
     const auto physical_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
     while (!physical.await_ready () && std::chrono::steady_clock::now () < physical_deadline)
@@ -339,7 +340,7 @@ TEST (RequestCallAllocations,
     if (physical_ready)
         EXPECT_FALSE (physical.result ());
     source.runtime.stop ();
-    EXPECT_EQ (probe::request_deliveries.load () - deliveries, 1u);
+    EXPECT_EQ (fw::detail::test_creation_probe::request_deliveries.load () - deliveries, 1u);
     EXPECT_EQ (conversions.load (), 1u);
     EXPECT_EQ (public_results.load (), 1u);
 }

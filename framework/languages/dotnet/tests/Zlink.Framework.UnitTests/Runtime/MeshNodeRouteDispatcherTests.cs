@@ -60,7 +60,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 new ThrowingRuntimeErrorSink(),
                 CancellationToken.None
             );
-            await using var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
+            var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
                 ZLinkMeshNodeRouteDispatcher.Create(
                     services,
                     registration,
@@ -212,7 +212,7 @@ public sealed partial class EntrySpotActorDispatchTests
             new ThrowingRuntimeErrorSink(),
             CancellationToken.None
         );
-        await using var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
+        var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
             ZLinkMeshNodeRouteDispatcher.Create(services, registration, spotNode, runtime, runner)
         );
         var batch = new[]
@@ -224,15 +224,24 @@ public sealed partial class EntrySpotActorDispatchTests
         Task dispatch;
         if (separateBatches)
         {
-            var first = dispatcher.DispatchBatchAsync([batch[0]], CancellationToken.None).AsTask();
+            var first = runner.Run(
+                "mesh-first-claim",
+                _ => dispatcher.DispatchBatchAsync([batch[0]], CancellationToken.None)
+            );
             await capture.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
             dispatch = Task.WhenAll(
                 first,
-                dispatcher.DispatchBatchAsync(batch[1..], CancellationToken.None).AsTask()
+                runner.Run(
+                    "mesh-next-claim",
+                    _ => dispatcher.DispatchBatchAsync(batch[1..], CancellationToken.None)
+                )
             );
         }
         else
-            dispatch = dispatcher.DispatchBatchAsync(batch, CancellationToken.None).AsTask();
+            dispatch = runner.Run(
+                "mesh-claim",
+                _ => dispatcher.DispatchBatchAsync(batch, CancellationToken.None)
+            );
         try
         {
             await capture.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -248,7 +257,7 @@ public sealed partial class EntrySpotActorDispatchTests
             Assert.Equal(0UL, admissionQueue.GetStatus().PermitsInUse);
             if (!nodeDirect)
             {
-                shutdown = dispatcher.DisposeAsync().AsTask();
+                shutdown = runner.StopAsync().AsTask();
                 Assert.False(shutdown.IsCompleted);
             }
         }
@@ -483,7 +492,7 @@ public sealed partial class EntrySpotActorDispatchTests
             new ThrowingRuntimeErrorSink(),
             CancellationToken.None
         );
-        await using var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
+        var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
             ZLinkMeshNodeRouteDispatcher.Create(
                 services,
                 registration,
@@ -755,7 +764,7 @@ public sealed partial class EntrySpotActorDispatchTests
             new ThrowingRuntimeErrorSink(),
             CancellationToken.None
         );
-        await using var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
+        var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
             ZLinkMeshNodeRouteDispatcher.Create(
                 services,
                 registration,

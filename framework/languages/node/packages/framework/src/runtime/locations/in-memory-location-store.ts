@@ -126,16 +126,17 @@ export class ZLinkInMemoryLocationStore
     this.authority = new ZLinkInMemoryAuthorityStore(
       {
         isOwnerLive,
-        isTargetLive: (key, lifecycleGeneration, owner) => {
+        isTargetLive: (key, lifecycleGeneration, owner, generationTransition) => {
           const descriptor = this.meshNodes.rows.get(meshNodeKey(key.meshName, key.rid));
           return (
             descriptor !== undefined &&
             descriptor.lifecycleGeneration === lifecycleGeneration &&
             descriptor.ownerId === owner.ownerId &&
-            descriptor.leaseGeneration === owner.leaseGeneration &&
             descriptor.objectRole === ZLinkObjectRole.Server &&
-            descriptor.state === ZLinkFrameworkRuntimeState.Serving &&
-            isOwnerLive(owner)
+            isOwnerLive(owner) &&
+            (generationTransition === 'preserve' ||
+              (descriptor.leaseGeneration === owner.leaseGeneration &&
+                descriptor.state === ZLinkFrameworkRuntimeState.Serving))
           );
         },
         placementCapacityAvailable: (key, requested, reserved, active) => {

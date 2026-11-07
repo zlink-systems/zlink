@@ -677,7 +677,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
                 intent == ZLinkLocationWriteIntent.Renew
                 && (
                     storedOwner != ownerId
-                    || storedLeaseGeneration != leaseGeneration
+                    || storedLeaseGeneration > leaseGeneration
                     || lifecycleGenerationOf(record.Descriptor) != lifecycleGeneration
                     || descriptorRevision <= record.DescriptorRevision
                     || !immutableFieldsEqual(record.Descriptor, descriptor)
