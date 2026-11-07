@@ -18,6 +18,7 @@ import type {
 import { ZLinkTimerOverrunPolicy } from '../../contracts';
 import { validateTimerRegistration } from '../../contracts/Configuration/TimerRegistrationValidator';
 import { throwIfAborted } from '../abort';
+import { runOutsideZLinkActorExecution } from '../actors/actor-execution-context';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -403,24 +404,26 @@ export class ZLinkSpotTimerRegistry {
               this.flowCreationEnabled(),
               undefined
             );
-            const operation = () => {
-              const current = this.timers.get(name);
-              if (
-                current === undefined ||
-                current.generation !== generation ||
-                current.timer !== timer
-              ) {
-                return undefined;
-              }
-              if (!this.executionAllowed()) return undefined;
-              callbackStarted = true;
-              return runWithFlow(timerFlow, () => binding.handler.handle(binding.spot, tick));
-            };
-            if (this.executeTimer !== undefined) {
-              await this.executeTimer(name, operation);
-            } else {
-              await binding.executionSerial!.execute(operation);
-            }
+            const operation = () =>
+              runOutsideZLinkActorExecution(() => {
+                const current = this.timers.get(name);
+                if (
+                  current === undefined ||
+                  current.generation !== generation ||
+                  current.timer !== timer
+                ) {
+                  return undefined;
+                }
+                if ((this.executionBarrier?.allowsExecution() ?? this.executionAllowed()) === false)
+                  return undefined;
+                callbackStarted = true;
+                return runWithFlow(timerFlow, () => binding.handler.handle(binding.spot, tick));
+              });
+            await runOutsideZLinkActorExecution(() =>
+              this.executeTimer !== undefined
+                ? this.executeTimer(name, operation)
+                : binding.executionSerial!.execute(operation)
+            );
           },
           (tick, cause, event) => slot.binding?.reportFailure?.(tick, cause, event),
           () => callbackStarted,

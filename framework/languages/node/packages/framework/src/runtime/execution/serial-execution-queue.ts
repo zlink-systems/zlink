@@ -1,3 +1,7 @@
+import {
+  createInternalFrameworkException,
+  ZLinkFrameworkInternalErrorKind
+} from '../framework-errors-internal';
 import { macrotaskBoundary } from '../abort';
 import {
   diagnosticWorkName,
@@ -55,6 +59,7 @@ export interface ZLinkSerialWorkPreparation {
 
 type SerialWorkRecord<T> = Omit<ZLinkSerialWorkRecord<T>, 'acceptedSequence'> & {
   acceptedSequence: bigint;
+  readonly executionOwner?: object;
   readonly operationEnvelope: boolean;
   readonly mailbox?: ZLinkSerialExecutionQueue;
   readonly preparation?: ZLinkSerialWorkPreparation;
@@ -86,6 +91,24 @@ export class ZLinkSerialExecutionQueue {
   private lifecycleDebt = false;
   private claimStartedAt?: number;
   private closed = false;
+  private executionPolicy?: (owner: object | undefined) => boolean | undefined;
+  private captureExecutionOwner?: () => object | undefined;
+
+  setExecutionPolicy(
+    capture: () => (owner: object | undefined) => boolean | undefined,
+    captureOwner?: () => object | undefined
+  ): void {
+    this.executionPolicy = capture();
+    this.captureExecutionOwner = captureOwner;
+  }
+  private requireExecution(record: SerialWorkRecord<unknown>): void {
+    if (record.lane === 'application' && this.executionPolicy?.(record.executionOwner) === false)
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RequestRejected,
+        'Object execution was rejected because Location owner admission is closed.'
+      );
+  }
+
   readonly idleWaiters: Array<() => void> = [];
 
   constructor(
@@ -181,6 +204,22 @@ export class ZLinkSerialExecutionQueue {
     }
   }
 
+  discardPendingApplication(error: unknown): void {
+    for (const record of this.application.records.splice(0)) {
+      if (record.mailbox !== undefined) {
+        record.mailbox.ownerMembership = undefined;
+        record.mailbox.discardPendingApplication(error);
+        continue;
+      }
+      record.preparationController?.abort(error);
+      record.preparation?.cancel();
+      (record.context as { release?: () => void } | undefined)?.release?.();
+      record.operation = () => undefined;
+      record.fail(error);
+    }
+    if (!this.hasPendingWork) this.resolveIdleWaiters();
+  }
+
   get hasPendingDurableApplication(): boolean {
     // Every application record accepted behind durable work inherits durable
     // ownership, so the tail answers this without scanning the FIFO.
@@ -250,6 +289,7 @@ export class ZLinkSerialExecutionQueue {
       acceptedSequence: 0n,
       lane,
       operation,
+      executionOwner: lane === 'application' ? this.captureExecutionOwner?.() : undefined,
       operationEnvelope,
       context,
       preparation,
@@ -359,6 +399,7 @@ export class ZLinkSerialExecutionQueue {
     // Actor claim remains held until terminal settlement returns to this gate.
     let terminal: Promise<unknown>;
     try {
+      this.requireExecution(record);
       terminal = Promise.resolve(record.operation());
     } catch (error) {
       terminal = Promise.reject(error);
@@ -424,6 +465,7 @@ export class ZLinkSerialExecutionQueue {
               record.fail(error);
             }
           } else {
+            this.requireExecution(record);
             await this.executeRecord(record);
           }
         } catch (error) {

@@ -326,6 +326,10 @@ export class ZLinkSpotActivation {
     };
   }
 
+  discardLocalMembers(discard: (actor: ZLinkActor) => boolean): void {
+    for (const actor of [...this.joinedActors.values()]) discard(actor);
+  }
+
   beginActorTransfer(actorId: string): void {
     this.departedActorIds.add(actorId);
   }

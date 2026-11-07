@@ -1,3 +1,4 @@
+import { currentZLinkActorExecution } from '../actors/actor-execution-context';
 import { inspectRuntime } from '../internal-observation';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
 import { encodeActorReply } from '../actors/actor-reply';
@@ -393,7 +394,8 @@ export class DefaultZLinkSpotManager {
       claimApplicationWork:
         options.admission === undefined
           ? undefined
-          : (meshName) => options.admission!.claim(meshName, 'Spot route dispatch'),
+          : (meshName) =>
+              options.admission!.claim(meshName, 'Spot route dispatch', ReceiveKind.SpotRequest),
       providerResolver: options.providerResolver,
       dispatchErrors: options.dispatchErrors
     });
@@ -461,6 +463,44 @@ export class DefaultZLinkSpotManager {
         this.activations.finishClose(activation.meshName, activation.spotId);
       },
       registerActivation: async (activation) => {
+        this.options.admission?.requireRequest('Spot Ready confirmation', activation.meshName);
+        const lifecycle = this.options.locationLifecycle;
+        const executionAllowed = (owner: object | undefined) => {
+          const spotAllowed = this.options.admission?.executionAllowed(activation.spot);
+          return spotAllowed === undefined
+            ? undefined
+            : spotAllowed &&
+                (owner === activation.spot ||
+                  this.options.admission?.executionAllowed(owner) !== false);
+        };
+        const actorOwner = (actorId: string) =>
+          activation.resolveJoinedActor(actorId) ?? this.options.actorResolver?.(actorId);
+        activation.serialExecutor.setActorExecutionPolicy(() => executionAllowed, actorOwner);
+        activation.executionBarrier.setExecutionPolicy(
+          () => executionAllowed,
+          () => {
+            const actorId = currentZLinkActorExecution()?.actorId;
+            return actorId === undefined ? activation.spot : actorOwner(actorId);
+          }
+        );
+        lifecycle?.bindSpotExecution(activation.meshName, activation.spotId, activation.spot);
+        const steadyReady = () =>
+          !activation.executionBarrier.isSealed && !activation.serialExecutor.isPreparing;
+        lifecycle?.trackExecution(activation.spot, steadyReady, () => {
+          if (!steadyReady()) return;
+          activation.executionBarrier.discard();
+          activation.serialExecutor.discardPendingApplication(
+            createInternalFrameworkException(
+              ZLinkFrameworkInternalErrorKind.RequestRejected,
+              'Object execution authority was discarded.'
+            )
+          );
+          activation.discardLocalMembers((actor) => lifecycle.discardSteadyExecution(actor));
+          this.activations.finishClose(activation.meshName, activation.spotId);
+          this.options.detachedTaskRunner.runDetached('Discard Spot execution', () =>
+            this.activationLifecycle.discard(activation)
+          );
+        });
         const published = this.activations.register(activation);
         this.scheduleIdleSweep();
         if (published?.domain.kind === 'user') await published.serialExecutor.finishPreparation();
@@ -472,6 +512,8 @@ export class DefaultZLinkSpotManager {
       //  cut over locally.
       routeToActorJoinPrewarm: (actorId, objectGeneration, arrival) =>
         this.formalRemoteActorAdmissions.routeIngress(actorId, objectGeneration, arrival),
+      releaseExecution: (activation) =>
+        this.options.locationLifecycle?.forgetExecution(activation.spot),
       releaseLocation: (activation, meshName, spotId) => {
         if (activation.domain.kind === 'user') {
           return this.locationClaim.release(meshName, spotId);
@@ -899,6 +941,7 @@ export class DefaultZLinkSpotManager {
   ): void {
     const activation = this.activations.activationForClose(meshName, target.targetSpotId);
     if (activation?.objectGeneration === target.objectGeneration) {
+      this.options.admission?.requireRequest('Instance Ready confirmation', meshName);
       const published = this.activations.publish(meshName, target.targetSpotId);
       published?.serialExecutor.openPreparationAdmission();
     }
@@ -1385,11 +1428,7 @@ export class DefaultZLinkSpotManager {
           await this.activationLifecycle.cleanupFailedIncarnation(initialized);
         }
         this.activations.finishClose(meshName, spotId);
-        operation.activation.serial.visitPendingApplication((record) => {
-          const context = record.context as
-            import('./spot-serial-turn-executor').ZLinkSpotApplicationTurnContext | undefined;
-          if (context?.replay !== undefined) record.operation = () => context.replay!(error);
-        });
+        operation.activation.serial.rejectPendingReplays(error);
         operation.activation.serial.closeAdmission();
         throw error;
       }
@@ -1402,14 +1441,14 @@ export class DefaultZLinkSpotManager {
       }
     }
     if (operation.reason === ZLinkSpotCloseReason.ExplicitClose) {
-      operation.activation.serial.visitPendingApplication((record) => {
-        const context = record.context as
-          import('./spot-serial-turn-executor').ZLinkSpotApplicationTurnContext | undefined;
-        if (context?.replay !== undefined) {
-          record.operation =
-            intentFailure === undefined ? context.replay : () => context.replay!(intentFailure);
-        }
-      });
+      if (intentFailure !== undefined)
+        operation.activation.serial.rejectPendingReplays(intentFailure);
+      else
+        operation.activation.serial.visitPendingApplication((record) => {
+          const context = record.context as
+            import('./spot-serial-turn-executor').ZLinkSpotApplicationTurnContext | undefined;
+          if (context?.replay !== undefined) record.operation = context.replay;
+        });
     }
     this.closeOperations.delete(`${meshName}\0${String(spotId)}`);
     // An OnClosing failure never changes a Close result; host shutdown alone
@@ -1493,6 +1532,7 @@ export class DefaultZLinkSpotManager {
   }
 
   async publishUserSpot(meshName: string, spotId: RoutingId): Promise<void> {
+    this.options.admission?.requireRequest('Spot Ready confirmation', meshName);
     const published = this.activations.publish(meshName, spotId);
     await published?.serialExecutor.finishPreparation();
   }
@@ -1685,6 +1725,21 @@ export class DefaultZLinkSpotManager {
   }
 
   /** Runs an owner-side lifecycle decision in the Actor's existing execution gate. */
+  discardActorActivation(actor: ZLinkActor): void {
+    const spotId = actor.context.spotId;
+    if (spotId === undefined) return;
+    const activation = this.activations.activationForClose(actor.context.meshName, spotId);
+    if (activation?.resolveJoinedActor(actor.context.actorId) !== actor) return;
+    activation.serialExecutor.discardActor(
+      actor.context.actorId,
+      createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RequestRejected,
+        'Actor execution authority was discarded.'
+      )
+    );
+    activation.commitActorDeparture(actor.context.actorId);
+  }
+
   executeActorTurn<T>(
     meshName: string,
     spotId: RoutingId | undefined,
