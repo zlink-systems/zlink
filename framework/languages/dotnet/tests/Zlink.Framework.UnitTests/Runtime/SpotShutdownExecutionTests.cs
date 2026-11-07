@@ -5,11 +5,124 @@ using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Contracts.Spots;
 using Zlink.Framework.Contracts.Timers;
+using Zlink.Framework.Runtime.Host;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class SpotShutdownExecutionTests
 {
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    public async Task Finalized_activation_accepts_stop_requests_from_stale_catalog_snapshot(
+        int operation
+    )
+    {
+        using var host = new HostBuilder()
+            .ConfigureServices(services =>
+                services.AddZLinkFramework(options =>
+                {
+                    options.UseTestLocationStore();
+                    options
+                        .AddRouteMesh("finalized-stop")
+                        .Listen("tcp://127.0.0.1:0")
+                        .Objects()
+                        .Server()
+                        .AddSpotFactory<FinalizedSpot>(
+                            "target",
+                            factory => factory.DisableRelocation()
+                        );
+                })
+            )
+            .Build();
+        await host.StartAsync();
+        var runtime = host.Services.GetRequiredService<ZLinkFrameworkRuntime>();
+        await host
+            .Services.GetRequiredService<IZLinkSpotManager>()
+            .GetOrCreate("finalized-target", "target")
+            .InMesh("finalized-stop")
+            .Async();
+        var node = runtime.GetSpotNodeRuntime("finalized-stop");
+        var activation = Assert.Single(node.Spots);
+        var token = activation.StopToken;
+        var cancellationRequested = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseMembers = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var callbacks = 0;
+        using var registration = token.Register(() =>
+        {
+            try
+            {
+                Assert.False(activation._lane.IsOnLane);
+                activation.RequestStop();
+                Interlocked.Increment(ref callbacks);
+            }
+            finally
+            {
+                cancellationRequested.TrySetResult();
+            }
+        });
+        try
+        {
+            var finalization = activation.DiscardLocationExecutionAsync(() =>
+                new ValueTask(releaseMembers.Task)
+            );
+            await cancellationRequested.Task;
+            Assert.False(finalization.IsCompleted);
+            activation.RequestStop();
+            activation.CancelActiveOperations();
+            releaseMembers.TrySetResult();
+            // Await CTS disposal while retaining catalog membership to model a
+            // previously taken snapshot. No clock controls this ordering.
+            await finalization;
+            Assert.Throws<ObjectDisposedException>(() =>
+            {
+                _ = activation.StopToken;
+            });
+            Assert.Equal(1, callbacks);
+            Assert.Same(activation, Assert.Single(node.Spots));
+            Assert.True(token.IsCancellationRequested);
+            Assert.True(activation.IsDisposed);
+            switch (operation)
+            {
+                case 0:
+                    activation.CancelActiveOperations();
+                    break;
+                case 1:
+                    activation.RequestStop();
+                    break;
+                case 2:
+                    node.CancelActiveOperations();
+                    break;
+                case 3:
+                    node.RequestStop();
+                    break;
+                case 4:
+                    await runtime.ForceStopAsync(CancellationToken.None);
+                    break;
+            }
+            Assert.True(token.IsCancellationRequested);
+            Assert.Equal(1, callbacks);
+        }
+        finally
+        {
+            releaseMembers.TrySetResult();
+            await runtime.DiscardLocationExecutionAsync(activation);
+            await runtime.ForceStopAsync(CancellationToken.None);
+        }
+    }
+
+    public sealed class FinalizedSpot(IZLinkSpotContext context) : IZLinkSpot
+    {
+        public IZLinkSpotContext Context { get; } = context;
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
