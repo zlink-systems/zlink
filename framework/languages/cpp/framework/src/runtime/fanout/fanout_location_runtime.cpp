@@ -683,12 +683,12 @@ void fanout_location_runtime_t::pump ()
                     permit.reset ();
                 };
                 inbound.message.channel_name = subscriber.channel_name;
-                inbound.message.packet_name = received->payload.packet_name;
-                inbound.message.content_type = received->payload.content_type;
+                inbound.message.packet_name = received->payload.packet_name ();
+                inbound.message.content_type = received->payload.content_type ();
                 inbound.topic = received->topic;
                 auto retained = std::move (received->retained);
                 auto runtime = _channel_runtime;
-                auto packet_name = received->payload.packet_name;
+                auto packet_name = received->payload.packet_name ();
                 auto channel_name = subscriber.channel_name;
                 auto topic = received->topic;
                 const auto finish_dispatch = [active = subscriber.active_dispatches,

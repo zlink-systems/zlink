@@ -433,12 +433,12 @@ stateful_error_t raw_stateful_dispatch_t::finish_accepted_ingress (
                     event.actor_id = owner.key;
                 else
                     event.spot_id = owner.key;
-                event.packet_name = admission.admitted_application->packet_name;
+                event.packet_name = admission.admitted_application->packet_name ();
                 event.flow_id = admission.admitted_application->flow_id;
                 event.flow_origin = admission.admitted_application->flow_origin;
-                if (admission.admitted_application->packet_name
+                if (admission.admitted_application->packet_name ()
                       == protocol::framework_multipart_packet_name
-                    && admission.admitted_application->content_type
+                    && admission.admitted_application->content_type ()
                          == protocol::framework_multipart_content_type) {
                     const messaging::message_parts_t parts (
                       protocol::decode_application_parts (*admission.admitted_application));

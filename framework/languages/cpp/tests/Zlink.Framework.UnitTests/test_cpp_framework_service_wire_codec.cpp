@@ -490,8 +490,8 @@ static void test_application_payload_wire_bytes ()
                     payload.flow_origin = zlink::framework::flow_origin_t::application;
                 }
                 std::vector<std::uint8_t> body;
-                put_text8 (body, payload.packet_name);
-                put_text8 (body, payload.content_type);
+                put_text8 (body, payload.packet_name ());
+                put_text8 (body, payload.content_type ());
                 put_u32 (body, static_cast<std::uint32_t> (bytes.size ()));
                 body.insert (body.end (), bytes.begin (), bytes.end ());
                 if (traced) {
@@ -548,8 +548,9 @@ static void test_application_payload_wire_bytes ()
                     mismatched_parts.flow_id = native.flow_id;
                     mismatched_parts.flow_origin = native.flow_origin;
                     assert (!(native == mismatched_parts));
-                    auto changed_metadata = native;
-                    changed_metadata.packet_name += "!";
+                    auto changed_metadata = protocol::application_payload_t{
+                      native.packet_name () + "!", native.content_type (), payload.payload_bytes (),
+                      native.flow_id, native.flow_origin};
                     assert (!(native == changed_metadata));
                     for (const auto length : {std::size_t{0}, std::size_t{3}, std::size_t{7},
                                               payload.payload_bytes ().size () - 1}) {
@@ -952,9 +953,10 @@ static void test_native_service_wire_length_boundaries_and_goldens ()
     payload_parts.push_back (zlink::message_t::from (std::vector<std::uint8_t>{0x10, 0x20}));
     payload_parts.push_back (zlink::message_t::from (std::vector<std::uint8_t>{0x30}));
     const auto traced_multipart = protocol::application_payload_t::from_parts (payload_parts);
-    auto traced_multipart_with_flow = traced_multipart;
-    traced_multipart_with_flow.packet_name = "p";
-    traced_multipart_with_flow.content_type = "c";
+    auto traced_multipart_with_flow = protocol::application_payload_t{
+      "p", "c",
+      protocol::decode_application_payload (protocol::encode_application_payload (traced_multipart))
+        .payload_bytes ()};
     traced_multipart_with_flow.flow_id = flow_id;
     traced_multipart_with_flow.flow_origin = zlink::framework::flow_origin_t::application;
     std::vector<std::uint8_t> multipart_golden{2};
@@ -1444,7 +1446,7 @@ int main (int argc, char **argv)
     {
         const auto stripped = protocol::decode_application_payload (traced_application_wire, false);
         assert (!stripped.flow_id && !stripped.flow_origin);
-        assert (stripped.packet_name == traced_application.packet_name
+        assert (stripped.packet_name () == traced_application.packet_name ()
                 && stripped.payload_bytes () == traced_application.payload_bytes ());
         auto corrupted_wire = traced_application_wire;
         /* Corrupt the first flow-id byte (after the 1-byte text8 length). */
