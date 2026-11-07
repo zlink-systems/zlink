@@ -38,13 +38,27 @@ internal abstract partial class ZLinkSpotActivation
 
     internal void CancelActiveOperations()
     {
-        _stopSource.Cancel();
+        // The activation lane owns cancellation and source disposal. Callbacks
+        // finish outside the lane so they can use activation state themselves.
+        var cancellation = AwaitStateLane(
+            _lane.RunAsync(() =>
+                _stopSource.IsCancellationRequested ? Task.CompletedTask : _stopSource.CancelAsync()
+            )
+        );
+        cancellation.GetAwaiter().GetResult();
     }
 
     internal void RequestStop()
     {
-        _serial.RequestStop();
-        _stopSource.Cancel();
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                // Once finalization starts it owns stopping and joining the executor.
+                if (_finalization is null)
+                    _serial.RequestStop();
+            })
+        );
+        CancelActiveOperations();
     }
 
     public ValueTask DisposeAsync() =>
@@ -193,11 +207,11 @@ internal abstract partial class ZLinkSpotActivation
         // barriers still need this parent's gate before its executor can end.
         await CaptureAsync(() => discardedMembers ?? _runtime.InvalidateSpotActorRuntimeAsync(this))
             .ConfigureAwait(false);
-        Capture(RequestStop);
+        Capture(_serial.RequestStop);
         await CaptureAsync(_serial.DisposeAsync).ConfigureAwait(false);
         if (await ReleaseLocalResourcesAsync().ConfigureAwait(false) is { } releaseFailure)
             failures.AddRange(releaseFailure.InnerExceptions);
-        Capture(_stopSource.Dispose);
+        await CaptureAsync(() => _lane.RunAsync(_stopSource.Dispose)).ConfigureAwait(false);
         _spot = null;
         _handlerInvoker = null;
         ThrowFailures(failures);
