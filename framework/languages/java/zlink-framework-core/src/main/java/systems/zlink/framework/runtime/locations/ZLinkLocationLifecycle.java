@@ -41,6 +41,11 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
         this.store = runtime.locationStore();
     }
 
+    public ZLinkLocationRuntime.Execution execution(
+            java.util.function.BooleanSupplier steady, Runnable cleanup) {
+        return runtime.execution(steady, cleanup);
+    }
+
     public boolean isOwnerAdmissionOpen() {
         return runtime.isOwnerAdmissionOpen();
     }

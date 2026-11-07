@@ -1677,10 +1677,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                     cleanups.add(
                             () ->
                                     ZLinkHandlerStages.fromRunnable(
-                                            () ->
-                                                    relocationReplies
-                                                            .closeActorTimersAfterRelocation(
-                                                                    actorId)));
+                                            () -> relocationReplies.closeActorTimers(actorId)));
             }
             cleanups.add(() -> actors.completeRelocationSource(actorIds));
             cleanups.add(() -> spots.completeRelocationSource(spotId, generation, deadline));
