@@ -59,6 +59,37 @@ internal sealed partial class ZLinkActorSessionManager(
         failures.ThrowIfAny();
     }
 
+    internal ValueTask DeactivateActorOnOwnershipLossAsync(ZLinkActorRuntimeState state) =>
+        ZLinkLocationRuntime.IsRelocationLifecycleOwned(state)
+            ? ValueTask.CompletedTask
+            : DiscardLocationExecutionAsync(state);
+
+    internal ValueTask DiscardLocationExecutionAsync(ZLinkActorRuntimeState state)
+    {
+        var bound = state.TryGetBoundSession(out var session);
+        var nativeActor = state.NativeActorRef;
+        var instance = state.Actor;
+        var parent = state.Activation;
+        return state.InvalidateRuntimeGenerationAfterDispatchesAsync(
+            expectedActivation: null,
+            cleanup: async () =>
+            {
+                if (instance is not null)
+                    runtime.ForgetDiscardedActorMembership(
+                        instance,
+                        parent,
+                        nativeActor?.NodeRid ?? default
+                    );
+                if (bound)
+                    runtime.RemoveActorSessionBinding(state.ActorId, session.BindingToken);
+                if (nativeActor is { } native && getActorSpotNode() is { } node)
+                    await DestroyNativeActorAttemptAsync(node, native, CancellationToken.None)
+                        .ConfigureAwait(false);
+                _actorSessions.RemoveIfCurrent(state.RuntimeActorId, state);
+            }
+        );
+    }
+
     internal int CountActiveActors(string meshName) => _actorSessions.CountActive(meshName);
 
     public async ValueTask<CreateActorResult> CreateAndBindActorAsync(

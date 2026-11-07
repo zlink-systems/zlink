@@ -1,3 +1,5 @@
+using Zlink.Framework.Runtime.Execution;
+
 namespace Zlink.Framework.Runtime.Spots;
 
 internal sealed class ZLinkSpotActorDispatchSubmitter(
@@ -197,8 +199,9 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         Message payload,
         RoutingId? sourceSessionRid,
         DateTimeOffset receivedAt
-    )
+    ) : IZLinkObjectExecutionRecord
     {
+        public bool IsExecutionAllowed => RuntimeState.IsLocationExecutionAllowed;
         public ZLinkSpotActorPacketDispatcher Dispatcher { get; } = dispatcher;
 
         public IZLinkActor Actor { get; } = actor;
@@ -222,8 +225,9 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         Message payload,
         RoutingId? sourceSessionRid,
         DateTimeOffset receivedAt
-    )
+    ) : IZLinkObjectExecutionRecord
     {
+        public bool IsExecutionAllowed => RuntimeState.IsLocationExecutionAllowed;
         public ZLinkSpotActorPacketDispatcher Dispatcher { get; } = dispatcher;
 
         public IZLinkActor Actor { get; } = actor;

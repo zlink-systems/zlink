@@ -151,6 +151,11 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         _spots = components.Spots;
         _stateFactory = components.StateFactory;
         _actorSessionManager = components.ActorSessionManager;
+        if (_locationRuntime is not null)
+        {
+            _locationRuntime.CaptureExecutions = SnapshotLocationExecutions;
+            _locationRuntime.ExecutionsDiscarded += DiscardLocationExecutions;
+        }
         _actors = components.Actors;
         _actorBoundSessionCoordinator = new ZLinkActorBoundSessionCoordinator(
             _actorSessionManager.GetOrCreateState,
@@ -748,6 +753,91 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     internal bool IsOwnerAdmissionOpen =>
         _locationRuntime is null || _locationRuntime.IsOwnerAdmissionOpen;
 
+    internal bool IsLocationExecutionAllowed(object execution) =>
+        _locationRuntime?.IsExecutionAllowed(execution) ?? true;
+
+    private IReadOnlySet<object> SnapshotLocationExecutions()
+    {
+        var executions = new HashSet<object>(_actorSessionManager.SnapshotStates());
+        if (_state is { } state)
+            foreach (var node in state.SpotNodes.Values)
+            foreach (var spot in node.Spots)
+                executions.Add(spot);
+        return executions;
+    }
+
+    private void DiscardLocationExecutions(IReadOnlySet<object> executions)
+    {
+        // Publish terminal execution fences before handing resource cleanup to
+        // the lifecycle owner. Neither fence enters an object's state lane.
+        foreach (var execution in executions)
+            if (execution is ZLinkActorRuntimeState actor)
+                actor.FenceRuntimeGeneration();
+            else if (execution is ZLinkSpotActivation spot)
+                spot.FenceLocationExecution();
+        _ = _locationLifecycle?.TryRunBackgroundAsync(_ =>
+            DiscardLocationExecutionsAsync(executions)
+        );
+    }
+
+    internal ValueTask DiscardLocationExecutionAsync(object execution) =>
+        execution is ZLinkActorRuntimeState actor
+            ? _actorSessionManager.DiscardLocationExecutionAsync(actor)
+            : DiscardLocationExecutionsAsync(new HashSet<object> { execution });
+
+    private async ValueTask DiscardLocationExecutionsAsync(IReadOnlySet<object> executions)
+    {
+        var discarded = new HashSet<object>(executions);
+        foreach (
+            var member in await _actorSessionManager.SnapshotStatesAsync().ConfigureAwait(false)
+        )
+            if (member.Activation is { } parent && executions.Contains(parent))
+                discarded.Add(member);
+        var actors = discarded.OfType<ZLinkActorRuntimeState>().ToArray();
+        var independent = actors
+            .Where(actor => actor.Activation is null || !discarded.Contains(actor.Activation))
+            .ToArray();
+        var completions = new List<Task>();
+        foreach (var spot in discarded.OfType<ZLinkSpotActivation>())
+        {
+            var members = actors.Where(actor => ReferenceEquals(actor.Activation, spot)).ToArray();
+            ValueTask DiscardMembers() =>
+                new(
+                    Task.WhenAll(
+                        members.Select(member =>
+                            _actorSessionManager.DiscardLocationExecutionAsync(member).AsTask()
+                        )
+                    )
+                );
+            var node = _state?.SpotNodes.GetValueOrDefault(
+                ZLinkSpotNodeName.FromBoundary(spot.SpotNodeName, nameof(spot.SpotNodeName))
+            );
+            completions.Add(
+                (
+                    node is null
+                        ? spot.DiscardLocationExecutionAsync(DiscardMembers)
+                        : node.DiscardLocationExecutionAsync(spot, DiscardMembers)
+                ).AsTask()
+            );
+        }
+        foreach (var actor in independent)
+            completions.Add(_actorSessionManager.DiscardLocationExecutionAsync(actor).AsTask());
+        await Task.WhenAll(completions).ConfigureAwait(false);
+    }
+
+    internal void ForgetDiscardedActorMembership(
+        IZLinkActor actor,
+        ZLinkSpotActivation? parent,
+        RoutingId nodeRid
+    )
+    {
+        parent?.ForgetDiscardedActorMembership(actor);
+        if (_state is { } state)
+            foreach (var node in state.SpotNodes.Values)
+                if (node.Node.RoutingId == nodeRid)
+                    node.EntrySpotActivation?.ForgetDiscardedActorMembership(actor);
+    }
+
     internal ZLinkDrainRemainderCounts GetDrainRemainderCounts()
     {
         var actors = _actorSessionManager
@@ -882,15 +972,18 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
 
     // Blocking compatibility surface. A framework execution context uses
     // AdmitOperationAsync and enters the admission in its own frame.
-    internal ZLinkRuntimeOperationLease EnterOperation(bool countAsRequest = false) =>
-        AwaitStateLane(AdmitOperationAsync(countAsRequest)).Enter();
+    internal ZLinkRuntimeOperationLease EnterOperation(
+        bool countAsRequest = false,
+        bool boundExecution = false
+    ) => AwaitStateLane(AdmitOperationAsync(countAsRequest, boundExecution)).Enter();
 
     /// <summary>
     /// Decides operation admission on the runtime state lane. The caller enters the result in
     /// its own frame: an async method cannot publish the ambient lease to its caller.
     /// </summary>
     internal ValueTask<ZLinkRuntimeOperationAdmission> AdmitOperationAsync(
-        bool countAsRequest = false
+        bool countAsRequest = false,
+        bool boundExecution = false
     )
     {
         if (
@@ -899,12 +992,20 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         )
         {
             EnsureAmbientOperationCurrent(current);
+            if (
+                !(
+                    boundExecution
+                        ? (_locationRuntime?.IsBoundExecutionOpen ?? true)
+                        : IsOwnerAdmissionOpen
+                )
+            )
+                throw NotAcceptingOperations("owner admission is closed");
             return countAsRequest
                 ? AdmitNestedRequestAsync()
                 : ValueTask.FromResult(default(ZLinkRuntimeOperationAdmission));
         }
 
-        return AdmitUnnestedOperationAsync(countAsRequest);
+        return AdmitUnnestedOperationAsync(countAsRequest, boundExecution);
     }
 
     private async ValueTask<ZLinkRuntimeOperationAdmission> AdmitNestedRequestAsync()
@@ -917,7 +1018,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         _drainAdmission.IsSealed ? ZLinkRuntimeOperationAdmission.Refused : null;
 
     private async ValueTask<ZLinkRuntimeOperationAdmission> AdmitUnnestedOperationAsync(
-        bool countAsRequest
+        bool countAsRequest,
+        bool boundExecution
     )
     {
         var admitted = await _stateLane
@@ -927,7 +1029,13 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 //  shutdown) refuses it.
                 if (RefuseClosedApplicationAdmission() is not null)
                     return null;
-                if (!IsOwnerAdmissionOpen)
+                if (
+                    !(
+                        boundExecution
+                            ? (_locationRuntime?.IsBoundExecutionOpen ?? true)
+                            : IsOwnerAdmissionOpen
+                    )
+                )
                     throw NotAcceptingOperations("owner admission is closed");
                 return AdmitOperationOnLane(countAsRequest);
             })
@@ -1111,7 +1219,10 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         bool Neutral
     ) AdmitUnnestedInboundOperationOnLane(bool countAsRequest, bool ownsObjectWork)
     {
-        if (_drainAdmission.IsSealedForShutdown || (ownsObjectWork && !IsOwnerAdmissionOpen))
+        if (
+            _drainAdmission.IsSealedForShutdown
+            || (ownsObjectWork && !(_locationRuntime?.IsBoundExecutionOpen ?? true))
+        )
         {
             return (Admitted: (ZLinkFrameworkComponentState?)null, Accepted: false, Neutral: true);
         }
@@ -1129,15 +1240,25 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         );
     }
 
-    internal async ValueTask ExecuteOperationAsync(Func<ValueTask> operation)
+    internal async ValueTask ExecuteOperationAsync(
+        Func<ValueTask> operation,
+        bool boundExecution = false
+    )
     {
-        using var lease = (await AdmitOperationAsync().ConfigureAwait(false)).Enter();
+        using var lease = (
+            await AdmitOperationAsync(boundExecution: boundExecution).ConfigureAwait(false)
+        ).Enter();
         await operation().ConfigureAwait(false);
     }
 
-    internal async ValueTask<T> ExecuteOperationAsync<T>(Func<ValueTask<T>> operation)
+    internal async ValueTask<T> ExecuteOperationAsync<T>(
+        Func<ValueTask<T>> operation,
+        bool boundExecution = false
+    )
     {
-        using var lease = (await AdmitOperationAsync().ConfigureAwait(false)).Enter();
+        using var lease = (
+            await AdmitOperationAsync(boundExecution: boundExecution).ConfigureAwait(false)
+        ).Enter();
         return await operation().ConfigureAwait(false);
     }
 
