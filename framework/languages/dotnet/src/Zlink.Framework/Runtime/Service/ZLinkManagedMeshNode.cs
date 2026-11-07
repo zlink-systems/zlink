@@ -11617,24 +11617,31 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                             start: pending =>
                             {
                                 var frames = Interlocked.Exchange(ref ownedWire, null)!;
-                                _ = ObserveNativeDeadlineReplyAsync(
-                                    (PendingOperation<TReply>)pending,
+                                _ = ObserveProgressAsync(
+                                    pending,
                                     ZLinkDurableRequest
-                                        .RequestAsync(
+                                        .AdmitAsync(
                                             frames,
                                             pending.DeadlineStartTimestamp,
                                             pending.DeadlineTimeout,
                                             (parts, remaining, token) =>
                                             {
-                                                replyAdmission = peer!.Liveness;
-                                                return SubmitNativeWireAsync(
-                                                    peer!.PhysicalRoutingId,
-                                                    parts,
-                                                    pending.Deadline - _deadlineClock.Elapsed,
-                                                    token,
-                                                    peer.Liveness,
-                                                    requestAdmission
+                                                var physical = SubmitNativeWireAsync(
+                                                        peer!.PhysicalRoutingId,
+                                                        parts,
+                                                        pending.Deadline - _deadlineClock.Elapsed,
+                                                        token,
+                                                        peer.Liveness,
+                                                        requestAdmission
+                                                    )
+                                                    .AsTask();
+                                                _ = ObserveNativeDeadlineReplyAsync(
+                                                    (PendingOperation<TReply>)pending,
+                                                    physical,
+                                                    Decode,
+                                                    receiveAdmission: peer.Liveness
                                                 );
+                                                return true;
                                             },
                                             cancellationToken,
                                             () =>
@@ -11655,8 +11662,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                                             _deadlineTimeProvider,
                                             completion
                                         )
-                                        .AsTask(),
-                                    Decode
+                                        .AsTask()
                                 );
                             }
                         );

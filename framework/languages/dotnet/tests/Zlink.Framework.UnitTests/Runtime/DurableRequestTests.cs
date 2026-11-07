@@ -4,6 +4,122 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class DurableRequestTests
 {
+    public static IEnumerable<object[]> DirectReplyCases() =>
+        Enumerable.Range(0, 100).Select(index => new object[] { index });
+
+    [Theory]
+    [MemberData(nameof(DirectReplyCases))]
+    public async Task Admission_returns_binding_reply_without_forwarding(int iteration)
+    {
+        var physical = new TaskCompletionSource<IReadOnlyList<Message>>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var waiting = (iteration & 1) != 0;
+        var route = new ZLinkPeerRouteObservation(1, waiting ? 0UL : 1UL, changed.Task);
+        var submissions = 0;
+        var admission = ZLinkDurableRequest.AdmitAsync(
+            [],
+            Stopwatch.GetTimestamp(),
+            TimeSpan.FromSeconds(5),
+            (_, _, _) =>
+            {
+                submissions++;
+                return physical.Task;
+            },
+            CancellationToken.None,
+            () => route
+        );
+        Assert.Equal(!waiting, admission.IsCompletedSuccessfully);
+        Assert.Equal(waiting ? 0 : 1, submissions);
+        route = new(1, 1, NoTopologyChange);
+        changed.SetResult();
+        var reply = await admission;
+        Assert.Same(physical.Task, reply);
+        Assert.False(reply.IsCompleted);
+        Assert.Equal(1, submissions);
+        if ((iteration & 2) == 0)
+        {
+            physical.SetResult(Array.Empty<Message>());
+            Assert.Empty(await reply);
+        }
+        else
+        {
+            var failure = new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotAdmitted);
+            physical.SetException(failure);
+            Assert.Same(failure, await Assert.ThrowsAsync<ZlinkSubmitException>(() => reply));
+        }
+    }
+
+    [Fact]
+    public void Ordinary_reply_is_observed_inside_the_admission_callback()
+    {
+        var root = Zlink.Framework.Tests.Common.FrameworkTestEnvironment.GetFrameworkRoot();
+        var source = File.ReadAllText(
+            Path.Combine(root, "src/Zlink.Framework/Runtime/Service/ZLinkManagedMeshNode.cs")
+        );
+        var start = source.IndexOf(
+            "private async ValueTask<TReply> RequestNativeDurableWireAsync",
+            StringComparison.Ordinal
+        );
+        var end = source.IndexOf(
+            "            else\n            {",
+            start,
+            StringComparison.Ordinal
+        );
+        var ordinary = source[start..end];
+        Assert.DoesNotContain(".RequestAsync(", ordinary);
+        var admission = ordinary.IndexOf(".AdmitAsync(", StringComparison.Ordinal);
+        var submit = ordinary.IndexOf(
+            "var physical = SubmitNativeWireAsync(",
+            StringComparison.Ordinal
+        );
+        var observe = ordinary.IndexOf(
+            "_ = ObserveNativeDeadlineReplyAsync(",
+            StringComparison.Ordinal
+        );
+        Assert.True(admission >= 0 && submit > admission && observe > submit);
+        Assert.Contains("physical,", ordinary[observe..]);
+    }
+
+    [Fact]
+    public void Ready_admission_allocates_no_reply_forwarding_storage()
+    {
+        var physical = new TaskCompletionSource<IReadOnlyList<Message>>();
+        Func<
+            IReadOnlyList<Message>,
+            TimeSpan,
+            CancellationToken,
+            Task<IReadOnlyList<Message>>
+        > submit = (_, _, _) => physical.Task;
+        Func<ZLinkPeerRouteObservation> observe = ReadyRoute;
+        var started = Stopwatch.GetTimestamp();
+        var timeout = TimeSpan.FromSeconds(5);
+        for (var index = 0; index < 100; index++)
+            _ = ZLinkDurableRequest
+                .AdmitAsync([], started, timeout, submit, default, observe)
+                .Result;
+        var identical = true;
+        var allocated = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < 100; index++)
+        {
+            var admission = ZLinkDurableRequest.AdmitAsync(
+                [],
+                started,
+                timeout,
+                submit,
+                default,
+                observe
+            );
+            identical &=
+                admission.IsCompletedSuccessfully
+                && ReferenceEquals(physical.Task, admission.Result);
+        }
+        allocated = GC.GetAllocatedBytesForCurrentThread() - allocated;
+        Assert.True(identical);
+        Assert.Equal(0, allocated);
+    }
+
     [Fact]
     public async Task Readiness_cancellation_does_not_run_completion_inside_the_cancelling_turn()
     {
