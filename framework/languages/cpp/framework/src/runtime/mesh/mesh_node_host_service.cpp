@@ -541,6 +541,37 @@ actor_create_result_t actor_result_from_terminal (const creation_terminal_record
  * authority body for the chosen placement target; only the state differs.
  * The target decodes this slot before it materializes the Actor, so the
  * Application request must never be written here (#549). */
+task_t<object_complete_creation_result_t>
+complete_actor_creation (std::shared_ptr<host::public_host_runtime_t> node,
+                         std::shared_ptr<location_repository_t> store,
+                         object_complete_creation_request_t request,
+                         std::string stable_type)
+{
+    const auto fence = request.fence;
+    const auto key = request.key;
+    std::function<void ()> confirm;
+    if (node && std::holds_alternative<object_creation_completed_t> (request.completion))
+        confirm = co_await node->prepare_store_ready (
+          {stateful::object_kind_t::actor, key.global_id, fence.object_generation,
+           fence.authority_owner_generation, fence.target.mesh_name,
+           std::string (fence.target.node_rid.value ())});
+    auto result = co_await store->complete_creation (std::move (request));
+    bool ready = false;
+    if (const auto *completed = std::get_if<object_creation_completed_result_t> (&result))
+        ready = completed->ready.has_value ();
+    else if (const auto *already =
+               std::get_if<object_creation_already_completed_result_t> (&result)) {
+        const auto terminal =
+          actor_result_from_terminal (already->terminal, fence.target.node_rid, stable_type,
+                                      [] (zlink::message_t) { return message_t{}; });
+        const auto *created = std::get_if<actor_create_created_t> (&terminal);
+        ready = created && created->actor.object_generation () == fence.object_generation;
+    }
+    if (ready && confirm)
+        confirm ();
+    co_return result;
+}
+
 std::vector<std::byte> target_actor_authority_payload (actor_authority_state_t state,
                                                        const std::string &stable_type,
                                                        const actor_id_t &actor_id,
@@ -1346,8 +1377,13 @@ task_t<actor_create_result_t> mesh_node_host_service_t::complete_local_actor_cre
           publication};
     else
         completion = object_creation_rejected_t{publication};
+    std::shared_ptr<host::public_host_runtime_t> owner;
+    for (const auto &local : _nodes)
+        if (target.rid == local->native_node ().status ().routing_id ())
+            owner = local->native_node ().shared_from_this ();
     const auto completed = co_await await_result (
-      _location_store->complete_creation ({reserve_key, fence, std::move (completion)}));
+      complete_actor_creation (std::move (owner), _location_store,
+                               {reserve_key, fence, std::move (completion)}, stable_type));
     if (!completed)
         co_return detail::propagate_failure<actor_create_result_t> (
           completed, "Actor creation completion failed");
@@ -1434,10 +1470,14 @@ task_t<result_t<void>> mesh_node_host_service_t::finalize_local_actor_destroy (a
     }
 
     const auto node = co_await find_local_actor_node_async (actor.node_rid ());
+    const auto cleaned = co_await detail::cleanup_local_actor_resources (
+      {}, _services ? std::optional<service_provider_t>{*_services} : std::nullopt, actor);
+    if (!cleaned)
+        co_return cleaned;
     if (node) {
-        const auto cleaned = co_await node->cleanup_application_actor_stateful (actor);
-        if (!cleaned)
-            co_return cleaned;
+        const auto native_cleaned = co_await node->cleanup_application_actor_stateful (actor);
+        if (!native_cleaned)
+            co_return native_cleaned;
     }
 
     std::optional<authority_snapshot_t> removed_snapshot;
@@ -1494,14 +1534,6 @@ task_t<result_t<void>> mesh_node_host_service_t::finalize_local_actor_destroy (a
         }
     }
 
-    if (_services) {
-        if (auto gateway = _services->get<detail::actor_gateway_runtime_t> ()) {
-            const auto cleaned = co_await gateway->get ().destroy_actor_async (actor);
-            if (!cleaned) {
-                co_return cleaned;
-            }
-        }
-    }
     co_return result_t<void>::success ();
 }
 
@@ -2429,7 +2461,7 @@ void execute_actor_create_operation_target (
             return;
         }
         const auto publish =
-          [request, store, target,
+          [request, store, target, node,
            fence] (std::optional<terminal_codec::actor_create_result_t> creation_result,
                    std::optional<actor_ref_t> actor,
                    const std::optional<protocol::application_payload_t> &application_reply,
@@ -2461,9 +2493,11 @@ void execute_actor_create_operation_target (
                   target_completion = object_creation_failed_t{terminal};
               }
               auto published =
-                store->complete_creation ({{placement_object_kind_t::actor, request.actor_id},
-                                           fence,
-                                           std::move (target_completion)});
+                complete_actor_creation (node->native_node ().shared_from_this (), store,
+                                         {{placement_object_kind_t::actor, request.actor_id},
+                                          fence,
+                                          std::move (target_completion)},
+                                         request.stable_type);
               detail::observe_task_completion (
                 published, [done = std::move (done)] (
                              const result_t<object_complete_creation_result_t> &result) {

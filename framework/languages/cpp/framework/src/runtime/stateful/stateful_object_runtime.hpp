@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/execution/serial_execution_queue.hpp"
 #include "runtime/stateful/object_ref.hpp"
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
 #include "runtime/spots/actor_transfer_coordinator.hpp"
@@ -342,6 +343,9 @@ class stateful_object_runtime_t
                                                relocation_state_abort_t abort);
     void configure_relocation_cut (relocation_source_cut_t cut);
 
+    task_t<void> bind_execution_gate (object_ref_t object,
+                                      std::weak_ptr<runtime::serial_execution_queue_t> gate);
+
     void replace_placement_candidates (std::vector<placement_candidate_t> candidates);
     create_result_t begin_create (const create_request_t &request);
     task_t<create_result_t> begin_create_async (create_request_t request);
@@ -558,6 +562,7 @@ class stateful_object_runtime_t
         object_ref_t reference;
         std::string stable_type;
         object_state_t state = object_state_t::creating;
+        std::weak_ptr<runtime::serial_execution_queue_t> execution_gate;
         std::uint64_t attempt = 0;
         std::string membership;
         std::optional<relocation_restore_identity_t> restore_identity;
@@ -669,6 +674,8 @@ class stateful_object_runtime_t
     {
         if (found != _objects.end ()) {
             record_actor_population (found->second, -1);
+            if (auto gate = found->second.execution_gate.lock ())
+                gate->invalidate_execution_ready ();
             _objects.erase (found);
         }
     }

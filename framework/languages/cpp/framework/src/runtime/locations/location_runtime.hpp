@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/execution/task_result.hpp"
+#include "runtime/execution/serial_execution_queue.hpp"
 #include <zlink/framework/detail/deadline_scheduler.hpp>
 
 #include "runtime/diagnostics/runtime_metrics.hpp"
@@ -59,7 +60,7 @@ class owner_lease_claim_rejected_error_t final : public std::runtime_error
 class location_runtime_t
 {
     friend struct location_runtime_test_access_t;
-    struct store_outage_t
+    struct store_outage_t : std::enable_shared_from_this<store_outage_t>
     {
         store_outage_t (std::chrono::steady_clock::time_point observed_at,
                         std::chrono::steady_clock::time_point cutoff,
@@ -72,13 +73,21 @@ class location_runtime_t
         const std::chrono::steady_clock::time_point cutoff;
         const location_owner_token_t token;
         std::atomic_bool discarded = false;
+        std::vector<std::function<void (serial_execution_queue_t::execution_admission_t)>>
+          discard_requests;
         std::shared_ptr<detail::deadline_state_t> deadline =
           std::make_shared<detail::deadline_state_t> ();
 
         bool latch (std::chrono::steady_clock::time_point now)
         {
-            if (now >= cutoff)
-                discarded.store (true, std::memory_order_release);
+            if (now >= cutoff && !discarded.exchange (true, std::memory_order_acq_rel)) {
+                // The deadline owns the latch; each owner only posts its local cleanup.
+                for (const auto &request : discard_requests)
+                    request (
+                      [episode = shared_from_this ()] (const serial_execution_queue_t &queue) {
+                          return execution_allowed (episode, queue.execution_ready_at (), {});
+                      });
+            }
             return discarded.load (std::memory_order_acquire);
         }
     };
@@ -218,7 +227,8 @@ class location_runtime_t
     task_t<observation_status_t> observation_status_task () const
     {
         return _lane.run_task ([this] {
-            const auto lease = std::atomic_load_explicit (&_owner_lease, std::memory_order_acquire);
+            const auto lease =
+              std::atomic_load_explicit (_owner_lease.get (), std::memory_order_acquire);
             const auto &outage = lease->outage;
             return observation_status_t{
               _last_error,
@@ -243,6 +253,31 @@ class location_runtime_t
     location_runtime_t (const location_runtime_t &) = delete;
     location_runtime_t &operator= (const location_runtime_t &) = delete;
 
+    std::function<std::chrono::steady_clock::time_point ()> execution_clock () const
+    {
+        return _lease_now;
+    }
+
+    serial_execution_queue_t::execution_admission_t execution_policy () const
+    {
+        return [lease = _owner_lease, open = _episode_open,
+                now = _lease_now] (const serial_execution_queue_t &queue) {
+            if (!open->load (std::memory_order_acquire))
+                return true;
+            const auto snapshot =
+              std::atomic_load_explicit (lease.get (), std::memory_order_acquire);
+            return execution_allowed (snapshot->outage, queue.execution_ready_at (), now);
+        };
+    }
+
+    task_t<void> on_execution_discard (
+      std::function<void (serial_execution_queue_t::execution_admission_t)> request)
+    {
+        return _lane.run_task ([this, request = std::move (request)] () mutable {
+            _execution_discard_requests.push_back (std::move (request));
+        });
+    }
+
     const std::string &owner_id () const noexcept { return _owner_id; }
 
     const location_options_t &options () const noexcept { return _options; }
@@ -255,7 +290,8 @@ class location_runtime_t
 
     std::shared_ptr<const location_owner_token_t> current_owner_observation () const
     {
-        const auto lease = std::atomic_load_explicit (&_owner_lease, std::memory_order_acquire);
+        const auto lease =
+          std::atomic_load_explicit (_owner_lease.get (), std::memory_order_acquire);
         if (!owner_lease_usable (*lease, std::chrono::steady_clock::now ()))
             return {};
         return {lease, &*lease->token};
@@ -311,18 +347,20 @@ class location_runtime_t
 
     bool owner_lease_healthy () const noexcept
     {
-        return std::atomic_load_explicit (&_owner_lease, std::memory_order_acquire)->healthy;
+        return std::atomic_load_explicit (_owner_lease.get (), std::memory_order_acquire)->healthy;
     }
 
     bool owner_lease_usable () const noexcept
     {
-        const auto lease = std::atomic_load_explicit (&_owner_lease, std::memory_order_acquire);
+        const auto lease =
+          std::atomic_load_explicit (_owner_lease.get (), std::memory_order_acquire);
         return owner_lease_usable (*lease, std::chrono::steady_clock::now ());
     }
 
     std::optional<std::chrono::system_clock::time_point> owner_lease_renewed_at () const
     {
-        return std::atomic_load_explicit (&_owner_lease, std::memory_order_acquire)->renewed_at;
+        return std::atomic_load_explicit (_owner_lease.get (), std::memory_order_acquire)
+          ->renewed_at;
     }
 
     std::optional<std::string> last_error () const
@@ -518,7 +556,7 @@ class location_runtime_t
     // Observers do not create a retry clock or a second lease state.
     auto owner_lease_observation () const
     {
-        return std::atomic_load_explicit (&_owner_lease, std::memory_order_acquire)
+        return std::atomic_load_explicit (_owner_lease.get (), std::memory_order_acquire)
           ->admission_deadline;
     }
 
@@ -576,6 +614,18 @@ class location_runtime_t
         }
     }
 
+    // Location runtime §5.1: this predicate only supplies the retention exception;
+    // all existing admission and lifecycle rules still run in the execution gate.
+    static bool
+    execution_allowed (const std::shared_ptr<store_outage_t> &episode,
+                       std::optional<std::chrono::steady_clock::time_point> ready_at,
+                       const std::function<std::chrono::steady_clock::time_point ()> &now) noexcept
+    {
+        if (!episode || !ready_at || *ready_at >= episode->observed_at)
+            return true;
+        return !episode->discarded.load (std::memory_order_acquire) && now () < episode->cutoff;
+    }
+
     static bool owner_lease_usable (const owner_lease_snapshot_t &lease,
                                     std::chrono::steady_clock::time_point now) noexcept
     {
@@ -585,11 +635,13 @@ class location_runtime_t
 
     template <typename Work> void update_owner_lease_on_lane (Work work) const
     {
-        auto lease = *std::atomic_load_explicit (&_owner_lease, std::memory_order_acquire);
+        auto lease = *std::atomic_load_explicit (_owner_lease.get (), std::memory_order_acquire);
         work (lease);
+        const bool open = static_cast<bool> (lease.outage);
         std::atomic_store_explicit (
-          &_owner_lease, std::make_shared<const owner_lease_snapshot_t> (std::move (lease)),
+          _owner_lease.get (), std::make_shared<const owner_lease_snapshot_t> (std::move (lease)),
           std::memory_order_release);
+        _episode_open->store (open, std::memory_order_release);
     }
 
     void clear_owner_lease_on_lane () const
@@ -620,6 +672,7 @@ class location_runtime_t
             }
             auto episode = std::make_shared<store_outage_t> (observed_at, cutoff,
                                                              lease.last_successful_lease->token);
+            episode->discard_requests = _execution_discard_requests;
             lease.outage = episode;
             episode->latch (episode->observed_at);
             detail::deadline_scheduler_t::instance ().schedule (
@@ -670,7 +723,7 @@ class location_runtime_t
 
     std::optional<location_owner_token_t> current_owner_token_unchecked () const
     {
-        return std::atomic_load_explicit (&_owner_lease, std::memory_order_acquire)->token;
+        return std::atomic_load_explicit (_owner_lease.get (), std::memory_order_acquire)->token;
     }
 
     owner_lease_renew_result_t
@@ -862,7 +915,8 @@ class location_runtime_t
                   if (metrics_enabled && lateness_seconds > 0)
                       runtime->record_lease_metric_on_lane (false, lateness_seconds);
                   attempt->requested_outage =
-                    std::atomic_load_explicit (&runtime->_owner_lease, std::memory_order_acquire)
+                    std::atomic_load_explicit (runtime->_owner_lease.get (),
+                                               std::memory_order_acquire)
                       ->outage;
                   return runtime->current_owner_token_unchecked ();
               });
@@ -1221,11 +1275,17 @@ class location_runtime_t
     std::thread _heartbeat;
     std::shared_ptr<heartbeat_owner_t> _heartbeat_state;
     // Lane teardown finishes accepted turns before their state is destroyed.
-    mutable std::shared_ptr<const owner_lease_snapshot_t> _owner_lease{
-      std::make_shared<const owner_lease_snapshot_t> ()};
+    mutable std::shared_ptr<std::shared_ptr<const owner_lease_snapshot_t>> _owner_lease{
+      std::make_shared<std::shared_ptr<const owner_lease_snapshot_t>> (
+        std::make_shared<const owner_lease_snapshot_t> ())};
+    // One shared episode indicator outlives the runtime with its execution policies.
+    std::shared_ptr<std::atomic_bool> _episode_open = std::make_shared<std::atomic_bool> (false);
     mutable std::optional<std::string> _last_error;
     mutable std::vector<std::shared_ptr<descriptor_publication_t>> _descriptor_publications;
 
+    // Owner subscriptions contain no retained object inventory or Ready evidence.
+    std::vector<std::function<void (serial_execution_queue_t::execution_admission_t)>>
+      _execution_discard_requests;
     mutable state_lane_t _lane;
 };
 
