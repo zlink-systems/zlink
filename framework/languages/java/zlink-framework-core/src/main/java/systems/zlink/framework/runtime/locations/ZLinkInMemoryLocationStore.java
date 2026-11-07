@@ -23,6 +23,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMutation
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityScanCursor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityScanResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityWriteResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptorKey;
@@ -149,6 +150,15 @@ public final class ZLinkInMemoryLocationStore
             ZLinkAuthorityMutation mutation,
             ZLinkStoreCancellation cancellation) {
         return authority.compareExchange(key, expectation, mutation, cancellation);
+    }
+
+    @Override
+    public CompletionStage<Boolean> cleanupDiscarded(
+            String key,
+            ZLinkAuthoritySnapshot discarded,
+            ZLinkLocationOwnerToken currentOwner,
+            ZLinkStoreCancellation cancellation) {
+        return authority.cleanupDiscarded(key, discarded, currentOwner, cancellation);
     }
 
     @Override

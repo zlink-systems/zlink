@@ -234,6 +234,17 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
     }
 
     @Override
+    public CompletionStage<Boolean> cleanupDiscarded(
+            String key,
+            ZLinkAuthoritySnapshot discarded,
+            ZLinkLocationOwnerToken currentOwner,
+            ZLinkStoreCancellation cancellation) {
+        return observeStore(
+                LocationOperation.COMPARE_EXCHANGE,
+                () -> authority.cleanupDiscarded(key, discarded, currentOwner, cancellation));
+    }
+
+    @Override
     public CompletionStage<ZLinkAuthorityScanResult> list(
             String prefix,
             Optional<ZLinkAuthorityScanCursor> cursor,
