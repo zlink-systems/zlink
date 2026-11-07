@@ -30,6 +30,7 @@ import {
 
 export class ZLinkSpotLocationClaims {
   private readonly spots = new Map<string, TrackedSpot>();
+  private readonly executionKeys = new WeakMap<object, string>();
 
   constructor(
     private readonly runtime: IZLinkLocationLifecycleRuntime,
@@ -109,7 +110,7 @@ export class ZLinkSpotLocationClaims {
       return;
     }
     if (tracked.kind === 'legacy') {
-      this.spots.delete(canonical);
+      this.forget(canonical);
       await this.runtime.removeSpot(
         key,
         this.runtime.currentOwnerToken?.leaseGeneration ?? tracked.generation
@@ -119,7 +120,7 @@ export class ZLinkSpotLocationClaims {
     }
     await this.releaseAuthority(tracked);
     if (this.spots.get(canonical) === tracked) {
-      this.spots.delete(canonical);
+      this.forget(canonical);
     }
     this.invalidateSpotRoute?.(tracked.spotId);
   }
@@ -225,9 +226,80 @@ export class ZLinkSpotLocationClaims {
     };
   }
 
+  confirmAuthority(
+    meshName: string,
+    spotId: RoutingId,
+    authority: ZLinkAuthoritySnapshot,
+    expectedStoreVersion?: string
+  ): void {
+    const tracked = this.spots.get(ZLinkLocationKeyCodec.encodeSpotKey({ meshName, spotId }));
+    if (tracked?.kind === 'legacy') {
+      if (
+        expectedStoreVersion === undefined ||
+        tracked.authority?.storeVersion.value === expectedStoreVersion
+      )
+        tracked.authority = authority;
+    } else if (
+      tracked?.kind === 'authority' &&
+      (expectedStoreVersion === undefined || tracked.storeVersion === expectedStoreVersion)
+    ) {
+      tracked.storeVersion = authority.storeVersion.value;
+      tracked.ownerLeaseGeneration = authority.ownerLeaseGeneration;
+    }
+  }
+
+  recoveryAuthority(owner: object):
+    | {
+        key: ReturnType<typeof encodeAuthorityKey>;
+        fence: import('./lifecycle').ZLinkRecoveryAuthorityFence;
+      }
+    | undefined {
+    const canonical = this.executionKeys.get(owner);
+    const tracked = canonical === undefined ? undefined : this.spots.get(canonical);
+    if (tracked?.executionOwner?.deref() === owner) {
+      if (tracked.kind === 'authority')
+        return {
+          key: encodeAuthorityKey('instance_spot', String(tracked.spotId)),
+          fence: {
+            storeVersion: { value: tracked.storeVersion } as ZLinkAuthorityStoreVersion,
+            ownerId: tracked.ownerId,
+            ownerLeaseGeneration: tracked.ownerLeaseGeneration,
+            objectGeneration: tracked.objectGeneration,
+            authorityOwnerGeneration: tracked.authorityOwnerGeneration,
+            allocation: {
+              descriptor: { meshName: tracked.meshName, rid: tracked.nodeRid },
+              descriptorLifecycleGeneration: tracked.nodeGeneration
+            }
+          }
+        };
+      if (tracked.authority !== undefined)
+        return {
+          key: encodeAuthorityKey(
+            tracked.authority.allocation.objectKind,
+            String(tracked.row.spotId)
+          ),
+          fence: tracked.authority
+        };
+    }
+    return undefined;
+  }
+
   bindExecution(meshName: string, id: RoutingId, owner: object): void {
-    const tracked = this.spots.get(ZLinkLocationKeyCodec.encodeSpotKey({ meshName, spotId: id }));
-    if (tracked !== undefined) tracked.executionOwner = new WeakRef(owner);
+    const canonical = ZLinkLocationKeyCodec.encodeSpotKey({ meshName, spotId: id });
+    const tracked = this.spots.get(canonical);
+    if (tracked !== undefined) {
+      const previous = tracked.executionOwner?.deref();
+      if (previous !== undefined) this.executionKeys.delete(previous);
+      tracked.executionOwner = new WeakRef(owner);
+      this.executionKeys.set(owner, canonical);
+    }
+  }
+
+  private forget(canonical: string): void {
+    const tracked = this.spots.get(canonical);
+    const owner = tracked?.executionOwner?.deref();
+    if (owner !== undefined) this.executionKeys.delete(owner);
+    this.spots.delete(canonical);
   }
 
   onOwnershipLost(event: ZLinkOwnershipLostEvent): void {
@@ -235,7 +307,7 @@ export class ZLinkSpotLocationClaims {
       return;
     }
     const tracked = this.spots.get(event.key);
-    this.spots.delete(event.key);
+    this.forget(event.key);
     const executionOwner = tracked?.executionOwner?.deref();
     if (executionOwner !== undefined) this.runtime.discardExecution?.(executionOwner);
     if (tracked !== undefined) {
@@ -248,13 +320,25 @@ export class ZLinkSpotLocationClaims {
     }
   }
 
-  async reclaimOwnerRows(): Promise<void> {
+  async reclaimOwnerRows(
+    excluded?: import('./lifecycle-runtime').ZLinkPreservedAuthority
+  ): Promise<void> {
     const owner = this.runtime.currentOwnerToken;
     if (owner === undefined) {
       throw new Error('Spot location recovery requires a claimed owner token.');
     }
     const failures: unknown[] = [];
     for (const [canonical, tracked] of [...this.spots]) {
+      if (
+        excluded?.(
+          encodeAuthorityKey(
+            'user_spot',
+            String(tracked.kind === 'legacy' ? tracked.row.spotId : tracked.spotId)
+          ),
+          tracked.kind === 'legacy' ? tracked.authority : tracked
+        ) === true
+      )
+        continue;
       try {
         if (tracked.kind === 'legacy') {
           const current = await this.spotStore?.resolveSpot({
@@ -269,7 +353,7 @@ export class ZLinkSpotLocationClaims {
               current.leaseGeneration !== owner.leaseGeneration)
           ) {
             if (this.spots.get(canonical) !== tracked) continue;
-            this.spots.delete(canonical);
+            this.forget(canonical);
             const executionOwner = tracked.executionOwner?.deref();
             if (executionOwner !== undefined) this.runtime.discardExecution?.(executionOwner);
             await tracked.deactivate?.();
@@ -311,7 +395,7 @@ export class ZLinkSpotLocationClaims {
           current.ownerId !== owner.ownerId
         ) {
           if (this.spots.get(canonical) !== tracked) continue;
-          this.spots.delete(canonical);
+          this.forget(canonical);
           const executionOwner = tracked.executionOwner?.deref();
           if (executionOwner !== undefined) this.runtime.discardExecution?.(executionOwner);
           await tracked.deactivate?.();
@@ -426,6 +510,7 @@ export interface ZLinkInstanceClosingAuthority {
 }
 
 interface TrackedLegacySpot {
+  authority?: ZLinkAuthoritySnapshot;
   executionOwner?: WeakRef<object>;
   readonly kind: 'legacy';
   row: ZLinkSpotLocation;
