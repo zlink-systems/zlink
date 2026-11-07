@@ -331,7 +331,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             Duration timeout,
             Function<BiConsumer<T, Throwable>, CompletionStage<?>> submission,
             Consumer<? super T> discardValue,
-            Operation<T> completion) {
+            Operation<?> completion) {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(submission, "submission");
         Objects.requireNonNull(discardValue, "discardValue");
@@ -346,20 +346,17 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                             if (!completion.beginRegistration()) return false;
                             if (closed) {
                                 if (!completion.finishRegistration(this)) return false;
-                                ZLinkServiceCompletionDispatcher.deliver(
-                                        CompletableFuture.failedStage(closeFailure), completion);
+                                postRegistrationFailure(completion, closeFailure);
                                 return false;
                             }
                             long remaining = deadline - nanoTime.getAsLong();
                             if (remaining <= 0) {
                                 if (!completion.finishRegistration(this)) return false;
-                                ZLinkServiceCompletionDispatcher.deliver(
-                                        CompletableFuture.failedStage(timeoutFailure.get()),
-                                        completion);
+                                postRegistrationFailure(completion, timeoutFailure.get());
                                 return false;
                             }
                             Entry<T> entry =
-                                    registerEntry(
+                                    this.<T>registerEntry(
                                             deadline, id, Kind.REQUEST, completion, discardValue);
                             if (!completion.finishRegistration(this)) {
                                 abandonRegistration(entry);
@@ -373,10 +370,16 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         registration.whenComplete(
                 (accepted, failure) -> {
                     if (failure != null && completion.rejectRegistration(this))
-                        ZLinkServiceCompletionDispatcher.deliver(
-                                CompletableFuture.failedStage(failure), completion);
+                        postRegistrationFailure(completion, failure);
                 });
         return registration;
+    }
+
+    private void postRegistrationFailure(Operation<?> completion, Throwable failure) {
+        Entry<Object> entry = new Entry<>(completion.id(), completion, null);
+        completions.register(entry);
+        entry.completeWithFailure(failure);
+        completions.post(entry);
     }
 
     private <T> void submitOnOwner(
@@ -696,7 +699,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             long deadlineNanos,
             UUID id,
             Kind kind,
-            CompletableFuture<T> completion,
+            CompletableFuture<?> completion,
             Consumer<? super T> discardValue) {
         if (closed) {
             throw new IllegalStateException("operation registry is closed");
@@ -743,6 +746,23 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         return new Operation<>(true, Objects.requireNonNull(id, "id"));
     }
 
+    /** Prepares the public receiver and its value conversion before transport submission. */
+    @SuppressWarnings("unchecked")
+    public static <V, R> Operation<R> prepareOperation(
+            UUID id,
+            Function<V, R> receiver,
+            Consumer<? super R> discardResult,
+            Function<Throwable, Throwable> failureMapper,
+            BiConsumer<CompletableFuture<R>, Throwable> observer) {
+        Operation<R> result = new Operation<>(true, Objects.requireNonNull(id, "id"), observer);
+        Objects.requireNonNull(receiver, "receiver");
+        result.flow = ZLinkFlowContext.current();
+        result.receiver = (Function<Object, R>) receiver;
+        result.discardResult = discardResult;
+        result.failureMapper = Objects.requireNonNull(failureMapper, "failureMapper");
+        return result;
+    }
+
     private static long timeoutNanos(Duration timeout) {
         Objects.requireNonNull(timeout, "timeout");
         if (timeout.isNegative() || timeout.isZero()) {
@@ -755,7 +775,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         }
     }
 
-    public static final class Operation<T> extends CompletableFuture<T> {
+    public static final class Operation<T> extends ZLinkCompletionBridge.CancellationFuture<T> {
         private static final Object UNREGISTERED = new Object();
         private static final Object REGISTERING = new Object();
         private static final VarHandle OWNER;
@@ -773,9 +793,27 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         private volatile Object owner;
         private final UUID id;
 
+        private ZLinkFlowContext.State flow;
+        private Function<Object, T> receiver;
+        private Consumer<? super T> discardResult;
+        private Function<Throwable, Throwable> failureMapper;
+
         private Operation(boolean cancellable, UUID id) {
+            this(cancellable, id, null);
+        }
+
+        private Operation(
+                boolean cancellable,
+                UUID id,
+                BiConsumer<CompletableFuture<T>, Throwable> observer) {
+            super(observer);
             this.owner = cancellable ? UNREGISTERED : null;
             this.id = id;
+        }
+
+        @Override
+        protected void beforeCompletion(Throwable failure) {
+            observeTerminal(failure);
         }
 
         public UUID id() {
@@ -788,6 +826,41 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
 
         void clearCancellation() {
             owner = null;
+            flow = null;
+            receiver = null;
+            discardResult = null;
+            failureMapper = null;
+        }
+
+        /** Rejects submission without retaining a receiver that physical work cannot reach. */
+        public boolean rejectSubmission(Throwable failure) {
+            Objects.requireNonNull(failure, "failure");
+            boolean unsubmitted = OWNER.compareAndSet(this, UNREGISTERED, null);
+            try {
+                return completeExceptionally(failure);
+            } finally {
+                if (unsubmitted) clearCancellation();
+            }
+        }
+
+        private <V> void receiveValue(V value, Consumer<? super V> discardValue) {
+            T decoded;
+            Consumer<? super T> discard = discardResult;
+            try {
+                try {
+                    decoded = receiver.apply(value);
+                } finally {
+                    if (value != null && discardValue != null) discardValue.accept(value);
+                }
+            } catch (RuntimeException | Error failure) {
+                completeExceptionally(failure);
+                return;
+            }
+            if (!complete(decoded) && discard != null) discard.accept(decoded);
+        }
+
+        private void receiveFailure(Throwable failure) {
+            completeExceptionally(failureMapper == null ? failure : failureMapper.apply(failure));
         }
 
         boolean beginRegistration() {
@@ -815,7 +888,11 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                 if (current instanceof ZLinkServiceOperationRegistry registry)
                     return registry.cancel(id, this);
                 if (current != UNREGISTERED && current != REGISTERING) return false;
-                if (OWNER.compareAndSet(this, current, null)) return super.cancel(false);
+                if (OWNER.compareAndSet(this, current, null)) {
+                    boolean cancelled = super.cancel(false);
+                    clearCancellation();
+                    return cancelled;
+                }
             }
         }
 
@@ -835,7 +912,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         private static final int FAILURE = 2;
         private static final int CANCELLATION = 3;
 
-        private CompletableFuture<T> completion;
+        private CompletableFuture<?> completion;
         private Consumer<? super T> discardValue;
         private final UUID id;
         private long deadlineTick;
@@ -847,7 +924,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         private Object terminalValue;
         Throwable terminalFailure;
 
-        Entry(UUID id, CompletableFuture<T> completion, Consumer<? super T> discardValue) {
+        Entry(UUID id, CompletableFuture<?> completion, Consumer<? super T> discardValue) {
             this.discardValue = discardValue;
             this.id = id;
             this.completion = completion;
@@ -880,14 +957,28 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         @SuppressWarnings("unchecked")
         @Override
         void dispatch() {
-            try {
+            ZLinkFlowContext.State flow =
+                    completion instanceof Operation<?> operation
+                            ? operation.flow
+                            : ZLinkFlowContext.current();
+            try (var scope =
+                    flow == null && ZLinkFlowContext.current() == null
+                            ? null
+                            : ZLinkFlowContext.enter(flow)) {
                 switch (terminalKind) {
                     case VALUE -> {
-                        if (!completion.complete((T) terminalValue)
+                        if (completion instanceof Operation<?> operation
+                                && operation.receiver != null) {
+                            operation.receiveValue((T) terminalValue, discardValue);
+                        } else if (!((CompletableFuture<T>) completion).complete((T) terminalValue)
                                 && terminalValue != null
                                 && discardValue != null) discardValue.accept((T) terminalValue);
                     }
-                    case FAILURE -> completion.completeExceptionally(terminalFailure);
+                    case FAILURE -> {
+                        if (completion instanceof Operation<?> operation)
+                            operation.receiveFailure(terminalFailure);
+                        else completion.completeExceptionally(terminalFailure);
+                    }
                     case CANCELLATION -> {
                         if (completion instanceof Operation<?> operation)
                             operation.completeCancellation();

@@ -6,6 +6,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceCompletionDispatcher;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 
 import java.lang.invoke.MethodHandles;
@@ -2599,7 +2600,9 @@ public final class ZLinkSerialExecutionQueue {
      */
     public static <T> CompletionStage<T> manageCurrent(CompletionStage<T> stage) {
         CompletionStage<T> managed = manageCurrentInTurn(stage);
-        return managed == stage ? ZLinkServiceCompletionDispatcher.deliver(stage) : managed;
+        return managed == stage && !(stage instanceof ZLinkServiceOperationRegistry.Operation<?>)
+                ? ZLinkServiceCompletionDispatcher.deliver(stage)
+                : managed;
     }
 
     /**

@@ -1465,58 +1465,46 @@ public final class ZLinkChannelRuntime
             String packetName,
             Message payload,
             Duration timeout) {
-        CompletableFuture<Message> result = new CompletableFuture<>();
         Duration effectiveTimeout = effectiveRouteTimeout(timeout);
         List<Message> requestParts =
                 ZLinkChannelCallRuntime.parts(Optional.of(packetName), payload);
-        callRuntime
-                .requestRoute(
-                        systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds
-                                .next(),
-                        requireRouteRouter(channelName),
-                        target,
-                        requestParts,
-                        effectiveTimeout,
-                        null)
-                .whenComplete(
-                        (reply, failure) -> {
-                            requestParts.forEach(Message::close);
-                            if (failure != null) {
-                                result.completeExceptionally(
-                                        ZLinkChannelCallRuntime.requestFailure(failure));
-                                return;
-                            }
-                            if (result.isDone()) {
-                                reply.close();
-                                return;
-                            }
-                            try {
-                                if (reply.result() != ZLinkBackendRequestResult.OK) {
-                                    result.completeExceptionally(
-                                            systems.zlink.framework.runtime.internal.backend
-                                                    .ZLinkRequestFailureMapping.receivedFailure(
-                                                    reply.result()
-                                                            .toFrameworkErrorKind(
-                                                                    reply.failureCode()),
-                                                    "internal route request failed: "
-                                                            + reply.result(),
-                                                    reply.failureCode(),
-                                                    java.util.Map.of()));
-                                } else if (reply.parts().isEmpty()) {
-                                    result.completeExceptionally(
-                                            new ZLinkFrameworkException(
-                                                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                                                    "internal route request reply was empty: "
-                                                            + packetName));
-                                } else {
-                                    result.complete(Message.from(reply.parts().get(0)));
-                                }
-                            } catch (RuntimeException error) {
-                                result.completeExceptionally(error);
-                            } finally {
-                                reply.close();
-                            }
-                        });
+        var result =
+                systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry
+                        .<ZLinkBackendReceived, Message>prepareOperation(
+                                systems.zlink.framework.runtime.internal.service
+                                        .ZLinkServiceOperationIds.next(),
+                                reply -> {
+                                    if (reply.result() != ZLinkBackendRequestResult.OK) {
+                                        throw systems.zlink.framework.runtime.internal.backend
+                                                .ZLinkRequestFailureMapping.receivedFailure(
+                                                reply.result()
+                                                        .toFrameworkErrorKind(reply.failureCode()),
+                                                "internal route request failed: " + reply.result(),
+                                                reply.failureCode(),
+                                                java.util.Map.of());
+                                    }
+                                    if (reply.parts().isEmpty())
+                                        throw new ZLinkFrameworkException(
+                                                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                                                "internal route request reply was empty: "
+                                                        + packetName);
+                                    return Message.from(reply.parts().get(0));
+                                },
+                                Message::close,
+                                ZLinkChannelCallRuntime::requestFailure,
+                                (caller, failure) -> requestParts.forEach(Message::close));
+        try {
+            callRuntime.requestRoute(
+                    result.id(),
+                    requireRouteRouter(channelName),
+                    target,
+                    requestParts,
+                    effectiveTimeout,
+                    null,
+                    result);
+        } catch (RuntimeException | Error failure) {
+            result.rejectSubmission(failure);
+        }
         return ZLinkSerialExecutionQueue.manageCurrent(result);
     }
 
