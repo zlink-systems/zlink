@@ -260,17 +260,39 @@ final class ZLinkStartupDescriptorPublicationTest {
         var monotonicNanos = new AtomicLong();
         try (var runtime =
                 start(automaticOptions(store, "invalid-publication"), store, monotonicNanos)) {
-            ExecutionException failure =
-                    assertThrows(
-                            ExecutionException.class,
-                            () ->
-                                    ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
-                                            .toCompletableFuture()
-                                            .get(WAIT_SECONDS, TimeUnit.SECONDS));
-            assertInstanceOf(IllegalArgumentException.class, failure.getCause());
-            assertEquals(ZLinkFrameworkRuntimeState.ERROR, runtime.state());
-        } finally {
-            store.losing.set(false);
+            assertInvalidDescriptorStartupFailure(runtime, store);
+        }
+    }
+
+    @Test
+    void invalidDescriptorStartupIsObservedBeforeOwnerAdmissionCloses() throws Exception {
+        var store =
+                new LostDescriptorResponseStore(ZLinkFrameworkRuntimeState.PREPARING, false, false);
+        store.failure = new IllegalArgumentException("invalid descriptor request");
+        store.publicationResponse = new CompletableFuture<>();
+        var monotonicNanos = new AtomicLong();
+        try (var runtime =
+                start(
+                        automaticOptions(store, "invalid-publication-order"),
+                        store,
+                        monotonicNanos)) {
+            var startup =
+                    ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                            .toCompletableFuture();
+            // Completing the provider response runs this observer before the owner-lease
+            // publication continuation can revoke admission. Shutdown must see a recovered store.
+            var observation =
+                    startup.handle(
+                            (ignored, error) -> {
+                                assertInvalidDescriptorStartupFailure(runtime, store);
+                                assertTrue(
+                                        ZLinkFrameworkRuntimeTestAccess.ownerAdmissionOpen(
+                                                runtime));
+                                runtime.close();
+                                return null;
+                            });
+            store.publicationResponse.complete(null);
+            observation.toCompletableFuture().get(WAIT_SECONDS, TimeUnit.SECONDS);
         }
     }
 
@@ -651,6 +673,25 @@ final class ZLinkStartupDescriptorPublicationTest {
                 .get(WAIT_SECONDS, TimeUnit.SECONDS);
     }
 
+    private static void assertInvalidDescriptorStartupFailure(
+            ZLinkFrameworkRuntime runtime, LostDescriptorResponseStore store) {
+        try {
+            ExecutionException failure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () ->
+                                    ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                                            .toCompletableFuture()
+                                            .get(WAIT_SECONDS, TimeUnit.SECONDS));
+            assertInstanceOf(IllegalArgumentException.class, failure.getCause());
+            assertEquals(ZLinkFrameworkRuntimeState.ERROR, runtime.state());
+        } finally {
+            // Location runtime §11: teardown reads and removes the descriptor. The
+            // startup-only fault must end before close, while admission may still be open.
+            store.losing.set(false);
+        }
+    }
+
     private static ZLinkFrameworkRuntime start(DefaultZLinkFrameworkOptions options) {
         return ZLinkFrameworkRuntimeTestAccess.start(options, new ZLinkJavaBackendAdapterFactory());
     }
@@ -773,6 +814,8 @@ final class ZLinkStartupDescriptorPublicationTest {
         private final ZLinkFrameworkRuntimeState failedState;
         private final boolean applied;
         private final boolean confirmingReadAvailable;
+        private CompletableFuture<Void> publicationResponse =
+                CompletableFuture.completedFuture(null);
         private RuntimeException failure =
                 new IllegalStateException("location store response lost");
 
@@ -820,6 +863,7 @@ final class ZLinkStartupDescriptorPublicationTest {
             return (applied
                             ? inner.write(request, cancellation)
                             : CompletableFuture.<ZLinkStoreWriteResult>completedFuture(null))
+                    .thenCompose(ignored -> publicationResponse)
                     .thenCompose(ignored -> CompletableFuture.failedFuture(failure));
         }
 
