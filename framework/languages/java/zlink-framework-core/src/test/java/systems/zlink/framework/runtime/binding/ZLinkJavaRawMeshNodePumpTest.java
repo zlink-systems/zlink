@@ -77,6 +77,44 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 final class ZLinkJavaRawMeshNodePumpTest {
+    @org.junit.jupiter.api.RepeatedTest(100)
+    void successiveRotationsReleaseAllRecordsAndReturnThePermitBudget() throws Exception {
+        try (var queue =
+                        new ZLinkApplicationJobQueue(
+                                ZLinkApplicationJobQueueProfile.BALANCED,
+                                OptionalLong.of(100),
+                                new ZLinkApplicationJobQueue.ProcessorCandidates(
+                                        1, null, null, null),
+                                100,
+                                0);
+                var context = Zlink.createContext();
+                var node = rotationNode(context, () -> 0L)) {
+            node.setApplicationJobQueue(queue);
+            var records = new java.util.ArrayList<Received>();
+            var published = new AtomicInteger();
+            for (int rotation = 0; rotation < 3; rotation++) {
+                var claims = new AtomicInteger();
+                installClaims(
+                        node,
+                        () ->
+                                claims.getAndIncrement() == 0
+                                        ? admissionRecord(published::incrementAndGet, records)
+                                        : null);
+                drain(node);
+                assertEquals(rotation + 1, published.get());
+                for (var record : records)
+                    org.junit.jupiter.api.Assertions.assertThrows(
+                            IllegalStateException.class, record::parts);
+                int returned = queue.reserveRotationBudget(100);
+                try {
+                    assertEquals(100, returned);
+                } finally {
+                    queue.abandonRotationBudget(returned);
+                }
+            }
+        }
+    }
+
     @Test
     void crossedHelloResponseKeepsItsSnapshotWhenAdmitIsClaimedInTheSameRotation()
             throws Exception {

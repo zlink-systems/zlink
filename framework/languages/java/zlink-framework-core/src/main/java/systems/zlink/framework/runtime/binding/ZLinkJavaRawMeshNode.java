@@ -230,6 +230,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 }
             }
         }
+        wire.prepareChannelNames(counts.keySet());
         peerObservation =
                 new PeerObservationRoot(
                         current == null ? localDescriptor : current.localDescriptor(),
@@ -284,6 +285,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private volatile ExecutorService pump;
     // The pump's next rotation, built once per pump start.
     private volatile Runnable pumpRotation;
+    private final List<ClaimedRecord> ingressRecords = new ArrayList<>(MAX_INGRESS_BATCH);
+    private final ZLinkApplicationJobQueue.Permit[] ingressPermits =
+            new ZLinkApplicationJobQueue.Permit[MAX_INGRESS_BATCH];
     // The pump's receive turn, built once with the pump socket like pumpRotation.
     private Supplier<ClaimedRecord> pumpClaim;
     private final AtomicReference<CompletableFuture<ZLinkApplicationJobQueue.Permit>>
@@ -2733,7 +2737,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 throw new IllegalArgumentException("invalid Spot reply frame count");
             }
             ZLinkServiceM6AWireCodec.Reply header =
-                    wire.decodeReplyHeader(frames.getFirst().toByteArray());
+                    wire.decodeReplyHeader(frames.getFirst().dataBuffer());
             if (header.correlation() != correlation
                     || (header.terminalResult() == 0) != (frames.size() == 2)) {
                 throw new IllegalArgumentException("Spot reply terminal mismatch");
@@ -5159,7 +5163,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 throw new IllegalArgumentException(
                         "generic Actor reply carries an operation-specific tail");
             }
-            header = wire.decodeReplyHeader(frames.getFirst().toByteArray());
+            header = wire.decodeReplyHeader(frames.getFirst().dataBuffer());
             if (header.correlation() != correlation
                     || (header.terminalResult() == 0) != (frames.size() == 2)) {
                 throw new IllegalArgumentException("Actor reply terminal mismatch");
@@ -5316,7 +5320,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         "generic service reply carries an operation-specific tail");
             }
             ZLinkServiceM6AWireCodec.Reply header =
-                    wire.decodeReplyHeader(frames.getFirst().toByteArray());
+                    wire.decodeReplyHeader(frames.getFirst().dataBuffer());
             if (header.correlation() != correlation
                     || (header.terminalResult() == 0) != (frames.size() == 2)) {
                 throw new IllegalArgumentException("service reply terminal mismatch");
@@ -5538,9 +5542,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         class Rotation implements AutoCloseable, Supplier<Runnable> {
             final long startedAt = nanoTime.getAsLong();
             final ZLinkApplicationJobQueue budgetQueue = applicationJobQueue;
-            final List<ClaimedRecord> records = new ArrayList<>(MAX_INGRESS_BATCH);
-            final ZLinkApplicationJobQueue.Permit[] permits =
-                    new ZLinkApplicationJobQueue.Permit[MAX_INGRESS_BATCH];
+            final List<ClaimedRecord> records = ingressRecords;
+            final ZLinkApplicationJobQueue.Permit[] permits = ingressPermits;
             ZLinkApplicationJobQueue.Permit nextPermit;
             long receivedBytes;
             int count;
@@ -5672,6 +5675,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 }
                 if (nextPermit != null) nextPermit.abandonReservation();
                 if (budget > 0) budgetQueue.abandonRotationBudget(budget);
+                records.clear();
+                java.util.Arrays.fill(permits, null);
             }
         }
         rotationReceivePeer = null;
@@ -9000,7 +9005,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
     }
 
-    private static String requireChannel(String value) {
+    private String requireChannel(String value) {
+        if (wire.hasPreparedChannelName(value)) return value;
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException("channelName is required");
         }

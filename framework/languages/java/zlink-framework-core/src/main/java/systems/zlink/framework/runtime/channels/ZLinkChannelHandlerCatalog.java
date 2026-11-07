@@ -13,6 +13,7 @@ import java.util.Set;
 
 final class ZLinkChannelHandlerCatalog {
     private final ZLinkScannedHandlerCatalog scannedHandlers;
+    private final java.util.function.Consumer<Class<?>> prepare;
 
     private final List<ZLinkSuspendInvocationAdapter> suspendInvokers;
 
@@ -23,8 +24,16 @@ final class ZLinkChannelHandlerCatalog {
     ZLinkChannelHandlerCatalog(
             ZLinkScannedHandlerCatalog scannedHandlers,
             List<ZLinkSuspendInvocationAdapter> suspendInvokers) {
+        this(scannedHandlers, suspendInvokers, ignored -> {});
+    }
+
+    ZLinkChannelHandlerCatalog(
+            ZLinkScannedHandlerCatalog scannedHandlers,
+            List<ZLinkSuspendInvocationAdapter> suspendInvokers,
+            java.util.function.Consumer<Class<?>> prepare) {
         this.scannedHandlers = scannedHandlers;
         this.suspendInvokers = suspendInvokers;
+        this.prepare = prepare;
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -49,6 +58,13 @@ final class ZLinkChannelHandlerCatalog {
             handlers.put(handler.packetName(), handler);
         }
         handlers.replaceAll((name, handler) -> handler.withChannelNames(channel.envelopeNames()));
+        handlers.values()
+                .forEach(
+                        handler -> {
+                            prepare.accept(handler.requestType());
+                            if (handler.replyType() != handler.requestType())
+                                prepare.accept(handler.replyType());
+                        });
         return Map.copyOf(handlers);
     }
 
@@ -121,6 +137,13 @@ final class ZLinkChannelHandlerCatalog {
             handlers.put(handler.packetName(), handler);
         }
         handlers.replaceAll((name, handler) -> handler.withChannelNames(channel.envelopeNames()));
+        handlers.values()
+                .forEach(
+                        handler -> {
+                            prepare.accept(handler.requestType());
+                            if (handler.replyType() != handler.requestType())
+                                prepare.accept(handler.replyType());
+                        });
         return Map.copyOf(handlers);
     }
 
