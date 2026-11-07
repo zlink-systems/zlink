@@ -52,6 +52,7 @@ internal abstract partial class ZLinkSpotActivation
 
     internal async ValueTask DiscardLocationExecutionAsync(Func<ValueTask> discardMembers)
     {
+        FenceLocationExecution();
         var state = await _lane.RunAsync(BeginFinalizationOnLane).ConfigureAwait(false);
         await StartFinalization(state, discardMembers).ConfigureAwait(false);
     }
@@ -61,7 +62,11 @@ internal abstract partial class ZLinkSpotActivation
         if (_finalization is not null)
             return (_finalization, null);
 
-        FenceLocationExecution();
+        Interlocked.CompareExchange(
+            ref _disposed,
+            (int)ZLinkObjectExecutionStatus.Stopped,
+            (int)ZLinkObjectExecutionStatus.Allowed
+        );
         if (_serial.IsPreparing)
             _ = _serial.FinishActivationPreparation();
         var completion = new TaskCompletionSource(
