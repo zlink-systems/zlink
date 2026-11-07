@@ -42,6 +42,7 @@ export interface ZLinkActorClaimActivation<TActor> {
 
 export class ZLinkActorLocationClaims {
   private readonly actors = new Map<string, TrackedActor>();
+  private readonly executionKeys = new WeakMap<object, string>();
 
   constructor(
     private readonly runtime: IZLinkLocationLifecycleRuntime,
@@ -277,6 +278,7 @@ export class ZLinkActorLocationClaims {
         `Actor '${actorId}' membership commit was rejected with status ${result.kind}.`
       );
     }
+    this.confirmAuthority(actorId, { ...result, kind: 'snapshot' });
   }
 
   async release(_actorType: string, actorId: string, actorRef?: ActorRef): Promise<void> {
@@ -290,7 +292,7 @@ export class ZLinkActorLocationClaims {
         ownerToken?.leaseGeneration ?? tracked.generation
       );
       if (this.actors.get(canonical) === tracked) {
-        this.actors.delete(canonical);
+        this.forget(canonical);
       }
       if (status === ZLinkLocationWriteStatus.Stored) {
         await this.releaseAuthority(actorId, actorRef ?? tracked.row.actorRef, ownerToken);
@@ -319,13 +321,17 @@ export class ZLinkActorLocationClaims {
     return tracked === undefined ? undefined : { ...tracked.row };
   }
 
-  async reclaimOwnerRows(): Promise<void> {
+  async reclaimOwnerRows(
+    excluded?: import('./lifecycle-runtime').ZLinkPreservedAuthority
+  ): Promise<void> {
     const owner = this.runtime.currentOwnerToken;
     if (owner === undefined) {
       throw new Error('Actor location recovery requires a claimed owner token.');
     }
     const failures: unknown[] = [];
     for (const [canonical, tracked] of [...this.actors]) {
+      if (excluded?.(encodeAuthorityKey('actor', tracked.row.actorId), tracked.authority) === true)
+        continue;
       const key = { meshName: tracked.row.meshName, actorId: tracked.row.actorId };
       try {
         const current = await this.actorStore.resolveActor(key);
@@ -337,7 +343,7 @@ export class ZLinkActorLocationClaims {
             current.leaseGeneration !== owner.leaseGeneration)
         ) {
           if (this.actors.get(canonical) !== tracked) continue;
-          this.actors.delete(canonical);
+          this.forget(canonical);
           const executionOwner = tracked.executionOwner?.deref();
           if (executionOwner !== undefined) this.runtime.discardExecution?.(executionOwner);
           await tracked.deactivate?.();
@@ -375,11 +381,54 @@ export class ZLinkActorLocationClaims {
     }
   }
 
-  bindExecution(id: string, owner: object): void {
+  confirmAuthority(
+    actorId: string,
+    authority: ZLinkAuthoritySnapshot,
+    expectedStoreVersion?: string
+  ): void {
     const tracked = this.actors.get(
-      ZLinkLocationKeyCodec.encodeActorKey({ meshName: this.entryMeshName, actorId: id })
+      ZLinkLocationKeyCodec.encodeActorKey({ meshName: this.entryMeshName, actorId })
     );
-    if (tracked !== undefined) tracked.executionOwner = new WeakRef(owner);
+    if (
+      tracked !== undefined &&
+      (expectedStoreVersion === undefined ||
+        tracked.authority?.storeVersion.value === expectedStoreVersion)
+    )
+      tracked.authority = authority;
+  }
+
+  recoveryAuthority(
+    owner: object
+  ): { key: ReturnType<typeof encodeAuthorityKey>; fence: ZLinkAuthoritySnapshot } | undefined {
+    const canonical = this.executionKeys.get(owner);
+    const tracked = canonical === undefined ? undefined : this.actors.get(canonical);
+    if (tracked?.executionOwner?.deref() === owner && tracked.authority !== undefined)
+      return {
+        key: encodeAuthorityKey('actor', tracked.row.actorId),
+        fence: tracked.authority
+      };
+    return undefined;
+  }
+
+  bindExecution(id: string, owner: object): void {
+    const canonical = ZLinkLocationKeyCodec.encodeActorKey({
+      meshName: this.entryMeshName,
+      actorId: id
+    });
+    const tracked = this.actors.get(canonical);
+    if (tracked !== undefined) {
+      const previous = tracked.executionOwner?.deref();
+      if (previous !== undefined) this.executionKeys.delete(previous);
+      tracked.executionOwner = new WeakRef(owner);
+      this.executionKeys.set(owner, canonical);
+    }
+  }
+
+  private forget(canonical: string): void {
+    const tracked = this.actors.get(canonical);
+    const owner = tracked?.executionOwner?.deref();
+    if (owner !== undefined) this.executionKeys.delete(owner);
+    this.actors.delete(canonical);
   }
 
   onOwnershipLost(event: ZLinkOwnershipLostEvent): void {
@@ -387,7 +436,7 @@ export class ZLinkActorLocationClaims {
       return;
     }
     const tracked = this.actors.get(event.key);
-    this.actors.delete(event.key);
+    this.forget(event.key);
     const executionOwner = tracked?.executionOwner?.deref();
     if (executionOwner !== undefined) this.runtime.discardExecution?.(executionOwner);
     if (tracked?.deactivate !== undefined) {
@@ -465,6 +514,7 @@ export class ZLinkActorLocationClaims {
 }
 
 interface TrackedActor {
+  authority?: ZLinkAuthoritySnapshot;
   executionOwner?: WeakRef<object>;
   row: ZLinkActorLocation;
   generation: bigint;
