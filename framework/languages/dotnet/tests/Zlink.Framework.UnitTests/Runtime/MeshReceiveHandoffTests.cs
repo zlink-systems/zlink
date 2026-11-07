@@ -1,4 +1,9 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.AspNetCore;
+using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Service;
@@ -95,6 +100,363 @@ public sealed class MeshReceiveHandoffTests
         }
         await application.DisposeAsync();
         Assert.Empty(errors);
+    }
+
+    [ThreadStatic]
+    private static int _mailboxTurn;
+
+    [Fact]
+    public async Task ChannelMailbox_ExecutesHandlerInClaimTurn_AndRetainsReplyDuringDrain()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshReceiveHandoffTests),
+                nameof(ChannelMailbox_ExecutesHandlerInClaimTurn_AndRetainsReplyDuringDrain)
+            )
+        )
+            return;
+        await RunChannelMailboxAsync(false);
+    }
+
+    [Fact]
+    public async Task ChannelMailbox_WithNoIdleWorker_KeepsReceiverAndManagementIndependent()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshReceiveHandoffTests),
+                nameof(ChannelMailbox_WithNoIdleWorker_KeepsReceiverAndManagementIndependent)
+            )
+        )
+            return;
+        await RunChannelMailboxAsync(true);
+    }
+
+    private static async Task RunChannelMailboxAsync(bool exhaustApplicationResources)
+    {
+        var capture = new ChannelTurnCapture();
+        var builder = Host.CreateApplicationBuilder();
+        builder.Logging.ClearProviders().AddConsole().SetMinimumLevel(LogLevel.Trace);
+        builder.Services.AddSingleton(capture).AddTransient<ChannelTurnHandler>();
+        builder.Services.AddZLinkFramework(_ => { });
+        using var host = builder.Build();
+        var runtime = host.Services.GetRequiredService<ZLinkFrameworkRuntime>();
+        var registration = host.Services.GetRequiredService<ZLinkFrameworkRegistration>();
+        registration.DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+        var spotNode = new ZLinkSpotNodeRegistration
+        {
+            SpotNodeName = "channel-turn",
+            RoutingId = RoutingId.From("channel-turn-target"),
+        };
+        foreach (var channel in new[] { "work", "other" })
+        {
+            var membership = new ZLinkMeshChannelMembership { ChannelName = channel };
+            membership.RequestHandlers.Add(
+                new ZLinkChannelHandlerRegistration(
+                    typeof(ChannelTurnHandler),
+                    typeof(ChannelTurnMessage),
+                    typeof(ChannelTurnMessage),
+                    nameof(ChannelTurnMessage)
+                )
+            );
+            spotNode.ChannelMemberships.Add(membership);
+        }
+        var failures = new System.Collections.Concurrent.ConcurrentQueue<Exception>();
+        var reporter = new Runtime.AuditRuntimeFailureReporter();
+        var runner = new ZLinkRuntimeTaskRunner(reporter, CancellationToken.None);
+        await using var native = Systems.Zlink.Zlink.CreateContext();
+        var context = new RecordingContext(native, channelRequests: true);
+        var admitted = Signal();
+        ZLinkManagedMeshNode? sourceNode = null;
+        ZLinkManagedMeshNode? targetNode = null;
+        IPoller Poller() =>
+            new RecordingPoller(() =>
+            {
+                if (
+                    sourceNode?.Status().AdmittedPeerCount == 1
+                    && targetNode?.Status().AdmittedPeerCount == 1
+                )
+                    admitted.TrySetResult();
+            });
+        await using var source = sourceNode = new ZLinkManagedMeshNode(
+            native,
+            "channel-turn",
+            receivePollerFactory: Poller
+        );
+        await using var target = targetNode = new ZLinkManagedMeshNode(
+            context,
+            "channel-turn",
+            receivePollerFactory: Poller
+        );
+        var suffix = Guid.NewGuid().ToString("N");
+        var sourceRid = RoutingId.From("channel-turn-source");
+        var targetRid = spotNode.RoutingId;
+        var targetEndpoint = $"inproc://channel-turn-target-{suffix}";
+        source.SetRoutingId(sourceRid);
+        source.SetBind($"inproc://channel-turn-source-{suffix}");
+        target.SetRoutingId(targetRid);
+        target.SetBind(targetEndpoint);
+        target.AddChannel("work");
+        target.AddChannel("other");
+        source.ConnectPeer(targetEndpoint, targetRid);
+        target.Start();
+        source.Start();
+        // The pump retains dispatch results; the dispatcher does not own another worker.
+        var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
+            ZLinkMeshNodeRouteDispatcher.Create(
+                host.Services,
+                registration,
+                spotNode,
+                runtime,
+                runner
+            )
+        );
+        await using var pump = new ZLinkMeshDispatchPump(target, new ZLinkMeshCompletionTable());
+        var turns = 0;
+        pump.SetNodeRouteHandler(
+            (records, token) =>
+            {
+                _mailboxTurn = Interlocked.Increment(ref turns);
+                foreach (var record in records)
+                {
+                    var header = record.ApplicationPayloadView is { } view
+                        ? ZLinkEnvelopeCodec.DecodeHeader(view)
+                        : ZLinkEnvelopeCodec.DecodeHeader(record.Parts);
+                    capture.Claims[header.CorrelationId!] = (
+                        Environment.CurrentManagedThreadId,
+                        _mailboxTurn
+                    );
+                }
+                try
+                {
+                    return dispatcher.DispatchBatchAsync(records, token);
+                }
+                finally
+                {
+                    _mailboxTurn = 0;
+                }
+            }
+        );
+        pump.EnsureStarted();
+        await host.StartAsync();
+        var blockers = new List<ZLinkProcessExecutionPool.ApplicationSource>();
+        using var releaseWorkers = new ManualResetEventSlim();
+        using var workersEntered = new CountdownEvent(
+            ZLinkProcessExecutionPool.ApplicationWorkerCount
+        );
+        Task? stopping = null;
+        try
+        {
+            await admitted.Task.WaitAsync(CompletionBound);
+            if (exhaustApplicationResources)
+            {
+                for (var i = 0; i < ZLinkProcessExecutionPool.ApplicationWorkerCount; i++)
+                {
+                    var blocker = ZLinkProcessExecutionPool.CreateApplicationSource(
+                        _ =>
+                        {
+                            workersEntered.Signal();
+                            Assert.True(releaseWorkers.Wait(CompletionBound));
+                            return ValueTask.CompletedTask;
+                        },
+                        failures.Enqueue
+                    );
+                    blockers.Add(blocker);
+                    blocker.Signal();
+                }
+                Assert.True(workersEntered.Wait(CompletionBound));
+            }
+            var first = Submit("work", "first");
+            var router = Assert.IsType<RecordingRouter>(context.Router);
+            var receiveThread = await router.FirstReceived.Task.WaitAsync(CompletionBound);
+            if (exhaustApplicationResources)
+            {
+                Assert.False(capture.FirstEntered.Task.IsCompleted);
+                await CheckDeadline();
+                Assert.Equal(0, Volatile.Read(ref turns));
+                releaseWorkers.Set();
+            }
+            await capture.FirstEntered.Task.WaitAsync(CompletionBound);
+            var second = Submit("work", "second");
+            await router.SecondReceived.Task.WaitAsync(CompletionBound);
+            var other = Submit("other", "other");
+            Assert.Equal("other", await other.WaitAsync(CompletionBound));
+            await CheckDeadline();
+            Assert.False(capture.ReleaseSync.IsSet);
+            Assert.False(first.IsCompleted);
+            Assert.False(second.IsCompleted);
+            Assert.Equal(receiveThread, router.SecondReceiveThread);
+            Assert.NotEqual(receiveThread, capture.Starts["first"].Thread);
+            capture.ReleaseSync.Set();
+            Assert.Equal("first", await first.WaitAsync(CompletionBound));
+            Assert.Equal("second", await second.WaitAsync(CompletionBound));
+            Assert.Equal(new[] { "first", "second" }, capture.WorkOrder.ToArray());
+            var held = Submit("other", "held");
+            await capture.AsyncEntered.Task.WaitAsync(CompletionBound);
+            runtime.SealApplicationAdmissionsForDrain(CancellationToken.None);
+            Assert.Equal(
+                "shutting_down",
+                await Submit("work", "sealed").WaitAsync(CompletionBound)
+            );
+            Assert.False(capture.Starts.ContainsKey("sealed"));
+            var drained = runtime.WaitForAcceptedOperationsForDrainAsync();
+            stopping = pump.DisposeAsync().AsTask();
+            Assert.False(stopping.IsCompleted);
+            Assert.False(drained.IsCompleted);
+            capture.ReleaseAsync.TrySetResult();
+            Assert.Equal("held", await held.WaitAsync(CompletionBound));
+            await Task.WhenAll(stopping, drained).WaitAsync(CompletionBound);
+            foreach (var (key, started) in capture.Starts)
+            {
+                Assert.Equal(capture.Claims[key], started);
+                Assert.NotEqual(0, started.Turn);
+            }
+            Assert.Equal(1, router.MaximumConcurrentReceives);
+            Assert.Empty(failures);
+            Assert.Empty(reporter.Failures);
+        }
+        finally
+        {
+            releaseWorkers.Set();
+            capture.ReleaseSync.Set();
+            capture.ReleaseAsync.TrySetResult();
+            foreach (var blocker in blockers)
+                await blocker.DisposeAsync();
+            if (stopping is not null)
+                await stopping;
+            await pump.DisposeAsync();
+            await runner.StopAsync();
+            await host.StopAsync();
+            capture.ReleaseSync.Dispose();
+        }
+
+        Task<string> Submit(string channel, string value)
+        {
+            var completion = new TaskCompletionSource<string>(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            var header = new ZLinkEnvelopeHeader(
+                ZLinkMessageKind.Request,
+                channel,
+                nameof(ChannelTurnMessage),
+                ZLinkEnvelopeCodec.DefaultContentType,
+                value,
+                null,
+                null,
+                null,
+                null
+            );
+            var parts = ZLinkEnvelopeCodec.EncodeParts(
+                header,
+                new ChannelTurnMessage(value),
+                typeof(ChannelTurnMessage),
+                null
+            );
+            try
+            {
+                Assert.Equal(
+                    SubmitResult.Ok,
+                    source
+                        .EntrySpot()
+                        .RequestToChannel(
+                            channel,
+                            parts,
+                            (result, reply) =>
+                            {
+                                try
+                                {
+                                    Assert.Equal(RequestResult.Ok, result);
+                                    var response = ZLinkEnvelopeCodec.DecodeHeader(reply);
+                                    completion.TrySetResult(
+                                        response.Kind == ZLinkMessageKind.Error
+                                            ? response.ErrorCode!
+                                            : Assert
+                                                .IsType<ChannelTurnMessage>(
+                                                    ZLinkEnvelopeCodec.DecodeBody(
+                                                        reply,
+                                                        typeof(ChannelTurnMessage)
+                                                    )
+                                                )
+                                                .Value
+                                    );
+                                }
+                                catch (Exception error)
+                                {
+                                    completion.TrySetException(error);
+                                }
+                            },
+                            CompletionBound
+                        )
+                );
+            }
+            finally
+            {
+                foreach (var part in parts)
+                    part.Dispose();
+            }
+            return completion.Task;
+        }
+
+        async Task CheckDeadline()
+        {
+            var deadline = source.RunDeadlineRequestAsync<int>(
+                TimeSpan.FromMilliseconds(10),
+                default,
+                completion =>
+                    throw new ZlinkRequestException(
+                        (ZlinkRequestException.ErrorCode)(int)completion.Result
+                    ),
+                static (_, _) => Task.CompletedTask
+            );
+            var error = await Assert.ThrowsAsync<ZlinkRequestException>(() =>
+                deadline.WaitAsync(CompletionBound)
+            );
+            Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, error.Result);
+        }
+    }
+
+    private sealed record ChannelTurnMessage(string Value);
+
+    private sealed class ChannelTurnCapture
+    {
+        internal readonly System.Collections.Concurrent.ConcurrentDictionary<
+            string,
+            (int Thread, int Turn)
+        > Claims = new();
+        internal readonly System.Collections.Concurrent.ConcurrentDictionary<
+            string,
+            (int Thread, int Turn)
+        > Starts = new();
+        internal readonly System.Collections.Concurrent.ConcurrentQueue<string> WorkOrder = new();
+        internal readonly TaskCompletionSource FirstEntered = Signal();
+        internal readonly TaskCompletionSource AsyncEntered = Signal();
+        internal readonly ManualResetEventSlim ReleaseSync = new();
+        internal readonly TaskCompletionSource ReleaseAsync = Signal();
+    }
+
+    private sealed class ChannelTurnHandler(ChannelTurnCapture capture)
+        : IZLinkRequestHandler<ChannelTurnMessage, ChannelTurnMessage>
+    {
+        public async ValueTask<ChannelTurnMessage> HandleAsync(
+            ChannelTurnMessage request,
+            IZLinkMessageContext context,
+            CancellationToken cancellationToken
+        )
+        {
+            capture.Starts[request.Value] = (Environment.CurrentManagedThreadId, _mailboxTurn);
+            if (request.Value is "first" or "second")
+                capture.WorkOrder.Enqueue(request.Value);
+            if (request.Value == "first")
+            {
+                capture.FirstEntered.TrySetResult();
+                Assert.True(capture.ReleaseSync.Wait(CompletionBound));
+            }
+            if (request.Value == "held")
+            {
+                capture.AsyncEntered.TrySetResult();
+                await capture.ReleaseAsync.Task;
+            }
+            return request;
+        }
     }
 
     private static async Task RunHandoffAsync(bool exhaustApplicationResources)
@@ -286,7 +648,7 @@ public sealed class MeshReceiveHandoffTests
     private static TaskCompletionSource Signal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    private sealed class RecordingRouter(IRouterSocket inner)
+    private sealed class RecordingRouter(IRouterSocket inner, bool channelRequests = false)
         : PressureSocket<IRouterSocket>(inner),
             IRouterSocket
     {
@@ -335,7 +697,12 @@ public sealed class MeshReceiveHandoffTests
                 var header = result.Parts[0].AsReadOnlySpan();
                 if (
                     ZLinkServiceWireCodec.TryDecodePrefix(header, out var command, out _, out _)
-                    && command == ServiceWireConstants.Command.NodeSend
+                    && command
+                        == (
+                            channelRequests
+                                ? ServiceWireConstants.Command.ChannelRequest
+                                : ServiceWireConstants.Command.NodeSend
+                        )
                 )
                 {
                     // The service wire packs payload into this frame. Match its
@@ -358,12 +725,13 @@ public sealed class MeshReceiveHandoffTests
         }
     }
 
-    private sealed class RecordingContext(IContext inner) : IContext
+    private sealed class RecordingContext(IContext inner, bool channelRequests = false) : IContext
     {
         internal RecordingRouter? Router { get; private set; }
         public IContextOptions Options => inner.Options;
 
-        public IRouterSocket CreateRouterSocket() => Router = new(inner.CreateRouterSocket());
+        public IRouterSocket CreateRouterSocket() =>
+            Router = new(inner.CreateRouterSocket(), channelRequests);
 
         public IPairSocket CreatePairSocket() => inner.CreatePairSocket();
 
