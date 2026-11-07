@@ -16,7 +16,7 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
     private int _acceptedWaiters;
     private int _pendingRequests;
 
-    internal Func<bool>? ExecutionAllowed { get; set; }
+    internal Func<ZLinkObjectExecutionStatus>? ExecutionAllowed { get; set; }
 
     public ZLinkActorSerialExecutor(ZLinkExecutionLanePolicy? lanePolicy = null)
     {
@@ -26,7 +26,7 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
             reporter,
             CancellationToken.None,
             lanePolicy ?? ZLinkExecutionLanePolicy.Default,
-            executionAllowed: () => ExecutionAllowed?.Invoke() != false
+            executionAllowed: () => ExecutionAllowed?.Invoke() ?? ZLinkObjectExecutionStatus.Allowed
         );
     }
 
@@ -231,6 +231,8 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
             {
                 if (published.Completion.IsFaulted)
                     waiter.FailPreparation(published.Completion.Exception!.InnerException!);
+                else if (published.Completion.IsCanceled)
+                    waiter.FailPreparation(new TaskCanceledException(published.Completion));
                 OnWaiterFinished(waiter);
             });
             waiter.BindItem(published);
