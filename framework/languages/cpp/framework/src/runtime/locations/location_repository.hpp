@@ -14,6 +14,8 @@
 #include <zlink/framework/contracts/spots/spot.hpp>
 
 #include <array>
+#include <atomic>
+#include <memory>
 #include <functional>
 #include <limits>
 #include <map>
@@ -485,6 +487,15 @@ class location_repository_t
     friend struct location_reclaim_test_access_t;
 
   public:
+    struct access_t
+    {
+        std::function<bool ()> admit;
+        std::function<void (authority_key_t, authority_snapshot_t)> observe;
+    };
+    void configure_access (std::shared_ptr<const access_t> access)
+    {
+        std::atomic_store (&_access, std::move (access));
+    }
     virtual ~location_repository_t () = default;
 
     void configure_reclaim_margin (std::chrono::milliseconds margin)
@@ -508,8 +519,14 @@ class location_repository_t
     {
         return remove_mesh_node (std::move (key), std::move (owner));
     }
+    task_t<location_page_t<mesh_node_descriptor_t>>
+    list_mesh_nodes (std::string mesh_name, location_page_request_t page = {})
+    {
+        require_admission ();
+        co_return co_await list_mesh_nodes_core (std::move (mesh_name), std::move (page));
+    }
     virtual task_t<location_page_t<mesh_node_descriptor_t>>
-    list_mesh_nodes (std::string mesh_name, location_page_request_t page = {}) = 0;
+    list_mesh_nodes_core (std::string mesh_name, location_page_request_t page = {}) = 0;
     virtual task_t<location_write_result_t>
     update_client_server (client_server_server_descriptor_t descriptor,
                           location_write_intent_t intent) = 0;
@@ -533,13 +550,35 @@ class location_repository_t
     renew_owner_lease (location_owner_token_t token, std::chrono::milliseconds lease_ttl) = 0;
     virtual task_t<owner_lease_release_result_t>
     release_owner_lease (location_owner_token_t token) = 0;
-    virtual task_t<authority_read_result_t> read_authority (authority_key_t key,
-                                                            std::stop_token cancellation = {}) = 0;
-    virtual task_t<authority_compare_exchange_result_t>
+    task_t<authority_read_result_t> read_authority (authority_key_t key,
+                                                    std::stop_token cancellation = {})
+    {
+        require_admission ();
+        auto result = co_await read_authority_core (key, cancellation);
+        const auto access = std::atomic_load (&_access);
+        if (access && access->observe)
+            if (const auto *snapshot = std::get_if<authority_snapshot_t> (&result))
+                access->observe (std::move (key), *snapshot);
+        co_return result;
+    }
+    virtual task_t<authority_read_result_t>
+    read_authority_core (authority_key_t key, std::stop_token cancellation = {}) = 0;
+    task_t<authority_compare_exchange_result_t>
     compare_exchange_authority (authority_key_t key,
                                 std::string expected_store_version,
                                 authority_mutation_t mutation,
-                                std::stop_token cancellation = {}) = 0;
+                                std::stop_token cancellation = {})
+    {
+        if (!std::holds_alternative<authority_delete_t> (mutation))
+            require_admission ();
+        co_return co_await compare_exchange_authority_core (
+          std::move (key), std::move (expected_store_version), std::move (mutation), cancellation);
+    }
+    virtual task_t<authority_compare_exchange_result_t>
+    compare_exchange_authority_core (authority_key_t key,
+                                     std::string expected_store_version,
+                                     authority_mutation_t mutation,
+                                     std::stop_token cancellation = {}) = 0;
     virtual task_t<authority_scan_result_t>
     list_authorities (std::string prefix,
                       std::optional<authority_scan_cursor_t> cursor,
@@ -557,21 +596,49 @@ class location_repository_t
         throw std::logic_error ("Reservation lifecycle recovery is not supported");
         co_return false;
     }
-    virtual task_t<object_reserve_result_t> reserve (object_reserve_request_t request,
-                                                     std::stop_token cancellation = {}) = 0;
-    virtual task_t<object_complete_creation_result_t>
+    task_t<object_reserve_result_t> reserve (object_reserve_request_t request,
+                                             std::stop_token cancellation = {})
+    {
+        require_admission ();
+        co_return co_await reserve_core (std::move (request), cancellation);
+    }
+    virtual task_t<object_reserve_result_t> reserve_core (object_reserve_request_t request,
+                                                          std::stop_token cancellation = {}) = 0;
+    task_t<object_complete_creation_result_t>
     complete_creation (object_complete_creation_request_t request,
-                       std::stop_token cancellation = {}) = 0;
-    virtual task_t<object_commit_result_t>
+                       std::stop_token cancellation = {})
+    {
+        require_admission ();
+        co_return co_await complete_creation_core (std::move (request), cancellation);
+    }
+    virtual task_t<object_complete_creation_result_t>
+    complete_creation_core (object_complete_creation_request_t request,
+                            std::stop_token cancellation = {}) = 0;
+    task_t<object_commit_result_t>
     commit (object_commit_request_t request,
             std::stop_token cancellation = {},
-            std::chrono::system_clock::time_point operation_deadline = {}) = 0;
+            std::chrono::system_clock::time_point operation_deadline = {})
+    {
+        require_admission ();
+        co_return co_await commit_core (std::move (request), cancellation, operation_deadline);
+    }
+    virtual task_t<object_commit_result_t>
+    commit_core (object_commit_request_t request,
+                 std::stop_token cancellation = {},
+                 std::chrono::system_clock::time_point operation_deadline = {}) = 0;
     virtual task_t<object_abort_result_t>
     abort (object_abort_request_t request,
            std::stop_token cancellation = {},
            std::chrono::system_clock::time_point operation_deadline = {}) = 0;
+    task_t<aggregate_prepare_result_t> prepare_aggregate (aggregate_prepare_request_t request,
+                                                          std::stop_token cancellation = {})
+    {
+        require_admission ();
+        co_return co_await prepare_aggregate_core (std::move (request), cancellation);
+    }
     virtual task_t<aggregate_prepare_result_t>
-    prepare_aggregate (aggregate_prepare_request_t request, std::stop_token cancellation = {}) = 0;
+    prepare_aggregate_core (aggregate_prepare_request_t request,
+                            std::stop_token cancellation = {}) = 0;
     virtual task_t<aggregate_commit_result_t>
     commit_aggregate (aggregate_fence_t fence, std::stop_token cancellation = {}) = 0;
     virtual task_t<aggregate_abort_result_t>
@@ -613,6 +680,16 @@ class location_repository_t
         (void) mesh_name;
         return task_t<std::optional<std::uint64_t>> (
           result_t<std::optional<std::uint64_t>>::success (std::nullopt));
+    }
+
+  private:
+    std::shared_ptr<const access_t> _access;
+    void require_admission () const
+    {
+        const auto access = std::atomic_load (&_access);
+        if (access && access->admit && !access->admit ())
+            throw framework_exception_t (framework_error_kind_t::unavailable,
+                                         "Location admission is closed");
     }
 
   protected:

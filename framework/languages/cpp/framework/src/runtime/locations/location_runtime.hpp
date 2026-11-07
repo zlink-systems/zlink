@@ -85,7 +85,7 @@ class location_runtime_t
                 for (const auto &request : discard_requests)
                     request (
                       [episode = shared_from_this ()] (const serial_execution_queue_t &queue) {
-                          return execution_allowed (episode, queue.execution_ready_at (), {});
+                          return execution_admission (episode, queue.execution_ready_at (), {});
                       });
             }
             return discarded.load (std::memory_order_acquire);
@@ -109,6 +109,11 @@ class location_runtime_t
         std::optional<std::chrono::system_clock::time_point> renewed_at;
     };
 
+    struct execution_observer_t
+    {
+        std::function<void (serial_execution_queue_t::execution_admission_t)> discard;
+        std::function<void (authority_key_t, authority_snapshot_t)> observe;
+    };
     struct heartbeat_attempt_t;
 
     struct lease_renew_outcome_t
@@ -226,7 +231,7 @@ class location_runtime_t
 
     task_t<observation_status_t> observation_status_task () const
     {
-        return _lane.run_task ([this] {
+        return _lane->run_task ([this] {
             const auto lease =
               std::atomic_load_explicit (_owner_lease.get (), std::memory_order_acquire);
             const auto &outage = lease->outage;
@@ -246,16 +251,35 @@ class location_runtime_t
         _store (&store), _options (options), _owner_id (std::move (owner_id))
     {
         _store->configure_reclaim_margin (_options.owner_lease_fencing_margin);
+        auto access = std::make_shared<location_repository_t::access_t> ();
+        access->admit = [lease = _owner_lease, clock = _lease_now] {
+            const auto snapshot =
+              std::atomic_load_explicit (lease.get (), std::memory_order_acquire);
+            return !snapshot->outage || owner_lease_usable (*snapshot, (*clock) ());
+        };
+        access->observe = [lane = _lane, observers = _execution_discard_requests] (
+                            authority_key_t key, authority_snapshot_t snapshot) {
+            lane->try_post ([observers, key = std::move (key), snapshot = std::move (snapshot)] {
+                for (const auto &request : *observers)
+                    if (request.observe)
+                        request.observe (key, snapshot);
+            });
+        };
+        _store->configure_access (std::move (access));
     }
 
-    ~location_runtime_t () { stop (); }
+    ~location_runtime_t ()
+    {
+        stop ();
+        _store->configure_access ({});
+    }
 
     location_runtime_t (const location_runtime_t &) = delete;
     location_runtime_t &operator= (const location_runtime_t &) = delete;
 
     std::function<std::chrono::steady_clock::time_point ()> execution_clock () const
     {
-        return _lease_now;
+        return *_lease_now;
     }
 
     serial_execution_queue_t::execution_admission_t execution_policy () const
@@ -263,19 +287,21 @@ class location_runtime_t
         return [lease = _owner_lease, open = _episode_open,
                 now = _lease_now] (const serial_execution_queue_t &queue) {
             if (!open->load (std::memory_order_acquire))
-                return true;
+                return serial_execution_queue_t::execution_status_t::allowed;
             const auto snapshot =
               std::atomic_load_explicit (lease.get (), std::memory_order_acquire);
-            return execution_allowed (snapshot->outage, queue.execution_ready_at (), now);
+            return execution_admission (snapshot->outage, queue.execution_ready_at (), *now);
         };
     }
 
     task_t<void> on_execution_discard (
-      std::function<void (serial_execution_queue_t::execution_admission_t)> request)
+      std::function<void (serial_execution_queue_t::execution_admission_t)> request,
+      std::function<void (authority_key_t, authority_snapshot_t)> observe = {})
     {
-        return _lane.run_task ([this, request = std::move (request)] () mutable {
-            _execution_discard_requests.push_back (std::move (request));
-        });
+        return _lane->run_task (
+          [this, request = std::move (request), observe = std::move (observe)] () mutable {
+              _execution_discard_requests->push_back ({std::move (request), std::move (observe)});
+          });
     }
 
     const std::string &owner_id () const noexcept { return _owner_id; }
@@ -292,9 +318,26 @@ class location_runtime_t
     {
         const auto lease =
           std::atomic_load_explicit (_owner_lease.get (), std::memory_order_acquire);
-        if (!owner_lease_usable (*lease, std::chrono::steady_clock::now ()))
+        if (!owner_lease_usable (*lease, (*_lease_now) ()))
             return {};
         return {lease, &*lease->token};
+    }
+
+    auto bound_execution_owner () const
+    {
+        return [lease = _owner_lease, now = _lease_now] (
+                 const serial_execution_queue_t &queue) -> std::optional<location_owner_token_t> {
+            return bound_execution_owner (
+              *std::atomic_load_explicit (lease.get (), std::memory_order_acquire), queue, *now);
+        };
+    }
+
+    std::optional<location_owner_token_t>
+    bound_execution_owner (const serial_execution_queue_t &queue) const
+    {
+        return bound_execution_owner (
+          *std::atomic_load_explicit (_owner_lease.get (), std::memory_order_acquire), queue,
+          *_lease_now);
     }
 
     task_t<std::optional<location_owner_token_t>> current_owner_token_task () const
@@ -323,12 +366,13 @@ class location_runtime_t
 
     task_t<void> register_metric_scope (std::string kind, std::string name)
     {
-        return _lane.run_task ([this, kind = std::move (kind), name = std::move (name)] () mutable {
-            const auto scope = std::pair{std::move (kind), std::move (name)};
-            if (std::find (_metric_scopes.begin (), _metric_scopes.end (), scope)
-                == _metric_scopes.end ())
-                _metric_scopes.push_back (scope);
-        });
+        return _lane->run_task (
+          [this, kind = std::move (kind), name = std::move (name)] () mutable {
+              const auto scope = std::pair{std::move (kind), std::move (name)};
+              if (std::find (_metric_scopes.begin (), _metric_scopes.end (), scope)
+                  == _metric_scopes.end ())
+                  _metric_scopes.push_back (scope);
+          });
     }
 
 
@@ -354,7 +398,7 @@ class location_runtime_t
     {
         const auto lease =
           std::atomic_load_explicit (_owner_lease.get (), std::memory_order_acquire);
-        return owner_lease_usable (*lease, std::chrono::steady_clock::now ());
+        return owner_lease_usable (*lease, (*_lease_now) ());
     }
 
     std::optional<std::chrono::system_clock::time_point> owner_lease_renewed_at () const
@@ -365,7 +409,7 @@ class location_runtime_t
 
     std::optional<std::string> last_error () const
     {
-        return _lane.run_checked ([this] { return _last_error; }).get ();
+        return _lane->run_checked ([this] { return _last_error; }).get ();
     }
 
     void start (zlink::routing_id_t node_rid, std::stop_token cancellation = {})
@@ -443,7 +487,7 @@ class location_runtime_t
                 };
                 await_cleanup ([&] { return _store->remove_all_by_owner (*token, deadline_at); });
                 await_cleanup ([&] { return _store->release_owner_lease (*token, deadline_at); });
-                _lane.run_checked ([this] { clear_owner_lease_on_lane (); }).get ();
+                _lane->run_checked ([this] { clear_owner_lease_on_lane (); }).get ();
             }
             return true;
         }
@@ -490,7 +534,7 @@ class location_runtime_t
         std::stop_callback stopped (cancellation, cancel);
         std::stop_callback owner_stopped (owner_cancellation, cancel);
         try {
-            co_await _lane.run_task ([this, operation] {
+            co_await _lane->run_task ([this, operation] {
                 std::erase_if (_descriptor_publications, [] (const auto &pending) {
                     return pending->drained.task ().await_ready ();
                 });
@@ -540,7 +584,7 @@ class location_runtime_t
 
             if (result.error_kind () == framework_error_kind_t::shutting_down)
                 co_return false;
-            co_await _lane.run_task (
+            co_await _lane->run_task (
               [this, message = std::string (result.error ()->what ())] () mutable {
                   record_failure_on_lane (std::move (message));
               });
@@ -617,13 +661,22 @@ class location_runtime_t
     // Location runtime §5.1: this predicate only supplies the retention exception;
     // all existing admission and lifecycle rules still run in the execution gate.
     static bool
-    execution_allowed (const std::shared_ptr<store_outage_t> &episode,
-                       std::optional<std::chrono::steady_clock::time_point> ready_at,
-                       const std::function<std::chrono::steady_clock::time_point ()> &now) noexcept
+    retention_eligible (const std::shared_ptr<store_outage_t> &episode,
+                        std::optional<std::chrono::steady_clock::time_point> ready_at) noexcept
     {
-        if (!episode || !ready_at || *ready_at >= episode->observed_at)
-            return true;
-        return !episode->discarded.load (std::memory_order_acquire) && now () < episode->cutoff;
+        return episode && ready_at && *ready_at < episode->observed_at;
+    }
+
+    static serial_execution_queue_t::execution_status_t execution_admission (
+      const std::shared_ptr<store_outage_t> &episode,
+      std::optional<std::chrono::steady_clock::time_point> ready_at,
+      const std::function<std::chrono::steady_clock::time_point ()> &now) noexcept
+    {
+        if (!retention_eligible (episode, ready_at))
+            return serial_execution_queue_t::execution_status_t::allowed;
+        return !episode->discarded.load (std::memory_order_acquire) && now () < episode->cutoff
+                 ? serial_execution_queue_t::execution_status_t::allowed
+                 : serial_execution_queue_t::execution_status_t::ownership_lost;
     }
 
     static bool owner_lease_usable (const owner_lease_snapshot_t &lease,
@@ -631,6 +684,19 @@ class location_runtime_t
     {
         return lease.token.has_value () && lease.admission_deadline.has_value ()
                && now < *lease.admission_deadline;
+    }
+
+    static std::optional<location_owner_token_t>
+    bound_execution_owner (const owner_lease_snapshot_t &lease,
+                           const serial_execution_queue_t &queue,
+                           const std::function<std::chrono::steady_clock::time_point ()> &now)
+    {
+        if (owner_lease_usable (lease, now ()))
+            return lease.token;
+        if (retention_eligible (lease.outage, queue.execution_ready_at ())
+            && queue.execution_status () == serial_execution_queue_t::execution_status_t::allowed)
+            return lease.outage->token;
+        return std::nullopt;
     }
 
     template <typename Work> void update_owner_lease_on_lane (Work work) const
@@ -672,7 +738,8 @@ class location_runtime_t
             }
             auto episode = std::make_shared<store_outage_t> (observed_at, cutoff,
                                                              lease.last_successful_lease->token);
-            episode->discard_requests = _execution_discard_requests;
+            for (const auto &request : *_execution_discard_requests)
+                episode->discard_requests.push_back (request.discard);
             lease.outage = episode;
             episode->latch (episode->observed_at);
             detail::deadline_scheduler_t::instance ().schedule (
@@ -692,7 +759,7 @@ class location_runtime_t
     {
         const auto &episode = lease.outage;
         if (episode) {
-            if (episode->latch (_lease_now ()) || !renewal || episode != requested_outage
+            if (episode->latch ((*_lease_now) ()) || !renewal || episode != requested_outage
                 || started_at < episode->observed_at || !lease.token
                 || lease.token->owner_id != token.owner_id
                 || lease.token->lease_generation != token.lease_generation
@@ -711,7 +778,7 @@ class location_runtime_t
     heartbeat_communication_failure (std::shared_ptr<heartbeat_attempt_t> attempt)
     {
         auto *runtime = attempt->runtime;
-        const auto observed_at = runtime->_lease_now ();
+        const auto observed_at = (*runtime->_lease_now) ();
         const auto heartbeat = attempt->heartbeat.lock ();
         if (attempt->cancellation.stop_requested ()
             || (heartbeat && heartbeat->stop.load (std::memory_order_acquire)
@@ -768,7 +835,7 @@ class location_runtime_t
     static auto lease_lane (const std::shared_ptr<heartbeat_attempt_t> &attempt,
                             Work work) -> task_t<std::invoke_result_t<Work &>>
     {
-        return attempt->runtime->_lane.run_task (std::move (work));
+        return attempt->runtime->_lane->run_task (std::move (work));
     }
 
     template <typename T>
@@ -778,7 +845,7 @@ class location_runtime_t
         auto attempt = weak_attempt.lock ();
         auto heartbeat = attempt ? attempt->heartbeat.lock () : nullptr;
         if (!attempt || !heartbeat || heartbeat->stop.load (std::memory_order_acquire)
-            || remaining_until (attempt->deadline_at, attempt->runtime->_lease_now ())
+            || remaining_until (attempt->deadline_at, (*attempt->runtime->_lease_now) ())
                  <= std::chrono::milliseconds::zero ())
             co_return std::nullopt;
         auto completion = std::make_shared<task_completion_source_t<std::optional<result_t<T>>>> ();
@@ -795,7 +862,7 @@ class location_runtime_t
           pending, [weak_attempt, completion] (const result_t<T> &result) {
               if (auto active = weak_attempt.lock ()) {
                   completion->complete (result_t<std::optional<result_t<T>>>::success (
-                    remaining_until (active->deadline_at, active->runtime->_lease_now ())
+                    remaining_until (active->deadline_at, (*active->runtime->_lease_now) ())
                         > std::chrono::milliseconds::zero ()
                       ? std::optional<result_t<T>>{result}
                       : std::nullopt));
@@ -865,7 +932,7 @@ class location_runtime_t
                 co_return std::nullopt;
             if (auto heartbeat = attempt->heartbeat.lock ();
                 heartbeat && heartbeat->stop.load (std::memory_order_acquire)
-                || remaining_until (attempt->deadline_at, attempt->runtime->_lease_now ())
+                || remaining_until (attempt->deadline_at, (*attempt->runtime->_lease_now) ())
                      <= std::chrono::milliseconds::zero ())
                 co_return std::nullopt;
             auto response = co_await await_heartbeat_store (
@@ -927,7 +994,7 @@ class location_runtime_t
                 std::string failure = "owner lease renewal timed out";
                 std::optional<owner_lease_renew_result_t> result;
                 try {
-                    if (remaining_until (attempt->deadline_at, attempt->runtime->_lease_now ())
+                    if (remaining_until (attempt->deadline_at, (*attempt->runtime->_lease_now) ())
                         <= std::chrono::milliseconds::zero ()) {
                         co_await heartbeat_communication_failure (attempt);
                         co_await heartbeat_failure (attempt, failure);
@@ -998,7 +1065,7 @@ class location_runtime_t
                 if (auto heartbeat = attempt->heartbeat.lock ();
                     heartbeat && heartbeat->stop.load (std::memory_order_acquire))
                     co_return outcome;
-                if (remaining_until (attempt->deadline_at, attempt->runtime->_lease_now ())
+                if (remaining_until (attempt->deadline_at, (*attempt->runtime->_lease_now) ())
                     <= std::chrono::milliseconds::zero ()) {
                     co_await heartbeat_failure (attempt, failure);
                     co_return outcome;
@@ -1118,7 +1185,7 @@ class location_runtime_t
         catch (const std::exception &error) {
             record_failure (error.what ());
         }
-        _lane.run_checked ([this] { clear_owner_lease_on_lane (); }).get ();
+        _lane->run_checked ([this] { clear_owner_lease_on_lane (); }).get ();
     }
 
     static std::string make_owner_id ()
@@ -1194,7 +1261,7 @@ class location_runtime_t
             } else {
                 auto attempt = heartbeat->current;
                 const auto remaining =
-                  remaining_until (attempt->deadline_at, attempt->runtime->_lease_now ());
+                  remaining_until (attempt->deadline_at, (*attempt->runtime->_lease_now) ());
                 if (remaining <= std::chrono::milliseconds::zero ()) {
                     auto expire = std::move (attempt->expire);
                     lock.unlock ();
@@ -1241,8 +1308,8 @@ class location_runtime_t
 
     task_t<void> drain_descriptor_publications () const
     {
-        auto operations =
-          co_await _lane.run_task ([this] { return std::exchange (_descriptor_publications, {}); });
+        auto operations = co_await _lane->run_task (
+          [this] { return std::exchange (_descriptor_publications, {}); });
         for (const auto &operation : operations)
             operation->observe (detail::result_access_t::failure<location_write_result_t> (
               detail::make_cancellation_exception ("Location descriptor publication stopped")));
@@ -1254,7 +1321,7 @@ class location_runtime_t
 
     void record_failure (std::string message) const
     {
-        _lane.run_checked ([&] { record_failure_on_lane (std::move (message)); }).get ();
+        _lane->run_checked ([&] { record_failure_on_lane (std::move (message)); }).get ();
     }
 
     void record_failure_on_lane (std::string message) const
@@ -1266,8 +1333,9 @@ class location_runtime_t
     location_repository_t *_store;
     location_options_t _options;
     std::string _owner_id;
-    std::function<std::chrono::steady_clock::time_point ()> _lease_now =
-      &std::chrono::steady_clock::now;
+    std::shared_ptr<std::function<std::chrono::steady_clock::time_point ()>> _lease_now =
+      std::make_shared<std::function<std::chrono::steady_clock::time_point ()>> (
+        &std::chrono::steady_clock::now);
     std::atomic_bool _draining = false;
     std::vector<std::pair<std::string, std::string>> _metric_scopes;
     std::shared_ptr<framework::detail::monitoring_runtime_state_t> _monitoring;
@@ -1284,9 +1352,9 @@ class location_runtime_t
     mutable std::vector<std::shared_ptr<descriptor_publication_t>> _descriptor_publications;
 
     // Owner subscriptions contain no retained object inventory or Ready evidence.
-    std::vector<std::function<void (serial_execution_queue_t::execution_admission_t)>>
-      _execution_discard_requests;
-    mutable state_lane_t _lane;
+    std::shared_ptr<std::vector<execution_observer_t>> _execution_discard_requests =
+      std::make_shared<std::vector<execution_observer_t>> ();
+    mutable std::shared_ptr<state_lane_t> _lane = std::make_shared<state_lane_t> ();
 };
 
 } // namespace zlink::framework::runtime
