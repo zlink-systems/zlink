@@ -85,7 +85,7 @@ class actor_join_authority_store_t final
     bool unreadable = false;
 
     zlink::framework::task_t<zlink::framework::authority_read_result_t>
-    read_authority (zlink::framework::authority_key_t, std::stop_token) override
+    read_authority_core (zlink::framework::authority_key_t, std::stop_token) override
     {
         if (unreadable) {
             return zlink::framework::task_t<zlink::framework::authority_read_result_t> (

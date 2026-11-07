@@ -343,6 +343,9 @@ class stateful_object_runtime_t
                                                relocation_state_abort_t abort);
     void configure_relocation_cut (relocation_source_cut_t cut);
 
+    task_t<std::shared_ptr<runtime::serial_execution_queue_t>>
+    execution_gate (object_ref_t object) const;
+    task_t<bool> fence_location_authority (object_ref_t observed, bool owner_matches);
     task_t<void> bind_execution_gate (object_ref_t object,
                                       std::weak_ptr<runtime::serial_execution_queue_t> gate);
 

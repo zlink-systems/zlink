@@ -1714,7 +1714,7 @@ class client_node_store_t : public runtime::in_memory_location_repository_t
   public:
     int lists = 0;
     task_t<location_page_t<mesh_node_descriptor_t>>
-    list_mesh_nodes (std::string mesh_name, location_page_request_t = {}) override
+    list_mesh_nodes_core (std::string mesh_name, location_page_request_t = {}) override
     {
         ++lists;
         mesh_node_descriptor_t target;

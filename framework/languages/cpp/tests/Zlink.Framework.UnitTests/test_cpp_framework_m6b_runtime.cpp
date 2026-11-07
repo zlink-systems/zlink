@@ -338,29 +338,29 @@ class counting_location_repository_t final
     }
 
     zlink::framework::task_t<zlink::framework::object_reserve_result_t>
-    reserve (zlink::framework::object_reserve_request_t request,
-             std::stop_token cancellation = {}) override
+    reserve_core (zlink::framework::object_reserve_request_t request,
+                  std::stop_token cancellation = {}) override
     {
         reservation_calls.fetch_add (1, std::memory_order_relaxed);
-        return in_memory_location_repository_t::reserve (std::move (request), cancellation);
+        return in_memory_location_repository_t::reserve_core (std::move (request), cancellation);
     }
 
     zlink::framework::task_t<zlink::framework::authority_read_result_t>
-    read_authority (zlink::framework::authority_key_t key,
-                    std::stop_token cancellation = {}) override
+    read_authority_core (zlink::framework::authority_key_t key,
+                         std::stop_token cancellation = {}) override
     {
         authority_reads.fetch_add (1, std::memory_order_relaxed);
-        return in_memory_location_repository_t::read_authority (std::move (key), cancellation);
+        return in_memory_location_repository_t::read_authority_core (std::move (key), cancellation);
     }
 
     zlink::framework::task_t<
       zlink::framework::location_page_t<zlink::framework::mesh_node_descriptor_t>>
-    list_mesh_nodes (std::string mesh_name,
-                     zlink::framework::location_page_request_t page = {}) override
+    list_mesh_nodes_core (std::string mesh_name,
+                          zlink::framework::location_page_request_t page = {}) override
     {
         mesh_node_reads.fetch_add (1);
-        return in_memory_location_repository_t::list_mesh_nodes (std::move (mesh_name),
-                                                                 std::move (page));
+        return in_memory_location_repository_t::list_mesh_nodes_core (std::move (mesh_name),
+                                                                      std::move (page));
     }
 
     zlink::framework::task_t<zlink::framework::owner_lease_read_result_t>
@@ -375,10 +375,10 @@ class counting_location_repository_t final
     }
 
     zlink::framework::task_t<zlink::framework::authority_compare_exchange_result_t>
-    compare_exchange_authority (zlink::framework::authority_key_t key,
-                                std::string expected_store_version,
-                                zlink::framework::authority_mutation_t mutation,
-                                std::stop_token cancellation = {}) override
+    compare_exchange_authority_core (zlink::framework::authority_key_t key,
+                                     std::string expected_store_version,
+                                     zlink::framework::authority_mutation_t mutation,
+                                     std::stop_token cancellation = {}) override
     {
         const std::vector<std::byte> *payload = nullptr;
         if (const auto *put = std::get_if<zlink::framework::authority_put_t> (&mutation))
@@ -399,7 +399,7 @@ class counting_location_repository_t final
                                : std::nullopt);
             }
         }
-        return in_memory_location_repository_t::compare_exchange_authority (
+        return in_memory_location_repository_t::compare_exchange_authority_core (
           std::move (key), std::move (expected_store_version), std::move (mutation), cancellation);
     }
 
