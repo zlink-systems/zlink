@@ -51,12 +51,13 @@ final class ZLinkTypedRequestReceiverTest {
             result =
                     ZLinkServiceOperationRegistry.<Payload, String>prepareOperation(
                             ZLinkServiceOperationIds.next(),
-                            (payload, caller) -> {
+                            payload -> {
                                 decoded.incrementAndGet();
                                 assertEquals(0, payload.closed.get());
                                 assertTrue(ZLinkServiceCompletionDispatcher.isCurrentCompletion());
-                                caller.complete("typed");
+                                return "typed";
                             },
+                            null,
                             failure -> {
                                 failures.incrementAndGet();
                                 failureProcessed.complete(null);
@@ -98,6 +99,60 @@ final class ZLinkTypedRequestReceiverTest {
                             @Override
                             public synchronized void start() {}
                         });
+    }
+
+    @Test
+    void convertedOwnedReplyIsDiscardedOnlyWhenPublicResultAlreadyFinished() throws Exception {
+        for (boolean earlyFailure : new boolean[] {false, true}) {
+            try (var registry = registry()) {
+                var raw = new Payload();
+                var converted = new Payload();
+                var disposed = new CompletableFuture<Void>();
+                var receiver =
+                        ZLinkServiceOperationRegistry.<Payload, Payload>prepareOperation(
+                                ZLinkServiceOperationIds.next(),
+                                payload -> {
+                                    assertSame(raw, payload);
+                                    assertEquals(0, raw.closed.get());
+                                    return converted;
+                                },
+                                value -> {
+                                    value.close();
+                                    disposed.complete(null);
+                                },
+                                failure -> failure,
+                                null);
+                registry.<Payload>submitTerminal(
+                                receiver.id(), TIMEOUT, terminal -> null, Payload::close, receiver)
+                        .toCompletableFuture()
+                        .join();
+                var observed = receiver.handle((value, error) -> raw.closed.get());
+                if (earlyFailure)
+                    receiver.completeExceptionally(new IllegalStateException("early"));
+                assertTrue(registry.complete(receiver.id(), raw));
+                if (earlyFailure) {
+                    disposed.get(5, TimeUnit.SECONDS);
+                    assertEquals(1, converted.closed.get());
+                } else {
+                    assertSame(converted, receiver.get(5, TimeUnit.SECONDS));
+                    assertEquals(1, observed.get(5, TimeUnit.SECONDS));
+                    assertEquals(0, converted.closed.get());
+                    converted.close();
+                }
+                assertEquals(1, raw.closed.get());
+            }
+        }
+    }
+
+    @Test
+    void replyPayloadIsReleasedBeforePublicContinuation() throws Exception {
+        try (var registry = registry()) {
+            var request = new Request(registry);
+            var payload = new Payload();
+            var observed = request.result.thenApply(value -> payload.closed.get());
+            request.success(payload);
+            assertEquals(1, observed.get(5, TimeUnit.SECONDS));
+        }
     }
 
     @RepeatedTest(100)
@@ -220,7 +275,10 @@ final class ZLinkTypedRequestReceiverTest {
                     first.result.thenRun(
                             () -> {
                                 assertTrue(first.result.isDone());
-                                assertEquals(0, firstPayload.closed.get());
+                                assertEquals(
+                                        1,
+                                        firstPayload.closed.get(),
+                                        "reply released before caller continuation");
                                 entered.countDown();
                                 try {
                                     assertTrue(release.await(5, TimeUnit.SECONDS));
@@ -291,10 +349,11 @@ final class ZLinkTypedRequestReceiverTest {
                 receiver =
                         ZLinkServiceOperationRegistry.<String, String>prepareOperation(
                                 ZLinkServiceOperationIds.next(),
-                                (value, caller) -> {
+                                value -> {
                                     decoded.set(ZLinkFlowContext.current());
-                                    caller.complete(value);
+                                    return value;
                                 },
+                                null,
                                 failure -> failure,
                                 null);
             }
@@ -316,9 +375,10 @@ final class ZLinkTypedRequestReceiverTest {
             var receiver =
                     ZLinkServiceOperationRegistry.<Payload, String>prepareOperation(
                             ZLinkServiceOperationIds.next(),
-                            (payload, caller) -> {
+                            payload -> {
                                 throw error;
                             },
+                            null,
                             failure -> failure,
                             null);
             registry.<Payload>submitTerminal(
@@ -350,7 +410,8 @@ final class ZLinkTypedRequestReceiverTest {
             var receiver =
                     ZLinkServiceOperationRegistry.<Payload, String>prepareOperation(
                             ZLinkServiceOperationIds.next(),
-                            (payload, caller) -> caller.complete("unexpected"),
+                            payload -> "unexpected",
+                            null,
                             failure -> failure,
                             null);
             var callback =
@@ -383,7 +444,8 @@ final class ZLinkTypedRequestReceiverTest {
             var request =
                     ZLinkServiceOperationRegistry.<Payload, String>prepareOperation(
                             ZLinkServiceOperationIds.next(),
-                            (payload, caller) -> fail("rejected receiver decoded"),
+                            payload -> fail("rejected receiver decoded"),
+                            null,
                             failure -> failure,
                             null);
             var failure = new IllegalStateException("submission rejected before registration");

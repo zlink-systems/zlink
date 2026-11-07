@@ -423,7 +423,6 @@ final class RouteRequestCall implements ZLinkRequestCall {
             runtime.requestRoute(
                     operationId, router, target, requestParts, timeout, requestAdmission, result);
         } catch (RuntimeException | Error failure) {
-            ZLinkFrameworkMultipartView.closeAll(requestParts);
             result.rejectSubmission(failure);
         }
         return result;
@@ -437,9 +436,9 @@ final class RouteRequestCall implements ZLinkRequestCall {
             long started) {
         ZLinkApplicationMetadata metadata =
                 this.metadata == null ? ZLinkApplicationMetadata.empty() : this.metadata;
-        var result = requestResult(replyType, metric, started);
-        var operationId = result.id();
+        var operationId = ZLinkServiceOperationIds.next();
         List<Message> requestParts = requestParts(operationId, metadata.values());
+        var result = requestResult(replyType, metric, started, operationId, requestParts);
         try {
             Optional<Integer> classified = node.classifyNodeSendTarget(target);
             if (classified.isPresent()) {
@@ -475,8 +474,6 @@ final class RouteRequestCall implements ZLinkRequestCall {
                     result);
         } catch (RuntimeException | Error error) {
             result.rejectSubmission(error);
-        } finally {
-            ZLinkFrameworkMultipartView.closeAll(requestParts);
         }
         return result;
     }
@@ -494,7 +491,8 @@ final class RouteRequestCall implements ZLinkRequestCall {
             List<Message> requestParts) {
         return ZLinkServiceOperationRegistry.<ZLinkBackendReceived, TReply>prepareOperation(
                 id,
-                (reply, caller) -> caller.complete(runtime.decodeReply(reply, replyType)),
+                reply -> runtime.decodeReply(reply, replyType),
+                null,
                 ZLinkChannelCallRuntime::requestFailure,
                 (result, error) -> {
                     if (requestParts != null) ZLinkFrameworkMultipartView.closeAll(requestParts);
@@ -1016,7 +1014,6 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                     requestAdmission,
                     result);
         } catch (RuntimeException | Error failure) {
-            ZLinkFrameworkMultipartView.closeAll(parts);
             result.rejectSubmission(failure);
         }
         return result;
@@ -1040,7 +1037,8 @@ final class ChannelRequestCall implements ZLinkRequestCall {
             List<Message> requestParts) {
         return ZLinkServiceOperationRegistry.<ZLinkBackendReceived, TReply>prepareOperation(
                 id,
-                (reply, caller) -> caller.complete(runtime.decodeReply(reply, replyType)),
+                reply -> runtime.decodeReply(reply, replyType),
+                null,
                 ZLinkChannelCallRuntime::requestFailure,
                 (result, error) -> {
                     if (requestParts != null) ZLinkFrameworkMultipartView.closeAll(requestParts);

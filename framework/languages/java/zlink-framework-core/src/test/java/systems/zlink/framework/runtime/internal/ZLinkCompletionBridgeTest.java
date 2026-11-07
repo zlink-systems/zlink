@@ -4,6 +4,9 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
+
 import java.util.ArrayDeque;
 import java.util.Collections;
 import java.util.IdentityHashMap;
@@ -11,11 +14,103 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 
 final class ZLinkCompletionBridgeTest {
+    @Test
+    void forwardedCancellationObservesThePublishedCallerCancellation() {
+        for (int terminal = 0; terminal < 3; terminal++) {
+            var cleanup = new AtomicInteger();
+            var caller =
+                    ZLinkCompletionBridge.<String>newCancellationFuture(
+                            (completed, error) -> cleanup.incrementAndGet());
+            var waiter = new CompletableFuture<Void>();
+            ZLinkCompletionBridge.forwardCancellation(caller, waiter);
+            var observed = waiter.handle((value, error) -> caller.isCancelled());
+            if (terminal == 0) caller.cancel(false);
+            else if (terminal == 1) caller.completeExceptionally(new CancellationException());
+            else caller.obtrudeException(new CancellationException());
+            assertTrue(observed.join(), "forward after publication; terminal=" + terminal);
+            assertEquals(1, cleanup.get());
+        }
+    }
+
+    @Test
+    void competingTerminalCannotPublishWhileCleanupIsBlocked() throws Exception {
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var observations = new AtomicInteger();
+        var caller =
+                ZLinkServiceOperationRegistry.<String, String>prepareOperation(
+                        ZLinkServiceOperationIds.next(),
+                        value -> value,
+                        null,
+                        failure -> failure,
+                        (completed, error) -> {
+                            observations.incrementAndGet();
+                            entered.countDown();
+                            try {
+                                if (!release.await(5, TimeUnit.SECONDS))
+                                    throw new IllegalStateException("cleanup blocked");
+                            } catch (InterruptedException failure) {
+                                Thread.currentThread().interrupt();
+                                throw new IllegalStateException(failure);
+                            }
+                        });
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var completion = executor.submit(() -> caller.complete("reply"));
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                assertFalse(caller.isDone());
+                assertFalse(caller.complete("late"));
+                assertFalse(caller.completeExceptionally(new IllegalStateException("late")));
+                assertFalse(caller.cancel(false));
+                assertFalse(caller.isDone());
+            } finally {
+                release.countDown();
+            }
+            assertTrue(completion.get(5, TimeUnit.SECONDS));
+            assertEquals("reply", caller.join());
+            assertEquals(1, observations.get());
+        }
+    }
+
+    @Test
+    void terminalCleanupPrecedesEveryPublicCompletion() {
+        for (int terminal = 0; terminal < 7; terminal++) {
+            var released = new AtomicInteger();
+            var caller =
+                    ZLinkServiceOperationRegistry.<String, String>prepareOperation(
+                            ZLinkServiceOperationIds.next(),
+                            value -> value,
+                            null,
+                            failure -> failure,
+                            (completed, error) -> released.incrementAndGet());
+            var observed = caller.handle((value, error) -> released.get());
+            switch (terminal) {
+                case 0 -> caller.complete("reply");
+                case 1 -> caller.completeExceptionally(new IllegalStateException("rejected"));
+                case 2 -> caller.cancel(false);
+                case 3 -> caller.obtrudeValue("reply");
+                case 4 -> caller.obtrudeException(new IllegalStateException("rejected"));
+                case 5 -> caller.completeAsync(() -> "reply", Runnable::run);
+                case 6 -> caller.completeExceptionally(new java.util.concurrent.TimeoutException());
+                default -> throw new AssertionError();
+            }
+            assertEquals(
+                    1, observed.join(), "cleanup before public continuation; terminal=" + terminal);
+            caller.complete("late");
+            caller.completeExceptionally(new IllegalStateException("late"));
+            caller.cancel(false);
+            assertEquals(1, released.get(), "one cleanup owner");
+        }
+    }
+
     @Test
     void completeAsyncSkipsSupplierWhenAlreadyCompletedLikeJdk() {
         for (boolean bridge : new boolean[] {false, true}) {

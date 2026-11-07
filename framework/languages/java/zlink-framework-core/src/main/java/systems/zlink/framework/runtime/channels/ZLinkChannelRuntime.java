@@ -1473,7 +1473,7 @@ public final class ZLinkChannelRuntime
                         .<ZLinkBackendReceived, Message>prepareOperation(
                                 systems.zlink.framework.runtime.internal.service
                                         .ZLinkServiceOperationIds.next(),
-                                (reply, caller) -> {
+                                reply -> {
                                     if (reply.result() != ZLinkBackendRequestResult.OK) {
                                         throw systems.zlink.framework.runtime.internal.backend
                                                 .ZLinkRequestFailureMapping.receivedFailure(
@@ -1488,12 +1488,9 @@ public final class ZLinkChannelRuntime
                                                 ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
                                                 "internal route request reply was empty: "
                                                         + packetName);
-                                    systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
-                                            .completeOrDiscard(
-                                                    caller,
-                                                    Message.from(reply.parts().get(0)),
-                                                    Message::close);
+                                    return Message.from(reply.parts().get(0));
                                 },
+                                Message::close,
                                 ZLinkChannelCallRuntime::requestFailure,
                                 (caller, failure) -> requestParts.forEach(Message::close));
         try {
