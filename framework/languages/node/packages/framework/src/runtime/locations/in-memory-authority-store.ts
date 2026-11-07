@@ -71,7 +71,8 @@ export interface ZLinkInMemoryAuthorityValidation {
   isTargetLive(
     descriptor: ZLinkMeshNodeDescriptorKey,
     lifecycleGeneration: bigint,
-    owner: ZLinkLocationOwnerToken
+    owner: ZLinkLocationOwnerToken,
+    generationTransition?: 'preserve'
   ): boolean;
   placementCapacityAvailable?(
     descriptor: ZLinkMeshNodeDescriptorKey,
@@ -195,12 +196,11 @@ export class ZLinkInMemoryAuthorityStore {
       };
       if (
         !sameOwner(mutation.expectedOwner, currentOwner) ||
-        mutation.targetOwner.ownerId !== currentOwner.ownerId ||
-        mutation.targetOwner.leaseGeneration === currentOwner.leaseGeneration ||
         !this.validation.isTargetLive(
           row.snapshot.allocation.descriptor,
           row.snapshot.allocation.descriptorLifecycleGeneration,
-          mutation.targetOwner
+          mutation.targetOwner,
+          'preserve'
         )
       ) {
         return { kind: 'conflict', current: this.read(keyValue) };
@@ -1175,7 +1175,7 @@ export class ZLinkInMemoryAuthorityStore {
   }
 }
 
-function validateAuthorityMutation(mutation: ZLinkAuthorityMutation): void {
+export function validateAuthorityMutation(mutation: ZLinkAuthorityMutation): void {
   if (mutation.kind === 'delete' || mutation.kind === 'restore') return;
   if (mutation.kind === 'rebindOwnerLease') {
     if (
