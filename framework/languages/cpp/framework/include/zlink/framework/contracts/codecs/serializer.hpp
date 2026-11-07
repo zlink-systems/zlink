@@ -8,9 +8,11 @@
 #include <zlink/json_profile.hpp>
 
 #include <zlink/Contracts/Messaging/message.hpp>
+#include <zlink/framework/contracts/detail/message_name.hpp>
 #include <zlink/framework/contracts/errors/error.hpp>
 #include <zlink/framework/codecs/json.hpp>
 
+#include <exception>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -33,6 +35,21 @@ class codec_registration_context_t;
 
 namespace detail
 {
+struct prepared_header_fragment_t
+{
+    std::string bytes;
+    std::exception_ptr error;
+};
+struct request_type_plan_t
+{
+    std::string content_type;
+    std::string prefix;
+    std::string middle;
+    std::exception_ptr error;
+};
+prepared_header_fragment_t prepare_request_channel (std::string_view channel);
+request_type_plan_t prepare_request_type (std::string_view name, std::string content_type);
+
 inline constexpr std::size_t serializer_send_type_cache_capacity = 1024;
 class serializer_registry_state_t;
 struct serializer_registry_access_t;
@@ -219,8 +236,9 @@ template <typename T> class serializer_t
     serializer_t (serialize_fn_t serialize,
                   deserialize_fn_t deserialize,
                   std::string content_type) :
-        _state (std::make_shared<const state_t> (
-          state_t{std::move (serialize), std::move (deserialize), std::move (content_type)}))
+        _state (std::make_shared<const state_t> (state_t{
+          std::move (serialize), std::move (deserialize),
+          detail::prepare_request_type (detail::message_name<T> (), std::move (content_type))}))
     {
     }
 
@@ -241,7 +259,7 @@ template <typename T> class serializer_t
 
     serialized_payload_t serialize_with_content_type (const T &value) const
     {
-        return serialized_payload_t{serialize (value), _state->content_type};
+        return serialized_payload_t{serialize (value), _state->plan.content_type};
     }
 
     T deserialize (const encoded_payload_t &payload) const
@@ -259,14 +277,15 @@ template <typename T> class serializer_t
         }
     }
 
-    const std::string &content_type () const noexcept { return _state->content_type; }
+    const std::string &content_type () const noexcept { return _state->plan.content_type; }
 
   private:
+    friend struct detail::serializer_registry_access_t;
     struct state_t
     {
         serialize_fn_t serialize;
         deserialize_fn_t deserialize;
-        std::string content_type;
+        detail::request_type_plan_t plan;
     };
 
     std::shared_ptr<const state_t> _state;
@@ -436,6 +455,12 @@ namespace detail
 
 struct serializer_registry_access_t
 {
+    template <typename T>
+    static std::shared_ptr<const request_type_plan_t>
+    request_plan (const serializer_t<T> &serializer) noexcept
+    {
+        return {serializer._state, &serializer._state->plan};
+    }
     static serializer_registry_t retain (const serializer_registry_t &registry)
     {
         return serializer_registry_t (registry._state);

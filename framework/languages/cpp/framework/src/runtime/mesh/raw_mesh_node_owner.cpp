@@ -1343,6 +1343,38 @@ catch (...) {
     return task_t<bool> (detail::current_exception_result<bool> ());
 }
 
+zlink::submit_result_t raw_mesh_node_owner_t::node_request_submission_result (
+  std::span<const std::uint8_t> target_routing_id, bool accepted) const
+{
+    if (accepted)
+        return zlink::submit_result_t::ok;
+    // The error model classifies a rejected target absent from the live peer
+    // table as NotFound. An expected descriptor alone is not a live peer.
+    return _topology.peer (target_routing_id) ? zlink::submit_result_t::not_connected
+                                              : zlink::submit_result_t::not_found;
+}
+
+void raw_mesh_node_owner_t::submit_node_request (
+  std::span<const std::uint8_t> target_routing_id,
+  const protocol::application_payload_t &application_payload,
+  std::chrono::milliseconds timeout,
+  foundation::operation_registry_t::callback_t &&callback,
+  std::shared_ptr<task_completion_source_t<void>> admitted)
+{
+    const auto deadline = capture_request_deadline (timeout);
+    auto source = start_request_with_header (
+      target_routing_id,
+      [] (std::uint64_t correlation) {
+          return protocol::encode_node_request_header_message (correlation);
+      },
+      application_payload, deadline, std::move (callback), {}, false,
+      mesh_request_metric_t (_request_metrics, mesh_request_surface_t::node), {},
+      std::move (admitted));
+    if (!source)
+        throw messaging::map_node_request_submit_exception (
+          node_request_submission_result (target_routing_id, false));
+}
+
 task_t<bool> raw_mesh_node_owner_t::request_to_channel (
   const std::string &channel_name,
   const protocol::application_payload_t &application_payload,
@@ -1495,7 +1527,7 @@ service_topology_registry_t::peer_observer_t raw_mesh_node_owner_t::observe_requ
                                                         : expected->second.advertised_endpoint);
 }
 
-task_t<bool> raw_mesh_node_owner_t::request_with_header (
+std::shared_ptr<task_completion_source_t<void>> raw_mesh_node_owner_t::start_request_with_header (
   std::span<const std::uint8_t> target_routing_id,
   const std::function<zlink::message_t (std::uint64_t)> &header,
   const protocol::application_payload_t &application_payload,
@@ -1507,7 +1539,7 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
   std::optional<foundation::operation_registry_t::request_identity_t> request,
   std::shared_ptr<task_completion_source_t<void>> admitted,
   physical_receiver_t receiver)
-try {
+{
     const auto wait_owner = detail::current_wait_owner ();
     struct request_start_t
     {
@@ -1577,13 +1609,34 @@ try {
           return std::optional<request_start_t>{std::move (value)};
       });
     if (!start)
-        return task_t<bool> (result_t<bool>::success (false));
+        return {};
     if (!start->registered) {
         throw framework_exception_t (framework_error_kind_t::shutting_down,
                                      "raw mesh request registry is closed");
     }
-    auto admission = start->admitted->task ();
-    return await_request_admission (std::move (admission));
+    return std::move (start->admitted);
+}
+
+task_t<bool> raw_mesh_node_owner_t::request_with_header (
+  std::span<const std::uint8_t> target_routing_id,
+  const std::function<zlink::message_t (std::uint64_t)> &header,
+  const protocol::application_payload_t &application_payload,
+  foundation::operation_registry_t::clock_t::time_point deadline,
+  foundation::operation_registry_t::callback_t &&callback,
+  std::optional<std::uint64_t> requested_correlation,
+  bool target_claimed,
+  mesh_request_metric_t request_metric,
+  std::optional<foundation::operation_registry_t::request_identity_t> request,
+  std::shared_ptr<task_completion_source_t<void>> admitted,
+  physical_receiver_t receiver)
+try {
+    auto source = start_request_with_header (
+      target_routing_id, header, application_payload, deadline, std::move (callback),
+      requested_correlation, target_claimed, std::move (request_metric), std::move (request),
+      std::move (admitted), std::move (receiver));
+    if (!source)
+        return task_t<bool> (result_t<bool>::success (false));
+    return await_request_admission (source->task ());
 }
 catch (...) {
     return task_t<bool> (detail::current_exception_result<bool> ());

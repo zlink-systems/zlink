@@ -2,6 +2,8 @@
 #pragma once
 #include <variant>
 
+#include "runtime/protocol/application_envelope_encoder.hpp"
+
 #include <zlink/Contracts/Messaging/message.hpp>
 #include <zlink/framework/contracts/codecs/serializer.hpp>
 #include <zlink/framework/contracts/dispatch/execution.hpp>
@@ -16,6 +18,11 @@
 #include <typeindex>
 #include <utility>
 #include <vector>
+
+namespace zlink::framework::runtime::protocol
+{
+struct application_payload_t;
+}
 
 namespace zlink::framework::runtime::messaging
 {
@@ -169,6 +176,8 @@ class message_parts_t
     std::span<const std::byte> part_bytes (std::size_t index) const;
     message_parts_t (zlink::message_t header, zlink::message_t body);
     explicit message_parts_t (std::vector<zlink::message_t> parts);
+    static message_parts_t from_envelope_encoder (protocol::application_envelope_encoder_t encode);
+    protocol::application_payload_t take_application_payload () &&;
 
     std::size_t size () const noexcept;
     const zlink::message_t &operator[] (std::size_t index) const;
@@ -177,9 +186,10 @@ class message_parts_t
 
   private:
     friend class envelope_codec_t;
-    std::variant<std::vector<zlink::message_t>,
-                 const std::vector<zlink::message_t> *,
-                 std::span<const std::span<const std::byte>>>
+    mutable std::variant<std::vector<zlink::message_t>,
+                         const std::vector<zlink::message_t> *,
+                         std::span<const std::span<const std::byte>>,
+                         protocol::application_envelope_encoder_t>
       _parts;
 };
 
@@ -242,6 +252,14 @@ class envelope_codec_t
     friend class client_call_codec_t;
     zlink::message_t encode_header (const envelope_header_t &header,
                                     std::string_view content_type) const;
+    zlink::message_t encode_header (const envelope_header_t &header,
+                                    const detail::request_type_plan_t &type,
+                                    const detail::prepared_header_fragment_t &channel) const;
+    protocol::application_envelope_encoder_t prepare_service_payload (
+      envelope_header_t header,
+      zlink::message_t body,
+      std::shared_ptr<const detail::request_type_plan_t> type,
+      std::shared_ptr<const detail::prepared_header_fragment_t> channel) const;
 };
 
 } // namespace zlink::framework::runtime::messaging

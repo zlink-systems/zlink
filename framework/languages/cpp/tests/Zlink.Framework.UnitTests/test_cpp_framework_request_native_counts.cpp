@@ -100,7 +100,6 @@ TEST (RequestNativeCounts, RegistryReservationDoesNotCreateAPayloadPlaceholder)
     EXPECT_EQ (calls[4], 0u);
     EXPECT_TRUE (registry.unregister ({81, 1}));
 }
-#ifndef J1672_BEFORE
 TEST (RequestNativeCounts, PackedReplyViewsStayUnderTheirParentWithoutNativeSlices)
 {
     std::vector<zlink::message_t> parts;
@@ -154,7 +153,6 @@ TEST (RequestNativeCounts, WaitReadinessIsConsumedWithoutAnotherPollEvenAtPermit
     }
     node.stop ();
 }
-#endif
 struct count_payload_t
 {
     static constexpr const char *packet_name = "CountPayload";
@@ -539,8 +537,7 @@ TEST (RequestNativeCounts, RealRoundTripReportsSourceNativeCallsPerRequest)
     runtime.bind_mesh_node_transport (
       "native-count", {}, [&] (const auto &rid, auto parts, auto timeout, auto receiver) {
           physical_admission = receiver.admitted;
-          source.request_node_reply (rid, std::move (parts).take_items (), timeout,
-                                     std::move (receiver));
+          source.request_node_reply (rid, std::move (parts), timeout, std::move (receiver));
       });
     auto client = builder.route_client (serializers);
     constexpr std::size_t requests = 8;
@@ -572,11 +569,7 @@ TEST (RequestNativeCounts, RealRoundTripReportsSourceNativeCallsPerRequest)
                   codec.encode_raw_body_parts (header, zlink::message_t::from (std::string ("41")));
                 replied = target.native_node ().reply (record.reply_token, response.items ());
             };
-#ifdef J1672_BEFORE
-            target.dispatch_ready (receive).result ().value ();
-#else
             target.dispatch_ready (receive, true, {}, waited).result ().value ();
-#endif
         }
         ASSERT_TRUE (replied);
         fw::tests::count_native_calls.store (true);
@@ -586,11 +579,7 @@ TEST (RequestNativeCounts, RealRoundTripReportsSourceNativeCallsPerRequest)
               std::chrono::ceil<std::chrono::milliseconds> (deadline
                                                             - std::chrono::steady_clock::now ()),
               false, {});
-#ifdef J1672_BEFORE
-            source.dispatch_ready (discard, false).result ().value ();
-#else
             source.dispatch_ready (discard, false, {}, waited).result ().value ();
-#endif
             if (fw::tests::native_completion_events.load () != completions) {
                 ASSERT_TRUE (reply.result_for (std::chrono::ceil<std::chrono::milliseconds> (
                   deadline - std::chrono::steady_clock::now ())));
@@ -602,11 +591,7 @@ TEST (RequestNativeCounts, RealRoundTripReportsSourceNativeCallsPerRequest)
         EXPECT_EQ (reply.result ().value ().value, 41);
         // Keep source cleanup in the measured window before excluding the next
         // target turn. These are lifecycle counts, not elapsed-time budgets.
-#ifdef J1672_BEFORE
-        constexpr std::size_t closes_per_request = 21;
-#else
-        constexpr std::size_t closes_per_request = 10;
-#endif
+        constexpr std::size_t closes_per_request = 9;
         ASSERT_TRUE (calls.wait_for_closes ((i + 1) * closes_per_request, deadline));
     }
     source.stop ();
@@ -615,11 +600,12 @@ TEST (RequestNativeCounts, RealRoundTripReportsSourceNativeCallsPerRequest)
       "source-native requests=%zu init=%zu init_size=%zu init_data=%zu copy=%zu "
       "close=%zu poller_wait=%zu (excludes service controls; includes source shutdown)\n",
       requests, calls[0], calls[1], calls[2], calls[3], calls[4], calls[5]);
-    // Binding retains two native send views. Framework adds two inner parts
+    // Binding retains two native send views. Framework creates one typed body
     // and two service parts; the receive owner initializes two adoption slots.
+    // The JSON header is written directly into the service payload frame.
     EXPECT_EQ (calls[3], requests * 2);
-    EXPECT_EQ (calls[0] + calls[1] + calls[2], requests * 8);
-    EXPECT_EQ (calls[4], requests * 10);
+    EXPECT_EQ (calls[0] + calls[1] + calls[2], requests * 7);
+    EXPECT_EQ (calls[4], requests * 9);
     target.stop ();
 }
 

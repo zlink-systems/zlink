@@ -3,6 +3,7 @@
 #include "runtime/messaging/envelope_codec.hpp"
 
 #include "runtime/diagnostics/flow_context.hpp"
+#include "runtime/protocol/service_wire_codec.hpp"
 
 #include <nlohmann/json.hpp>
 #include <service_wire_constants.hpp>
@@ -32,8 +33,28 @@ message_parts_t::message_parts_t (std::vector<zlink::message_t> parts) : _parts 
 {
 }
 
+message_parts_t
+message_parts_t::from_envelope_encoder (protocol::application_envelope_encoder_t encode)
+{
+    message_parts_t result;
+    result._parts = std::move (encode);
+    return result;
+}
+
+protocol::application_payload_t message_parts_t::take_application_payload () &&
+{
+    if (auto *encode = std::get_if<protocol::application_envelope_encoder_t> (&_parts))
+        return protocol::application_payload_t::from_envelope_encoder (std::move (*encode));
+    return protocol::application_payload_t::from_parts (std::move (*this).take_items ());
+}
+
 message_parts_t::message_parts_t (const message_parts_t &other)
 {
+    if (const auto *encode =
+          std::get_if<protocol::application_envelope_encoder_t> (&other._parts)) {
+        _parts = *encode;
+        return;
+    }
     if (!std::holds_alternative<std::span<const std::span<const std::byte>>> (other._parts)) {
         _parts = other.items ();
         return;
@@ -69,7 +90,10 @@ std::size_t message_parts_t::size () const noexcept
 {
     return std::visit (
       [] (const auto &parts) {
-          if constexpr (std::is_pointer_v<std::decay_t<decltype (parts)>>)
+          if constexpr (std::is_same_v<std::decay_t<decltype (parts)>,
+                                       protocol::application_envelope_encoder_t>)
+              return std::size_t{2};
+          else if constexpr (std::is_pointer_v<std::decay_t<decltype (parts)>>)
               return parts->size ();
           else
               return parts.size ();
@@ -79,6 +103,8 @@ std::size_t message_parts_t::size () const noexcept
 
 const std::vector<zlink::message_t> &message_parts_t::items () const
 {
+    if (auto *encode = std::get_if<protocol::application_envelope_encoder_t> (&_parts))
+        _parts = protocol::decode_application_parts ((*encode) ({}, {}), false);
     if (const auto *parts = std::get_if<const std::vector<zlink::message_t> *> (&_parts))
         return **parts;
     return std::get<std::vector<zlink::message_t>> (_parts);
@@ -86,6 +112,8 @@ const std::vector<zlink::message_t> &message_parts_t::items () const
 
 std::vector<zlink::message_t> message_parts_t::take_items () &&
 {
+    if (auto *encode = std::get_if<protocol::application_envelope_encoder_t> (&_parts))
+        return protocol::decode_application_parts ((*encode) ({}, {}), false);
     if (auto *parts = std::get_if<std::vector<zlink::message_t>> (&_parts))
         return std::move (*parts);
     return std::move (message_parts_t (*this)).take_items ();
@@ -203,7 +231,7 @@ bool valid_utf8 (std::string_view value) noexcept
 }
 
 // The envelope has a fixed field order. Count the escaped bytes first, then
-// write directly into its native message; there is no header DOM or byte copy.
+// write directly into the destination frame.
 class header_writer_t
 {
   public:
@@ -320,6 +348,30 @@ void write_metadata (header_writer_t &writer, const std::map<std::string, std::s
                                        + std::to_string (protocol::metadataBytes) + " bytes");
 }
 
+void write_channel_fragment (header_writer_t &writer, std::string_view channel)
+{
+    writer.append ("{\"channelName\":");
+    writer.string (channel);
+}
+
+void write_type_fragments (header_writer_t &prefix,
+                           header_writer_t &middle,
+                           std::string_view name,
+                           std::string_view content_type,
+                           message_kind_t kind)
+{
+    prefix.append (",\"contentType\":");
+    prefix.string (content_type);
+    prefix.append (",\"correlationId\":");
+    middle.append (",\"formatMarker\":");
+    middle.number (static_cast<int> (flow_id_t::format_marker));
+    middle.append (",\"kind\":");
+    middle.number (static_cast<int> (kind));
+    middle.append (",\"messageName\":");
+    middle.string (name);
+    middle.append (",\"metadata\":");
+}
+
 struct header_plan_t
 {
     std::optional<message_kind_t> kind;
@@ -355,20 +407,10 @@ struct header_plan_t
         content_type = selected_content_type;
 
         header_writer_t prefix_writer (prefix);
-        prefix_writer.append ("{\"channelName\":");
-        prefix_writer.string (channel_name);
-        prefix_writer.append (",\"contentType\":");
-        prefix_writer.string (content_type);
-        prefix_writer.append (",\"correlationId\":");
-
         header_writer_t middle_writer (middle);
-        middle_writer.append (",\"formatMarker\":");
-        middle_writer.number (static_cast<int> (flow_id_t::format_marker));
-        middle_writer.append (",\"kind\":");
-        middle_writer.number (static_cast<int> (header.kind));
-        middle_writer.append (",\"messageName\":");
-        middle_writer.string (message_name);
-        middle_writer.append (",\"metadata\":");
+        write_channel_fragment (prefix_writer, channel_name);
+        write_type_fragments (prefix_writer, middle_writer, message_name, content_type,
+                              header.kind);
         kind = header.kind;
     }
 };
@@ -383,9 +425,12 @@ void write_header (header_writer_t &writer,
                    const envelope_header_t &header,
                    const std::string *flow_id,
                    const std::optional<flow_origin_t> &flow_origin,
-                   const header_plan_t &plan)
+                   std::string_view prefix,
+                   std::string_view middle,
+                   std::string_view content = {})
 {
-    writer.append (plan.prefix);
+    writer.append (prefix);
+    writer.append (content);
     if (header.correlation_id.empty ())
         writer.append ("null");
     else
@@ -406,13 +451,39 @@ void write_header (header_writer_t &writer,
         writer.number (static_cast<int> (*flow_origin));
     else
         writer.append ("null");
-    writer.append (plan.middle);
+    writer.append (middle);
     write_metadata (writer, header.metadata);
     writer.append (",\"source\":");
     writer.optional_string (header.source);
     writer.append (",\"topic\":");
     writer.optional_string (header.topic);
     writer.append ("}");
+}
+
+std::pair<const std::string *, std::optional<flow_origin_t>>
+validate_outgoing_header (const envelope_header_t &header)
+{
+    const auto &flow = flow_context_t::current ();
+    const bool stamp = !header.flow_id && flow && !flow->flow_id.empty ();
+    const auto *id = stamp ? &flow->flow_id : header.flow_id ? &*header.flow_id : nullptr;
+    const auto origin = stamp ? std::optional<flow_origin_t> (flow->origin) : header.flow_origin;
+    if (auto valid = validate_protocol_header (header, flow_id_t::format_marker, id, origin);
+        !valid)
+        throw framework_exception_t (valid.error_kind (), valid.error ()->what ());
+    return {id, origin};
+}
+
+std::pair<const std::string *, std::optional<flow_origin_t>>
+validate_request_header (const envelope_header_t &header,
+                         const detail::request_type_plan_t &type,
+                         const detail::prepared_header_fragment_t &channel)
+{
+    const auto flow = validate_outgoing_header (header);
+    if (channel.error)
+        std::rethrow_exception (channel.error);
+    if (type.error)
+        std::rethrow_exception (type.error);
+    return flow;
 }
 
 } // namespace
@@ -425,27 +496,61 @@ zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &heade
 zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &header,
                                                   std::string_view content_type) const
 {
-    const auto &flow = flow_context_t::current ();
-    const bool stamp_flow = !header.flow_id && flow && !flow->flow_id.empty ();
-    const auto *flow_id = stamp_flow ? &flow->flow_id : header.flow_id ? &*header.flow_id : nullptr;
-    const auto flow_origin =
-      stamp_flow ? std::optional<flow_origin_t> (flow->origin) : header.flow_origin;
-    if (auto valid =
-          validate_protocol_header (header, flow_id_t::format_marker, flow_id, flow_origin);
-        !valid) {
-        throw framework_exception_t (valid.error_kind (), valid.error ()->what ());
-    }
+    const auto [flow_id, flow_origin] = validate_outgoing_header (header);
     auto &plan = header_plan ();
     if (!plan.matches (header, content_type))
         plan.rebuild (header, content_type);
     header_writer_t measure;
-    write_header (measure, header, flow_id, flow_origin, plan);
+    write_header (measure, header, flow_id, flow_origin, plan.prefix, plan.middle);
     auto message = zlink::message_t::allocate (measure.size ());
     if (!message.valid ())
         throw std::bad_alloc ();
     header_writer_t writer (reinterpret_cast<char *> (message.data ()));
-    write_header (writer, header, flow_id, flow_origin, plan);
+    write_header (writer, header, flow_id, flow_origin, plan.prefix, plan.middle);
     return message;
+}
+
+zlink::message_t
+envelope_codec_t::encode_header (const envelope_header_t &header,
+                                 const detail::request_type_plan_t &type,
+                                 const detail::prepared_header_fragment_t &channel) const
+{
+    const auto [flow_id, origin] = validate_request_header (header, type, channel);
+    header_writer_t measure;
+    write_header (measure, header, flow_id, origin, channel.bytes, type.middle, type.prefix);
+    auto message = zlink::message_t::allocate (measure.size ());
+    if (!message.valid ())
+        throw std::bad_alloc ();
+    header_writer_t writer (reinterpret_cast<char *> (message.data ()));
+    write_header (writer, header, flow_id, origin, channel.bytes, type.middle, type.prefix);
+    return message;
+}
+
+protocol::application_envelope_encoder_t envelope_codec_t::prepare_service_payload (
+  envelope_header_t header,
+  zlink::message_t body,
+  std::shared_ptr<const detail::request_type_plan_t> type,
+  std::shared_ptr<const detail::prepared_header_fragment_t> channel) const
+{
+    const auto [flow_id, origin] = validate_request_header (header, *type, *channel);
+    // Preserve the E1 flow snapshot when target resolution defers the E3 pack.
+    if (flow_id && !header.flow_id)
+        header.flow_id = *flow_id;
+    header.flow_origin = origin;
+    header_writer_t measure;
+    write_header (measure, header, header.flow_id ? &*header.flow_id : nullptr, header.flow_origin,
+                  channel->bytes, type->middle, type->prefix);
+    return [header = std::move (header), body = std::move (body), type = std::move (type),
+            channel = std::move (channel), size = measure.size ()] (
+             const std::optional<std::string> &flow_id, std::optional<flow_origin_t> flow_origin) {
+        auto write = [&] (std::span<std::byte> destination) {
+            header_writer_t writer (reinterpret_cast<char *> (destination.data ()));
+            write_header (writer, header, header.flow_id ? &*header.flow_id : nullptr,
+                          header.flow_origin, channel->bytes, type->middle, type->prefix);
+        };
+        return protocol::encode_application_envelope_message (size, std::ref (write), body.bytes (),
+                                                              flow_id, flow_origin);
+    };
 }
 
 namespace
@@ -1193,3 +1298,35 @@ result_t<zlink::message_t> envelope_codec_t::decode_body (const message_parts_t 
 }
 
 } // namespace zlink::framework::runtime::messaging
+
+namespace zlink::framework::detail
+{
+prepared_header_fragment_t prepare_request_channel (std::string_view channel)
+{
+    prepared_header_fragment_t result;
+    try {
+        runtime::messaging::header_writer_t writer (result.bytes);
+        runtime::messaging::write_channel_fragment (writer, channel);
+    }
+    catch (const nlohmann::json::exception &) {
+        result.error = std::current_exception ();
+    }
+    return result;
+}
+
+request_type_plan_t prepare_request_type (std::string_view name, std::string content_type)
+{
+    request_type_plan_t result;
+    result.content_type = std::move (content_type);
+    try {
+        runtime::messaging::header_writer_t prefix (result.prefix);
+        runtime::messaging::header_writer_t middle (result.middle);
+        runtime::messaging::write_type_fragments (prefix, middle, name, result.content_type,
+                                                  runtime::messaging::message_kind_t::request);
+    }
+    catch (const nlohmann::json::exception &) {
+        result.error = std::current_exception ();
+    }
+    return result;
+}
+} // namespace zlink::framework::detail

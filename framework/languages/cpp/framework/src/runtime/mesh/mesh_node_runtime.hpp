@@ -267,7 +267,7 @@ class mesh_node_runtime_t
       request_receiver_t<result_t<runtime::messaging::message_parts_t>> receiver);
     void
     request_node_reply (const zlink::routing_id_t &target,
-                        std::vector<zlink::message_t> parts,
+                        runtime::messaging::message_parts_t parts,
                         std::chrono::milliseconds timeout,
                         request_receiver_t<result_t<runtime::messaging::message_parts_t>> receiver);
     task_t<zlink::submit_result_t> request_to_node (const zlink::routing_id_t &target,
@@ -644,12 +644,12 @@ class mesh_node_runtime_t
                                 Unknown &&unknown) -> decltype (known ());
     void submit_node_request_reply (
       const zlink::routing_id_t &target,
-      std::vector<zlink::message_t> parts,
+      runtime::messaging::message_parts_t parts,
       std::chrono::milliseconds timeout,
       request_receiver_t<result_t<runtime::messaging::message_parts_t>> receiver);
     void request_unknown_node_reply (
       zlink::routing_id_t target,
-      std::vector<zlink::message_t> parts,
+      runtime::messaging::message_parts_t parts,
       std::chrono::milliseconds timeout,
       task_t<std::optional<zlink::submit_result_t>> classification,
       request_receiver_t<result_t<runtime::messaging::message_parts_t>> receiver);

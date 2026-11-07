@@ -237,6 +237,14 @@ class raw_mesh_node_owner_t
                                   foundation::operation_registry_t::callback_t &&callback,
                                   std::optional<std::uint64_t> correlation = std::nullopt,
                                   std::shared_ptr<task_completion_source_t<void>> admitted = {});
+    zlink::submit_result_t
+    node_request_submission_result (std::span<const std::uint8_t> target_routing_id,
+                                    bool accepted) const;
+    void submit_node_request (std::span<const std::uint8_t> target_routing_id,
+                              const protocol::application_payload_t &application_payload,
+                              std::chrono::milliseconds timeout,
+                              foundation::operation_registry_t::callback_t &&callback,
+                              std::shared_ptr<task_completion_source_t<void>> admitted);
     task_t<bool> request_to_channel (const std::string &channel_name,
                                      const protocol::application_payload_t &application_payload,
                                      std::chrono::milliseconds timeout,
@@ -611,6 +619,18 @@ class raw_mesh_node_owner_t
     service_topology_registry_t::peer_observer_t
     observe_request_peer_on_lane (const std::vector<std::uint8_t> &target_routing_id) const;
     task_t<bool> request_with_header (
+      std::span<const std::uint8_t> target_routing_id,
+      const std::function<zlink::message_t (std::uint64_t)> &header,
+      const protocol::application_payload_t &application_payload,
+      foundation::operation_registry_t::clock_t::time_point deadline,
+      foundation::operation_registry_t::callback_t &&callback,
+      std::optional<std::uint64_t> correlation = std::nullopt,
+      bool target_claimed = false,
+      mesh_request_metric_t request_metric = {},
+      std::optional<foundation::operation_registry_t::request_identity_t> request = {},
+      std::shared_ptr<task_completion_source_t<void>> admitted = {},
+      physical_receiver_t receiver = {});
+    std::shared_ptr<task_completion_source_t<void>> start_request_with_header (
       std::span<const std::uint8_t> target_routing_id,
       const std::function<zlink::message_t (std::uint64_t)> &header,
       const protocol::application_payload_t &application_payload,

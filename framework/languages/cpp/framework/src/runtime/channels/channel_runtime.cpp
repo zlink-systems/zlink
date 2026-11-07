@@ -113,28 +113,15 @@ spot_mesh_sender (const std::shared_ptr<channel_runtime_state_t> &state,
              : std::optional<channel_runtime_state_t::spot_mesh_send_t> (found->second);
 }
 
-using node_transport_t = std::variant<std::monostate,
-                                      std::shared_ptr<route_channel_runtime_t>,
-                                      channel_runtime_state_t::mesh_node_transport_ptr_t>;
+using node_transport_t = channel_runtime_state_t::node_transport_t;
 
-result_t<node_transport_t>
-resolve_node_transport (const std::shared_ptr<channel_runtime_state_t> &state,
-                        const std::string &mesh_name)
+node_transport_t resolve_node_transport (const std::shared_ptr<channel_runtime_state_t> &state,
+                                         const std::string &mesh_name)
 {
     const auto index =
       std::atomic_load_explicit (&state->node_transports, std::memory_order_acquire);
-    if (index->route_channels.contains (mesh_name))
-        return state->lane
-          .run_task ([&] () -> node_transport_t {
-              if (const auto route = state->route_channels.find (mesh_name);
-                  route != state->route_channels.end ())
-                  return route->second;
-              return std::monostate{};
-          })
-          .result ();
-    if (const auto mesh = index->mesh_nodes.find (mesh_name); mesh != index->mesh_nodes.end ())
-        return result_t<node_transport_t>::success (mesh->second);
-    return result_t<node_transport_t>::success (std::monostate{});
+    const auto found = index->nodes.find (mesh_name);
+    return found == index->nodes.end () ? node_transport_t{} : found->second.transport;
 }
 
 template <typename TClientServerTransports, typename TRouteMeshTransports>
@@ -183,7 +170,10 @@ bool has_route_channel (const std::shared_ptr<channel_runtime_state_t> &state,
 {
     const auto index =
       std::atomic_load_explicit (&state->node_transports, std::memory_order_acquire);
-    return index->route_channels.contains (channel_name);
+    const auto found = index->nodes.find (channel_name);
+    return found != index->nodes.end ()
+           && std::holds_alternative<std::shared_ptr<route_channel_runtime_t>> (
+             found->second.transport);
 }
 
 } // namespace
@@ -778,7 +768,15 @@ void channel_runtime_t::bind_mesh_node_transport (
             channel_runtime_state_t::mesh_node_transport_t{std::move (send), std::move (request)});
           _state->publish_node_transports ([&] (auto &index) {
               // A publication can retry, so the change copies its inputs.
-              index.mesh_nodes.insert_or_assign (mesh_name, transport);
+              const auto found = index.nodes.find (mesh_name);
+              if (found == index.nodes.end ()
+                  || !std::holds_alternative<std::shared_ptr<route_channel_runtime_t>> (
+                    found->second.transport))
+                  index.nodes.insert_or_assign (
+                    mesh_name,
+                    channel_runtime_state_t::node_transport_index_t::entry_t{
+                      transport, prepare_request_channel (mesh_name),
+                      &runtime::messaging::client_call_codec_t::encode_service_payload_parts});
           });
       })
       .get ();
@@ -1458,7 +1456,7 @@ route_client_t::submit_send_erased (const std::shared_ptr<detail::route_client_s
                                          "route client is not configured");
         }
         const auto transport = detail::resolve_node_transport (state->runtime, router_channel_id);
-        if (std::holds_alternative<std::monostate> (transport.value ())) {
+        if (std::holds_alternative<std::monostate> (transport)) {
             throw framework_exception_t (framework_error_kind_t::unavailable,
                                          "route channel or SPOT mesh '" + router_channel_id
                                            + "' is not registered");
@@ -1486,12 +1484,11 @@ route_client_t::submit_send_erased (const std::shared_ptr<detail::route_client_s
               *state->serializers, encode_payload);
             if (const auto mesh =
                   std::get_if<detail::channel_runtime_state_t::mesh_node_transport_ptr_t> (
-                    &transport.value ())) {
+                    &transport)) {
                 auto submitted = (*mesh)->send (target_node_rid, std::move (parts));
                 return detail::project_task_terminal<void> (submitted, finish);
             }
-            auto &runtime =
-              *std::get<std::shared_ptr<detail::route_channel_runtime_t>> (transport.value ());
+            auto &runtime = *std::get<std::shared_ptr<detail::route_channel_runtime_t>> (transport);
             runtime.submit_send_parts (target_node_rid, std::move (parts)).value ();
             return task_t<void> (result_t<void>::success ());
         }
@@ -1752,19 +1749,17 @@ void route_client_t::submit_request_reply_message_erased (
                                      "route client is not configured");
     }
     runtime::messaging::message_parts_t parts;
-    auto transport = detail::resolve_node_transport (state->runtime, router_channel_id);
-    if (!transport)
-        detail::propagate_failure<encoded_payload_t> (transport, "node transport lookup failed")
-          .value ();
-    const auto route =
-      std::get_if<std::shared_ptr<detail::route_channel_runtime_t>> (&transport.value ());
-    const auto mesh =
-      std::get_if<detail::channel_runtime_state_t::mesh_node_transport_ptr_t> (&transport.value ());
-    if (!route && !mesh) {
+    const auto index =
+      std::atomic_load_explicit (&state->runtime->node_transports, std::memory_order_acquire);
+    const auto endpoint = index->nodes.find (router_channel_id);
+    if (endpoint == index->nodes.end ())
         throw framework_exception_t (framework_error_kind_t::unavailable,
                                      "route channel or MeshNode '" + router_channel_id
                                        + "' is not registered");
-    }
+    const auto &transport = endpoint->second.transport;
+    const auto route = std::get_if<std::shared_ptr<detail::route_channel_runtime_t>> (&transport);
+    const auto mesh =
+      std::get_if<detail::channel_runtime_state_t::mesh_node_transport_ptr_t> (&transport);
     using reply_parts_t = runtime::messaging::message_parts_t;
     using node_reply_t = result_t<reply_parts_t>;
     struct request_decoder_t
@@ -1845,8 +1840,8 @@ void route_client_t::submit_request_reply_message_erased (
                          ? std::shared_ptr<const zlink::routing_id_t> (
                              std::shared_ptr<const zlink::routing_id_t>{}, target_owner.get ())
                          : std::shared_ptr<const zlink::routing_id_t> (target_owner);
-    request_decoder_t decode{state, transport.value (), std::move (target_view),
-                             std::move (packet_name), std::move (router_channel_id)};
+    request_decoder_t decode{state, transport, std::move (target_view), std::move (packet_name),
+                             std::move (router_channel_id)};
 
     auto effective_timeout = timeout;
     if (route) {
@@ -1881,9 +1876,11 @@ void route_client_t::submit_request_reply_message_erased (
                                               std::nullopt};
               });
         }
-        auto [payload, content_type] = encode_payload (*state->serializers);
-        parts =
-          codec.encode_payload_parts (std::move (header), std::move (payload), content_type.get ());
+        auto [payload, type_plan] = encode_payload (*state->serializers);
+        parts = (codec.*endpoint->second.encode_request) (
+          std::move (header), std::move (payload), std::move (type_plan),
+          std::shared_ptr<const detail::prepared_header_fragment_t> (index,
+                                                                     &endpoint->second.channel));
     }
     const auto ambient_guard = detail::enter_ambient_context (ambient_context);
     try {
