@@ -17,14 +17,51 @@ export interface ZLinkOwnershipLostEvent {
   readonly key: string;
 }
 
+export type ZLinkPreservedAuthority = (
+  key: import('./internal-location-contracts').ZLinkAuthorityKey,
+  incarnation?: Pick<
+    import('./internal-location-contracts').ZLinkAuthoritySnapshot,
+    'objectGeneration' | 'authorityOwnerGeneration'
+  >
+) => boolean;
+
+export type ZLinkAuthorityConfirmation = (
+  key: import('./internal-location-contracts').ZLinkAuthorityKey,
+  expected: import('./internal-location-contracts').ZLinkAuthoritySnapshot,
+  confirmed: import('./internal-location-contracts').ZLinkAuthoritySnapshot
+) => void;
+
+export interface ZLinkExecutionRecovery {
+  readonly key: import('./internal-location-contracts').ZLinkAuthorityKey;
+  readonly meshName: string;
+  readonly incarnation: Pick<
+    import('./internal-location-contracts').ZLinkAuthoritySnapshot,
+    'objectGeneration' | 'authorityOwnerGeneration'
+  >;
+  run(
+    owner: ZLinkLocationOwnerToken,
+    canSubmit: () => boolean,
+    signal?: AbortSignal
+  ): Promise<boolean>;
+}
+
 export interface IZLinkLocationLifecycleRuntime {
-  trackExecution?(owner: object, steadyReady: () => boolean, discard: () => void): void;
+  trackExecution?(
+    owner: object,
+    steadyReady: () => boolean,
+    discard: () => void,
+    captureRecovery?: (reference: WeakRef<object>) => ZLinkExecutionRecovery | undefined
+  ): void;
   forgetExecution?(owner: object): void;
   discardExecution?(owner: object): void;
   discardSteadyExecution?(owner: object): boolean;
   readonly ownerId: string;
   readonly currentOwnerToken?: ZLinkLocationOwnerToken;
-  reclaimOwnerAuthorities?(signal?: AbortSignal): Promise<void>;
+  reclaimOwnerAuthorities?(
+    publication?: Promise<void>,
+    signal?: AbortSignal,
+    onConfirmed?: ZLinkAuthorityConfirmation
+  ): Promise<ZLinkPreservedAuthority>;
   addOwnershipLostHandler(handler: (event: ZLinkOwnershipLostEvent) => void): void;
   removeOwnershipLostHandler(handler: (event: ZLinkOwnershipLostEvent) => void): void;
   writeActor(

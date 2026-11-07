@@ -111,12 +111,8 @@ import type {
   ZLinkSpotBoundSessionRuntime
 } from './spot-runtime-ports';
 
-export class ZLinkMeshNodeDescriptorConflictException extends ZLinkConfigurationException {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ZLinkMeshNodeDescriptorConflictException';
-  }
-}
+import { ZLinkMeshNodeDescriptorConflictException } from '../locations/descriptor-publication';
+export { ZLinkMeshNodeDescriptorConflictException } from '../locations/descriptor-publication';
 
 const DEFAULT_SPOT_NODE_SHUTDOWN_TIMEOUT_MS = 1000;
 
