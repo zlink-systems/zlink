@@ -107,6 +107,9 @@ internal sealed record ZLinkEnvelopeHeader(
     string? Source = null
 )
 {
+    internal Type? PreparedBodyType { get; init; }
+    internal IZLinkMessageSerializer? PreparedSerializer { get; init; }
+
     [System.Text.Json.Serialization.JsonPropertyOrder(-100)]
     public byte FormatMarker { get; init; }
 
@@ -152,7 +155,12 @@ internal static class ZLinkEnvelopeCodec
         ZLinkCodecRegistryBuilder? codecs
     )
     {
-        var bodyMessage = EncodeBody(body, bodyType, codecs, out var contentType);
+        var contentType = header.ContentType;
+        var bodyMessage =
+            body is not null and not Message and not ZLinkMessage
+            && header.PreparedBodyType is { } preparedType
+                ? EncodeBody(body, preparedType, header.PreparedSerializer)
+                : EncodeBody(body, bodyType, codecs, out contentType);
         try
         {
             return ZLinkMessageParts.Create(EncodeHeader(header, contentType), bodyMessage);
@@ -232,6 +240,39 @@ internal static class ZLinkEnvelopeCodec
             flowId,
             flowOrigin
         );
+    }
+
+    internal static ZLinkEnvelopeHeader PrepareResponse(
+        string channelName,
+        Type? replyType,
+        ZLinkCodecRegistryBuilder codecs
+    )
+    {
+        var contentType = DefaultContentType;
+        IZLinkMessageSerializer? serializer = null;
+        var typed =
+            replyType is not null
+            && replyType != typeof(Message)
+            && replyType != typeof(ZLinkMessage);
+        if (typed && !codecs.TryResolveSerializer(replyType!, out contentType, out serializer!))
+            contentType = DefaultContentType;
+        var header = new ZLinkEnvelopeHeader(
+            ZLinkMessageKind.Response,
+            channelName,
+            string.Empty,
+            contentType,
+            null,
+            null,
+            null,
+            null,
+            null
+        )
+        {
+            PreparedBodyType = typed ? replyType : null,
+            PreparedSerializer = serializer,
+        };
+        _ = GetHeaderPlan(new SimpleHeaderKey(header.Kind, channelName, string.Empty, contentType));
+        return header;
     }
 
     public static Message EncodeBody(

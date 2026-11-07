@@ -9,15 +9,14 @@ public sealed class MeshReceiveHandoffTests
 {
     private static readonly TimeSpan CompletionBound = TimeSpan.FromSeconds(10);
 
-    // Spec 08 §4.4: an idle resource takes the receive role before the previous
-    // receiver enters the application's existing owner turn on that same thread.
+    // Spec 08 §4.4: existing application workers execute independently of the receiver.
     [Fact]
-    public async Task ReceiveRoleHandoff_RunsHandlerOnPreviousReceiverWhileNextReceiveProgresses()
+    public async Task ReadyOwner_RunsOnApplicationWorkerWhileReceiveAndManagementProgress()
     {
         if (
             await IsolatedTestProcess.RunIsolatedAsync(
                 typeof(MeshReceiveHandoffTests),
-                nameof(ReceiveRoleHandoff_RunsHandlerOnPreviousReceiverWhileNextReceiveProgresses)
+                nameof(ReadyOwner_RunsOnApplicationWorkerWhileReceiveAndManagementProgress)
             )
         )
             return;
@@ -35,6 +34,67 @@ public sealed class MeshReceiveHandoffTests
         )
             return;
         await RunHandoffAsync(true);
+    }
+
+    [Fact]
+    public async Task ReadyOwner_StartsBeforeInjectedReceiveTurnReturns()
+    {
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(MeshReceiveHandoffTests),
+                nameof(ReadyOwner_StartsBeforeInjectedReceiveTurnReturns)
+            )
+        )
+            return;
+        using var started = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var finished = Signal();
+        var errors = new System.Collections.Concurrent.ConcurrentQueue<Exception>();
+        var receiverThread = 0;
+        var handlerThread = 0;
+        await using var receiver = ZLinkProcessExecutionPool.CreateReceiveSource(() =>
+            new RecordingPoller(() => { })
+        );
+        await using var application = ZLinkProcessExecutionPool.CreateApplicationSource(
+            _ =>
+            {
+                handlerThread = Environment.CurrentManagedThreadId;
+                started.Set();
+                Assert.True(release.Wait(CompletionBound));
+                return ValueTask.CompletedTask;
+            },
+            errors.Enqueue
+        );
+        var wait = receiver.WaitAsync([], Timeout.InfiniteTimeSpan).GetAwaiter();
+        // Inject a finite receive turn: it commits a ready owner and retains
+        // the receive resource until that owner's existing worker has started.
+        wait.UnsafeOnCompleted(() =>
+        {
+            try
+            {
+                wait.GetResult();
+                receiverThread = Environment.CurrentManagedThreadId;
+                application.Signal();
+                Assert.True(started.Wait(CompletionBound));
+                Assert.NotEqual(receiverThread, handlerThread);
+                finished.TrySetResult();
+            }
+            catch (Exception error)
+            {
+                finished.TrySetException(error);
+            }
+        });
+        receiver.Wake();
+        try
+        {
+            await finished.Task.WaitAsync(CompletionBound + CompletionBound);
+        }
+        finally
+        {
+            release.Set();
+        }
+        await application.DisposeAsync();
+        Assert.Empty(errors);
     }
 
     private static async Task RunHandoffAsync(bool exhaustApplicationResources)
@@ -182,7 +242,26 @@ public sealed class MeshReceiveHandoffTests
                 Assert.False(handlerEntered.Task.IsCompleted);
             }
             else
-                Assert.Equal(receiveThread, handlerThread);
+            {
+                Assert.NotEqual(receiveThread, handlerThread);
+                Assert.Equal(receiveThread, router.SecondReceiveThread);
+            }
+            var deadline = source.RunDeadlineRequestAsync<int>(
+                TimeSpan.FromMilliseconds(10),
+                default,
+                completion =>
+                {
+                    throw new ZlinkRequestException(
+                        (ZlinkRequestException.ErrorCode)(int)completion.Result
+                    );
+                },
+                static (_, _) => Task.CompletedTask
+            );
+            var timedOut = await Assert.ThrowsAsync<ZlinkRequestException>(() =>
+                deadline.WaitAsync(CompletionBound)
+            );
+            Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, timedOut.Result);
+            Assert.False(releaseHandler.IsSet);
         }
         finally
         {
@@ -217,6 +296,7 @@ public sealed class MeshReceiveHandoffTests
         internal IRouterSocket Inner => InnerSocket;
         internal int MaximumConcurrentReceives => Volatile.Read(ref _maximumConcurrentReceives);
         internal int NodeSendCount => Volatile.Read(ref _nodeSends);
+        internal int SecondReceiveThread;
         internal TaskCompletionSource<int> FirstReceived { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource SecondReceived { get; } = Signal();
@@ -264,7 +344,10 @@ public sealed class MeshReceiveHandoffTests
                     if (ordinal == 1)
                         FirstReceived.TrySetResult(Environment.CurrentManagedThreadId);
                     else if (ordinal == 2)
+                    {
+                        SecondReceiveThread = Environment.CurrentManagedThreadId;
                         SecondReceived.TrySetResult();
+                    }
                 }
                 return true;
             }
