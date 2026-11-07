@@ -86,6 +86,7 @@ export interface ZLinkStoreLocationResolversOptions {
   readonly events?: ZLinkLocationResolverEventSink;
   readonly spotMeshNames?: readonly string[];
   readonly routeCacheMaxAgeMs?: number;
+  readonly admissionOpen?: () => boolean;
   readonly monotonicNowMs?: () => number;
 }
 
@@ -314,10 +315,19 @@ export class ZLinkStoreLocationResolvers
     return candidates[candidates.length - 1]?.rid;
   }
 
+  private requireRouteLookup(): void {
+    if (this.options.admissionOpen?.() === false)
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RequestRejected,
+        'A new route lookup requires Location owner admission.'
+      );
+  }
+
   async resolveRoute(
     key: ZLinkRouteLocationKey,
     signal?: AbortSignal
   ): Promise<ZLinkRouteLocation | undefined> {
+    this.requireRouteLookup();
     const row = await this.liveRows.resolve(
       await this.options.stores.routeStore.resolveRoute(key, signal),
       (candidate, signal) => this.options.leaseTracker.isOwnerLive(candidate.ownerId, signal),
@@ -432,6 +442,7 @@ export class ZLinkStoreLocationResolvers
   ): Promise<ZLinkDirectActorRouteResolution> {
     const cached = await this.lane.run(() => this.getCachedCore(this.directActorRoutes, actorId));
     if (cached !== undefined) return { kind: 'ready', route: cached };
+    this.requireRouteLookup();
     const resolving = this.resolveUncachedDirectActorRoute(actorId, signal);
     if (requestOperation === undefined) {
       remainingActorRequestTimeout(actorId, deadlineMs);
@@ -573,6 +584,7 @@ export class ZLinkStoreLocationResolvers
     const cacheKey = `${key.meshName}\u0000${String(key.spotId)}`;
     const cached = await this.lane.run(() => this.getCachedCore(this.spotRoutes, cacheKey));
     if (cached !== undefined) return cached;
+    this.requireRouteLookup();
     const row = await this.liveRows.resolve(
       await this.options.stores.spotStore.resolveSpot(key, signal),
       (candidate, signal) => this.options.leaseTracker.isOwnerTokenLive(candidate, signal),
@@ -636,6 +648,7 @@ export class ZLinkStoreLocationResolvers
     const cacheKey = `${key.meshName}\u0000${key.actorId}`;
     const cached = await this.lane.run(() => this.getCachedCore(this.actorRoutes, cacheKey));
     if (cached !== undefined) return cached;
+    this.requireRouteLookup();
     const meshNames =
       key.meshName.length === 0 ? (this.options.spotMeshNames ?? []) : [key.meshName];
     let stored: ZLinkActorLocation | undefined;

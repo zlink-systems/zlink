@@ -154,6 +154,7 @@ export interface ZLinkSpotActivationLifecycleOptions {
   readonly stageActivation?: (activation: ZLinkSpotActivation) => void;
   readonly discardActivation?: (activation: ZLinkSpotActivation) => void;
   readonly routeToActorJoinPrewarm?: ZLinkRouteToActorJoinPrewarm;
+  readonly releaseExecution?: (activation: ZLinkSpotActivation) => void;
   readonly releaseLocation: (
     activation: ZLinkSpotActivation,
     meshName: string,
@@ -1042,6 +1043,28 @@ export class ZLinkSpotActivationLifecycle {
     }
   }
 
+  async discard(activation: ZLinkSpotActivation): Promise<void> {
+    const state = this.cleanupStates.get(activation) ?? {
+      closingAttempted: false,
+      timersDisposed: false,
+      serialDisposed: false,
+      handlersDisposed: false,
+      actorDispatchDisposed: false,
+      nativeDisposed: false,
+      locationReleased: true
+    };
+    state.locationReleased = true;
+    this.cleanupStates.set(activation, state);
+    activation.serial.closeAdmission();
+    activation.serialExecutor.discardPendingApplication(
+      createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RequestRejected,
+        'Object execution authority was discarded.'
+      )
+    );
+    await this.cleanupActivation(activation, activation.meshName, false);
+  }
+
   private async cleanupActivation(
     activation: ZLinkSpotActivation,
     locationMeshName: string,
@@ -1176,6 +1199,7 @@ export class ZLinkSpotActivationLifecycle {
         () => disposeLifecycleHandlers(activation.spot, this.options.detachedTaskRunner),
         () => {
           state.handlersDisposed = true;
+          this.options.releaseExecution?.(activation);
         }
       );
     }
