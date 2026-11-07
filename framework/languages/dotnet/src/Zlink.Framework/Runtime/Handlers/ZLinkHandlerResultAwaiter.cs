@@ -16,6 +16,8 @@ internal static class ZLinkHandlerResultAwaiter
 
         switch (result)
         {
+            case ValueTask<object?> prepared:
+                return prepared;
             case Task task when result.GetType() == typeof(Task):
                 return task.IsCompletedSuccessfully
                     ? new ValueTask<object?>((object?)null)
@@ -29,6 +31,17 @@ internal static class ZLinkHandlerResultAwaiter
         return IsGenericAwaitable(result.GetType())
             ? GenericAwaiters.GetOrAdd(result.GetType(), CreateGenericAwaiter)(result)
             : new ValueTask<object?>(result);
+    }
+
+    internal static Func<object?, ValueTask<object?>> Prepare(Type resultType)
+    {
+        if (IsGenericAwaitable(resultType))
+            return GenericAwaiters.GetOrAdd(resultType, CreateGenericAwaiter)!;
+        if (resultType == typeof(Task))
+            return static result => result is Task task ? AwaitTaskAsync(task) : new((object?)null);
+        if (resultType == typeof(ValueTask))
+            return static result => AwaitValueTaskAsync((ValueTask)result!);
+        return static result => new(result);
     }
 
     private static bool IsGenericAwaitable(Type resultType)

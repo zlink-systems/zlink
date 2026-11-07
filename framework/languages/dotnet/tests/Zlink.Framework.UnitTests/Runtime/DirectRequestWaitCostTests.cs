@@ -176,10 +176,15 @@ public sealed class DirectRequestWaitCostTests
                 );
             if (waiter?.DeclaringType != typeof(ZLinkManagedMeshNode))
                 return;
-            if (waiter.Name.StartsWith("<RequestDirectWireAsync>", StringComparison.Ordinal))
-                ForwardingWaits++;
-            if (waiter.Name.StartsWith("<ObserveDirectWireReplyAsync>", StringComparison.Ordinal))
+            if (
+                waiter.Name.StartsWith(
+                    "<ObserveNativeDeadlineReplyAsync>",
+                    StringComparison.Ordinal
+                )
+            )
                 ReplyObservations++;
+            else
+                ForwardingWaits++;
         }
     }
 }

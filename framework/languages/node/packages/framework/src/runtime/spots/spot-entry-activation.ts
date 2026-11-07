@@ -1,3 +1,7 @@
+import {
+  createInternalFrameworkException,
+  ZLinkFrameworkInternalErrorKind
+} from '../framework-errors-internal';
 import { dispatchActorPacketInMailbox } from './spot-actor-admission-coordinator';
 import { currentApplicationJobOrigin } from '../application-jobs/application-job-queue-scope';
 import type {
@@ -135,6 +139,12 @@ export class ZLinkEntrySpotActivation {
       this.serial,
       ZLinkUserSpotExecutionMode.PerActor,
       options.nativeSpot.routingId
+    );
+    const executionAllowed = (owner: object | undefined) =>
+      options.admission?.executionAllowed(owner) !== false;
+    this.spotSerialExecutor.setActorExecutionPolicy(
+      () => executionAllowed,
+      (actorId) => options.entryActorRuntime?.resolveActor(actorId)
     );
     // Entry Spot lifecycle, timers and detached continuations use this serial
     // executor. Actor packets use the target actor mailbox.
@@ -387,6 +397,16 @@ export class ZLinkEntrySpotActivation {
 
   executeActor<T>(actorId: string, operation: () => Promise<T>): Promise<T> {
     return this.spotSerialExecutor.executeActor(actorId, operation);
+  }
+
+  discardActor(actorId: string): void {
+    this.spotSerialExecutor.discardActor(
+      actorId,
+      createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RequestRejected,
+        'Actor execution authority was discarded.'
+      )
+    );
   }
 
   terminateActor(actorId: string, terminal: () => Promise<void>): Promise<void> {

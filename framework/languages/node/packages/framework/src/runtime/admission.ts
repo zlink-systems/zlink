@@ -28,6 +28,21 @@ export class ZLinkRuntimeAdmissionGate {
    */
   constructor(readonly ownerAdmissionOpen: () => boolean = () => true) {}
 
+  private executionRuntime?: () =>
+    | {
+        readonly boundExecutionUsable: boolean;
+        executionAllowed?(owner: object | undefined): boolean;
+      }
+    | undefined;
+
+  setExecutionRuntime(provider: NonNullable<ZLinkRuntimeAdmissionGate['executionRuntime']>): void {
+    this.executionRuntime = provider;
+  }
+
+  executionAllowed(owner: object | undefined): boolean | undefined {
+    return this.executionRuntime?.()?.executionAllowed?.(owner);
+  }
+
   get acceptsNewWork(): boolean {
     if (!this.ownerAdmissionOpen()) return false;
     for (const state of this.meshes.values()) {
@@ -142,6 +157,12 @@ export class ZLinkRuntimeAdmissionGate {
         kind === ReceiveKind.NodeRequest ||
         kind === ReceiveKind.ChannelSend ||
         kind === ReceiveKind.ChannelRequest ||
+        ((kind === ReceiveKind.ActorSend ||
+          kind === ReceiveKind.ActorRequest ||
+          kind === ReceiveKind.SpotSend ||
+          kind === ReceiveKind.SpotRequest ||
+          kind === ReceiveKind.SpotMulticast) &&
+          this.executionRuntime?.()?.boundExecutionUsable === true) ||
         this.ownerAdmissionOpen())
     );
   }

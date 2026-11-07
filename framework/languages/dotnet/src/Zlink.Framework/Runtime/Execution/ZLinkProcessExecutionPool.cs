@@ -386,18 +386,13 @@ internal sealed class ZLinkProcessExecutionPool
                     _receiving = this;
                     try
                     {
-                        application = ReceiveUntilHandoff(worker);
+                        Receive();
                     }
                     finally
                     {
                         _receiving = null;
                     }
-                    if (_stopping)
-                    {
-                        lock (_gate)
-                            application?.CompleteUnderLock();
-                        return;
-                    }
+                    return;
                 }
                 application?.Run(worker.Turn);
             }
@@ -454,7 +449,7 @@ internal sealed class ZLinkProcessExecutionPool
         return null;
     }
 
-    private ApplicationSource? ReceiveUntilHandoff(Worker worker)
+    private void Receive()
     {
         var readySources = _receiveReady;
         while (true)
@@ -484,7 +479,6 @@ internal sealed class ZLinkProcessExecutionPool
                         _poller.Dispose();
                         _poller = null!;
                     }
-                    worker.Receiving = false;
                     terminating = true;
                     NotifyAllUnderLock();
                 }
@@ -508,7 +502,7 @@ internal sealed class ZLinkProcessExecutionPool
             if (terminating)
             {
                 NotifyFailedSources(failedContinuations);
-                return null;
+                return;
             }
             var count = _poller.Wait(_events, timeout);
             lock (_gate)
@@ -534,7 +528,7 @@ internal sealed class ZLinkProcessExecutionPool
                 CollectReadySourcesUnderLock(readySources);
             }
             // Completing these waits resumes only the finite source turn. Every source
-            // reaches its next readiness/permit/management await before the role moves.
+            // reaches its next readiness/permit/management await on this receive resource.
             foreach (var source in readySources)
             {
                 Action<object?>? continuation;
@@ -575,22 +569,6 @@ internal sealed class ZLinkProcessExecutionPool
                 }
             }
             readySources.Clear();
-            lock (_gate)
-            {
-                if (_ready.Count == 0 || _idle.First is null)
-                    continue;
-                var application = TakeApplicationUnderLock();
-                if (application is null)
-                    continue;
-                var replacementEntry = _idle.First!;
-                var replacement = replacementEntry.Value;
-                _idle.Remove(replacementEntry);
-                // The reservation excludes application assignment before the old receiver runs.
-                replacement.Receiving = true;
-                worker.Receiving = false;
-                NotifyWorkerUnderLock(replacement);
-                return application;
-            }
         }
     }
 
@@ -726,7 +704,7 @@ internal sealed class ZLinkProcessExecutionPool
     {
         internal Thread? Thread;
         internal readonly ApplicationTurn Turn = new();
-        internal bool Receiving;
+        internal bool Receiving { get; init; }
         internal readonly AutoResetEvent Wake = new(false);
         internal readonly LinkedListNode<Worker> IdleEntry;
         internal ApplicationSource? Application;
@@ -1049,11 +1027,7 @@ internal sealed class ZLinkProcessExecutionPool
                     return;
                 ReadyEntry.Value = this;
                 pool._ready.AddLast(ReadyEntry);
-                if (!ReferenceEquals(_receiving, pool))
-                {
-                    pool.DispatchApplicationsUnderLock();
-                    pool.WakeUnderLock();
-                }
+                pool.DispatchApplicationsUnderLock();
             }
         }
 

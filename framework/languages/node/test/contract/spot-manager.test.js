@@ -2857,22 +2857,43 @@ test('ZLinkSpotManager create reject returns rejected state reply and does not r
 test('ZLinkSpotManager rejection disposes native Spot and releases its location exactly once', async () => {
   let nativeDisposes = 0;
   let locationReleases = 0;
+  let executionReleases = 0;
   const nativeSpot = {
     routingId: 'rejected-cleanup-room',
     lifecycleGeneration: 1n,
     setDispatchHandler() {},
     setSubscription() {},
-    subscribe() { return false; },
-    recvActorLifecycle() { return null; },
-    drainReply() { return 0; },
-    drainChannelReply() { return 0; },
-    recvRoute() { return false; },
+    subscribe() {
+      return false;
+    },
+    recvActorLifecycle() {
+      return null;
+    },
+    drainReply() {
+      return 0;
+    },
+    drainChannelReply() {
+      return 0;
+    },
+    recvRoute() {
+      return false;
+    },
     onSendReady() {},
-    async dispose() { nativeDisposes++; }
+    async dispose() {
+      nativeDisposes++;
+    }
   };
   const locationLifecycle = {
-    async claimSpot() { return framework.ZLinkLocationWriteStatus.Stored; },
-    async releaseSpot() { locationReleases++; }
+    forgetExecution(owner) {
+      assert.ok(owner instanceof RejectingSpot);
+      executionReleases++;
+    },
+    async claimSpot() {
+      return framework.ZLinkLocationWriteStatus.Stored;
+    },
+    async releaseSpot() {
+      locationReleases++;
+    }
   };
   class RejectingSpot {
     async onCreate() {
@@ -2897,6 +2918,7 @@ test('ZLinkSpotManager rejection disposes native Spot and releases its location 
   assert.equal(await manager.close('test.mesh', 'rejected-cleanup-room'), false);
   assert.equal(nativeDisposes, 1);
   assert.equal(locationReleases, 1);
+  assert.equal(executionReleases, 1);
 });
 
 test('ZLinkSpotManager getOrCreate can retry same spotId after create rejection', async () => {
