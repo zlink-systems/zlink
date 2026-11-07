@@ -91,6 +91,13 @@ class native_wire_writer_t
     {
         insert (position, bytes.begin (), bytes.end ());
     }
+    void generate (std::size_t size, const std::function<void (std::span<std::byte>)> &write)
+    {
+        if (size > _message.size () - _size)
+            throw service_wire_error_t ("native wire writer exceeded allocated size");
+        write ({reinterpret_cast<std::byte *> (end ()), size});
+        _size += size;
+    }
     zlink::message_t take () &&
     {
         if (_size != _message.size ())
@@ -2923,22 +2930,38 @@ retain_application_messages (std::span<const zlink::message_t> parts)
 }
 } // namespace
 
+namespace
+{
+const std::string &multipart_packet_name_text ()
+{
+    static const std::string value (framework_multipart_packet_name);
+    return value;
+}
+const std::string &multipart_content_type_text ()
+{
+    static const std::string value (framework_multipart_content_type);
+    return value;
+}
+} // namespace
+
 const std::string &application_payload_t::packet_name () const noexcept
 {
-    static const std::string multipart_name (framework_multipart_packet_name);
-    return parts () ? multipart_name : std::get<byte_payload_t> (_body).packet_name;
+    return parts () || envelope_encoder () ? multipart_packet_name_text ()
+                                           : std::get<byte_payload_t> (_body).packet_name;
 }
 
 const std::string &application_payload_t::content_type () const noexcept
 {
-    static const std::string multipart_type (framework_multipart_content_type);
-    return parts () ? multipart_type : std::get<byte_payload_t> (_body).content_type;
+    return parts () || envelope_encoder () ? multipart_content_type_text ()
+                                           : std::get<byte_payload_t> (_body).content_type;
 }
 
 application_payload_t::application_payload_t (const application_payload_t &other) :
     flow_id (other.flow_id), flow_origin (other.flow_origin)
 {
-    if (const auto *parts = other.parts ()) {
+    if (const auto *encode = other.envelope_encoder ()) {
+        _body = *encode;
+    } else if (const auto *parts = other.parts ()) {
         _body = retain_application_messages (*parts);
     } else {
         _body = std::get<byte_payload_t> (other._body);
@@ -2950,6 +2973,23 @@ application_payload_t &application_payload_t::operator= (const application_paylo
     if (this != &other)
         *this = application_payload_t (other);
     return *this;
+}
+
+application_payload_t
+application_payload_t::from_envelope_encoder (application_envelope_encoder_t encode)
+{
+    application_payload_t result;
+    result._body = std::move (encode);
+    return result;
+}
+
+void application_payload_t::materialize_envelope () const
+{
+    if (const auto *encode = envelope_encoder ()) {
+        auto frame = (*encode) (flow_id, flow_origin);
+        auto decoded = decode_application_payload (message_bytes (frame));
+        _body = std::move (decoded._body);
+    }
 }
 
 application_payload_t application_payload_t::from_parts (const multipart_t &parts)
@@ -3110,8 +3150,8 @@ bool operator== (const application_payload_t &left, const application_payload_t 
     return offset == bytes.size ();
 }
 
-template <typename Buffer>
-Buffer encode_application_payload_into (const application_payload_t &payload)
+template <typename Buffer, typename Payload>
+Buffer encode_application_payload_into (const Payload &payload)
 {
     if (payload.flow_id.has_value () != payload.flow_origin.has_value ()) {
         throw service_wire_error_t (
@@ -3153,10 +3193,14 @@ Buffer encode_application_payload_into (const application_payload_t &payload)
         append_u32 (result, static_cast<std::uint32_t> (parts->size ()));
         for (const auto &part : *parts) {
             append_u32 (result, static_cast<std::uint32_t> (part.size ()));
-            const auto bytes = part.bytes ();
-            if (!bytes.empty ()) {
-                const auto *begin = reinterpret_cast<const std::uint8_t *> (bytes.data ());
-                result.insert (result.end (), begin, begin + bytes.size ());
+            if constexpr (requires { part.append_to (result); }) {
+                part.append_to (result);
+            } else {
+                const auto bytes = part.bytes ();
+                if (!bytes.empty ()) {
+                    const auto *begin = reinterpret_cast<const std::uint8_t *> (bytes.data ());
+                    result.insert (result.end (), begin, begin + bytes.size ());
+                }
             }
         }
     } else {
@@ -3172,11 +3216,59 @@ Buffer encode_application_payload_into (const application_payload_t &payload)
 
 std::vector<std::uint8_t> encode_application_payload (const application_payload_t &payload)
 {
+    if (const auto *encode = payload.envelope_encoder ())
+        return (*encode) (payload.flow_id, payload.flow_origin).to_bytes ();
     return encode_application_payload_into<std::vector<std::uint8_t>> (payload);
 }
 
 zlink::message_t encode_application_payload_message (const application_payload_t &payload)
 {
+    if (const auto *encode = payload.envelope_encoder ())
+        return (*encode) (payload.flow_id, payload.flow_origin);
+    return encode_application_payload_into<native_wire_writer_t> (payload).take ();
+}
+
+namespace
+{
+struct envelope_part_t
+{
+    std::size_t length;
+    const std::function<void (std::span<std::byte>)> *write;
+    std::span<const std::byte> body;
+    std::size_t size () const noexcept { return length; }
+    void append_to (native_wire_writer_t &output) const
+    {
+        if (write)
+            output.generate (length, *write);
+        else if (!body.empty ()) {
+            const auto *begin = reinterpret_cast<const std::uint8_t *> (body.data ());
+            output.insert (output.end (), begin, begin + body.size ());
+        }
+    }
+};
+struct envelope_parts_t
+{
+    std::array<envelope_part_t, 2> messages;
+    std::optional<std::string> flow_id;
+    std::optional<flow_origin_t> flow_origin;
+    const auto *parts () const noexcept { return &messages; }
+    const std::string &packet_name () const noexcept { return multipart_packet_name_text (); }
+    const std::string &content_type () const noexcept { return multipart_content_type_text (); }
+    std::span<const std::uint8_t> payload_bytes () const noexcept { return {}; }
+};
+} // namespace
+
+zlink::message_t
+encode_application_envelope_message (std::size_t header_size,
+                                     const std::function<void (std::span<std::byte>)> &write_header,
+                                     std::span<const std::byte> body,
+                                     const std::optional<std::string> &flow_id,
+                                     std::optional<flow_origin_t> flow_origin)
+{
+    envelope_parts_t payload{{envelope_part_t{header_size, &write_header, {}},
+                              envelope_part_t{body.size (), nullptr, body}},
+                             flow_id,
+                             flow_origin};
     return encode_application_payload_into<native_wire_writer_t> (payload).take ();
 }
 

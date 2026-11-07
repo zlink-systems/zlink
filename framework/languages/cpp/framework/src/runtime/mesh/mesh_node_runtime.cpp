@@ -43,13 +43,6 @@
 #include <tuple>
 #include <utility>
 
-#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
-namespace zlink::framework::detail::test_creation_probe
-{
-std::atomic<void (*) ()> node_admission_observer_fault{nullptr};
-std::atomic<void (*) ()> node_admission_observer_context_fault{nullptr};
-}
-#endif
 
 namespace mesh_endpoint_notation = zlink::framework::runtime::transport;
 
@@ -4339,14 +4332,8 @@ namespace
 using node_reply_t = result_t<runtime::messaging::message_parts_t>;
 node_reply_t node_submission_failure (zlink::submit_result_t submitted)
 {
-    if (submitted == zlink::submit_result_t::not_found)
-        return node_reply_t::failure (framework_error_kind_t::not_found,
-                                      "MeshNode request target was not found");
-    if (submitted == zlink::submit_result_t::terminated)
-        return detail::boundary_failure<runtime::messaging::message_parts_t> (
-          detail::boundary_error_t::shutdown, "MeshNode request runtime is stopped");
-    return node_reply_t::failure (runtime::messaging::map_submit_result_error_kind (submitted),
-                                  "MeshNode request was not submitted");
+    return detail::result_access_t::failure<runtime::messaging::message_parts_t> (
+      runtime::messaging::map_node_request_submit_exception (submitted));
 }
 }
 
@@ -4415,7 +4402,7 @@ void mesh_node_runtime_t::compose_node_request_reply (host::pending_operation_t 
 }
 
 void mesh_node_runtime_t::submit_node_request_reply (const zlink::routing_id_t &target,
-                                                     std::vector<zlink::message_t> parts,
+                                                     runtime::messaging::message_parts_t parts,
                                                      std::chrono::milliseconds timeout,
                                                      request_receiver_t<node_reply_t> receiver)
 {
@@ -4460,34 +4447,9 @@ void mesh_node_runtime_t::submit_node_request_reply (const zlink::routing_id_t &
         // The stored callback now owns this receiver, including submission failures
         // before registration. Keep no independent physical fallback after transfer.
         receiver.complete = {};
-        auto submission = _node->request_to_node (target, std::move (parts), timeout,
-                                                  std::move (completion), receiver.admitted);
-        // A callback retained here was never registered. Once C1 accepts it,
-        // submission observes admission only; C1 alone owns reply delivery.
-#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
-        if (auto fault = test_creation_probe::node_admission_observer_fault.exchange (nullptr))
-            fault ();
-#endif
-        auto submission_observer = [admitted = receiver.admitted, completion] (
-                                     const result_t<zlink::submit_result_t> &submitted) mutable {
-            if (submitted && submitted.value () == zlink::submit_result_t::ok) {
-                admitted->complete (result_t<void>::success ());
-                return;
-            }
-            const auto failure = submitted
-                                   ? node_submission_failure (submitted.value ()).exception ()
-                                   : submitted.exception ();
-            admitted->complete (result_access_t::failure<void> (failure));
-            if (completion)
-                completion (runtime::foundation::operation_terminal_t::transport_failed,
-                            result_access_t::failure<zlink::message_t> (failure));
-        };
-#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
-        if (auto fault =
-              test_creation_probe::node_admission_observer_context_fault.exchange (nullptr))
-            test_creation_probe::task_terminal_context_fault.store (fault);
-#endif
-        observe_task_terminal (submission, std::move (submission_observer));
+        _node->transport ().submit_node_request (
+          {target.data (), target.size ()}, std::move (parts).take_application_payload (), timeout,
+          std::move (completion), receiver.admitted);
     }
     catch (...) {
         const auto failure = std::current_exception ();
@@ -4501,7 +4463,7 @@ void mesh_node_runtime_t::submit_node_request_reply (const zlink::routing_id_t &
 }
 
 void mesh_node_runtime_t::request_node_reply (const zlink::routing_id_t &target,
-                                              std::vector<zlink::message_t> parts,
+                                              runtime::messaging::message_parts_t parts,
                                               std::chrono::milliseconds timeout,
                                               request_receiver_t<node_reply_t> receiver)
 {
@@ -4521,7 +4483,7 @@ void mesh_node_runtime_t::request_node_reply (const zlink::routing_id_t &target,
 
 void mesh_node_runtime_t::request_unknown_node_reply (
   zlink::routing_id_t target,
-  std::vector<zlink::message_t> parts,
+  runtime::messaging::message_parts_t parts,
   std::chrono::milliseconds timeout,
   task_t<std::optional<zlink::submit_result_t>> classification,
   request_receiver_t<node_reply_t> receiver)

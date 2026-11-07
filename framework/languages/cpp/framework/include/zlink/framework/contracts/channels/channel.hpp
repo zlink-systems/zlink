@@ -912,8 +912,9 @@ class route_client_t
               auto encode_payload = [&request_value,
                                      &selected_serializer] (serializer_registry_t &serializers) {
                   selected_serializer.emplace (serializers.template get<TRequest> ());
-                  return std::pair{selected_serializer->serialize (request_value),
-                                   std::cref (selected_serializer->content_type ())};
+                  return std::pair{
+                    selected_serializer->serialize (request_value),
+                    detail::serializer_registry_access_t::request_plan (*selected_serializer)};
               };
               // Erased submit consumes this encoder before its first suspension.
               submit_request_reply_message_erased (state, router_channel_id, target_node_rid,
@@ -1011,8 +1012,8 @@ class route_client_t
                              payload_encoder_t encode_payload,
                              const route_send_call_t::metadata_map_t &metadata);
 
-    using node_payload_encoder_t =
-      std::function<std::pair<encoded_payload_t, std::reference_wrapper<const std::string>> (
+    using node_payload_encoder_t = std::function<
+      std::pair<encoded_payload_t, std::shared_ptr<const detail::request_type_plan_t>> (
         serializer_registry_t &)>;
 
     static void
