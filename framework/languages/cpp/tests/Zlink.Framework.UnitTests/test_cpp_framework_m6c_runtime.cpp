@@ -1805,7 +1805,7 @@ class public_memory_authority_store_t final
     }
 
     zlink::framework::task_t<zlink::framework::authority_read_result_t>
-    read_authority (zlink::framework::authority_key_t key, std::stop_token) override
+    read_authority_core (zlink::framework::authority_key_t key, std::stop_token) override
     {
         if (!authority_rows.empty ()) {
             const auto current = authority_rows.find (key.value);
@@ -1820,10 +1820,10 @@ class public_memory_authority_store_t final
     }
 
     zlink::framework::task_t<zlink::framework::authority_compare_exchange_result_t>
-    compare_exchange_authority (zlink::framework::authority_key_t key,
-                                std::string expected_store_version,
-                                zlink::framework::authority_mutation_t mutation,
-                                std::stop_token) override
+    compare_exchange_authority_core (zlink::framework::authority_key_t key,
+                                     std::string expected_store_version,
+                                     zlink::framework::authority_mutation_t mutation,
+                                     std::stop_token) override
     {
         observed_keys.push_back (std::move (key.value));
         const auto *put = std::get_if<zlink::framework::authority_put_t> (&mutation);

@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include <gtest/gtest.h>
 #include "task_allocation_counter.hpp"
+#include "location_runtime_test_access.hpp"
+#include "manual_internal_scheduler.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime_failure_fixture.hpp"
@@ -715,7 +717,7 @@ class pending_listing_t final : public fw::runtime::in_memory_location_repositor
     using page_t = fw::location_page_t<fw::mesh_node_descriptor_t>;
     fw::task_completion_source_t<page_t> completion;
     unsigned calls = 0;
-    fw::task_t<page_t> list_mesh_nodes (std::string, fw::location_page_request_t = {}) override
+    fw::task_t<page_t> list_mesh_nodes_core (std::string, fw::location_page_request_t = {}) override
     {
         ++calls;
         return completion.task ();
@@ -953,3 +955,42 @@ TEST (SendAllocations, ReceiveTurnRetainsCallbacksAcrossNativeSuspension)
     }
 }
 } // namespace
+
+TEST (ZLinkFrameworkSendAllocations, HealthyExecutionAdmissionDoesNotAllocateOrReadClock)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    in_memory_location_repository_t store;
+    location_runtime_t runtime (store, {}, "allocation-owner");
+    const auto now = std::chrono::steady_clock::time_point{std::chrono::hours (1000000)};
+    int clock_reads = 0;
+    location_runtime_test_access_t::clock (runtime, [&] {
+        ++clock_reads;
+        return now;
+    });
+    location_runtime_test_access_t::heartbeat (runtime, now);
+    for (bool shared : {false, true}) {
+        test::manual_internal_scheduler_t scheduler;
+        auto spot = std::make_shared<serial_execution_queue_t> (
+          scheduler, serial_execution_queue_options_t{},
+          serial_execution_queue_t::error_handler_t{},
+          shared ? serial_lane_policy_t::spot_wide () : serial_lane_policy_t::per_actor_spot ());
+        auto actor = std::make_shared<serial_execution_queue_t> (scheduler);
+        actor->attach_spot_gate (spot);
+        for (const auto &queue : {spot, actor}) {
+            queue->set_execution_policy (runtime.execution_policy ());
+            queue->confirm_execution_ready (now);
+        }
+        scheduler.run_all ();
+        clock_reads = 0;
+        bool allowed = true;
+        const auto allocations = tests::count_allocations (
+          [&] { allowed = spot->execution_allowed () && actor->execution_allowed (); });
+        EXPECT_TRUE (allowed);
+        EXPECT_EQ (0u, allocations);
+        EXPECT_EQ (0, clock_reads);
+        actor->cancel_pending ();
+        spot->cancel_pending ();
+        scheduler.run_all ();
+    }
+}
