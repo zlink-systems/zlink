@@ -49,7 +49,7 @@ public sealed partial class EntrySpotActorDispatchTests
             new ThrowingRuntimeErrorSink(),
             CancellationToken.None
         );
-        await using var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
+        var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
             ZLinkMeshNodeRouteDispatcher.Create(
                 host.Services,
                 registration,
