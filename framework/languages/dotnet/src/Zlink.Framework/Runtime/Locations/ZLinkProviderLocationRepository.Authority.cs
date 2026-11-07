@@ -150,7 +150,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         ValidateAuthorityKey(key);
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedStoreVersion);
         ArgumentNullException.ThrowIfNull(mutation);
-        ValidateAuthorityMutation(mutation);
+        ZLinkAuthorityMutation.Validate(mutation);
 
         for (; ; )
         {
@@ -288,6 +288,8 @@ internal sealed partial class ZLinkProviderLocationRepository
                     {
                         MembershipFailure = membershipFailure,
                     };
+                if (!ZLinkAuthorityMutation.MatchesPreservedOwner(current.Snapshot, put))
+                    return Conflict(current);
                 var changesOwner =
                     put.GenerationTransition == ZLinkAuthorityGenerationTransition.NewOwner;
                 var targetOwner =
@@ -296,6 +298,36 @@ internal sealed partial class ZLinkProviderLocationRepository
                         current.Snapshot.OwnerId,
                         current.Snapshot.OwnerLeaseGeneration
                     );
+                if (
+                    put.GenerationTransition == ZLinkAuthorityGenerationTransition.Preserve
+                    && put.TargetOwner is not null
+                )
+                {
+                    var descriptorKey = MeshKey(
+                        current.Snapshot.Allocation.Descriptor.MeshName,
+                        current.Snapshot.Allocation.Descriptor.Rid
+                    );
+                    var descriptor = await _provider
+                        .ReadAsync(descriptorKey, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (
+                        descriptor is not ZLinkStoreReadResult.Found foundDescriptor
+                        || !ZLinkAuthorityMutation.MatchesPreservedDescriptor(
+                            current.Snapshot,
+                            DecodeDescriptor<ZLinkMeshNodeDescriptor>(
+                                foundDescriptor.Value.Bytes
+                            ).Descriptor
+                        )
+                    )
+                        return Conflict(current);
+                    AddCondition(
+                        conditions,
+                        new ZLinkStoreCondition.Version(
+                            descriptorKey,
+                            foundDescriptor.Value.Version
+                        )
+                    );
+                }
                 var liveOwner = await ReadLiveOwnerAsync(targetOwner, cancellationToken)
                     .ConfigureAwait(false);
                 if (liveOwner is null)
@@ -5050,39 +5082,6 @@ internal sealed partial class ZLinkProviderLocationRepository
     {
         if (payload.Length > 1024 * 1024)
             throw new ArgumentOutOfRangeException(nameof(payload));
-    }
-
-    private static void ValidateAuthorityMutation(ZLinkAuthorityMutation mutation)
-    {
-        if (mutation is not ZLinkAuthorityMutation.Put put)
-            return;
-        var preserve =
-            put.GenerationTransition
-            is ZLinkAuthorityGenerationTransition.Preserve
-                or ZLinkAuthorityGenerationTransition.Reincarnate;
-        var changesOwner = put.GenerationTransition == ZLinkAuthorityGenerationTransition.NewOwner;
-        if (
-            !preserve && !changesOwner
-            || preserve
-                && (
-                    put.TargetOwner is not null
-                    || put.TargetAllocation is not null
-                    || put.TargetAuthorityOwnerGeneration != 0
-                )
-            || changesOwner
-                && (
-                    put.TargetOwner is null
-                    || put.TargetAllocation
-                        is not {
-                            State: ZLinkPlacementAllocationState.Active,
-                            DescriptorLifecycleGeneration: > 0
-                        }
-                )
-        )
-            throw new ArgumentException(
-                "The authority mutation is inconsistent.",
-                nameof(mutation)
-            );
     }
 
     private static void ValidateReservation(ZLinkObjectReservationRequest request)

@@ -27,6 +27,31 @@ internal sealed class ZLinkLocationLifecycle : IAsyncDisposable
         _runtime.OwnershipLost += OnOwnershipLost;
         ActorOwnership = new ZLinkActorOwnershipCoordinator(runtime, resolver);
         SpotLocations = new ZLinkSpotLocationLifecycle(runtime);
+        runtime.CaptureRecoveryAuthoritiesAsync = async episode =>
+        {
+            await ActorOwnership.CaptureRecoveryAuthoritiesAsync(episode).ConfigureAwait(false);
+            await SpotLocations.CaptureRecoveryAuthoritiesAsync(episode).ConfigureAwait(false);
+        };
+        runtime.ReadPreservedAuthorityAsync = execution =>
+            execution switch
+            {
+                ZLinkActorRuntimeState actor => ActorOwnership.ReadPreservedAuthorityAsync(actor),
+                ZLinkSpotActivation spot => SpotLocations.ReadPreservedAuthorityAsync(spot),
+                _ => ValueTask.FromResult<ZLinkAuthoritySnapshot?>(null),
+            };
+        runtime.ApplyRecoveredAuthorityAsync = (execution, snapshot) =>
+            execution switch
+            {
+                ZLinkActorRuntimeState actor => ActorOwnership.UpdateTrackedSnapshotAsync(
+                    actor.RuntimeActorId,
+                    snapshot
+                ),
+                ZLinkSpotActivation spot => SpotLocations.ApplyRecoveredAuthorityAsync(
+                    spot,
+                    snapshot
+                ),
+                _ => ValueTask.CompletedTask,
+            };
     }
 
     internal ZLinkActorOwnershipCoordinator ActorOwnership { get; }

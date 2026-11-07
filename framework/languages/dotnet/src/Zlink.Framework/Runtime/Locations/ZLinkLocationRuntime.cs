@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Zlink.Framework.Internal.Locations;
 using Zlink.Framework.Runtime.Execution;
 using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
@@ -19,7 +20,21 @@ internal sealed record ZLinkStoreOutageEpisode(
     bool Discarded = false
 )
 {
-    internal IReadOnlySet<object> Executions { get; init; } = new HashSet<object>();
+    private ImmutableHashSet<object> _executions = ImmutableHashSet<object>.Empty;
+    internal IReadOnlySet<object> Executions
+    {
+        get => Volatile.Read(ref _executions);
+        init => _executions = value.ToImmutableHashSet();
+    }
+
+    internal void CompleteExecution(object execution)
+    {
+        Volatile.Write(ref _executions, _executions.Remove(execution));
+    }
+
+    internal TaskCompletionSource CaptureCompleted { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal int Recovering;
 }
 
 internal sealed class ZLinkOwnerLeaseClaimRejectedException(ZLinkOwnerLeaseClaimResult result)
@@ -43,7 +58,7 @@ internal sealed class ZLinkOwnerLeaseCancellationCleanupException(
 /// row: subscribers must stop advertising and deactivate the local
 /// instance (ownership-loss rule).
 /// </summary>
-internal sealed class ZLinkLocationRuntime : IAsyncDisposable
+internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
 {
     private readonly ZLinkLocationOptions _options;
     private readonly IZLinkLocationRepository _store;
@@ -87,8 +102,10 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
     /// generation cannot become live again.</summary>
     internal string OwnerId => AwaitStateLane(_lane.RunAsync(() => _ownerId));
 
-    internal ZLinkLocationOwnerToken OwnerToken =>
-        AwaitStateLane(_lane.RunAsync(RequireOwnerTokenOnLane));
+    internal ZLinkLocationOwnerToken OwnerToken => AwaitStateLane(GetOwnerTokenAsync());
+
+    internal ValueTask<ZLinkLocationOwnerToken> GetOwnerTokenAsync() =>
+        _lane.RunAsync(RequireOwnerTokenOnLane);
 
     internal ZLinkLocationOwnerToken AdmissionOwnerToken
     {
@@ -173,6 +190,8 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         var episode = GetHealthSnapshot().StoreOutage;
         if (episode is null)
             return execution is not null || IsOwnerAdmissionOpenOnLane();
+        if (Volatile.Read(ref episode.Recovering) != 0 && episode.Executions.Contains(execution!))
+            return false;
         var retained = !episode.Discarded && episode.Executions.Count > 0;
         if (execution is null)
             return retained || IsOwnerAdmissionOpenOnLane();
@@ -181,7 +200,7 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         {
             if (!episode.Executions.Contains(parent))
                 return IsOwnerAdmissionOpenOnLane() && (!preserved || retained);
-            if (!retained)
+            if (!retained || Volatile.Read(ref episode.Recovering) != 0)
                 return false;
         }
         return preserved ? retained : IsOwnerAdmissionOpenOnLane();
@@ -556,7 +575,13 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         CancellationToken cancellationToken = default
     )
     {
-        var ownerToken = AdmissionOwnerToken;
+        var ownerToken = await _lane
+            .RunAsync(() =>
+            {
+                EnsureOwnerAdmissionOpenOnLane();
+                return RequireOwnerTokenOnLane();
+            })
+            .ConfigureAwait(false);
         var stamped = descriptor with
         {
             OwnerId = ownerToken.OwnerId,
@@ -760,6 +785,23 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                     }
                     else
                     {
+                        var episode = GetHealthSnapshot().StoreOutage;
+                        if (episode is { Discarded: false })
+                        {
+                            readingOrRenewing = true;
+                            var exact = await _store
+                                .ReadOwnerLeaseAsync(owner.Id, operation.Token)
+                                .ConfigureAwait(false);
+                            readingOrRenewing = false;
+                            if (
+                                exact is ZLinkOwnerLeaseReadResult.Found found
+                                && found.Token != owner.Token
+                            )
+                            {
+                                await DiscardRecoveryAsync(episode).ConfigureAwait(false);
+                                return false;
+                            }
+                        }
                         readingOrRenewing = true;
                         var renewal = await ObserveStoreAsync(
                                 () =>
@@ -776,6 +818,19 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                         readingOrRenewing = false;
                         if (renewal is not ZLinkOwnerLeaseRenewResult.Renewed renewed)
                         {
+                            if (
+                                await CanReclaimExpiredOwnerAsync(
+                                        owner.Token.Value,
+                                        operation.Token
+                                    )
+                                    .ConfigureAwait(false)
+                            )
+                            {
+                                await _lane
+                                    .RunAsync(() => _ownerToken = null)
+                                    .ConfigureAwait(false);
+                                continue;
+                            }
                             await _lane
                                 .RunAsync(() =>
                                 {
@@ -810,7 +865,23 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                 catch (Exception exception)
                 {
                     if (readingOrRenewing)
-                        await _lane.RunAsync(ObserveStoreOutageOnLane).ConfigureAwait(false);
+                    {
+                        var episode = await _lane
+                            .RunAsync(ObserveStoreOutageOnLane)
+                            .ConfigureAwait(false);
+                        if (episode is not null)
+                        {
+                            try
+                            {
+                                if (CaptureRecoveryAuthoritiesAsync is { } capture)
+                                    await capture(episode).ConfigureAwait(false);
+                            }
+                            finally
+                            {
+                                episode.CaptureCompleted.TrySetResult();
+                            }
+                        }
+                    }
                     if (
                         (
                             exception is not OperationCanceledException
@@ -865,14 +936,7 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                 if (episode is not null)
                 {
                     LatchStoreOutageOnLane(episode);
-                    if (
-                        GetHealthSnapshot().StoreOutage!.Discarded
-                        || renewingOwner != episode.Owner
-                    )
-                        return;
-                    _storeOutageTimer?.Dispose();
-                    _storeOutageTimer = null;
-                    UpdateHealth(health => health with { StoreOutage = null });
+                    // Object authority and descriptor confirmations complete outside this lane.
                 }
                 if (
                     _lastSuccessfulLease is null
@@ -882,6 +946,8 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                     _lastSuccessfulLease = (RequireOwnerTokenOnLane(), _ownerAdmissionDeadline);
             })
             .ConfigureAwait(false);
+        if (GetHealthSnapshot().StoreOutage is { Discarded: false } recovery)
+            await RecoverPreservedExecutionsAsync(recovery, renewingOwner).ConfigureAwait(false);
         UpdateHealth(health =>
             health with
             {
@@ -898,14 +964,14 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         return true;
     }
 
-    private void ObserveStoreOutageOnLane()
+    private ZLinkStoreOutageEpisode? ObserveStoreOutageOnLane()
     {
         if (
             _lastSuccessfulLease is not { } lease
             || GetHealthSnapshot().StoreOutage is not null
             || Volatile.Read(ref _disposeState) != 0
         )
-            return;
+            return null;
         var lifetime = _options.StoreOutageRetention
             ? _options.OwnerLeaseTtl
                 + _options.OwnerLeaseFencingMargin
@@ -942,6 +1008,7 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
             );
         }
         LatchStoreOutageOnLane(episode);
+        return episode;
     }
 
     private void LatchStoreOutageOnLane(ZLinkStoreOutageEpisode episode)

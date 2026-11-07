@@ -29,7 +29,7 @@ internal sealed class ZLinkSpotLocationLifecycle(ZLinkLocationRuntime runtime)
             await TrackAsync(
                 spotId,
                 spotGeneration,
-                storeVersion: null,
+                snapshot: null,
                 authorityOwnerGeneration,
                 meshName,
                 spotType,
@@ -69,7 +69,7 @@ internal sealed class ZLinkSpotLocationLifecycle(ZLinkLocationRuntime runtime)
         await TrackAsync(
             spotId,
             snapshot.ObjectGeneration,
-            snapshot.StoreVersion,
+            snapshot,
             snapshot.AuthorityOwnerGeneration,
             meshName,
             spotType,
@@ -128,7 +128,7 @@ internal sealed class ZLinkSpotLocationLifecycle(ZLinkLocationRuntime runtime)
         await TrackAsync(
             spotId,
             objectGeneration,
-            snapshot.StoreVersion,
+            snapshot,
             authorityOwnerGeneration,
             meshName,
             stableType,
@@ -238,12 +238,46 @@ internal sealed class ZLinkSpotLocationLifecycle(ZLinkLocationRuntime runtime)
         });
     }
 
+    internal ValueTask CaptureRecoveryAuthoritiesAsync(ZLinkStoreOutageEpisode episode) =>
+        _lane.RunAsync(() =>
+        {
+            foreach (var spot in episode.Executions.OfType<ZLinkSpotActivation>())
+                if (
+                    _spots.TryGetValue(spot.RuntimeSpotId, out var tracked)
+                    && spot.ObjectGeneration == tracked.SpotGeneration
+                )
+                    tracked.PreservedSnapshot = tracked.Snapshot;
+        });
+
+    internal ValueTask<ZLinkAuthoritySnapshot?> ReadPreservedAuthorityAsync(
+        ZLinkSpotActivation spot
+    ) =>
+        _lane.RunAsync(() =>
+            _spots.TryGetValue(spot.RuntimeSpotId, out var tracked)
+            && spot.ObjectGeneration == tracked.SpotGeneration
+                ? tracked.PreservedSnapshot
+                : null
+        );
+
+    internal ValueTask ApplyRecoveredAuthorityAsync(
+        ZLinkSpotActivation spot,
+        ZLinkAuthoritySnapshot snapshot
+    ) =>
+        _lane.RunAsync(() =>
+        {
+            if (
+                _spots.TryGetValue(spot.RuntimeSpotId, out var tracked)
+                && tracked.SpotGeneration == snapshot.ObjectGeneration
+            )
+                _spots[spot.RuntimeSpotId] = tracked with { Snapshot = snapshot };
+        });
+
     internal ValueTask ResetGenerationAsync() => _lane.RunAsync(_spots.Clear);
 
     private ValueTask TrackAsync(
         ZLinkSpotId spotId,
         ulong spotGeneration,
-        string? storeVersion,
+        ZLinkAuthoritySnapshot? snapshot,
         ulong authorityOwnerGeneration,
         ZLinkMeshName meshName,
         string? spotType,
@@ -257,7 +291,7 @@ internal sealed class ZLinkSpotLocationLifecycle(ZLinkLocationRuntime runtime)
         {
             _spots[spotId] = new TrackedSpot(
                 spotGeneration,
-                storeVersion,
+                snapshot,
                 authorityOwnerGeneration,
                 meshName,
                 spotType,
@@ -310,7 +344,7 @@ internal sealed class ZLinkSpotLocationLifecycle(ZLinkLocationRuntime runtime)
 
     private sealed record TrackedSpot(
         ulong SpotGeneration,
-        string? StoreVersion,
+        ZLinkAuthoritySnapshot? Snapshot,
         ulong AuthorityOwnerGeneration,
         ZLinkMeshName MeshName,
         string? SpotType,
@@ -318,5 +352,9 @@ internal sealed class ZLinkSpotLocationLifecycle(ZLinkLocationRuntime runtime)
         ulong NodeGeneration,
         ZLinkSpotLifecycleKind SpotKind,
         Func<CancellationToken, ValueTask>? Deactivate
-    );
+    )
+    {
+        internal string? StoreVersion => Snapshot?.StoreVersion;
+        internal ZLinkAuthoritySnapshot? PreservedSnapshot { get; set; }
+    }
 }

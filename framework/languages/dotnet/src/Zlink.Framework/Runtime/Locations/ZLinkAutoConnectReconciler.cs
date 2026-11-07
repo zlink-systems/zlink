@@ -878,6 +878,97 @@ internal sealed class ZLinkAutoConnectReconciler
         }
     }
 
+    internal async ValueTask<(
+        ZLinkMeshNodeDescriptorKey? Key,
+        Task<bool> Confirmation
+    )> SubmitOwnerRecoveryPublicationAsync(CancellationToken cancellationToken)
+    {
+        var owner = await _runtime.GetOwnerTokenAsync().ConfigureAwait(false);
+        await _reconcileGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var row = await _lane
+                .RunAsync(() =>
+                {
+                    if (_localRow is null)
+                        return null;
+                    if (_localRow.LeaseGeneration != owner.LeaseGeneration)
+                        _localRow = _localRow with
+                        {
+                            OwnerId = owner.OwnerId,
+                            LeaseGeneration = owner.LeaseGeneration,
+                            DescriptorRevision = ++_localRevision,
+                        };
+                    _localWriteStatus = null;
+                    return _localRow;
+                })
+                .ConfigureAwait(false);
+            if (row is null)
+            {
+                _reconcileGate.Release();
+                return (null, Task.FromResult(true));
+            }
+            // Submission and confirmation are separate so object CAS operations can proceed now.
+            return (
+                new ZLinkMeshNodeDescriptorKey(row.MeshName, row.Rid),
+                ConfirmAsync(
+                    row,
+                    _runtime.WriteDescriptorAsync(
+                        row,
+                        ZLinkLocationWriteIntent.Renew,
+                        cancellationToken
+                    )
+                )
+            );
+        }
+        catch
+        {
+            _reconcileGate.Release();
+            throw;
+        }
+
+        async Task<bool> ConfirmAsync(
+            ZLinkMeshNodeDescriptor row,
+            ValueTask<ZLinkLocationWriteResult> publication
+        )
+        {
+            try
+            {
+                ZLinkLocationWriteStatus status;
+                try
+                {
+                    status = (await publication.ConfigureAwait(false)).Status;
+                }
+                catch (ZLinkDescriptorPublicationUnconfirmedException)
+                {
+                    var descriptors = await _runtime
+                        .Store.ListAllMeshNodesAsync(row.MeshName, cancellationToken)
+                        .ConfigureAwait(false);
+                    var confirmed = descriptors.SingleOrDefault(descriptor =>
+                        descriptor.Rid == row.Rid
+                    );
+                    if (confirmed is null)
+                        throw;
+                    status = ZLinkLocationDescriptorComparison.SameExceptWriteTime(
+                        row with
+                        {
+                            Capacity = confirmed.Capacity,
+                        },
+                        confirmed
+                    )
+                        ? ZLinkLocationWriteStatus.Stored
+                        : ZLinkLocationWriteStatus.IgnoredStale;
+                }
+                await _lane.RunAsync(() => _localWriteStatus = status).ConfigureAwait(false);
+                return status == ZLinkLocationWriteStatus.Stored;
+            }
+            finally
+            {
+                _reconcileGate.Release();
+            }
+        }
+    }
+
     private async ValueTask<bool> PublishLocalAsync(CancellationToken cancellationToken)
     {
         var local = await _lane
