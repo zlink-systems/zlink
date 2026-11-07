@@ -214,11 +214,11 @@ class held_mesh_nodes_t final : public fw::runtime::in_memory_location_repositor
     bool hold = false;
     fw::task_completion_source_t<fw::location_page_t<fw::mesh_node_descriptor_t>> listed;
     fw::task_t<fw::location_page_t<fw::mesh_node_descriptor_t>>
-    list_mesh_nodes (std::string mesh, fw::location_page_request_t page = {}) override
+    list_mesh_nodes_core (std::string mesh, fw::location_page_request_t page = {}) override
     {
         return hold ? listed.task ()
-                    : in_memory_location_repository_t::list_mesh_nodes (std::move (mesh),
-                                                                        std::move (page));
+                    : in_memory_location_repository_t::list_mesh_nodes_core (std::move (mesh),
+                                                                             std::move (page));
     }
 };
 

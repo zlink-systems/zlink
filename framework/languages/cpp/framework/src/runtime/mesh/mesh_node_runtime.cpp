@@ -803,6 +803,13 @@ task_t<void> mesh_node_runtime_t::start (
               if (auto state = weak.lock ())
                   spot_node_runtime_t (state).request_location_execution_discard (
                     std::move (allowed));
+          },
+          [weak = std::weak_ptr (spot_state),
+           owner = spot_state->location_lifecycle->execution_runtime ().owner_id ()] (
+            authority_key_t key, authority_snapshot_t snapshot) {
+              if (auto state = weak.lock ())
+                  spot_node_runtime_t (state).observe_location_authority (
+                    std::move (key), std::move (snapshot), owner);
           });
         node->configure_location_execution (
           spot_state->location_lifecycle->execution_runtime ().execution_clock (),
@@ -813,7 +820,8 @@ task_t<void> mesh_node_runtime_t::start (
                     result_t<runtime::serial_execution_queue_t::ready_confirmation_t>::success (
                       {}));
               return spot_node_runtime_t (state).prepare_store_ready (std::move (object));
-          });
+          },
+          spot_state->location_lifecycle->execution_runtime ().bound_execution_owner ());
     }
     if (_delay_owner)
         node->set_delay_owner (*_delay_owner);

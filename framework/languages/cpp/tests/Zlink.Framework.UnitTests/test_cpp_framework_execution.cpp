@@ -183,7 +183,7 @@ class wire_actor_join_authority_store_t final
     std::optional<zlink::framework::authority_snapshot_t> spot_snapshot;
 
     zlink::framework::task_t<zlink::framework::authority_read_result_t>
-    read_authority (zlink::framework::authority_key_t key, std::stop_token) override
+    read_authority_core (zlink::framework::authority_key_t key, std::stop_token) override
     {
         const auto &selected = key.value.starts_with ("zla1:s:") ? spot_snapshot : snapshot;
         if (selected) {
