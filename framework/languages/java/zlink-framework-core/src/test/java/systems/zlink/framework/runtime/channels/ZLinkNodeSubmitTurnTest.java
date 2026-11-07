@@ -935,7 +935,7 @@ final class ZLinkNodeSubmitTurnTest {
                                                 }
                                                 break;
                                             case "requestToNode":
-                                                if ((args.length == 6 || args.length == 7)) {
+                                                if (args.length == 8) {
                                                     timeout.set((Duration) args[3]);
                                                     metadata.set(
                                                             ZLinkApplicationMetadata.decode(
@@ -943,10 +943,10 @@ final class ZLinkNodeSubmitTurnTest {
                                                     ZLinkServiceOperationRegistry operations =
                                                             (ZLinkServiceOperationRegistry) args[4];
                                                     UUID operationId = (UUID) args[5];
-                                                    return operations.submit(
+                                                    operations.<ZLinkBackendReceived>submitTerminal(
                                                             operationId,
                                                             (Duration) args[3],
-                                                            () -> {
+                                                            terminal -> {
                                                                 assertEquals(
                                                                         1,
                                                                         operations.pendingCount());
@@ -958,12 +958,18 @@ final class ZLinkNodeSubmitTurnTest {
                                                                             pending =
                                                                                     new CompletableFuture<>();
                                                                     pendingBinding.set(pending);
+                                                                    pending.whenComplete(terminal);
                                                                     return pending;
                                                                 }
-                                                                return CompletableFuture
-                                                                        .failedFuture(TERMINAL);
+                                                                terminal.accept(null, TERMINAL);
+                                                                return null;
                                                             },
-                                                            ZLinkBackendReceived::close);
+                                                            ZLinkBackendReceived::close,
+                                                            (ZLinkServiceOperationRegistry
+                                                                                    .Operation<
+                                                                            ?>)
+                                                                    args[7]);
+                                                    return null;
                                                 }
                                                 break;
                                             default:

@@ -7,7 +7,6 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.binding.ZLinkJavaDurableRequest;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
-import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
@@ -144,45 +143,49 @@ final class ZLinkChannelCallRuntime {
         }
     }
 
-    CompletionStage<ZLinkBackendReceived> requestClient(
+    <R> CompletionStage<R> requestClient(
             ZLinkBackendDealerSocket client,
             List<Message> requestParts,
             Duration timeout,
-            CompletableFuture<Void> requestAdmission) {
-        UUID id = ZLinkServiceOperationIds.next();
-        return preserveCurrentFlow(
-                operations.submitTerminal(
-                        id,
-                        timeout,
-                        terminal ->
-                                client.requestTo(
-                                        requestParts,
-                                        operations.remainingTimeout(id),
-                                        client.receiveAdmission(),
-                                        requestAdmission,
-                                        terminal),
-                        ZLinkBackendReceived::close));
+            CompletableFuture<Void> admission,
+            ZLinkServiceOperationRegistry.Operation<R> receiver) {
+        UUID id = receiver.id();
+        operations.<ZLinkBackendReceived>submitTerminal(
+                id,
+                timeout,
+                terminal ->
+                        client.requestTo(
+                                requestParts,
+                                operations.remainingTimeout(id),
+                                client.receiveAdmission(),
+                                admission,
+                                terminal),
+                ZLinkBackendReceived::close,
+                receiver);
+        return receiver;
     }
 
-    CompletionStage<ZLinkBackendReceived> requestRoute(
-            UUID operationId,
+    <R> CompletionStage<R> requestRoute(
+            UUID id,
             ZLinkBackendRouterSocket router,
             RoutingId target,
             List<Message> requestParts,
             Duration timeout,
-            CompletableFuture<Void> requestAdmission) {
-        return preserveCurrentFlow(
-                operations.submitTerminal(
-                        operationId,
-                        timeout,
-                        terminal ->
-                                router.requestTo(
-                                        target,
-                                        requestParts,
-                                        operations.remainingTimeout(operationId),
-                                        requestAdmission,
-                                        terminal),
-                        ZLinkBackendReceived::close));
+            CompletableFuture<Void> admission,
+            ZLinkServiceOperationRegistry.Operation<R> receiver) {
+        operations.<ZLinkBackendReceived>submitTerminal(
+                id,
+                timeout,
+                terminal ->
+                        router.requestTo(
+                                target,
+                                requestParts,
+                                operations.remainingTimeout(id),
+                                admission,
+                                terminal),
+                ZLinkBackendReceived::close,
+                receiver);
+        return receiver;
     }
 
     static ZLinkServiceOperationRegistry operationOwner(
@@ -191,56 +194,54 @@ final class ZLinkChannelCallRuntime {
         return owner == null ? fallback : owner;
     }
 
-    CompletionStage<ZLinkBackendReceived> requestChannel(
-            UUID operationId,
+    <R> CompletionStage<R> requestChannel(
+            UUID id,
             ZLinkInternalSpotNode node,
             String channelName,
             byte[] metadata,
             List<Message> requestParts,
             Duration timeout,
-            CompletableFuture<Void> requestAdmission) {
+            CompletableFuture<Void> admission,
+            ZLinkServiceOperationRegistry.Operation<R> receiver) {
         if (operations.isClosed()) {
-            return CompletableFuture.failedFuture(closedFailure());
+            receiver.rejectSubmission(closedFailure());
+            return receiver;
         }
-        try {
-            return preserveCurrentFlow(
-                    node.requestToChannel(
-                            channelName,
-                            metadata,
-                            requestParts,
-                            timeout,
-                            operationOwner(node, operations),
-                            operationId,
-                            requestAdmission));
-        } catch (RuntimeException failure) {
-            return CompletableFuture.failedFuture(failure);
-        }
+        node.requestToChannel(
+                channelName,
+                metadata,
+                requestParts,
+                timeout,
+                operationOwner(node, operations),
+                id,
+                admission,
+                receiver);
+        return receiver;
     }
 
-    CompletionStage<ZLinkBackendReceived> requestNode(
-            UUID operationId,
+    <R> CompletionStage<R> requestNode(
+            UUID id,
             ZLinkInternalSpotNode node,
             RoutingId target,
             byte[] metadata,
             List<Message> requestParts,
             Duration timeout,
-            CompletableFuture<Void> requestAdmission) {
+            CompletableFuture<Void> admission,
+            ZLinkServiceOperationRegistry.Operation<R> receiver) {
         if (operations.isClosed()) {
-            return CompletableFuture.failedFuture(closedFailure());
+            receiver.rejectSubmission(closedFailure());
+            return receiver;
         }
-        try {
-            return preserveCurrentFlow(
-                    node.requestToNode(
-                            target,
-                            metadata,
-                            requestParts,
-                            timeout,
-                            operationOwner(node, operations),
-                            operationId,
-                            requestAdmission));
-        } catch (RuntimeException failure) {
-            return CompletableFuture.failedFuture(failure);
-        }
+        node.requestToNode(
+                target,
+                metadata,
+                requestParts,
+                timeout,
+                operationOwner(node, operations),
+                id,
+                admission,
+                receiver);
+        return receiver;
     }
 
     static Throwable requestFailure(Throwable failure) {
@@ -256,55 +257,19 @@ final class ZLinkChannelCallRuntime {
         return current;
     }
 
-    static CompletionStage<ZLinkBackendReceived> preserveCurrentFlow(
-            CompletionStage<ZLinkBackendReceived> request) {
-        ZLinkFlowContext.State captured = ZLinkFlowContext.current();
-        if (captured == null) {
-            return request;
-        }
-        CompletableFuture<ZLinkBackendReceived> contextual = new CompletableFuture<>();
-        ZLinkCompletionBridge.forwardCancellation(contextual, request);
-        request.whenComplete(
-                (reply, failure) -> {
-                    try (ZLinkFlowContext.Scope ignored = ZLinkFlowContext.enter(captured)) {
-                        if (failure == null) {
-                            ZLinkCompletionBridge.completeOrDiscard(
-                                    contextual,
-                                    reply,
-                                    late -> {
-                                        if (late != null) late.close();
-                                    });
-                        } else {
-                            contextual.completeExceptionally(unwrap(failure));
-                        }
-                    }
-                });
-        return contextual;
-    }
-
-    <TReply> void completeReply(
-            ZLinkBackendReceived reply, Class<TReply> replyType, CompletableFuture<TReply> result) {
+    <TReply> TReply decodeReply(ZLinkBackendReceived reply, Class<TReply> replyType) {
         if (reply.result() != ZLinkBackendRequestResult.OK) {
-            //  A backend request terminal is framework-generated; carry the
-            //  origin marker (zlink.origin=framework).
-            result.completeExceptionally(
-                    ZLinkFrameworkErrorOrigin.framework(
-                            reply.result().toFrameworkErrorKind(reply.failureCode()),
-                            "channel request failed: " + reply.result(),
-                            reply.failureCode()));
-            return;
+            throw ZLinkFrameworkErrorOrigin.framework(
+                    reply.result().toFrameworkErrorKind(reply.failureCode()),
+                    "channel request failed: " + reply.result(),
+                    reply.failureCode());
         }
-        // One header read decides both the error reply and the payload decode.
         ZLinkChannelEnvelope.Header header =
                 ZLinkChannelEnvelope.tryDecodeHeader(reply.parts(), false);
         ZLinkFrameworkException errorReply = ZLinkFrameworkErrorReply.failure(header);
-        if (errorReply != null) {
-            result.completeExceptionally(errorReply);
-            return;
-        }
-        result.complete(
-                replyDecoder.decode(
-                        reply.parts(), header, replyType, "route mesh reply decode failed"));
+        if (errorReply != null) throw errorReply;
+        return replyDecoder.decode(
+                reply.parts(), header, replyType, "route mesh reply decode failed");
     }
 
     <TReply> TReply decodeSpotReply(List<Message> replies, Class<TReply> replyType) {

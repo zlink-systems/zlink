@@ -84,7 +84,7 @@ public final class ZLinkCompletionBridge {
                 Objects.requireNonNull(terminalObserver, "terminalObserver"));
     }
 
-    private static final class CancellationFuture<T> extends CompletableFuture<T> {
+    public static class CancellationFuture<T> extends CompletableFuture<T> {
         private static final Object FINISHED = new Object();
         private static final CancellationException CANCELLED = new CancellationException();
         private static final AtomicReferenceFieldUpdater<CancellationFuture, Object> FORWARDER =
@@ -94,13 +94,13 @@ public final class ZLinkCompletionBridge {
         private volatile Object forwarder;
         private volatile BiConsumer<CompletableFuture<T>, Throwable> terminalObserver;
 
-        private CancellationFuture(BiConsumer<CompletableFuture<T>, Throwable> terminalObserver) {
+        protected CancellationFuture(BiConsumer<CompletableFuture<T>, Throwable> terminalObserver) {
             this.terminalObserver = terminalObserver;
         }
 
         static boolean canCancelDirectly(CompletableFuture<?> waiter) {
             return waiter.getClass() == CompletableFuture.class
-                    || waiter.getClass() == CancellationFuture.class;
+                    || waiter instanceof CancellationFuture<?>;
         }
 
         boolean forwardTo(CompletableFuture<?> waiter) {

@@ -374,6 +374,64 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     }
 
     @Override
+    public <R> void requestToNode(
+            RoutingId target,
+            byte[] metadata,
+            List<Message> parts,
+            Duration timeout,
+            ZLinkServiceOperationRegistry operations,
+            java.util.UUID id,
+            CompletableFuture<Void> admission,
+            ZLinkServiceOperationRegistry.Operation<R> receiver) {
+        var submitted =
+                owner.inSourceTurn(
+                        () ->
+                                owner.requestNode(
+                                        target,
+                                        metadata,
+                                        parts,
+                                        timeout,
+                                        operations,
+                                        id,
+                                        admission,
+                                        receiver));
+        if (submitted != receiver)
+            submitted.whenComplete(
+                    (ignored, failure) -> {
+                        if (failure != null) receiver.rejectSubmission(failure);
+                    });
+    }
+
+    @Override
+    public <R> void requestToChannel(
+            String channel,
+            byte[] metadata,
+            List<Message> parts,
+            Duration timeout,
+            ZLinkServiceOperationRegistry operations,
+            java.util.UUID id,
+            CompletableFuture<Void> admission,
+            ZLinkServiceOperationRegistry.Operation<R> receiver) {
+        var submitted =
+                owner.inSourceTurn(
+                        () ->
+                                owner.requestChannel(
+                                        channel,
+                                        metadata,
+                                        parts,
+                                        timeout,
+                                        operations,
+                                        id,
+                                        admission,
+                                        receiver));
+        if (submitted != receiver)
+            submitted.whenComplete(
+                    (ignored, failure) -> {
+                        if (failure != null) receiver.rejectSubmission(failure);
+                    });
+    }
+
+    @Override
     public CompletionStage<Void> sendToChannel(String channelName, List<Message> parts) {
         return sendToChannel(channelName, new byte[0], parts);
     }
