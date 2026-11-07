@@ -5,6 +5,105 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class SerialExecutorTests
 {
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    [InlineData(true, true, true)]
+    public async Task StoppedObject_QueuedWorkIsCanceledWithoutStartingCallback(
+        bool sharedGate,
+        bool useRecord,
+        bool disposeMailbox
+    )
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var actor = new ZLinkActorRuntimeState("stopped");
+        var ready = false;
+        var calls = 0;
+        var checks = 0;
+        var record = new StoppedExecutionRecord(actor);
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            sharedGate: sharedGate,
+            executionAllowed: () =>
+            {
+                Interlocked.Increment(ref checks);
+                return actor.ExecutionStatus;
+            }
+        );
+        Assert.Equal(
+            ZLinkSerialPostAdmission.Accepted,
+            queue.TryPostApplicationWithAdmission(
+                _ =>
+                {
+                    Interlocked.Increment(ref calls);
+                    return ValueTask.CompletedTask;
+                },
+                0,
+                0,
+                false,
+                out var item,
+                ready: () => Volatile.Read(ref ready),
+                executionState: useRecord ? record : null
+            )
+        );
+        // Publish shutdown before readiness, without a scheduler race or a delay.
+        if (disposeMailbox)
+            await actor._dispatchMailbox.DisposeAsync();
+        else
+            actor.InvalidateRuntimeGeneration();
+        Volatile.Write(ref ready, true);
+        queue.NotifyReadiness();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            item.Completion.WaitAsync(TimeSpan.FromSeconds(5))
+        );
+        Assert.Equal(0, calls);
+        Assert.Equal(useRecord ? 0 : 1, checks);
+        Assert.Equal(useRecord ? 1 : 0, record.Checks);
+        Assert.Equal(0, queue.ApplicationPendingCount);
+        await actor._dispatchMailbox.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task StoppedObject_ActorMailboxWaiterObservesCancellation()
+    {
+        var actor = new ZLinkActorRuntimeState("stopped-waiter");
+        await using var mailbox = new ZLinkActorSerialExecutor
+        {
+            ExecutionAllowed = () => actor.ExecutionStatus,
+        };
+        var held = await mailbox.EnterAsync(CancellationToken.None);
+        var waiting = mailbox.EnterAsync(CancellationToken.None).AsTask();
+        actor.InvalidateRuntimeGeneration();
+        held.Dispose();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            waiting.WaitAsync(TimeSpan.FromSeconds(5))
+        );
+        Assert.Equal(0, mailbox.PendingRequestCount);
+    }
+
+    private sealed class StoppedExecutionRecord(ZLinkActorRuntimeState actor)
+        : IZLinkObjectExecutionRecord
+    {
+        internal int Checks;
+
+        public ZLinkObjectExecutionStatus ExecutionStatus
+        {
+            get
+            {
+                Interlocked.Increment(ref Checks);
+                return actor.ExecutionStatus;
+            }
+        }
+    }
+
     [Fact]
     public async Task SerialExecutionQueue_DrainsAcceptedWorkAfterRunnerStops()
     {

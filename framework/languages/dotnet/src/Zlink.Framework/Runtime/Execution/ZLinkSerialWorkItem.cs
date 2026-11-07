@@ -4,7 +4,14 @@ namespace Zlink.Framework.Runtime.Execution;
 
 internal interface IZLinkObjectExecutionRecord
 {
-    bool IsExecutionAllowed { get; }
+    ZLinkObjectExecutionStatus ExecutionStatus { get; }
+}
+
+internal enum ZLinkObjectExecutionStatus
+{
+    Allowed,
+    Stopped,
+    OwnershipLost,
 }
 
 internal interface IZLinkSerialTerminalRelease
@@ -34,7 +41,7 @@ internal sealed class ZLinkSerialWorkItem
         Func<ReadOnlyMemory<byte>>? acceptedPayloadFactory = null,
         bool reservationHeld = true,
         Func<bool>? ready = null,
-        Func<bool>? executionAllowed = null
+        Func<ZLinkObjectExecutionStatus>? executionAllowed = null
     )
     {
         _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -94,11 +101,12 @@ internal sealed class ZLinkSerialWorkItem
 
     internal bool ReservationHeld { get; }
     internal Func<bool>? Ready { get; }
-    internal Func<bool>? ExecutionAllowed { get; set; }
-    internal bool IsExecutionAllowed =>
+    internal Func<ZLinkObjectExecutionStatus>? ExecutionAllowed { get; set; }
+    internal bool IsExecutionAllowed => ExecutionStatus == ZLinkObjectExecutionStatus.Allowed;
+    internal ZLinkObjectExecutionStatus ExecutionStatus =>
         AcceptedState is IZLinkObjectExecutionRecord record
-            ? record.IsExecutionAllowed
-            : ExecutionAllowed?.Invoke() != false;
+            ? record.ExecutionStatus
+            : ExecutionAllowed?.Invoke() ?? ZLinkObjectExecutionStatus.Allowed;
     internal ZLinkSerialWorkPreparation? Preparation { get; set; }
     internal Action<Exception>? ErrorReporter { get; set; }
     internal bool IsReady => Ready?.Invoke() != false && Preparation?.IsReady != false;
@@ -174,10 +182,14 @@ internal sealed class ZLinkSerialWorkItem
         ZLinkSerialTurn turn
     )
     {
-        if (!IsExecutionAllowed)
+        var executionStatus = ExecutionStatus;
+        if (executionStatus != ZLinkObjectExecutionStatus.Allowed)
         {
             _relocationRelease?.Invoke();
-            if (cancellationToken.IsCancellationRequested)
+            if (
+                executionStatus == ZLinkObjectExecutionStatus.Stopped
+                || cancellationToken.IsCancellationRequested
+            )
                 _completion!.TrySetCanceled(cancellationToken);
             else
             {

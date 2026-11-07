@@ -153,10 +153,24 @@ internal abstract partial class ZLinkSpotActivation
     internal bool ContainsActor(string actorId) =>
         _actors.TryGetActor(ZLinkActorId.FromBoundary(actorId, nameof(actorId)), out _);
 
-    internal void FenceLocationExecution() => Volatile.Write(ref _disposed, 1);
+    internal void FenceLocationExecution() =>
+        Volatile.Write(ref _disposed, (int)ZLinkObjectExecutionStatus.OwnershipLost);
 
     internal bool IsLocationExecutionAllowed =>
-        !IsDisposed && _runtime.IsLocationExecutionAllowed(this);
+        ExecutionStatus == ZLinkObjectExecutionStatus.Allowed;
+
+    internal ZLinkObjectExecutionStatus ExecutionStatus
+    {
+        get
+        {
+            var status = (ZLinkObjectExecutionStatus)Volatile.Read(ref _disposed);
+            if (status == ZLinkObjectExecutionStatus.OwnershipLost)
+                return status;
+            if (!_runtime.IsLocationExecutionAllowed(this))
+                return ZLinkObjectExecutionStatus.OwnershipLost;
+            return status;
+        }
+    }
 
     public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
