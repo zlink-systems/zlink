@@ -164,7 +164,8 @@ class monitoring_mesh_store_t final
 
     zlink::framework::task_t<
       zlink::framework::location_page_t<zlink::framework::mesh_node_descriptor_t>>
-    list_mesh_nodes (std::string mesh_name, zlink::framework::location_page_request_t = {}) override
+    list_mesh_nodes_core (std::string mesh_name,
+                          zlink::framework::location_page_request_t = {}) override
     {
         std::lock_guard lock (_mutex);
         zlink::framework::location_page_t<zlink::framework::mesh_node_descriptor_t> page;
@@ -1678,7 +1679,7 @@ class delayed_monitoring_mesh_store_t final
 
     zlink::framework::task_t<
       zlink::framework::location_page_t<zlink::framework::mesh_node_descriptor_t>>
-    list_mesh_nodes (std::string, zlink::framework::location_page_request_t = {}) override
+    list_mesh_nodes_core (std::string, zlink::framework::location_page_request_t = {}) override
     {
         zlink::framework::location_page_t<zlink::framework::mesh_node_descriptor_t> page;
         page.items.push_back (_descriptor);

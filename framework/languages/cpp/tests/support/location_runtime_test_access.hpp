@@ -12,13 +12,13 @@ struct location_runtime_test_access_t
 
     static void clock (location_runtime_t &runtime, std::function<time_point ()> now)
     {
-        runtime._lease_now = std::move (now);
+        *runtime._lease_now = std::move (now);
     }
 
     static void communication_failure (location_runtime_t &runtime)
     {
         runtime._lane
-          .run_checked ([&] { runtime.observe_store_outage_on_lane (runtime._lease_now ()); })
+          ->run_checked ([&] { runtime.observe_store_outage_on_lane ((*runtime._lease_now) ()); })
           .get ();
     }
 
@@ -86,7 +86,7 @@ struct location_runtime_test_access_t
                                 });
         return delay;
     }
-    static state_lane_t &lane (location_runtime_t &runtime) { return runtime._lane; }
+    static state_lane_t &lane (location_runtime_t &runtime) { return *runtime._lane; }
     static auto snapshot (const location_runtime_t &runtime)
     {
         return std::atomic_load_explicit (runtime._owner_lease.get (), std::memory_order_acquire);
@@ -95,7 +95,7 @@ struct location_runtime_test_access_t
                               std::chrono::steady_clock::time_point deadline)
     {
         runtime._lane
-          .run_checked ([&] {
+          ->run_checked ([&] {
               runtime.update_owner_lease_on_lane (
                 [&] (auto &lease) { lease.admission_deadline = deadline; });
           })

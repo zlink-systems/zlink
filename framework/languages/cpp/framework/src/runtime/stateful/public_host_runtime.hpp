@@ -676,7 +676,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     void configure_location_execution (
       std::function<std::chrono::steady_clock::time_point ()> clock,
       std::function<task_t<runtime::serial_execution_queue_t::ready_confirmation_t> (
-        stateful::object_ref_t)> observer);
+        stateful::object_ref_t)> observer,
+      std::function<std::optional<location_owner_token_t> (
+        const runtime::serial_execution_queue_t &)> bound_owner = {});
     task_t<std::function<void ()>> prepare_store_ready (stateful::object_ref_t object);
     task_t<stateful::stateful_error_t>
     destroy_application_actor_async (std::string actor_id, std::uint64_t object_generation);
@@ -1139,6 +1141,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     std::unique_ptr<stateful::raw_stateful_dispatch_t> _stateful_dispatch;
     // The lease observation of this node; local publication reads its source original from it.
     std::function<std::shared_ptr<const location_owner_token_t> ()> _local_lease_observation;
+    std::function<std::optional<location_owner_token_t> (const runtime::serial_execution_queue_t &)>
+      _bound_execution_owner;
     stateful::stateful_object_runtime_t _objects;
     stateful::stream_session_registry_t _sessions;
     std::unique_ptr<stateful::maintenance_runtime_t> _maintenance;

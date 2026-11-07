@@ -93,14 +93,14 @@ class reserve_loser_repository_t final
 {
   public:
     zlink::framework::task_t<zlink::framework::authority_read_result_t>
-    read_authority (zlink::framework::authority_key_t, std::stop_token = {}) override
+    read_authority_core (zlink::framework::authority_key_t, std::stop_token = {}) override
     {
         ++reads;
         co_return zlink::framework::authority_missing_t{std::chrono::system_clock::now ()};
     }
 
     zlink::framework::task_t<zlink::framework::object_reserve_result_t>
-    reserve (zlink::framework::object_reserve_request_t request, std::stop_token = {}) override
+    reserve_core (zlink::framework::object_reserve_request_t request, std::stop_token = {}) override
     {
         ++reserves;
         observed = std::move (request);
@@ -153,40 +153,41 @@ static void verify_same_target_activation_order (
     class held_reservation_t final : public rt::in_memory_location_repository_t
     {
       public:
-        fw::task_t<fw::object_reserve_result_t> reserve (fw::object_reserve_request_t request,
-                                                         std::stop_token stop = {}) override
+        fw::task_t<fw::object_reserve_result_t> reserve_core (fw::object_reserve_request_t request,
+                                                              std::stop_token stop = {}) override
         {
             ++reserves;
             if (!hold_commit)
                 co_await release.task ();
-            co_return co_await rt::in_memory_location_repository_t::reserve (std::move (request),
-                                                                             stop);
+            co_return co_await rt::in_memory_location_repository_t::reserve_core (
+              std::move (request), stop);
         }
         fw::task_t<fw::object_commit_result_t>
-        commit (fw::object_commit_request_t request,
-                std::stop_token stop = {},
-                std::chrono::system_clock::time_point deadline = {}) override
+        commit_core (fw::object_commit_request_t request,
+                     std::stop_token stop = {},
+                     std::chrono::system_clock::time_point deadline = {}) override
         {
-            auto result = co_await rt::in_memory_location_repository_t::commit (std::move (request),
-                                                                                stop, deadline);
+            auto result = co_await rt::in_memory_location_repository_t::commit_core (
+              std::move (request), stop, deadline);
             ++commits;
             if (hold_commit)
                 co_await release.task ();
             co_return result;
         }
         fw::task_t<fw::authority_compare_exchange_result_t>
-        compare_exchange_authority (fw::authority_key_t key,
-                                    std::string version,
-                                    fw::authority_mutation_t mutation,
-                                    std::stop_token stop = {}) override
+        compare_exchange_authority_core (fw::authority_key_t key,
+                                         std::string version,
+                                         fw::authority_mutation_t mutation,
+                                         std::stop_token stop = {}) override
         {
             if (hold_terminal) {
                 terminal_entered.set_value ();
                 co_await terminal_release.task ();
                 hold_terminal = false;
             }
-            co_return co_await rt::in_memory_location_repository_t::compare_exchange_authority (
-              std::move (key), std::move (version), std::move (mutation), stop);
+            co_return co_await rt::in_memory_location_repository_t::
+              compare_exchange_authority_core (std::move (key), std::move (version),
+                                               std::move (mutation), stop);
         }
         bool hold_terminal = false;
         std::promise<void> terminal_entered;
@@ -1749,8 +1750,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation, AuthorityFollowConformance)
     class creating_repository_t final : public fw::runtime::in_memory_location_repository_t
     {
       public:
-        fw::task_t<fw::authority_read_result_t> read_authority (fw::authority_key_t,
-                                                                std::stop_token = {}) override
+        fw::task_t<fw::authority_read_result_t> read_authority_core (fw::authority_key_t,
+                                                                     std::stop_token = {}) override
         {
             fw::authority_snapshot_t snapshot;
             snapshot.store_version = "same-attempt";
@@ -2741,10 +2742,11 @@ static void verify_ready_recovery_root_deletion (bool local_available)
     class held_read_t final : public rt::in_memory_location_repository_t
     {
       public:
-        fw::task_t<fw::authority_read_result_t> read_authority (fw::authority_key_t key,
-                                                                std::stop_token stop = {}) override
+        fw::task_t<fw::authority_read_result_t>
+        read_authority_core (fw::authority_key_t key, std::stop_token stop = {}) override
         {
-            auto result = co_await rt::in_memory_location_repository_t::read_authority (key, stop);
+            auto result =
+              co_await rt::in_memory_location_repository_t::read_authority_core (key, stop);
             if (hold.exchange (false)) {
                 EXPECT_TRUE (std::holds_alternative<fw::authority_snapshot_t> (result));
                 captured.store (true);

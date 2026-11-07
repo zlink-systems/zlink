@@ -401,6 +401,38 @@ task_t<stateful_error_t> stateful_object_runtime_t::commit_create_async (std::ui
     });
 }
 
+task_t<std::shared_ptr<runtime::serial_execution_queue_t>>
+stateful_object_runtime_t::execution_gate (object_ref_t object) const
+{
+    return _lane.run_task ([this, object = std::move (object)] {
+        const auto found = _objects.find (key_for (object));
+        return found != _objects.end () && found->second.reference == object
+                 ? found->second.execution_gate.lock ()
+                 : std::shared_ptr<runtime::serial_execution_queue_t>{};
+    });
+}
+
+task_t<bool> stateful_object_runtime_t::fence_location_authority (object_ref_t observed,
+                                                                  bool owner_matches)
+{
+    return _lane.run_task ([this, observed = std::move (observed), owner_matches] {
+        const auto found = _objects.find (key_for (observed));
+        if (found == _objects.end ())
+            return false;
+        const auto &current = found->second.reference;
+        // A delayed read of an older record cannot revoke a newer local incarnation.
+        if (observed.object_generation < current.object_generation
+            || (observed.object_generation == current.object_generation
+                && observed.authority_owner_generation < current.authority_owner_generation))
+            return false;
+        if (owner_matches && observed == current)
+            return false;
+        const auto gate = found->second.execution_gate.lock ();
+        // Relocation and Close invalidate this proof and retain their own cleanup owner.
+        return gate && gate->execution_ready_at () && gate->fence_execution ();
+    });
+}
+
 task_t<void> stateful_object_runtime_t::bind_execution_gate (
   object_ref_t object, std::weak_ptr<runtime::serial_execution_queue_t> gate)
 {
