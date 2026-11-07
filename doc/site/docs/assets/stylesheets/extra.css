@@ -193,3 +193,21 @@
   .md-nav__item.zlink-lang-current > .md-nav > .md-nav__title { display: none; }
   .md-nav__item.zlink-lang-current > .md-nav > .md-nav__list { padding-left: 0; }
 }
+
+/* 헤더의 제품 사이트 링크. 넓은 화면에서는 아이콘 옆에 주소를 쓰고, 저장소 링크가 숨는 좁은 화면
+   (Material 기준 60em 미만)에서는 아이콘만 남겨 헤더 폭을 넘지 않게 한다. */
+.md-header__button.zlink-product-site {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  white-space: nowrap;
+}
+.zlink-product-site__label {
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+@media screen and (max-width: 59.984375em) {
+  .zlink-product-site__label {
+    display: none;
+  }
+}
