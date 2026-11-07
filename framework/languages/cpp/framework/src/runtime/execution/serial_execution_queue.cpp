@@ -1157,19 +1157,20 @@ void serial_execution_queue_t::set_application_start_policy (application_start_p
 
 void serial_execution_queue_t::set_execution_policy (std::function<bool ()> policy)
 {
-    set_execution_policy (policy ? execution_admission_t{[policy = std::move (policy)] (
-                                                           const auto &) { return policy (); }}
-                                 : execution_admission_t{});
+    set_execution_policy (
+      policy ? execution_admission_t{[policy = std::move (policy)] (const auto &) {
+          return policy () ? execution_status_t::allowed : execution_status_t::stopped;
+      }}
+             : execution_admission_t{});
 }
 
 void serial_execution_queue_t::set_execution_policy (execution_admission_t policy)
 {
     {
         std::lock_guard lock (_mutex);
-        auto entry = policy ? std::make_shared<execution_policy_t> (std::move (policy)) : nullptr;
-        if (entry)
-            _execution_policies.push_back (entry);
-        _execution_policy.store (entry.get (), std::memory_order_release);
+        if (_closed.load (std::memory_order_acquire) == execution_status_t::ownership_lost)
+            return;
+        install_execution_policy_locked (std::move (policy));
     }
     notify_control ("execution-policy", [this] {
         std::unique_lock lock (_mutex, std::defer_lock);
@@ -1177,6 +1178,36 @@ void serial_execution_queue_t::set_execution_policy (execution_admission_t polic
             lock.lock ();
         (void) schedule_drain_locked ();
     });
+}
+
+void serial_execution_queue_t::install_execution_policy_locked (execution_admission_t policy)
+{
+    auto entry = policy ? std::make_shared<execution_policy_t> (std::move (policy)) : nullptr;
+    if (entry)
+        _execution_policies.push_back (entry);
+    _execution_policy.store (entry.get (), std::memory_order_release);
+}
+
+bool serial_execution_queue_t::fence_execution ()
+{
+    {
+        std::lock_guard lock (_mutex);
+        if (execution_status () != execution_status_t::allowed)
+            return false;
+        auto expected = execution_status_t::allowed;
+        if (!_closed.compare_exchange_strong (expected, execution_status_t::ownership_lost,
+                                              std::memory_order_acq_rel))
+            return false;
+        install_execution_policy_locked (
+          [] (const auto &queue) { return queue._closed.load (std::memory_order_acquire); });
+    }
+    notify_control ("execution-fenced", [this] {
+        std::unique_lock lock (_mutex, std::defer_lock);
+        if (!owns_shared_gate ())
+            lock.lock ();
+        (void) schedule_drain_locked ();
+    });
+    return true;
 }
 
 serial_execution_queue_t::ready_confirmation_t serial_execution_queue_t::ready_confirmation () const
@@ -1229,10 +1260,27 @@ serial_execution_queue_t::execution_ready_at () const
                                                                : std::make_optional (at);
 }
 
+serial_execution_queue_t::execution_status_t serial_execution_queue_t::execution_status () const
+{
+    const auto terminal = _closed.load (std::memory_order_acquire);
+    if (terminal != execution_status_t::allowed)
+        return terminal;
+    const auto *policy = _execution_policy.load (std::memory_order_acquire);
+    const auto local = policy ? policy->admit (*this) : execution_status_t::allowed;
+    if (local == execution_status_t::ownership_lost)
+        return local;
+    if (_spot_gate) {
+        const auto parent = _spot_gate->execution_status ();
+        if (parent != execution_status_t::allowed)
+            return parent;
+    }
+    return local;
+}
+
 bool serial_execution_queue_t::execution_allowed () const
 {
     const auto *policy = _execution_policy.load (std::memory_order_acquire);
-    return !policy || policy->admit (*this);
+    return !policy || policy->admit (*this) == execution_status_t::allowed;
 }
 
 void serial_execution_queue_t::attach_spot_gate (std::shared_ptr<serial_execution_queue_t> gate)
@@ -1467,14 +1515,14 @@ task_t<bool> serial_execution_queue_t::accept_application_ready (
         std::unique_lock lock (_mutex, std::defer_lock);
         if (!owns_shared_gate ())
             lock.lock ();
-        while (!_closed) {
+        while ((_closed.load (std::memory_order_acquire) == execution_status_t::allowed)) {
             auto item = take ();
             if (!item)
                 return true;
             if (owns_shared_gate ())
                 lock.lock ();
             const bool accepted =
-              !_closed
+              (_closed.load (std::memory_order_acquire) == execution_status_t::allowed)
               && enqueue_locked (lock, std::move (item->name), std::move (item->work),
                                  std::move (item->options), 0, item->cancel);
             if (lock.owns_lock () && owns_shared_gate ())
@@ -1504,7 +1552,7 @@ task_t<bool> serial_execution_queue_t::adopt_application_prefix (
         std::unique_lock lock (_mutex, std::defer_lock);
         if (!owns_shared_gate ())
             lock.lock ();
-        if (_closed)
+        if (_closed.load (std::memory_order_acquire) != execution_status_t::allowed)
             return false;
         auto prefix = take ();
         if (prefix.empty ())
@@ -1534,7 +1582,7 @@ task_t<bool> serial_execution_queue_t::adopt_application_prefix (
             }
             if (shared_spot_gate ())
                 lock.lock ();
-            if (!_closed) {
+            if ((_closed.load (std::memory_order_acquire) == execution_status_t::allowed)) {
                 releases.reserve (2 * _application.queue.size () + 3 * prefix.size ());
                 lifecycle_start = _lifecycle.queue.size ();
                 suffix.emplace ();
@@ -1884,7 +1932,7 @@ bool serial_execution_queue_t::try_post_async (std::string name,
     bool accepted = false;
     {
         std::unique_lock<std::mutex> lock (_mutex);
-        if (_closed) {
+        if (_closed.load (std::memory_order_acquire) != execution_status_t::allowed) {
             return false;
         }
         accepted = enqueue_locked (lock, std::move (name), std::move (work), std::move (options));
@@ -1920,7 +1968,7 @@ serial_execution_queue_t::try_post_cancellable_async (std::string name,
     serial_submission_id_t submission_id = 0;
     {
         std::unique_lock<std::mutex> lock (_mutex);
-        if (_closed) {
+        if (_closed.load (std::memory_order_acquire) != execution_status_t::allowed) {
             return result_t<serial_submission_id_t>::failure (framework_error_kind_t::shutting_down,
                                                               "serial execution queue is closed");
         }
@@ -2065,7 +2113,8 @@ bool serial_execution_queue_t::post_async_wait (std::string name,
     bool accepted = false;
     {
         std::unique_lock lock (_mutex);
-        if (_closed || (stop_requested && stop_requested ())) {
+        if (_closed.load (std::memory_order_acquire) != execution_status_t::allowed
+            || (stop_requested && stop_requested ())) {
             return false;
         }
         accepted = enqueue_locked (lock, std::move (name), std::move (work), std::move (options));
@@ -2111,7 +2160,7 @@ serial_execution_queue_t::reserve_deferred_barrier_next (
     bool accepted;
     {
         std::unique_lock lock (_mutex);
-        accepted = !_closed
+        accepted = (_closed.load (std::memory_order_acquire) == execution_status_t::allowed)
                    && enqueue_locked (
                      lock, std::move (name),
                      [barrier] (auto complete) { barrier->reached (std::move (complete)); },
@@ -2263,7 +2312,7 @@ result_t<void> serial_execution_queue_t::retain_mailbox_until (task_t<void> term
             std::unique_lock lock (_mutex, std::defer_lock);
             if (!owns_shared_gate ())
                 lock.lock ();
-            if (_closed) {
+            if (_closed.load (std::memory_order_acquire) != execution_status_t::allowed) {
                 if (lock.owns_lock ())
                     lock.unlock ();
                 if (cancel)
@@ -2337,7 +2386,7 @@ serial_execution_queue_t::observe_handler_terminal ()
               std::unique_lock lock (_mutex, std::defer_lock);
               if (!owns_shared_gate ())
                   lock.lock ();
-              if (!_closed) {
+              if ((_closed.load (std::memory_order_acquire) == execution_status_t::allowed)) {
                   const auto current = current_turn_locked ();
                   for (const auto &entry : _handler_turns)
                       if (!entry.turn->is_barrier ()
@@ -2348,7 +2397,7 @@ serial_execution_queue_t::observe_handler_terminal ()
                       terminals.push_back (_suspended_lifecycle->turn->observe_handler ());
               }
           }
-          if (_closed) {
+          if (_closed.load (std::memory_order_acquire) != execution_status_t::allowed) {
               observer->cancel ();
           } else {
               auto pending =
@@ -2503,13 +2552,22 @@ std::vector<std::shared_ptr<const void>> serial_execution_queue_t::pending_messa
 
 void serial_execution_queue_t::close ()
 {
-    std::lock_guard<std::mutex> lock (_mutex);
-    close_locked ();
+    close (execution_status_t::stopped);
 }
 
-void serial_execution_queue_t::close_locked ()
+void serial_execution_queue_t::close (execution_status_t status)
 {
-    _closed = true;
+    std::lock_guard lock (_mutex);
+    if (status == execution_status_t::stopped
+        && execution_status () == execution_status_t::ownership_lost)
+        status = execution_status_t::ownership_lost;
+    close_locked (status);
+}
+
+void serial_execution_queue_t::close_locked (execution_status_t status)
+{
+    auto expected = execution_status_t::allowed;
+    _closed.compare_exchange_strong (expected, status, std::memory_order_acq_rel);
     if (owns_shared_gate ())
         return;
     if (!has_queued_locked () && _active == 0 && !_draining && !_drain_scheduled) {
@@ -2539,15 +2597,15 @@ void serial_execution_queue_t::cancel_waits_owned () noexcept
         turn->cancel_waits ();
 }
 
-void serial_execution_queue_t::cancel_pending () noexcept
+void serial_execution_queue_t::cancel_pending (execution_status_t status) noexcept
 {
-    close ();
+    close (status);
     notify_control ("cancel-pending", [this] { cancel_pending_owned (); });
 }
 
-task_t<void> serial_execution_queue_t::cancel_pending_async ()
+task_t<void> serial_execution_queue_t::cancel_pending_async (execution_status_t status)
 {
-    close ();
+    close (status);
     return control_async<void> ([this] { cancel_pending_owned (); });
 }
 
@@ -2561,7 +2619,7 @@ void serial_execution_queue_t::cancel_pending_owned () noexcept
         std::unique_lock<std::mutex> lock (_mutex, std::defer_lock);
         if (!owns_shared_gate () || shared_spot_gate ())
             lock.lock ();
-        _closed = true;
+        close_locked ();
         cancelled_items.reserve (_application.queue.size () + _lifecycle.queue.size ());
         const auto clear_queued = [this, &cancelled_items] (lane_state_t &lane) {
             std::size_t queued_bytes = 0;
@@ -2604,10 +2662,14 @@ void serial_execution_queue_t::cancel_pending_owned () noexcept
         }
     }
     cancel_waits ();
+    const auto status = _closed.load (std::memory_order_acquire);
     for (auto &item : cancelled_items)
         if (auto complete = std::move (item.completion))
-            complete (result_t<void>::failure (framework_error_kind_t::shutting_down,
-                                               "serial execution queue is stopping"));
+            complete (result_t<void>::failure (
+              status == execution_status_t::ownership_lost ? framework_error_kind_t::not_found
+                                                           : framework_error_kind_t::shutting_down,
+              status == execution_status_t::ownership_lost ? "object no longer owns execution"
+                                                           : "serial execution queue is stopping"));
     for (auto &cancel : active_cancellations)
         cancel ();
     if (shared_spot_gate ())
@@ -2644,9 +2706,9 @@ std::size_t serial_execution_queue_t::pending_bytes () const
 bool serial_execution_queue_t::closed () const
 {
     if (owns_shared_gate ())
-        return _closed.load (std::memory_order_acquire);
+        return _closed.load (std::memory_order_acquire) != execution_status_t::allowed;
     std::lock_guard<std::mutex> lock (_mutex);
-    return _closed;
+    return _closed.load (std::memory_order_acquire) != execution_status_t::allowed;
 }
 
 bool serial_execution_queue_t::schedule_drain_locked ()
@@ -3164,7 +3226,8 @@ serial_execution_queue_t::create_turn (const std::string &name,
                                            "serial execution queue completion lost its turn")));
             return;
         }
-        const bool queue_closed = _closed.load (std::memory_order_acquire);
+        const bool queue_closed =
+          _closed.load (std::memory_order_acquire) != execution_status_t::allowed;
         if (owns_shared_gate ()) {
             auto state = std::make_shared<std::pair<std::string, std::function<void ()>>> (
               std::move (name), std::move (completion));

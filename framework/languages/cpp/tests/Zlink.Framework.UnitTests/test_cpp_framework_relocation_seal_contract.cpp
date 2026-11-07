@@ -1783,7 +1783,7 @@ TEST (FrameworkRelocationSealContract, source_lookup_is_shared_by_claim_and_cut)
         int reads = 0;
         task_completion_source_t<location_page_t<mesh_node_descriptor_t>> listed;
         task_t<location_page_t<mesh_node_descriptor_t>>
-        list_mesh_nodes (std::string, location_page_request_t = {}) override
+        list_mesh_nodes_core (std::string, location_page_request_t = {}) override
         {
             ++reads;
             return listed.task ();

@@ -485,8 +485,8 @@ class held_authority_store_t final : public rt::in_memory_location_repository_t
     fw::task_completion_source_t<fw::authority_read_result_t> authority;
     int reads = 0;
 
-    fw::task_t<fw::authority_read_result_t> read_authority (fw::authority_key_t,
-                                                            std::stop_token) override
+    fw::task_t<fw::authority_read_result_t> read_authority_core (fw::authority_key_t,
+                                                                 std::stop_token) override
     {
         ++reads;
         return authority.task ();
@@ -547,11 +547,12 @@ class counting_actor_authority_store_t final : public rt::in_memory_location_rep
 {
   public:
     std::atomic_int reads{0};
-    fw::task_t<fw::authority_read_result_t> read_authority (fw::authority_key_t key,
-                                                            std::stop_token cancellation) override
+    fw::task_t<fw::authority_read_result_t>
+    read_authority_core (fw::authority_key_t key, std::stop_token cancellation) override
     {
         ++reads;
-        return rt::in_memory_location_repository_t::read_authority (std::move (key), cancellation);
+        return rt::in_memory_location_repository_t::read_authority_core (std::move (key),
+                                                                         cancellation);
     }
 };
 
