@@ -241,8 +241,14 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     void drain ();
     void close ();
     void cancel_waits () noexcept;
-    void cancel_pending () noexcept;
-    task_t<void> cancel_pending_async ();
+    enum class execution_status_t
+    {
+        allowed,
+        stopped,
+        ownership_lost
+    };
+    void cancel_pending (execution_status_t status = execution_status_t::stopped) noexcept;
+    task_t<void> cancel_pending_async (execution_status_t status = execution_status_t::stopped);
 
     std::size_t pending_count () const;
     std::size_t pending_count (serial_work_lane_t lane) const;
@@ -259,13 +265,16 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     // Installs the Location owner's nonblocking, nonthrowing execution decision.
     // Readiness and accepted-turn completion remain owned by the existing gate.
     void set_execution_policy (std::function<bool ()> policy);
-    using execution_admission_t = std::function<bool (const serial_execution_queue_t &)>;
+    using execution_admission_t =
+      std::function<execution_status_t (const serial_execution_queue_t &)>;
     void set_execution_policy (execution_admission_t policy);
     using ready_confirmation_t = std::function<void (std::chrono::steady_clock::time_point)>;
     ready_confirmation_t ready_confirmation () const;
     void confirm_execution_ready (std::chrono::steady_clock::time_point at);
     void invalidate_execution_ready ();
     std::optional<std::chrono::steady_clock::time_point> execution_ready_at () const;
+    execution_status_t execution_status () const;
+    bool fence_execution ();
     bool execution_allowed () const;
     // Installs the SpotWide owner before an Actor mailbox accepts work.
     void attach_spot_gate (std::shared_ptr<serial_execution_queue_t> gate);
@@ -404,7 +413,9 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     void execute_actor_head (work_item_t spot_item);
     bool owns_shared_gate () const noexcept;
     serial_execution_queue_t *shared_spot_gate () const noexcept;
-    void close_locked ();
+    void close (execution_status_t status);
+    void close_locked (execution_status_t status = execution_status_t::stopped);
+    void install_execution_policy_locked (execution_admission_t policy);
     void drain_loop ();
     void execute_item (work_item_t item);
     void complete_one (std::string name,
@@ -518,7 +529,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     std::optional<std::chrono::steady_clock::time_point> _claim_started_at;
     std::size_t _lifecycle_streak = 0;
     bool _lifecycle_debt = false;
-    std::atomic_bool _closed{false};
+    std::atomic<execution_status_t> _closed{execution_status_t::allowed};
     bool _drain_scheduled = false;
     bool _draining = false;
     std::size_t _active = 0;
