@@ -2539,6 +2539,22 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-unit;framework-regression"
     TIMEOUT 30)
 
+  add_executable(test_cpp_framework_discarded_authority
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_discarded_authority.cpp)
+  target_compile_features(test_cpp_framework_discarded_authority PRIVATE cxx_std_20)
+  target_link_zlink_test_harness(test_cpp_framework_discarded_authority)
+  target_use_zlink_gtest_main(test_cpp_framework_discarded_authority)
+  target_link_libraries(test_cpp_framework_discarded_authority PRIVATE zlink::framework)
+  target_include_directories(test_cpp_framework_discarded_authority PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  zlink_framework_cpp_add_boost_headers(test_cpp_framework_discarded_authority)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_discarded_authority
+    COMMAND test_cpp_framework_discarded_authority
+    LABELS "framework-unit;framework-contract;framework-location"
+    TIER unit
+    TIMEOUT 30)
+
   add_executable(test_cpp_framework_location_runtime
     tests/Zlink.Framework.UnitTests/test_cpp_framework_location_runtime.cpp)
   target_compile_features(test_cpp_framework_location_runtime PRIVATE cxx_std_20)
