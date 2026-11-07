@@ -729,7 +729,9 @@ public final class ZLinkChannelRuntime
                 ZLinkHandlerScanner.scan(registration.handlerPackageMarkers());
         ZLinkChannelHandlerCatalog channelHandlers =
                 new ZLinkChannelHandlerCatalog(
-                        handlerCatalog, registration.suspendHandlerInvokers());
+                        handlerCatalog,
+                        registration.suspendHandlerInvokers(),
+                        channelHandlerInvoker::prepare);
         ZLinkChannelRuntimeConfigurator configurator =
                 new ZLinkChannelRuntimeConfigurator(
                         backend,

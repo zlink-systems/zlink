@@ -169,6 +169,29 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                                 scannedHandlers,
                                                 framework.handlerExecutor(),
                                                 framework.suspendHandlerInvokers())));
+        namespaces
+                .values()
+                .forEach(
+                        namespace -> {
+                            namespace
+                                    .routeRequests
+                                    .values()
+                                    .forEach(
+                                            handler -> {
+                                                invoker.prepare(handler.requestType());
+                                                if (handler.replyType() != handler.requestType())
+                                                    invoker.prepare(handler.replyType());
+                                            });
+                            namespace
+                                    .channelRequests
+                                    .values()
+                                    .forEach(
+                                            handler -> {
+                                                invoker.prepare(handler.requestType());
+                                                if (handler.replyType() != handler.requestType())
+                                                    invoker.prepare(handler.replyType());
+                                            });
+                        });
     }
 
     @Override

@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.internal.dispatch;
 
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 
 import java.util.List;
 import java.util.Objects;
@@ -79,8 +80,8 @@ public final class ZLinkReceiveBatchBudget {
     public static long bytesOf(List<Message> parts) {
         Objects.requireNonNull(parts, "parts");
         long bytes = 0;
-        for (Message part : parts) {
-            bytes = saturatingAdd(bytes, part == null ? 0 : part.size());
+        for (int index = 0; index < parts.size(); index++) {
+            bytes = saturatingAdd(bytes, ZLinkFrameworkMultipartView.partSize(parts, index));
         }
         return bytes;
     }

@@ -24,6 +24,53 @@ import java.util.List;
 final class ZLinkServiceM6AWireCodecTest {
     private final ZLinkServiceM6AWireCodec codec = new ZLinkServiceM6AWireCodec();
 
+    @org.junit.jupiter.api.RepeatedTest(100)
+    void channelHeadersUseTheNamePreparedAtTopologyChange() {
+        codec.prepareChannelNames(List.of("orders", "한글"));
+        byte[] name = codec.channelNameBytes("한글");
+        for (int request = 1; request <= 10; request++) {
+            assertEquals(
+                    "한글",
+                    codec.decodeChannelRequestHeader(
+                                    codec.encodeChannelRequestHeader(request, "한글", 0))
+                            .channelName());
+            org.junit.jupiter.api.Assertions.assertSame(
+                    name, codec.channelNameBytes("한글"), "requests reuse the prepared UTF-8 bytes");
+        }
+        codec.prepareChannelNames(List.of("한글", "updated"));
+        org.junit.jupiter.api.Assertions.assertSame(name, codec.channelNameBytes("한글"));
+        assertFalse(codec.hasPreparedChannelName("orders"));
+        assertTrue(codec.hasPreparedChannelName("updated"));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> codec.prepareChannelNames(List.of("invalid\0name")));
+        assertTrue(
+                codec.hasPreparedChannelName("updated"),
+                "failed preparation leaves the snapshot intact");
+    }
+
+    @org.junit.jupiter.api.RepeatedTest(100)
+    void replyHeaderReadsTheBindingBufferWithoutChangingItsBounds() {
+        byte[] header = codec.encodeReplyHeader(Long.MIN_VALUE, 0, 0);
+        var storage = java.nio.ByteBuffer.allocateDirect(header.length + 6);
+        storage.position(3).put(header).flip().position(3);
+        var received = storage.asReadOnlyBuffer().order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        int position = received.position();
+        int limit = received.limit();
+        assertEquals(
+                new ZLinkServiceM6AWireCodec.Reply(Long.MIN_VALUE, 0, 0),
+                codec.decodeReplyHeader(received));
+        assertEquals(position, received.position());
+        assertEquals(limit, received.limit());
+        for (int length = 0; length < header.length; length++) {
+            var truncated = received.slice().limit(length);
+            assertThrows(IllegalArgumentException.class, () -> codec.decodeReplyHeader(truncated));
+        }
+        storage.put(3, (byte) 0);
+        assertThrows(IllegalArgumentException.class, () -> codec.decodeReplyHeader(received));
+        assertEquals(position, received.position());
+    }
+
     @Test
     void textDecodeAcceptsCanonicalUnicodeAndRejectsMalformedUtf8() {
         for (String name : List.of("event", "한글", "\uD83D\uDE00", "\uFFFD")) {
