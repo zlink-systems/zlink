@@ -555,8 +555,46 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     node?.discardRelocatedActor?.(nativeActorRef);
   }
 
+  private trackExecution(state: ZLinkActorRuntimeState): void {
+    const actor = state.actor;
+    if (actor === undefined) return;
+    this.options.locationLifecycle?.bindActorExecution(state.actorId, actor);
+    this.options.locationLifecycle?.trackExecution(
+      actor,
+      () => state.isSteadyReady && !this.relocationStaged.has(state.actorId),
+      () => {
+        if (!state.isSteadyReady) return;
+        const failures: unknown[] = [];
+        for (const cleanup of [
+          () => this.options.discardActorActivation?.(actor),
+          () => this.options.actorDestroyedCleanup?.(state.actorId),
+          () => this.discardNativeRelocationSource(state.nativeActorRef)
+        ]) {
+          try {
+            cleanup();
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+        state.clearAfterDestroy();
+        if (this.detachActorStateRegistration(state))
+          this.options.metrics?.change(METRIC_NAMES.ActorCount, -1);
+        this.detachedTaskRunner.runDetached('Discard Actor execution', async () => {
+          try {
+            await disposeLifecycleHandlers(actor, this.detachedTaskRunner);
+          } catch (error) {
+            failures.push(error);
+          }
+          if (failures.length > 0)
+            throw new AggregateError(failures, 'Actor local disposal failed.');
+        });
+      }
+    );
+  }
+
   private async finalizeActorState(state: ZLinkActorRuntimeState | undefined): Promise<void> {
     if (state === undefined) return;
+    if (state.actor !== undefined) this.options.locationLifecycle?.forgetExecution(state.actor);
     try {
       if (state.actor !== undefined)
         await disposeLifecycleHandlers(state.actor, this.detachedTaskRunner);
@@ -875,7 +913,14 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
       return existing;
     }
 
-    const state = new ZLinkActorRuntimeState(actorId);
+    const state = new ZLinkActorRuntimeState(
+      actorId,
+      () => this.trackExecution(state),
+      () => {
+        if (state.actor !== undefined)
+          this.options.locationLifecycle?.discardExecution(state.actor);
+      }
+    );
     const remembered = this.actorMeshNames.get(actorId);
     if (remembered !== undefined) {
       state.rememberMeshName(remembered);

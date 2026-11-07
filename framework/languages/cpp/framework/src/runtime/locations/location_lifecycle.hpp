@@ -40,6 +40,8 @@ class location_lifecycle_t
     {
     }
 
+    location_runtime_t &execution_runtime () const { return *_location_runtime; }
+
     ~location_lifecycle_t ()
     {
         try {

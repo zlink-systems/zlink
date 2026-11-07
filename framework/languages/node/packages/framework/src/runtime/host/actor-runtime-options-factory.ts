@@ -36,6 +36,7 @@ import type { ZLinkActorJoinRelocation } from '../actors/actor-join-relocation';
 
 export interface ZLinkActorRuntimeOptionsFactoryOptions {
   readonly requests?: RequestRuntime;
+  readonly discardActorActivation?: (actor: ZLinkActor) => void;
   readonly terminateActorActivation: (
     actor: ZLinkActor,
     terminal: () => Promise<void>
@@ -106,6 +107,7 @@ export class ZLinkActorRuntimeOptionsFactory {
     | 'actorCreatedNodeRidProvider'
     | 'actorRefResolver'
     | 'actorCreatedNotifier'
+    | 'discardActorActivation'
     | 'actorDestroyedCleanup'
     | 'terminateActorActivation'
     | 'publishActorAuthority'
@@ -247,6 +249,7 @@ export class ZLinkActorRuntimeOptionsFactory {
         this.options.forgetDestroyedActorRef(actor.context.actorId);
         return this.options.notifyEntrySpotActorCreated(nodeRid, actor, createRequest, signal);
       },
+      discardActorActivation: this.options.discardActorActivation,
       actorDestroyedCleanup: (actorId) => {
         this.options.invalidateActorRoute(actorId);
         const actorRef = this.options.actorManager()?.getState(actorId)?.nativeActorRef as

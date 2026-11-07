@@ -66,6 +66,7 @@ internal sealed partial class ZLinkActorSessionManager(
 
     internal ValueTask DiscardLocationExecutionAsync(ZLinkActorRuntimeState state)
     {
+        state.FenceRuntimeGeneration();
         var bound = state.TryGetBoundSession(out var session);
         var nativeActor = state.NativeActorRef;
         var instance = state.Actor;

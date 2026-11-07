@@ -401,6 +401,22 @@ task_t<stateful_error_t> stateful_object_runtime_t::commit_create_async (std::ui
     });
 }
 
+task_t<void> stateful_object_runtime_t::bind_execution_gate (
+  object_ref_t object, std::weak_ptr<runtime::serial_execution_queue_t> gate)
+{
+    return _lane.run_task ([this, object = std::move (object), gate = std::move (gate)] {
+        const auto found = _objects.find (key_for (object));
+        if (found == _objects.end ()
+            || found->second.reference.object_generation != object.object_generation
+            || found->second.reference.node_id != object.node_id)
+            return;
+        found->second.execution_gate = gate;
+        if (state_on_lane (found->second) != object_state_t::ready)
+            if (auto owner = gate.lock ())
+                owner->invalidate_execution_ready ();
+    });
+}
+
 void stateful_object_runtime_t::activate_object_on_lane (object_record_t &object)
 {
     for (auto &candidate : _candidates) {
@@ -679,6 +695,8 @@ stateful_object_runtime_t::begin_membership_move_async (const object_ref_t &acto
         }
         membership_token_t token{_next_membership_token++, actor_record->reference,
                                  spot_record->reference};
+        if (auto gate = actor_record->execution_gate.lock ())
+            gate->invalidate_execution_ready ();
         actor_record->state = object_state_t::moving;
         _membership_moves.emplace (token.value, membership_move_t{token, actor_record->membership});
         return {stateful_error_t::none, token};
@@ -706,6 +724,8 @@ stateful_object_runtime_t::begin_remote_membership_move_async (const object_ref_
             return {stateful_error_t::conflict, {}};
         membership_token_t token{_next_membership_token++, actor_record->reference,
                                  std::move (target_spot)};
+        if (auto gate = actor_record->execution_gate.lock ())
+            gate->invalidate_execution_ready ();
         actor_record->state = object_state_t::moving;
         _membership_moves.emplace (token.value, membership_move_t{token, actor_record->membership});
         return {stateful_error_t::none, token};
@@ -1517,8 +1537,12 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
         }
         // The prepared attempt reserves the participants; ingress keeps entering the
         // source FIFOs until the actual execution owner binds it.
-        for (const auto &key : plan.keys)
-            _objects.find (key)->second.barrier_generation = plan.token;
+        for (const auto &key : plan.keys) {
+            auto &object = _objects.find (key)->second;
+            if (auto gate = object.execution_gate.lock ())
+                gate->invalidate_execution_ready ();
+            object.barrier_generation = plan.token;
+        }
         plan.capture = _relocation_state_capture;
         plan.cut = _relocation_cut;
         plan.error = stateful_error_t::none;

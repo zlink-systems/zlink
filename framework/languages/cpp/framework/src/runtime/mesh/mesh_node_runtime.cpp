@@ -804,6 +804,24 @@ task_t<void> mesh_node_runtime_t::start (
     });
     const auto metric_provider = node_options.mesh.metric_provider;
     auto node = std::make_shared<host::public_host_runtime_t> (std::move (node_options));
+    if (spot_state->location_lifecycle) {
+        co_await spot_state->location_lifecycle->execution_runtime ().on_execution_discard (
+          [weak = std::weak_ptr (spot_state)] (auto allowed) {
+              if (auto state = weak.lock ())
+                  spot_node_runtime_t (state).request_location_execution_discard (
+                    std::move (allowed));
+          });
+        node->configure_location_execution (
+          spot_state->location_lifecycle->execution_runtime ().execution_clock (),
+          [weak = std::weak_ptr (spot_state)] (runtime::stateful::object_ref_t object) {
+              const auto state = weak.lock ();
+              if (!state)
+                  return task_t<runtime::serial_execution_queue_t::ready_confirmation_t> (
+                    result_t<runtime::serial_execution_queue_t::ready_confirmation_t>::success (
+                      {}));
+              return spot_node_runtime_t (state).prepare_store_ready (std::move (object));
+          });
+    }
     if (_delay_owner)
         node->set_delay_owner (*_delay_owner);
     /* flow-correlation §4: thread the flow-capture provider so the host's
@@ -1487,15 +1505,7 @@ task_t<result_t<bool>> mesh_node_runtime_t::destroy_application_actor (actor_ref
 
 task_t<result_t<void>> mesh_node_runtime_t::cleanup_application_actor_stateful (actor_ref_t actor)
 {
-    if (_node) {
-        const auto stateful = co_await _node->destroy_application_actor_async (
-          std::string (actor.actor_id ().value ()), actor.object_generation ());
-        if (stateful != runtime::stateful::stateful_error_t::none
-            && stateful != runtime::stateful::stateful_error_t::not_found)
-            co_return result_t<void>::failure (framework_error_kind_t::internal_failure,
-                                               "stateful Actor cleanup failed");
-    }
-    co_return result_t<void>::success ();
+    co_return co_await cleanup_local_actor_resources (_node, {}, actor);
 }
 
 task_t<runtime::stateful::aggregate_relocation_result_t>

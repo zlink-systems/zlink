@@ -84,6 +84,10 @@ export class ZLinkSpotSerialTurnExecutor {
     return this.scheduler.whenIdle();
   }
 
+  discardPendingApplication(error: unknown): void {
+    this.scheduler.discardPendingApplication(error);
+  }
+
   closeAdmission(): void {
     this.scheduler.closeAdmission();
   }
@@ -259,6 +263,23 @@ export class ZLinkSpotSerialTurnExecutor {
     this.scheduler.visitPendingApplication(visitor);
   }
 
+  rejectPendingReplays(error: unknown): void {
+    const failure =
+      error === undefined
+        ? createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RequestFailed,
+            'Application execution failed without an error value.'
+          )
+        : error;
+    this.scheduler.visitPendingApplication((record) => {
+      const context = record.context as ZLinkSpotApplicationTurnContext | undefined;
+      const replay = context?.replay;
+      if (replay === undefined) return;
+      context!.release();
+      Object.assign(record, { context: undefined, operation: () => replay(failure) });
+    });
+  }
+
   private async enqueueApplicationTurn<T>(
     operation: () => Promise<T> | T,
     workOptions?: ZLinkSerialWorkOptions,
@@ -379,6 +400,7 @@ export class ZLinkSpotSerialTurnExecutor {
       const turnId = this.turnSequence;
       this.activeTurnId = turnId;
       try {
+        barrierClaim?.start?.();
         return await runZLinkSpotSerialTurn(this, turnId, turn, operation);
       } finally {
         this.depth -= 1;

@@ -4072,6 +4072,9 @@ test('DefaultZLinkActorManager retries cleanup without destroying the native act
   const actor = await manager.getOrCreateActor('alice', 'player');
   manager.getState('alice').markLocationOwned();
   options.locationLifecycle = {
+    forgetExecution(owner) {
+      assert.strictEqual(owner, actor);
+    },
     async releaseActor() {
       releaseCalls += 1;
       if (releaseCalls === 1) throw new Error('location release failed');
