@@ -3401,29 +3401,9 @@ try {
     auto classify = [host, target] (const result_t<bool> &result) {
         if (!result)
             return detail::result_access_t::failure<zlink::submit_result_t> (result.exception ());
-        const auto accepted = result.value ();
-        if (!accepted) {
-            //  Spec 32-framework-error-model:76-77 -- a target this runtime has
-            //  never admitted (absent from the live peer table) does not exist
-            //  from the requester's perspective and must complete NotFound, not
-            //  Unavailable. `submitted(false)` below collapses every rejected
-            //  request_to_node into `not_connected` (-> Unavailable via
-            //  boundary_error_t::disconnected, see call_facade_runtime.cpp), but
-            //  that is only correct for a target that WAS reachable and merely
-            //  is not right now. service_topology_registry_t has no "known but
-            //  currently unreachable" state distinct from "not a peer" --
-            //  disconnect() erases the peer entry outright -- so any target
-            //  absent from the live peer table is, by this runtime's own model,
-            //  simply a target that does not exist. Matches Java's
-            //  ZLinkJavaRawSpotNode.classifyNodeSendTarget (peerState absent ->
-            //  TARGET_NOT_FOUND, i.e. NotFound) and Node's
-            //  raw-service-mesh-runtime.ts knownTarget gate (unknown RID ->
-            //  RequestResult.NotFound).
-            if (!host->_transport->topology ().peer ({target.data (), target.size ()}))
-                return result_t<zlink::submit_result_t>::success (
-                  zlink::submit_result_t::not_found);
-        }
-        return result_t<zlink::submit_result_t>::success (submitted (accepted));
+        return result_t<zlink::submit_result_t>::success (
+          host->_transport->node_request_submission_result ({target.data (), target.size ()},
+                                                            result.value ()));
     };
     if (accepted.await_ready ())
         return task_t<zlink::submit_result_t> (
