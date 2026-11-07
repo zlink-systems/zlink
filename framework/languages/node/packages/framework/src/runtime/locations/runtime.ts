@@ -1,5 +1,8 @@
 import { inspectRuntime } from '../internal-observation';
-import { ZLinkDescriptorPublicationUnconfirmedError } from './descriptor-publication';
+import {
+  ZLinkDescriptorPublicationUnconfirmedError,
+  ZLinkMeshNodeDescriptorConflictException
+} from './descriptor-publication';
 import { ZLinkOwnerLeaseReleaseDelayPendingError } from './owner-lease-release-delay';
 import { isIndeterminateLocationStoreFailure } from './location-store-failure';
 import { listAllMeshNodeDescriptors } from './location-store-pages';
@@ -7,8 +10,9 @@ import {
   ZLinkInternalMeshNodeWriteIntent,
   type ZLinkMeshNodeWriteIntent
 } from './domain-store-contract';
-import { MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
 import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
+import type { ZLinkAuthorityEntry, ZLinkAuthorityScanCursor } from './internal-location-contracts';
+import { MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
 import {
   zlinkRuntimeDefaultLocationOptions,
   type ZLinkLocationOptionOverrides
@@ -31,8 +35,6 @@ import {
   type ZLinkActorLocationKey,
   type ZLinkLocationKey,
   type ZLinkLocationPage,
-  type ZLinkAuthorityEntry,
-  type ZLinkAuthorityScanCursor,
   type ZLinkLocationRuntimeStatus,
   type ZLinkLocationServiceSummary,
   type ZLinkLocationServiceSummaryFilter,
@@ -75,7 +77,12 @@ import { zlinkLocationAutoConnectTypeName, zlinkLocationRoleName } from './canon
 import { ZLinkLocationKeyCodec } from './key-codec';
 import { ZLinkLiveRowFilter, ZLinkOwnerLeaseTracker } from './lease-tracker';
 import { isAbortError } from '../abort';
-import type { ZLinkOwnershipLostEvent } from './lifecycle-runtime';
+import type {
+  ZLinkExecutionRecovery,
+  ZLinkOwnershipLostEvent,
+  ZLinkPreservedAuthority,
+  ZLinkAuthorityConfirmation
+} from './lifecycle-runtime';
 
 export interface ZLinkLocationRuntimeStores {
   readonly locationStore: ZLinkDomainLocationStore;
@@ -145,6 +152,11 @@ export class ZLinkOwnerLeaseClaimError extends Error {
   }
 }
 
+interface ZLinkRetainedExecution {
+  readonly recover?: ZLinkExecutionRecovery;
+  phase: 'retained' | 'recovering' | 'recovered' | Promise<void>;
+}
+
 export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   readonly ownerId: string;
   private readonly options: Required<ZLinkLocationOptionOverrides>;
@@ -186,7 +198,8 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     readonly cutoffMs: number;
     readonly owner: ZLinkLocationOwnerToken;
     discarded: boolean;
-    readonly retained: Set<object>;
+    readonly retained: Map<WeakRef<object>, ZLinkRetainedExecution>;
+    readonly retainedByOwner: WeakMap<object, ZLinkRetainedExecution>;
   };
   private readonly discardedExecutions = new WeakSet<object>();
   private readonly executions = new Map<
@@ -194,18 +207,23 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     {
       readonly steadyReady: () => boolean;
       readonly discard: () => void;
+      readonly captureRecovery?: (reference: WeakRef<object>) => ZLinkExecutionRecovery | undefined;
     }
   >();
   private storeOutageTimer: unknown;
 
-  trackExecution(owner: object, steadyReady: () => boolean, discard: () => void): void {
+  trackExecution(
+    owner: object,
+    steadyReady: () => boolean,
+    discard: () => void,
+    captureRecovery?: (reference: WeakRef<object>) => ZLinkExecutionRecovery | undefined
+  ): void {
     if (!this.discardedExecutions.has(owner) && !this.executions.has(owner))
-      this.executions.set(owner, { steadyReady, discard });
+      this.executions.set(owner, { steadyReady, discard, captureRecovery });
   }
 
   forgetExecution(owner: object): void {
     this.executions.delete(owner);
-    this.storeOutage?.retained.delete(owner);
   }
 
   discardExecution(owner: object): void {
@@ -221,7 +239,8 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     return true;
   }
 
-  private retainedExecutions(): ReadonlySet<object> | undefined {
+  private retainedExecutions():
+    ReadonlyMap<WeakRef<object>, { readonly phase: string | Promise<void> }> | undefined {
     const outage = this.storeOutage;
     if (outage !== undefined && this.monotonicNowMs() >= outage.cutoffMs) this.latchStoreOutage();
     return this.options.storeOutageRetention && outage !== undefined && !outage.discarded
@@ -235,13 +254,13 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       this.ownerToken !== undefined &&
       this.ownerLeaseHealthy &&
       this.storeOutage === undefined;
-    const retained = admissionOpen ? undefined : this.retainedExecutions();
+    if (admissionOpen) return owner === undefined || !this.discardedExecutions.has(owner);
+    const retained = this.retainedExecutions();
     if (owner !== undefined && this.discardedExecutions.has(owner)) return false;
-    return (
-      admissionOpen ||
-      this.ownerLeaseUsable ||
-      (owner !== undefined && retained?.has(owner) === true)
-    );
+    const record = owner === undefined ? undefined : this.storeOutage?.retainedByOwner.get(owner);
+    if (record !== undefined && record.phase !== 'retained' && record.phase !== 'recovered')
+      return false;
+    return this.ownerLeaseUsable || (record?.phase === 'retained' && retained !== undefined);
   }
 
   get boundExecutionUsable(): boolean {
@@ -331,7 +350,178 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     this.recordFailure(errorMessage(error));
   }
 
-  async reclaimOwnerAuthorities(signal?: AbortSignal): Promise<void> {
+  get ownerLeaseRecoveryRequired(): boolean {
+    if (this.storeOutage !== undefined)
+      for (const record of this.storeOutage.retained.values())
+        if (record.phase !== 'recovered') return true;
+    return false;
+  }
+
+  async reclaimOwnerAuthorities(
+    publication: Promise<void> = Promise.resolve(),
+    signal?: AbortSignal,
+    onConfirmed?: ZLinkAuthorityConfirmation
+  ): Promise<ZLinkPreservedAuthority> {
+    const outage = this.storeOutage;
+    const owner = this.ownerToken;
+    const retainedIncarnations = new Map<string, Map<bigint, Set<bigint>>>();
+    if (outage !== undefined)
+      for (const record of outage.retained.values()) {
+        const recovery = record.recover;
+        if (recovery === undefined) continue;
+        let generations = retainedIncarnations.get(recovery.key.value);
+        if (generations === undefined) {
+          generations = new Map();
+          retainedIncarnations.set(recovery.key.value, generations);
+        }
+        let authorityGenerations = generations.get(recovery.incarnation.objectGeneration);
+        if (authorityGenerations === undefined) {
+          authorityGenerations = new Set();
+          generations.set(recovery.incarnation.objectGeneration, authorityGenerations);
+        }
+        authorityGenerations.add(recovery.incarnation.authorityOwnerGeneration);
+      }
+    const excluded: ZLinkPreservedAuthority = (key, incarnation) =>
+      incarnation !== undefined &&
+      retainedIncarnations
+        .get(key.value)
+        ?.get(incarnation.objectGeneration)
+        ?.has(incarnation.authorityOwnerGeneration) === true;
+    // Observe rejection immediately, including when every object is already terminal.
+    const confirmedPublication = publication.then(
+      () => undefined,
+      (error) => {
+        if (
+          error instanceof ZLinkMeshNodeDescriptorConflictException ||
+          !isIndeterminateLocationStoreFailure(error, signal)
+        ) {
+          for (const reference of outage?.retained.keys() ?? []) {
+            const execution = reference.deref();
+            if (execution !== undefined) this.discardExecution(execution);
+          }
+        }
+        throw error;
+      }
+    );
+    const recoveries =
+      outage === undefined || owner === undefined || outage.discarded
+        ? []
+        : [...outage.retained].map(([reference, retained]) => {
+            if (retained.phase instanceof Promise) return retained.phase;
+            return this.recoverExecution(
+              outage,
+              reference,
+              retained,
+              owner,
+              confirmedPublication,
+              signal
+            );
+          });
+    await Promise.all([confirmedPublication, ...recoveries]);
+    await this.reclaimUnpreservedOwnerAuthorities(excluded, signal, onConfirmed);
+    if (
+      outage !== undefined &&
+      !outage.discarded &&
+      [...outage.retained.values()].every((record) => record.phase === 'recovered')
+    ) {
+      if (this.storeOutageTimer !== undefined) this.clearTimer(this.storeOutageTimer);
+      this.storeOutageTimer = undefined;
+      this.storeOutage = undefined;
+    }
+    return excluded;
+  }
+
+  private recoverExecution(
+    outage: NonNullable<ZLinkLocationRuntime['storeOutage']>,
+    reference: WeakRef<object>,
+    retained: ZLinkRetainedExecution,
+    owner: ZLinkLocationOwnerToken,
+    publication: Promise<void>,
+    signal?: AbortSignal
+  ): Promise<void> {
+    if (
+      reference.deref() === undefined ||
+      this.discardedExecutions.has(reference.deref()!) ||
+      retained.phase === 'recovered'
+    )
+      return Promise.resolve();
+    if (retained.phase instanceof Promise) return retained.phase;
+    const operation = (async () => {
+      const recovered = await retained.recover?.run(
+        owner,
+        () =>
+          this.storeOutage === outage &&
+          !outage.discarded &&
+          reference.deref() !== undefined &&
+          !this.discardedExecutions.has(reference.deref()!) &&
+          this.monotonicNowMs() + this.options.ownerLeaseRenewTimeoutMs <= outage.cutoffMs,
+        signal
+      );
+      if (recovered !== true) {
+        const execution = reference.deref();
+        if (execution !== undefined) this.discardExecution(execution);
+        return;
+      }
+      await publication;
+      if (this.monotonicNowMs() >= outage.cutoffMs) this.latchStoreOutage();
+      const execution = reference.deref();
+      if (
+        !outage.discarded &&
+        execution !== undefined &&
+        !this.discardedExecutions.has(execution)
+      ) {
+        if (
+          this.ownerToken?.ownerId === owner.ownerId &&
+          this.ownerToken.leaseGeneration === owner.leaseGeneration
+        )
+          retained.phase = 'recovered';
+        else this.discardExecution(execution);
+      }
+    })();
+    retained.phase = operation;
+    void operation.catch(() => {
+      if (retained.phase === operation) retained.phase = 'recovering';
+    });
+    return operation;
+  }
+
+  private recoverPublishedExecutions(
+    meshName: string,
+    owner: ZLinkLocationOwnerToken,
+    publication: Promise<ZLinkLocationWriteResult>,
+    signal?: AbortSignal
+  ): void {
+    const outage = this.storeOutage;
+    if (outage === undefined || outage.discarded) return;
+    const confirmed = publication.then((result) => {
+      if (result.status !== ZLinkLocationWriteStatus.Stored)
+        throw new ZLinkMeshNodeDescriptorConflictException(
+          `Recovery descriptor '${meshName}' was rejected: ${result.status}.`
+        );
+    });
+    void confirmed.catch((error) => {
+      if (!(error instanceof ZLinkMeshNodeDescriptorConflictException)) return;
+      for (const [reference, retained] of outage.retained) {
+        const execution = reference.deref();
+        if (execution !== undefined && retained.recover?.meshName === meshName)
+          this.discardExecution(execution);
+      }
+    });
+    for (const [reference, retained] of outage.retained) {
+      if (retained.recover?.meshName !== meshName) continue;
+      void this.recoverExecution(outage, reference, retained, owner, confirmed, signal).catch(
+        (error) => {
+          this.lastError = errorMessage(error);
+        }
+      );
+    }
+  }
+
+  private async reclaimUnpreservedOwnerAuthorities(
+    excluded: ZLinkPreservedAuthority,
+    signal?: AbortSignal,
+    onConfirmed?: ZLinkAuthorityConfirmation
+  ): Promise<void> {
     const owner = this.ownerToken;
     if (owner === undefined) {
       throw new Error('Authority recovery requires a claimed owner token.');
@@ -341,6 +531,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     for (const entry of entries) {
       const snapshot = entry.snapshot;
       if (
+        excluded(entry.key, snapshot) ||
         snapshot.ownerId !== owner.ownerId ||
         snapshot.ownerLeaseGeneration === owner.leaseGeneration
       ) {
@@ -363,7 +554,10 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
           },
           signal
         );
-        if (result.kind === 'stored') continue;
+        if (result.kind === 'stored') {
+          onConfirmed?.(entry.key, snapshot, { ...result, kind: 'snapshot' });
+          continue;
+        }
         if (result.kind === 'conflict') {
           const current = result.current;
           if (
@@ -371,6 +565,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
             current.ownerId === owner.ownerId &&
             current.ownerLeaseGeneration === owner.leaseGeneration
           ) {
+            onConfirmed?.(entry.key, snapshot, current);
             continue;
           }
           continue;
@@ -539,10 +734,31 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         throw error;
       });
       const renewCompletedAtMs = this.monotonicNowMs();
+      if (result.kind === 'stale' && this.storeOutage !== undefined) {
+        const current = await withTimeout(
+          (readSignal) =>
+            this.stores.ownerLeaseStore.readOwnerLease(renewingOwner.ownerId, readSignal),
+          this.options.ownerLeaseRenewTimeoutMs,
+          signal
+        ).catch((error: unknown) => {
+          this.observeStoreOutage(error, signal);
+          throw error;
+        });
+        if (current.kind === 'found') {
+          this.ownerLeaseDeadlineMs = undefined;
+          if (current.token.leaseGeneration !== renewingOwner.leaseGeneration) {
+            for (const reference of this.storeOutage.retained.keys()) {
+              const execution = reference.deref();
+              if (execution !== undefined) this.discardExecution(execution);
+            }
+          }
+          this.recordOwnerLeaseRenewFailure();
+          this.recordFailure('Owner lease token cannot be renewed.');
+          for (const handler of this.ownerLeaseRenewalFailedHandlers) handler();
+          return false;
+        }
+      }
       if (result.kind !== 'renewed') {
-        // The provider may have been restarted with an empty store. The
-        // previous token can no longer be renewed, so the next heartbeat must
-        // perform a fresh claim rather than retrying the stale token forever.
         this.lastOwnerToken = this.ownerToken;
         this.ownerToken = undefined;
         this.ownerLeaseHealthy = false;
@@ -553,6 +769,10 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         // renewed. Claim immediately so descriptor recovery does not wait for
         // another heartbeat interval.
         return await this.claimFreshOwnerLease(signal, shutdownSignal);
+      }
+      if (this.ownerToken !== renewingOwner) {
+        this.retainedExecutions();
+        return false;
       }
       const wasOwnerLeaseUsable = this.ownerLeaseUsable;
       this.ownerLeaseHealthy = true;
@@ -764,16 +984,27 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         this.options.ownerLeaseTtlMs +
         2 * this.options.ownerLeaseFencingMarginMs
       : lease.admissionDeadlineMs;
+    const startedAtMs = this.monotonicNowMs();
+    const retained = new Map<WeakRef<object>, ZLinkRetainedExecution>();
+    const retainedByOwner = new WeakMap<object, ZLinkRetainedExecution>();
+    for (const [owner, execution] of [...this.executions].filter(([, entry]) =>
+      entry.steadyReady()
+    )) {
+      const reference = new WeakRef(owner);
+      const record: ZLinkRetainedExecution = {
+        recover: execution.captureRecovery?.(reference),
+        phase: 'retained'
+      };
+      retained.set(reference, record);
+      retainedByOwner.set(owner, record);
+    }
     this.storeOutage = {
-      startedAtMs: this.monotonicNowMs(),
+      startedAtMs,
       cutoffMs,
       owner: lease.owner,
       discarded: false,
-      retained: new Set(
-        [...this.executions]
-          .filter(([, execution]) => execution.steadyReady())
-          .map(([owner]) => owner)
-      )
+      retained,
+      retainedByOwner
     };
     this.latchStoreOutage();
   }
@@ -785,8 +1016,10 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       outage.discarded = true;
       if (this.storeOutageTimer !== undefined) this.clearTimer(this.storeOutageTimer);
       this.storeOutageTimer = undefined;
-      for (const owner of [...outage.retained]) this.discardSteadyExecution(owner);
-      outage.retained.clear();
+      for (const [reference, record] of outage.retained) {
+        const owner = reference.deref();
+        if (owner !== undefined && record.phase !== 'recovered') this.discardSteadyExecution(owner);
+      }
       return;
     }
     this.storeOutageTimer = this.setTimer(() => {
@@ -800,21 +1033,6 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     owner: ZLinkLocationOwnerToken,
     renewal: boolean
   ): void {
-    const outage = this.storeOutage;
-    if (outage !== undefined) {
-      // A completion applied at T cannot undo expiry even if its callback runs first.
-      if (this.monotonicNowMs() >= outage.cutoffMs) this.latchStoreOutage();
-      if (
-        outage.discarded ||
-        !renewal ||
-        owner.ownerId !== outage.owner.ownerId ||
-        owner.leaseGeneration !== outage.owner.leaseGeneration
-      )
-        return;
-      if (this.storeOutageTimer !== undefined) this.clearTimer(this.storeOutageTimer);
-      this.storeOutageTimer = undefined;
-      this.storeOutage = undefined;
-    }
     if (
       this.lastSuccessfulLease === undefined ||
       startedAtMs >= this.lastSuccessfulLease.startedAtMs
@@ -824,6 +1042,24 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         admissionDeadlineMs: this.ownerLeaseDeadlineMs!,
         owner
       };
+    }
+    const outage = this.storeOutage;
+    if (outage !== undefined) {
+      for (const retained of outage.retained.values())
+        if (retained.phase === 'retained') retained.phase = 'recovering';
+      // A completion applied at T cannot undo expiry even if its callback runs first.
+      if (this.monotonicNowMs() >= outage.cutoffMs) this.latchStoreOutage();
+      if (
+        outage.discarded ||
+        !renewal ||
+        owner.ownerId !== outage.owner.ownerId ||
+        owner.leaseGeneration !== outage.owner.leaseGeneration
+      )
+        return;
+      if (outage.retained.size > 0) return;
+      if (this.storeOutageTimer !== undefined) this.clearTimer(this.storeOutageTimer);
+      this.storeOutageTimer = undefined;
+      this.storeOutage = undefined;
     }
   }
 
@@ -881,35 +1117,40 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       // in-process result after the write completes.
       updatedAt: new Date()
     };
-    let result = await this.guardWrite(() =>
-      this.writeDescriptor(
-        (writeSignal) => this.stores.locationStore.updateMeshNode(stamped, intent, writeSignal),
-        signal
+    const submit = (writeIntent: ZLinkMeshNodeWriteIntent) => {
+      const request = this.guardWrite(() =>
+        this.writeDescriptor(
+          (writeSignal) =>
+            this.stores.locationStore.updateMeshNode(stamped, writeIntent, writeSignal),
+          signal
+        )
+      );
+      const outage = this.storeOutage;
+      if (
+        outage !== undefined &&
+        (owner.leaseGeneration === outage.owner.leaseGeneration ||
+          writeIntent === ZLinkInternalMeshNodeWriteIntent.RecoveryClaim ||
+          writeIntent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim)
       )
-    );
+        this.recoverPublishedExecutions(stamped.meshName, owner, request, signal);
+      return request;
+    };
+    let result = await submit(intent);
     if (
       (intent === ZLinkLocationWriteIntent.Renew ||
         intent === ZLinkInternalMeshNodeWriteIntent.FixedRidRenew) &&
       (result.status === ZLinkLocationWriteStatus.RejectedConflict ||
         result.status === ZLinkLocationWriteStatus.IgnoredStale)
     ) {
-      // Recovery creates an absent row with a Missing CAS condition and
-      // reclaims this owner's row from an earlier lease generation. A found
-      // row of another owner is rejected.
-      result = await this.guardWrite(() =>
-        this.writeDescriptor(
-          (writeSignal) =>
-            this.stores.locationStore.updateMeshNode(
-              stamped,
-              intent === ZLinkInternalMeshNodeWriteIntent.FixedRidRenew
-                ? ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
-                : ZLinkInternalMeshNodeWriteIntent.RecoveryClaim,
-              writeSignal
-            ),
-          signal
-        )
+      // Recovery preserves the existing descriptor publication contract.
+      result = await submit(
+        intent === ZLinkInternalMeshNodeWriteIntent.FixedRidRenew
+          ? ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+          : ZLinkInternalMeshNodeWriteIntent.RecoveryClaim
       );
     }
+    if (result.status === ZLinkLocationWriteStatus.Stored)
+      this.recoverPublishedExecutions(stamped.meshName, owner, Promise.resolve(result), signal);
     this.notifyIfStale(
       result,
       ZLinkLocationKind.Peer,

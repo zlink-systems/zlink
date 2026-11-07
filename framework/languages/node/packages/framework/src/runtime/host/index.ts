@@ -1,3 +1,4 @@
+import { encodeAuthorityKey } from '../locations/authority-key-codec';
 import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '../../contracts';
 import { RequestRuntime } from '../foundation/request-runtime';
 import { RuntimeDisposal } from '../disposal';
@@ -1804,7 +1805,12 @@ export class ZLinkFrameworkRuntimeHost
       wasOwnerLeaseUsable
     ) => {
       if (!this.ownerAdmissionOpen()) return;
-      if (wasOwnerLeaseUsable && this.runtimeState !== ZLinkFrameworkRuntimeState.Preparing) return;
+      if (
+        wasOwnerLeaseUsable &&
+        !runtime.ownerLeaseRecoveryRequired &&
+        this.runtimeState !== ZLinkFrameworkRuntimeState.Preparing
+      )
+        return;
       if (recoveryOperation !== undefined) return;
       recoveryOperation = this.resumeOwnerLeaseOwnedWork(runtime, spotNodeRuntime, channelRuntime)
         .catch((error) => {
@@ -1847,7 +1853,7 @@ export class ZLinkFrameworkRuntimeHost
       await spotNodeRuntime.startLocationAutoConnect(signal);
       await channelRuntime.startLocationAutoConnect(signal);
       await channelRuntime.reclaimLocationOwnerRows(signal);
-      await this.locationOwner.currentLifecycle?.reclaimOwnerRows();
+      await this.locationOwner.currentLifecycle?.reclaimOwnerRows(undefined, signal);
       if (this.runtimeState === ZLinkFrameworkRuntimeState.Preparing) {
         await this.enterServing(spotNodeRuntime, signal);
       }
@@ -2544,7 +2550,11 @@ export class ZLinkFrameworkRuntimeHost
         const node = this.options.registration.spotNodes.get(selectUserSpotMesh(meshName));
         return node?.spotFactoryRegistrations?.[stableType]?.relocation.kind;
       },
-      publishReadyRoute: (meshName, route) => {
+      publishReadyRoute: (meshName, route, authority) => {
+        this.locationOwner.currentLifecycle?.confirmAuthority(
+          encodeAuthorityKey('user_spot', String(route.spot.spotId)),
+          authority
+        );
         this.cachedLocationSpotRouteResolver?.invalidate?.(route.spot.spotId);
         this.spotNodeRuntime?.meshNode(meshName)?.rememberSpotRoute?.(route);
       },
@@ -2953,6 +2963,10 @@ export class ZLinkFrameworkRuntimeHost
             spotKind: ZLinkSpotKind.Entry
           },
           signal
+        );
+        this.locationOwner.currentLifecycle?.confirmAuthority(
+          encodeAuthorityKey('actor', actorRef.actorId),
+          authority
         );
         this.actorClientLocationResolver?.observeActorAuthorityVersion(
           actorRef.actorId,
