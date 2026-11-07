@@ -105,7 +105,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 CancellationToken.None,
                 runtime.ExecutionOwner
             );
-            await using var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
+            var dispatcher = Assert.IsType<ZLinkMeshNodeRouteDispatcher>(
                 ZLinkMeshNodeRouteDispatcher.Create(
                     runtime.Services,
                     runtime.Registration,
