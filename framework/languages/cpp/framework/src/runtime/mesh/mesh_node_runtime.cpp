@@ -226,8 +226,8 @@ canonical_actor_join_application_reply (const std::optional<message_t> &reply,
 std::vector<std::uint8_t> unwrap_canonical_actor_join_application_reply_impl (
   const runtime::protocol::application_payload_t &payload)
 {
-    if (payload.packet_name != runtime::protocol::framework_multipart_packet_name
-        || payload.content_type != runtime::protocol::framework_multipart_content_type)
+    if (payload.packet_name () != runtime::protocol::framework_multipart_packet_name
+        || payload.content_type () != runtime::protocol::framework_multipart_content_type)
         return payload.payload_bytes ();
 
     const auto &encoded = payload.payload_bytes ();
@@ -3635,7 +3635,7 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
                 spot_runtime.emit_actor_transfer_marker (
                   "message_follow_relay", actor,
                   header.correlation_id.empty () ? std::string (actor.actor_id ().value ())
-                                                 : header.correlation_id,
+                                                 : std::string (header.correlation_id),
                   follow_target.route.spot_id, follow_target.route.node_rid);
             }
             spot_inbound_message_t metadata{.received_at = received_at};
@@ -4424,9 +4424,9 @@ void mesh_node_runtime_t::submit_node_request_reply (const zlink::routing_id_t &
         completion = runtime::foundation::operation_registry_t::callback_t (
           receiver.complete.template capture<runtime::foundation::operation_terminal_t,
                                              result_t<zlink::message_t>> (
-            [host = _node,
-             receiver = receiver.borrow ()] (runtime::foundation::operation_terminal_t terminal,
-                                             result_t<zlink::message_t> payload) mutable {
+            [host = _node, complete = receiver.complete.borrow (),
+             admitted = receiver.admitted] (runtime::foundation::operation_terminal_t terminal,
+                                            result_t<zlink::message_t> payload) mutable {
                 try {
                     if (!payload)
                         payload.value ();
@@ -4438,8 +4438,9 @@ void mesh_node_runtime_t::submit_node_request_reply (const zlink::routing_id_t &
                           request_completion_failure (record, "MeshNode request"))
                         std::rethrow_exception (failure);
                     auto views = runtime::protocol::decode_application_part_views (
-                      runtime::protocol::message_bytes (payload.value ()), host->capture_flow ());
-                    receiver.complete (result_t<node_reply_t>::success (
+                      runtime::protocol::message_bytes (payload.value ()), host->capture_flow (),
+                      complete.resource ());
+                    complete (result_t<node_reply_t>::success (
                       node_reply_t::success (runtime::messaging::message_parts_t::borrow (views))));
                 }
                 catch (const runtime::protocol::service_wire_error_t &) {
@@ -4447,15 +4448,13 @@ void mesh_node_runtime_t::submit_node_request_reply (const zlink::routing_id_t &
                       runtime::messaging::request_failure_mapper_t{}.reply_header_exception (
                         static_cast<std::uint32_t> (zlink::request_result_t::protocol_error), 0,
                         "MeshNode request"));
-                    receiver.admitted->complete (
-                      result_access_t::failure<void> (failure.exception ()));
-                    receiver.complete (result_t<node_reply_t>::success (std::move (failure)));
+                    admitted->complete (result_access_t::failure<void> (failure.exception ()));
+                    complete (result_t<node_reply_t>::success (std::move (failure)));
                 }
                 catch (...) {
                     auto failure = current_exception_result<runtime::messaging::message_parts_t> ();
-                    receiver.admitted->complete (
-                      result_access_t::failure<void> (failure.exception ()));
-                    receiver.complete (result_t<node_reply_t>::success (std::move (failure)));
+                    admitted->complete (result_access_t::failure<void> (failure.exception ()));
+                    complete (result_t<node_reply_t>::success (std::move (failure)));
                 }
             }));
         // The stored callback now owns this receiver, including submission failures
@@ -4669,6 +4668,23 @@ task_t<std::size_t> mesh_node_runtime_t::dispatch_ready (
             throw configuration_error ("MeshNode dispatch callback is required");
         return _node->dispatch_ready (std::move (dispatch), accept_application_receive,
                                       std::move (next_application_receive), waited);
+    }
+    catch (...) {
+        return task_t<std::size_t> (detail::current_exception_result<std::size_t> ());
+    }
+}
+
+task_t<std::size_t> mesh_node_runtime_t::dispatch_hosted_ready (
+  runtime::mesh::service_mailbox_t::application_dispatch_t dispatch,
+  bool accept_application_receive,
+  std::function<bool ()> next_application_receive,
+  std::optional<zlink::poll_event_flag_t> waited)
+{
+    try {
+        if (!dispatch)
+            throw configuration_error ("MeshNode dispatch callback is required");
+        return _node->dispatch_hosted_ready (std::move (dispatch), accept_application_receive,
+                                             std::move (next_application_receive), waited);
     }
     catch (...) {
         return task_t<std::size_t> (detail::current_exception_result<std::size_t> ());
@@ -5137,7 +5153,8 @@ mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler_regist
                                                   registration.reply_type};
     _state->lane
       .run ([&] {
-          _state->handlers.add_handler (std::move (descriptor), std::move (registration.invoke));
+          _state->handlers.add_handler (std::move (descriptor), std::move (registration.invoke),
+                                        std::move (registration.bind_codecs));
       })
       .get ();
     return *this;

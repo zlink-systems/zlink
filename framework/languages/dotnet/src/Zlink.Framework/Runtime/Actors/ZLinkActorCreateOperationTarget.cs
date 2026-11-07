@@ -119,6 +119,7 @@ internal sealed class ZLinkActorOperationTarget(
                         cancellationToken
                     )
                     .ConfigureAwait(false);
+                runtime.LocationLifecycle?.EnsureOwnerAdmissionOpen();
             }
             catch (Exception exception)
             {

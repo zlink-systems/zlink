@@ -31,7 +31,7 @@ std::string next_correlation_id ()
 
 } // namespace
 
-std::string format_utc_deadline (std::chrono::system_clock::time_point deadline)
+static std::array<char, 20> deadline_bytes (std::chrono::system_clock::time_point deadline)
 {
     using namespace std::chrono;
     // Match the former time_point_cast/to_time_t truncation before splitting UTC fields.
@@ -53,12 +53,18 @@ std::string format_utc_deadline (std::chrono::system_clock::time_point deadline)
     write (11, 2, static_cast<unsigned> (clock.hours ().count ()));
     write (14, 2, static_cast<unsigned> (clock.minutes ().count ()));
     write (17, 2, static_cast<unsigned> (clock.seconds ().count ()));
-    return std::string (output.data (), output.size ());
+    return output;
+}
+
+std::string format_utc_deadline (std::chrono::system_clock::time_point deadline)
+{
+    const auto text = deadline_bytes (deadline);
+    return std::string (text.data (), text.size ());
 }
 
 message_parts_t client_call_codec_t::encode_payload_parts (const envelope_header_t &header,
                                                            encoded_payload_t payload,
-                                                           const std::string &content_type) const
+                                                           std::string_view content_type) const
 {
     auto body = detail::encoded_payload_to_raw (std::move (payload));
     return message_parts_t (_codec.encode_header (header, content_type), std::move (body));
@@ -80,9 +86,10 @@ envelope_header_t client_call_codec_t::create_envelope (message_kind_t kind,
       .message_name = std::move (message_name),
       .content_type = std::move (content_type),
       .correlation_id = kind == message_kind_t::request ? next_correlation_id () : std::string{},
-      .deadline = timeout.count () > 0 ? std::optional<std::string>{format_utc_deadline (
-                                           std::chrono::system_clock::now () + timeout)}
-                                       : std::nullopt,
+      .deadline = timeout.count () > 0
+                    ? std::optional<header_text_t>{header_text_t (
+                        deadline_bytes (std::chrono::system_clock::now () + timeout))}
+                    : std::nullopt,
       .topic = std::move (topic),
       .source = std::move (source)};
 }

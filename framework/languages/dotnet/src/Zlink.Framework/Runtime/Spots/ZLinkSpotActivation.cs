@@ -38,7 +38,7 @@ internal abstract partial class ZLinkSpotActivation
     private readonly ZLinkSpotSubscriptionRegistry _subscriptions = new();
     private readonly ZLinkSpotTimerRegistry _timers;
     private readonly ZLinkSpotId _spotId;
-    private readonly ZLinkStateLane _lane = new();
+    internal readonly ZLinkStateLane _lane = new();
     private readonly SemaphoreSlim _membershipPublicationGate = new(1, 1);
     private ZLinkSpotActorHandlerRegistry? _actorHandlers;
     private bool _configurationOpen = true;
@@ -152,6 +152,11 @@ internal abstract partial class ZLinkSpotActivation
 
     internal bool ContainsActor(string actorId) =>
         _actors.TryGetActor(ZLinkActorId.FromBoundary(actorId, nameof(actorId)), out _);
+
+    internal void FenceLocationExecution() => Volatile.Write(ref _disposed, 1);
+
+    internal bool IsLocationExecutionAllowed =>
+        !IsDisposed && _runtime.IsLocationExecutionAllowed(this);
 
     public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 

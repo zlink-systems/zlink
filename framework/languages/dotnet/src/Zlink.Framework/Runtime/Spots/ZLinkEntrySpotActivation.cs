@@ -286,6 +286,9 @@ internal sealed partial class ZLinkEntrySpotActivation
         return DestroyActorCoreAsync(actor, cancellationToken);
     }
 
+    internal void ForgetDiscardedActorMembership(IZLinkActor actor) =>
+        _actors.RemoveIfCurrent(actor);
+
     private async ValueTask DestroyActorCoreAsync(
         IZLinkActor actor,
         CancellationToken cancellationToken

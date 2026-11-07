@@ -123,7 +123,8 @@ int main ()
         const auto header = msg::client_call_codec_t{}.create_envelope (
           msg::message_kind_t::request, "channel", "message", timeout);
         const auto after = format (std::chrono::system_clock::now ());
-        if (!header.deadline || *header.deadline < before || *header.deadline > after)
+        if (!header.deadline || std::string_view (*header.deadline) < before
+            || std::string_view (*header.deadline) > after)
             return 174;
         const auto no_deadline = msg::client_call_codec_t{}.create_envelope (
           msg::message_kind_t::command, "channel", "message", std::chrono::milliseconds (0));

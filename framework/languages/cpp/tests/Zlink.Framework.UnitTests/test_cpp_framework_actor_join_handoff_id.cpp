@@ -16,8 +16,8 @@ int main ()
       zlink::framework::detail::canonical_actor_join_application_payload (
         "ZeroByteJoin", "application/x-test", zlink::message_t{});
     if (!zero_byte_payload || !zero_byte_payload->payload_bytes ().empty ()
-        || zero_byte_payload->packet_name != "ZeroByteJoin"
-        || zero_byte_payload->content_type != "application/x-test") {
+        || zero_byte_payload->packet_name () != "ZeroByteJoin"
+        || zero_byte_payload->content_type () != "application/x-test") {
         std::cerr << "typed zero-byte actor Join payload was omitted\n";
         return 2;
     }

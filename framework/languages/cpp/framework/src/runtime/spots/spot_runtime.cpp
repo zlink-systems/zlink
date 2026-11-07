@@ -4976,7 +4976,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                                      : *empty_services;
                   auto replay = spot_handler_registry_t (current).invoke_erased (
                     {}, spot_handler_kind_t::packet,
-                    original->original_activation->application_payload.packet_name, {},
+                    original->original_activation->application_payload.packet_name (), {},
                     std::type_index (typeid (void)), current->spot_instance.get (), nullptr,
                     provider, *current->channel_runtime->serializers, carrier->first,
                     carrier->second, false);
@@ -6588,12 +6588,18 @@ task_t<void> spot_node_runtime_t::replay_actor_handoff_batch (actor_ref_t actor_
             if (packet.application_record && !packet.application_record->invocation ()) {
                 runtime::stateful::with_accepted_application (
                   *packet.application_record->payload (), [&] (auto, const auto &application) {
-                      const runtime::messaging::message_parts_t parts (
-                        runtime::protocol::decode_application_parts (application));
-                      const auto body = runtime::messaging::envelope_codec_t{}.decode_body (parts);
+                      std::array<std::span<const std::byte>, 2> descriptors;
+                      auto parts =
+                        application.parts ()
+                          ? runtime::messaging::message_parts_t::borrow (*application.parts ())
+                          : runtime::messaging::message_parts_t::borrow (
+                              std::span<const std::span<const std::byte>> (descriptors)
+                                .first (runtime::protocol::decode_application_part_views (
+                                  application, descriptors)));
+                      auto body = runtime::messaging::envelope_codec_t{}.decode_body (parts);
                       if (!body)
                           std::rethrow_exception (body.exception ());
-                      packet.application_record->set_invocation (body.value (),
+                      packet.application_record->set_invocation (std::move (body.value ()),
                                                                  std::move (metadata));
                   });
                 metadata = std::move (packet.application_record->invocation ()->second);
@@ -9794,7 +9800,7 @@ task_t<void> spot_node_runtime_t::seal_actor_application_suffix (const actor_ref
               packet.packet_name = header.value ().message_name;
               packet.content_type = invocation_metadata
                                       ? std::move (invocation_metadata->content_type)
-                                      : header.value ().content_type;
+                                      : std::string (header.value ().content_type);
               packet.metadata = invocation_metadata ? std::move (invocation_metadata->values)
                                                     : header.value ().metadata;
               packet.is_request = kind == runtime::protocol::frozen_record_kind_t::actor_request;
@@ -15631,8 +15637,18 @@ bool spot_node_runtime_t::dispatch_mesh_record (
   std::function<void ()> deferred_terminal,
   bool *terminal_deferred,
   runtime::handler_entry_t before_application_handler,
-  runtime::serial_execution_queue_t::async_completion_t application_completed)
+  runtime::serial_execution_queue_t::async_completion_t application_completed,
+  runtime::application_dispatch_terminal_owner_t *local_terminal)
 {
+    std::shared_ptr<runtime::application_dispatch_terminal_owner_t> promoted_terminal;
+    const auto defer_terminal = [&] () -> std::function<void ()> {
+        if (!local_terminal)
+            return std::move (deferred_terminal);
+        promoted_terminal = std::make_shared<runtime::application_dispatch_terminal_owner_t> (
+          std::move (*local_terminal));
+        local_terminal = nullptr;
+        return [owned = promoted_terminal] { owned->settle (); };
+    };
     if (terminal_deferred)
         *terminal_deferred = false;
     if (owner.owner_kind == service::owner_kind_t::spot
@@ -15674,12 +15690,12 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                                submission.error_kind (), submission.error ()
                                                            ? submission.error ()->what ()
                                                            : "SPOT subscription dispatch failed"));
-        if (terminal_deferred && deferred_terminal)
+        if (terminal_deferred && (deferred_terminal || local_terminal))
             *terminal_deferred = true;
         detail::observe_task_terminal (
-          dispatched, [state = _state, topic = record.topic, context_state = context->_state,
-                       deferred_terminal =
-                         std::move (deferred_terminal)] (const result_t<zlink::message_t> &result) {
+          dispatched,
+          [state = _state, topic = record.topic, context_state = context->_state,
+           deferred_terminal = defer_terminal ()] (const result_t<zlink::message_t> &result) {
               if (!result) {
                   const framework_exception_t error (
                     result.error_kind (), result.error () ? result.error ()->what ()
@@ -15796,10 +15812,10 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                 co_return;
             }(_state, std::move (encoded), header, record.source_node_rid, terminal_route,
                                                      *success);
-            if (deferred_terminal) {
+            if (deferred_terminal || local_terminal) {
                 detail::observe_task_completion (
-                  settle, [node = _state, deferred_terminal = std::move (deferred_terminal)] (
-                            const result_t<void> &terminal) {
+                  settle, [node = _state,
+                           deferred_terminal = defer_terminal ()] (const result_t<void> &terminal) {
                       const auto failures = node->runtime_failures ();
                       if (!terminal)
                           failures->report (terminal.exception ());
@@ -15830,7 +15846,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
         if (route_send && dispatcher.can_handle_send (header.message_name)) {
             const bool transfer_actor_leave_owner_reservation =
               node_record && header.message_name == spot_actor_leave_route_command_t::packet_name
-              && static_cast<bool> (deferred_terminal);
+              && (deferred_terminal || local_terminal);
             route_received_packet_t received{record.source_node_rid,
                                              record.operation_id.low == 0
                                                ? std::nullopt
@@ -15854,11 +15870,11 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                                          : std::make_optional (std::to_string (operation_low)));
                 }
             };
-            auto dispatched = transfer_actor_leave_owner_reservation
-                                ? dispatcher.dispatch_actor_leave_async (
-                                    std::move (received), std::move (deferred_terminal),
-                                    record.transferred_owner_byte_cost)
-                                : dispatcher.dispatch_send (received, header, services);
+            auto dispatched =
+              transfer_actor_leave_owner_reservation
+                ? dispatcher.dispatch_actor_leave_async (std::move (received), defer_terminal (),
+                                                         record.transferred_owner_byte_cost)
+                : dispatcher.dispatch_send (received, header, services);
             detail::observe_task_completion (
               dispatched, [report] (const result_t<result_t<void>> &terminal) {
                   report (terminal ? terminal.value ()
@@ -15876,12 +15892,12 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                                                : std::make_optional (record.operation_id.low),
                                              std::move (encoded), std::nullopt, record.received_at};
             detail::channel_reply_writer_t replies;
-            if (deferred_terminal) {
+            if (deferred_terminal || local_terminal) {
                 const auto async_dispatched = dispatcher.dispatch_request_async (
                   received, header, services,
                   [reply_token = record.reply_token, request_header = header,
                    deferred_terminal =
-                     std::move (deferred_terminal)] (result_t<zlink::message_t> response) mutable {
+                     defer_terminal ()] (result_t<zlink::message_t> response) mutable {
                       try {
                           detail::channel_reply_writer_t async_replies;
                           const auto reply_parts =
@@ -16042,7 +16058,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                 if (terminal_deferred)
                     *terminal_deferred = true;
                 detail::observe_task_completion (
-                  handled, [terminal, deferred_terminal = std::move (deferred_terminal)] (
+                  handled, [terminal, deferred_terminal = defer_terminal ()] (
                              const result_t<zlink::message_t> &result) mutable {
                       try {
                           if (terminal) {
@@ -16468,8 +16484,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
         }
         const auto request_header = header;
         auto terminal_claimed = std::make_shared<std::atomic_bool> (false);
-        auto terminal_owner =
-          std::make_shared<std::function<void ()>> (std::move (deferred_terminal));
+        auto terminal_owner = std::make_shared<std::function<void ()>> (defer_terminal ());
         std::function<void ()> after_application_admission;
         if (record.kind == service::record_kind_t::actor_send && *terminal_owner) {
             // Spec 05 section 4.3 defines one-way acceptance at the target
@@ -16675,7 +16690,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
      * lifecycle lane). The Spot lifecycle drain waits for it at shutdown. */
     auto reply = std::make_shared<std::function<void (result_t<actor_join_reply_t>)>> (
       [reply_token = record.reply_token,
-       deferred_terminal = std::move (deferred_terminal)] (result_t<actor_join_reply_t> joined) {
+       deferred_terminal = defer_terminal ()] (result_t<actor_join_reply_t> joined) {
           if (!joined) {
               (void) service::actor_join_reply (
                 reply_token,

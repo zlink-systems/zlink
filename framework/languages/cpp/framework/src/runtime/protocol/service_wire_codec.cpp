@@ -2907,6 +2907,11 @@ std::string decode_channel_send_header (std::span<const std::uint8_t> bytes)
 
 namespace
 {
+bool framework_multipart_profile (std::string_view packet, std::string_view content) noexcept
+{
+    return packet == framework_multipart_packet_name && content == framework_multipart_content_type;
+}
+
 application_payload_t::multipart_t
 retain_application_messages (std::span<const zlink::message_t> parts)
 {
@@ -2918,16 +2923,25 @@ retain_application_messages (std::span<const zlink::message_t> parts)
 }
 } // namespace
 
+const std::string &application_payload_t::packet_name () const noexcept
+{
+    static const std::string multipart_name (framework_multipart_packet_name);
+    return parts () ? multipart_name : std::get<byte_payload_t> (_body).packet_name;
+}
+
+const std::string &application_payload_t::content_type () const noexcept
+{
+    static const std::string multipart_type (framework_multipart_content_type);
+    return parts () ? multipart_type : std::get<byte_payload_t> (_body).content_type;
+}
+
 application_payload_t::application_payload_t (const application_payload_t &other) :
-    packet_name (other.packet_name),
-    content_type (other.content_type),
-    flow_id (other.flow_id),
-    flow_origin (other.flow_origin)
+    flow_id (other.flow_id), flow_origin (other.flow_origin)
 {
     if (const auto *parts = other.parts ()) {
         _body = retain_application_messages (*parts);
     } else {
-        _body = other.payload_bytes ();
+        _body = std::get<byte_payload_t> (other._body);
     }
 }
 
@@ -2944,8 +2958,6 @@ application_payload_t application_payload_t::from_parts (const multipart_t &part
         throw std::invalid_argument ("framework multipart requires at least one part");
     auto retained = retain_application_messages (parts);
     application_payload_t result;
-    result.packet_name = framework_multipart_packet_name;
-    result.content_type = framework_multipart_content_type;
     result._body = std::move (retained);
     return result;
 }
@@ -2955,16 +2967,16 @@ application_payload_t application_payload_t::from_parts (multipart_t &&parts)
     if (parts.empty ())
         throw std::invalid_argument ("framework multipart requires at least one part");
     application_payload_t result;
-    result.packet_name = framework_multipart_packet_name;
-    result.content_type = framework_multipart_content_type;
     result._body = std::move (parts);
     return result;
 }
 
 namespace
 {
-template <typename CreatePart>
-auto decode_application_parts_bytes (std::span<const std::uint8_t> encoded, CreatePart create_part)
+template <typename Prepare, typename Consume>
+void read_application_parts_bytes (std::span<const std::uint8_t> encoded,
+                                   Prepare prepare,
+                                   Consume consume)
 {
     if (encoded.size () < 4)
         throw service_wire_error_t ("framework multipart payload is truncated");
@@ -2972,19 +2984,32 @@ auto decode_application_parts_bytes (std::span<const std::uint8_t> encoded, Crea
     const auto count = read_u32 (encoded, offset);
     if (count == 0 || count > (encoded.size () - offset) / sizeof (std::uint32_t))
         throw service_wire_error_t ("framework multipart part count is invalid");
-    std::vector<std::invoke_result_t<CreatePart, std::span<const std::uint8_t>>> parts;
-    parts.reserve (count);
+    prepare (count);
     for (std::uint32_t index = 0; index < count; ++index) {
         if (encoded.size () - offset < 4)
             throw service_wire_error_t ("framework multipart payload is truncated");
         const auto size = read_u32 (encoded, offset);
         if (size > encoded.size () - offset)
             throw service_wire_error_t ("framework multipart part is truncated");
-        parts.push_back (create_part (encoded.subspan (offset, size)));
+        consume (encoded.subspan (offset, size));
         offset += size;
     }
     if (offset != encoded.size ())
         throw service_wire_error_t ("framework multipart payload has trailing bytes");
+}
+
+template <typename CreatePart,
+          typename Allocator =
+            std::allocator<std::invoke_result_t<CreatePart, std::span<const std::uint8_t>>>>
+auto decode_application_parts_bytes (std::span<const std::uint8_t> encoded,
+                                     CreatePart create_part,
+                                     Allocator allocator = {})
+{
+    std::vector<std::invoke_result_t<CreatePart, std::span<const std::uint8_t>>, Allocator> parts (
+      allocator);
+    read_application_parts_bytes (
+      encoded, [&] (auto count) { parts.reserve (count); },
+      [&] (auto bytes) { parts.push_back (create_part (bytes)); });
     return parts;
 }
 } // namespace
@@ -2994,8 +3019,7 @@ namespace
 application_payload_t::multipart_t retained_application_parts (const application_payload_t &payload,
                                                                bool header_only)
 {
-    if (payload.packet_name != framework_multipart_packet_name
-        || payload.content_type != framework_multipart_content_type)
+    if (!framework_multipart_profile (payload.packet_name (), payload.content_type ()))
         throw service_wire_error_t ("framework application payload profile is unsupported");
     if (const auto *parts = payload.parts ()) {
         const auto count = header_only ? std::min (parts->size (), std::size_t{1}) : parts->size ();
@@ -3015,6 +3039,27 @@ application_payload_t::multipart_t decode_application_parts (const application_p
     return retained_application_parts (payload, false);
 }
 
+std::size_t decode_application_part_views (const application_payload_t &payload,
+                                           std::span<std::span<const std::byte>> descriptors)
+{
+    if (!framework_multipart_profile (payload.packet_name (), payload.content_type ()))
+        throw service_wire_error_t ("framework application payload profile is unsupported");
+    std::size_t written = 0;
+    const auto append = [&] (std::span<const std::byte> bytes) {
+        if (written < descriptors.size ())
+            descriptors[written++] = bytes;
+    };
+    if (const auto *parts = payload.parts ()) {
+        for (const auto &part : *parts)
+            append (part.bytes ());
+    } else {
+        read_application_parts_bytes (
+          payload.payload_bytes (), [] (auto) {},
+          [&] (auto bytes) { append (std::as_bytes (bytes)); });
+    }
+    return written;
+}
+
 zlink::message_t decode_application_header (const application_payload_t &payload)
 {
     auto parts = retained_application_parts (payload, true);
@@ -3025,7 +3070,7 @@ zlink::message_t decode_application_header (const application_payload_t &payload
 
 bool operator== (const application_payload_t &left, const application_payload_t &right)
 {
-    if (left.packet_name != right.packet_name || left.content_type != right.content_type
+    if (left.packet_name () != right.packet_name () || left.content_type () != right.content_type ()
         || left.flow_id != right.flow_id || left.flow_origin != right.flow_origin)
         return false;
     const auto *left_parts = left.parts ();
@@ -3091,8 +3136,8 @@ Buffer encode_application_payload_into (const application_payload_t &payload)
     } else {
         payload_size = payload.payload_bytes ().size ();
     }
-    const auto body_size = std::uint64_t{6} + payload.packet_name.size ()
-                           + payload.content_type.size () + payload_size
+    const auto body_size = std::uint64_t{6} + payload.packet_name ().size ()
+                           + payload.content_type ().size () + payload_size
                            + (payload.flow_id ? 2 + payload.flow_id->size () : 0);
     if (body_size > std::numeric_limits<std::uint32_t>::max ()) {
         throw service_wire_error_t ("application payload envelope exceeds u32");
@@ -3101,8 +3146,8 @@ Buffer encode_application_payload_into (const application_payload_t &payload)
     result.push_back (payload.flow_id ? application_payload_flow_version
                                       : application_payload_version);
     append_u32 (result, static_cast<std::uint32_t> (body_size));
-    append_text8 (result, payload.packet_name, "packet name");
-    append_text8 (result, payload.content_type, "content type");
+    append_text8 (result, payload.packet_name (), "packet name");
+    append_text8 (result, payload.content_type (), "content type");
     append_u32 (result, static_cast<std::uint32_t> (payload_size));
     if (parts) {
         append_u32 (result, static_cast<std::uint32_t> (parts->size ()));
@@ -3195,10 +3240,8 @@ application_payload_t decode_application_payload (std::span<const std::uint8_t> 
     return decode_application_payload_bytes (
       bytes, capture_flow,
       [] (auto packet_name, auto content_type, auto body, auto flow_id, auto flow_origin) {
-          application_payload_t result;
-          result.packet_name = packet_name;
-          result.content_type = content_type;
-          result.payload_bytes ().assign (body.begin (), body.end ());
+          application_payload_t result{std::string (packet_name), std::string (content_type),
+                                       std::vector<std::uint8_t> (body.begin (), body.end ())};
           if (flow_id)
               result.flow_id.emplace (*flow_id);
           result.flow_origin = flow_origin;
@@ -3208,18 +3251,20 @@ application_payload_t decode_application_payload (std::span<const std::uint8_t> 
 
 namespace
 {
-template <typename CreatePart>
+template <typename CreatePart,
+          typename Allocator =
+            std::allocator<std::invoke_result_t<CreatePart, std::span<const std::uint8_t>>>>
 auto decode_application_parts_with (std::span<const std::uint8_t> bytes,
                                     bool capture_flow,
-                                    CreatePart create_part)
+                                    CreatePart create_part,
+                                    Allocator allocator = {})
 {
     return decode_application_payload_bytes (
       bytes, capture_flow,
-      [create_part] (auto packet_name, auto content_type, auto body, auto, auto) {
-          if (packet_name != framework_multipart_packet_name
-              || content_type != framework_multipart_content_type)
+      [create_part, allocator] (auto packet_name, auto content_type, auto body, auto, auto) {
+          if (!framework_multipart_profile (packet_name, content_type))
               throw service_wire_error_t ("framework application payload profile is unsupported");
-          return decode_application_parts_bytes (body, create_part);
+          return decode_application_parts_bytes (body, create_part, allocator);
       });
 }
 } // namespace
@@ -3229,6 +3274,14 @@ decode_application_part_views (std::span<const std::uint8_t> bytes, bool capture
 {
     return decode_application_parts_with (bytes, capture_flow,
                                           [] (auto part) { return std::as_bytes (part); });
+}
+
+std::pmr::vector<std::span<const std::byte>> decode_application_part_views (
+  std::span<const std::uint8_t> bytes, bool capture_flow, std::pmr::memory_resource *storage)
+{
+    return decode_application_parts_with (
+      bytes, capture_flow, [] (auto part) { return std::as_bytes (part); },
+      std::pmr::polymorphic_allocator<std::span<const std::byte>> (storage));
 }
 
 namespace
@@ -3285,8 +3338,7 @@ application_payload_t::multipart_t decode_application_parts (zlink::message_t &&
 
 std::size_t application_payload_hwm_bytes (const application_payload_t &payload)
 {
-    if (payload.packet_name != framework_multipart_packet_name
-        || payload.content_type != framework_multipart_content_type) {
+    if (!framework_multipart_profile (payload.packet_name (), payload.content_type ())) {
         return payload.payload_bytes ().size ();
     }
     if (const auto *parts = payload.parts ())

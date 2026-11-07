@@ -803,6 +803,7 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                     0
                 )
             );
+            _ = owner();
             var commit = await authorityStore
                 .CommitAsync(
                     reservation,
@@ -1095,6 +1096,7 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                         snapshot.Allocation.DescriptorLifecycleGeneration,
                         new ZLinkLocationOwnerToken(snapshot.OwnerId, snapshot.OwnerLeaseGeneration)
                     );
+                    _ = owner();
                     var committed = await authorityStore
                         .CommitAsync(
                             reservation,

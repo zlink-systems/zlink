@@ -132,7 +132,7 @@ internal sealed class ZLinkSpotTimerRegistry(
                         name,
                         period,
                         timerOptions,
-                        DateTimeOffset.UtcNow,
+                        _scheduler.TimeProvider.GetUtcNow(),
                         0,
                         0,
                         null,

@@ -15,7 +15,7 @@ mesh_record_dispatcher_t::mesh_record_dispatcher_t (
   serializer_registry_t &serializers,
   const route_handler_registry_t &handlers,
   const handler_registry_t &filters,
-  dispatch_options_t dispatch_options,
+  retained_dispatch_options_t dispatch_options,
   std::function<void ()> before_application_handler,
   std::shared_ptr<void> registration) :
     _services (&services),
@@ -43,9 +43,11 @@ mesh_record_dispatcher_t::dispatch (const runtime::host::receive_record_t &recor
             "record kind is not node or ChannelName messaging"));
     }
 
+    if (!parts.empty ())
+        header.retained_header.message = std::move (parts.front ());
     runtime::messaging::message_parts_t message_parts (std::move (parts));
     const std::string dispatch_channel =
-      record.channel_name.empty () ? header.channel_name : record.channel_name;
+      record.channel_name.empty () ? std::string (header.channel_name) : record.channel_name;
     const auto channel_dispatch =
       record.kind == record_kind_t::channel_send || record.kind == record_kind_t::channel_request;
     route_packet_dispatcher_t dispatcher (
