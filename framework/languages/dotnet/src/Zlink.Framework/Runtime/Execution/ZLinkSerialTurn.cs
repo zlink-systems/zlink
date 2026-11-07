@@ -70,6 +70,9 @@ internal sealed class ZLinkSerialTurn
 
     public bool TryPost(Func<CancellationToken, ValueTask> callback)
     {
+        if (!Item.IsExecutionAllowed)
+            return false;
+        using var scope = Push(this);
         return _postCallback(callback);
     }
 

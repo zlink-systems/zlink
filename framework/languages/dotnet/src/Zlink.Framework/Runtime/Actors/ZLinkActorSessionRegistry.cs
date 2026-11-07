@@ -28,6 +28,7 @@ internal sealed class ZLinkActorSessionRegistry(
                 sessionBindingTombstoneRetention: sessionBindingTombstoneRetention,
                 services: services
             );
+            created._dispatchMailbox.ExecutionAllowed = () => created.IsLocationExecutionAllowed;
             _states.Add(actorId, created);
             return created;
         });
