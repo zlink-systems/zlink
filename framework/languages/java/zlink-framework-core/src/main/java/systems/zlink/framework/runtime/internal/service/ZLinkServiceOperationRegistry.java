@@ -750,13 +750,15 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     @SuppressWarnings("unchecked")
     public static <V, R> Operation<R> prepareOperation(
             UUID id,
-            BiConsumer<V, CompletableFuture<R>> receiver,
+            Function<V, R> receiver,
+            Consumer<? super R> discardResult,
             Function<Throwable, Throwable> failureMapper,
             BiConsumer<CompletableFuture<R>, Throwable> observer) {
         Operation<R> result = new Operation<>(true, Objects.requireNonNull(id, "id"), observer);
         Objects.requireNonNull(receiver, "receiver");
         result.flow = ZLinkFlowContext.current();
-        result.receiver = (BiConsumer<Object, CompletableFuture<R>>) receiver;
+        result.receiver = (Function<Object, R>) receiver;
+        result.discardResult = discardResult;
         result.failureMapper = Objects.requireNonNull(failureMapper, "failureMapper");
         return result;
     }
@@ -792,7 +794,8 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         private final UUID id;
 
         private ZLinkFlowContext.State flow;
-        private BiConsumer<Object, CompletableFuture<T>> receiver;
+        private Function<Object, T> receiver;
+        private Consumer<? super T> discardResult;
         private Function<Throwable, Throwable> failureMapper;
 
         private Operation(boolean cancellable, UUID id) {
@@ -808,6 +811,11 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             this.id = id;
         }
 
+        @Override
+        protected void beforeCompletion(Throwable failure) {
+            observeTerminal(failure);
+        }
+
         public UUID id() {
             return id;
         }
@@ -820,6 +828,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             owner = null;
             flow = null;
             receiver = null;
+            discardResult = null;
             failureMapper = null;
         }
 
@@ -834,12 +843,20 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             }
         }
 
-        private void receiveValue(Object value) {
+        private <V> void receiveValue(V value, Consumer<? super V> discardValue) {
+            T decoded;
+            Consumer<? super T> discard = discardResult;
             try {
-                receiver.accept(value, this);
+                try {
+                    decoded = receiver.apply(value);
+                } finally {
+                    if (value != null && discardValue != null) discardValue.accept(value);
+                }
             } catch (RuntimeException | Error failure) {
                 completeExceptionally(failure);
+                return;
             }
+            if (!complete(decoded) && discard != null) discard.accept(decoded);
         }
 
         private void receiveFailure(Throwable failure) {
@@ -952,12 +969,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                     case VALUE -> {
                         if (completion instanceof Operation<?> operation
                                 && operation.receiver != null) {
-                            try {
-                                operation.receiveValue(terminalValue);
-                            } finally {
-                                if (terminalValue != null && discardValue != null)
-                                    discardValue.accept((T) terminalValue);
-                            }
+                            operation.receiveValue((T) terminalValue, discardValue);
                         } else if (!((CompletableFuture<T>) completion).complete((T) terminalValue)
                                 && terminalValue != null
                                 && discardValue != null) discardValue.accept((T) terminalValue);

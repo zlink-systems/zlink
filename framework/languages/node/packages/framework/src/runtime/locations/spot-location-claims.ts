@@ -225,12 +225,19 @@ export class ZLinkSpotLocationClaims {
     };
   }
 
+  bindExecution(meshName: string, id: RoutingId, owner: object): void {
+    const tracked = this.spots.get(ZLinkLocationKeyCodec.encodeSpotKey({ meshName, spotId: id }));
+    if (tracked !== undefined) tracked.executionOwner = new WeakRef(owner);
+  }
+
   onOwnershipLost(event: ZLinkOwnershipLostEvent): void {
     if (event.kind !== ZLinkLocationKind.Spot) {
       return;
     }
     const tracked = this.spots.get(event.key);
     this.spots.delete(event.key);
+    const executionOwner = tracked?.executionOwner?.deref();
+    if (executionOwner !== undefined) this.runtime.discardExecution?.(executionOwner);
     if (tracked !== undefined) {
       this.invalidateSpotRoute?.(
         tracked.kind === 'authority' ? tracked.spotId : tracked.row.spotId
@@ -263,6 +270,8 @@ export class ZLinkSpotLocationClaims {
           ) {
             if (this.spots.get(canonical) !== tracked) continue;
             this.spots.delete(canonical);
+            const executionOwner = tracked.executionOwner?.deref();
+            if (executionOwner !== undefined) this.runtime.discardExecution?.(executionOwner);
             await tracked.deactivate?.();
             continue;
           }
@@ -303,6 +312,8 @@ export class ZLinkSpotLocationClaims {
         ) {
           if (this.spots.get(canonical) !== tracked) continue;
           this.spots.delete(canonical);
+          const executionOwner = tracked.executionOwner?.deref();
+          if (executionOwner !== undefined) this.runtime.discardExecution?.(executionOwner);
           await tracked.deactivate?.();
           continue;
         }
@@ -391,6 +402,7 @@ export class ZLinkSpotLocationClaims {
 }
 
 export interface ZLinkTrackedInstanceAuthority {
+  executionOwner?: WeakRef<object>;
   readonly meshName: string;
   readonly spotId: RoutingId;
   readonly stableType: string;
@@ -414,6 +426,7 @@ export interface ZLinkInstanceClosingAuthority {
 }
 
 interface TrackedLegacySpot {
+  executionOwner?: WeakRef<object>;
   readonly kind: 'legacy';
   row: ZLinkSpotLocation;
   generation: bigint;

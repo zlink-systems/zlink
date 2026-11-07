@@ -30,7 +30,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     private readonly CancellationToken _executionToken;
     private readonly ZLinkExecutionLanePolicy _policy;
     private readonly Func<ZLinkSerialWorkItem, bool>? _applicationStartAllowed;
-    private readonly Func<bool>? _executionAllowed;
+    private readonly Func<ZLinkObjectExecutionStatus>? _executionAllowed;
 
     // Instance method groups convert to a fresh delegate at every use site;
     // these run once per drained work item, so cache them.
@@ -134,7 +134,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         Func<ZLinkSerialWorkItem, bool>? applicationStartAllowed = null,
         bool sharedGate = false,
         ZLinkSerialExecutionQueue? sharedOwner = null,
-        Func<bool>? executionAllowed = null
+        Func<ZLinkObjectExecutionStatus>? executionAllowed = null
     )
     {
         ArgumentNullException.ThrowIfNull(taskRunner);

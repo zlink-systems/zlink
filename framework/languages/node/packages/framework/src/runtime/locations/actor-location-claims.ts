@@ -338,6 +338,8 @@ export class ZLinkActorLocationClaims {
         ) {
           if (this.actors.get(canonical) !== tracked) continue;
           this.actors.delete(canonical);
+          const executionOwner = tracked.executionOwner?.deref();
+          if (executionOwner !== undefined) this.runtime.discardExecution?.(executionOwner);
           await tracked.deactivate?.();
           continue;
         }
@@ -373,12 +375,21 @@ export class ZLinkActorLocationClaims {
     }
   }
 
+  bindExecution(id: string, owner: object): void {
+    const tracked = this.actors.get(
+      ZLinkLocationKeyCodec.encodeActorKey({ meshName: this.entryMeshName, actorId: id })
+    );
+    if (tracked !== undefined) tracked.executionOwner = new WeakRef(owner);
+  }
+
   onOwnershipLost(event: ZLinkOwnershipLostEvent): void {
     if (event.kind !== ZLinkLocationKind.Actor) {
       return;
     }
     const tracked = this.actors.get(event.key);
     this.actors.delete(event.key);
+    const executionOwner = tracked?.executionOwner?.deref();
+    if (executionOwner !== undefined) this.runtime.discardExecution?.(executionOwner);
     if (tracked?.deactivate !== undefined) {
       void tracked.deactivate().catch(() => undefined);
     }
@@ -454,6 +465,7 @@ export class ZLinkActorLocationClaims {
 }
 
 interface TrackedActor {
+  executionOwner?: WeakRef<object>;
   row: ZLinkActorLocation;
   generation: bigint;
   readonly deactivate?: () => Promise<void>;

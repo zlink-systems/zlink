@@ -184,7 +184,11 @@ export class ZLinkActorRuntimeState {
   private deferredJoinPendingValue = false;
   private destroyTask: Promise<void> | undefined;
 
-  constructor(readonly actorId: string) {
+  constructor(
+    readonly actorId: string,
+    private readonly onLocationOwned?: () => void,
+    private readonly onLocationReleased?: () => void
+  ) {
     if (isStructuralGuardEnabled()) {
       guardBoundSessionTargetWrites(this);
     }
@@ -280,6 +284,15 @@ export class ZLinkActorRuntimeState {
     return this.ownerLeaseGenerationValue;
   }
 
+  get isSteadyReady(): boolean {
+    return (
+      this.actorValue !== undefined &&
+      this.ownsLocationValue &&
+      !this.movingValue &&
+      this.destroyTask === undefined
+    );
+  }
+
   get isMoving(): boolean {
     return this.movingValue;
   }
@@ -323,10 +336,12 @@ export class ZLinkActorRuntimeState {
 
   markLocationOwned(): void {
     this.ownsLocationValue = true;
+    this.onLocationOwned?.();
   }
 
   markLocationReleased(): void {
     this.ownsLocationValue = false;
+    this.onLocationReleased?.();
   }
 
   setLocationGeneration(generation: bigint): void {
@@ -570,6 +585,7 @@ export class ZLinkActorRuntimeState {
 
   prepareForRemoteReentry(): void {
     if (this.remoteActorPacketTargetValue === undefined) return;
+    this.markLocationReleased();
     this.creationTask = undefined;
     this.configured = false;
     this.context = undefined;
@@ -582,7 +598,6 @@ export class ZLinkActorRuntimeState {
     this.boundSessionValue = undefined;
     this.remoteActorPacketTargetValue = undefined;
     this.createRequestPayloadValue = undefined;
-    this.ownsLocationValue = false;
     this.locationGenerationValue = undefined;
     this.ownerLeaseGenerationValue = undefined;
     this.movingValue = false;

@@ -21,6 +21,13 @@ function branchExpectation(name) {
   return branch.expect;
 }
 
+function observedAdmission(claim) {
+  const gate = new framework.ZLinkRuntimeAdmissionGate();
+  gate.register('mesh');
+  gate.claim = claim;
+  return gate;
+}
+
 function deferred() {
   let resolve;
   const promise = new Promise((done) => { resolve = done; });
@@ -220,25 +227,45 @@ for (const { state, sealed } of [
       nodeRid: 'node', nodeGeneration: 1n, objectGeneration: ready.objectGeneration,
       authorityOwnerGeneration: ready.authorityOwnerGeneration, ownerId: 'owner',
       ownerLeaseGeneration: 1n, storeVersion: ready.storeVersion.value });
-    const manager = new framework.DefaultZLinkSpotManager({ detachedTaskRunner, spotFactories: [],
+    const manager = new framework.DefaultZLinkSpotManager({
+      detachedTaskRunner,
+      spotFactories: [],
       instanceSpotFactories: new Map([['mesh', new Map([['room', Room]])]]),
       spotPacketHandlers: [{ spotType: Room, handlerType: Ping, packetName: 'Ping' }],
       statefulExecution: { admissionOpen: () => false, hostState: () => state },
-      instanceSpotApplicationTargetProvider: () => ({ stableType: 'room', objectGeneration: ready.objectGeneration }),
-      admission: { claim() { arrived.resolve(); return { close() { applicationReleases++; } }; } },
-      dispatchErrors: { captureEnabled: () => true, flow: { flowCreationEnabled: () => false, accepts: () => false },
+      instanceSpotApplicationTargetProvider: () => ({
+        stableType: 'room',
+        objectGeneration: ready.objectGeneration
+      }),
+      admission: observedAdmission(() => {
+        arrived.resolve();
+        return {
+          close() {
+            applicationReleases++;
+          }
+        };
+      }),
+      dispatchErrors: {
+        captureEnabled: () => true,
+        flow: { flowCreationEnabled: () => false, accepts: () => false },
         report(event) {
           if (failures.length === 0) terminalEvents.push('pendingMessagesTerminated');
           failures.push(event);
-        } },
+        }
+      },
       beginInstanceClosingAuthority: async (...args) => {
         const authority = await claims.beginInstanceClosing(...args);
-        return { release: async () => {
-          releases++;
-          await authority.release();
-          terminalEvents.push('authorityReleased');
-        },
-          reincarnate() { reincarnations++; assert.fail('host cannot reincarnate while draining or relocating'); } };
+        return {
+          release: async () => {
+            releases++;
+            await authority.release();
+            terminalEvents.push('authorityReleased');
+          },
+          reincarnate() {
+            reincarnations++;
+            assert.fail('host cannot reincarnate while draining or relocating');
+          }
+        };
       }
     });
     await manager.materializeInstance('mesh', 'room', 'close-room', ready.objectGeneration);
@@ -310,20 +337,33 @@ test('Instance intent request after the release decision is refused before admis
     nodeRid: 'node', nodeGeneration: 1n, objectGeneration: ready.objectGeneration,
     authorityOwnerGeneration: ready.authorityOwnerGeneration, ownerId: 'owner',
     ownerLeaseGeneration: 1n, storeVersion: ready.storeVersion.value });
-  const manager = new framework.DefaultZLinkSpotManager({ detachedTaskRunner, spotFactories: [],
+  const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner,
+    spotFactories: [],
     instanceSpotFactories: new Map([['mesh', new Map([['room', Room]])]]),
     spotPacketHandlers: [{ spotType: Room, handlerType: Ping, packetName: 'Ping' }],
-    instanceSpotApplicationTargetProvider: () => ({ stableType: 'room', objectGeneration: ready.objectGeneration }),
-    admission: { claim() { arrived.resolve(); return { close() {} }; } },
+    instanceSpotApplicationTargetProvider: () => ({
+      stableType: 'room',
+      objectGeneration: ready.objectGeneration
+    }),
+    admission: observedAdmission(() => {
+      arrived.resolve();
+      return { close() {} };
+    }),
     beginInstanceClosingAuthority: async (...args) => {
       const authority = await claims.beginInstanceClosing(...args);
-      return { release: async () => {
-        // Close step 3 has decided release; the Store holds its Delete.
-        releaseRequested.resolve();
-        await releaseHold.promise;
-        await authority.release();
-        events.push('authorityReleased');
-      }, reincarnate() { assert.fail('Close with no waiting Instance intent must release'); } };
+      return {
+        release: async () => {
+          // Close step 3 has decided release; the Store holds its Delete.
+          releaseRequested.resolve();
+          await releaseHold.promise;
+          await authority.release();
+          events.push('authorityReleased');
+        },
+        reincarnate() {
+          assert.fail('Close with no waiting Instance intent must release');
+        }
+      };
     }
   });
   await manager.materializeInstance('mesh', 'room', 'close-room', ready.objectGeneration);
@@ -435,21 +475,42 @@ for (const { initializationFails, queuedBeforeClose, readyCommitFails, send, rea
       nodeRid: 'node', nodeGeneration: 1n, objectGeneration: ready.objectGeneration,
       authorityOwnerGeneration: ready.authorityOwnerGeneration, ownerId: 'owner',
       ownerLeaseGeneration: 1n, storeVersion: ready.storeVersion.value });
-    const manager = new framework.DefaultZLinkSpotManager({ detachedTaskRunner, spotFactories: [],
-      instanceSpotFactories: new Map([['mesh', new Map([['room', Room]])]]),
-      spotPacketHandlers: [{ spotType: Room, handlerType: Ping, packetName: 'Ping' }],
-      instanceSpotApplicationTargetProvider: () => ({ stableType: 'room', objectGeneration: targetGeneration }),
-      spotTimerHandlers: [{ spotType: Room, handlerType: Tick, name: 'close-pending-timer', periodMs: 1_000 }],
-      admission: { claim() { arrived.resolve(); if (++admissionCount === 3) secondArrived.resolve(); return { close() { releasedClaims++; } }; } },
-      beginInstanceClosingAuthority: async (...args) => {
-        const authority = await claims.beginInstanceClosing(...args);
-        return { release: () => authority.release(), reincarnate: async (initialize) => {
-          const next = await authority.reincarnate(initialize);
-          targetGeneration = next.objectGeneration;
-          return next;
-        } };
-      }
-    }, timerClock);
+    const manager = new framework.DefaultZLinkSpotManager(
+      {
+        detachedTaskRunner,
+        spotFactories: [],
+        instanceSpotFactories: new Map([['mesh', new Map([['room', Room]])]]),
+        spotPacketHandlers: [{ spotType: Room, handlerType: Ping, packetName: 'Ping' }],
+        instanceSpotApplicationTargetProvider: () => ({
+          stableType: 'room',
+          objectGeneration: targetGeneration
+        }),
+        spotTimerHandlers: [
+          { spotType: Room, handlerType: Tick, name: 'close-pending-timer', periodMs: 1_000 }
+        ],
+        admission: observedAdmission(() => {
+          arrived.resolve();
+          if (++admissionCount === 3) secondArrived.resolve();
+          return {
+            close() {
+              releasedClaims++;
+            }
+          };
+        }),
+        beginInstanceClosingAuthority: async (...args) => {
+          const authority = await claims.beginInstanceClosing(...args);
+          return {
+            release: () => authority.release(),
+            reincarnate: async (initialize) => {
+              const next = await authority.reincarnate(initialize);
+              targetGeneration = next.objectGeneration;
+              return next;
+            }
+          };
+        }
+      },
+      timerClock
+    );
     if (readyCommitFails) {
       const compare = fixture.store.compareExchangeAuthority.bind(fixture.store);
       fixture.store.compareExchangeAuthority = async (key, version, mutation) => {

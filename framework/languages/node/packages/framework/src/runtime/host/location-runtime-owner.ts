@@ -133,6 +133,7 @@ export class ZLinkLocationRuntimeOwner {
       leaseTracker: this.leaseTracker(stores),
       events: this.events,
       spotMeshNames,
+      admissionOpen: () => this.runtime?.ownerLeaseUsable !== false,
       routeCacheMaxAgeMs: this.options.registration.locations.options.routeCacheMaxAgeMs
     });
   }
@@ -153,6 +154,7 @@ export class ZLinkLocationRuntimeOwner {
         stores: { ...stores, authorityStore: stores.locationStore },
         leaseTracker: this.leaseTracker(stores),
         events: this.events,
+        admissionOpen: () => this.runtime?.ownerLeaseUsable !== false,
         routeCacheMaxAgeMs: this.options.registration.locations.options.routeCacheMaxAgeMs
       }),
       spotMeshNames,
@@ -173,6 +175,7 @@ export class ZLinkLocationRuntimeOwner {
       leaseTracker: this.leaseTracker(stores),
       events: this.events,
       spotMeshNames,
+      admissionOpen: () => this.runtime?.ownerLeaseUsable !== false,
       routeCacheMaxAgeMs: this.options.registration.locations.options.routeCacheMaxAgeMs
     });
   }

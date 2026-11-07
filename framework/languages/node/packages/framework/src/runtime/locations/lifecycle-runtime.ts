@@ -18,6 +18,10 @@ export interface ZLinkOwnershipLostEvent {
 }
 
 export interface IZLinkLocationLifecycleRuntime {
+  trackExecution?(owner: object, steadyReady: () => boolean, discard: () => void): void;
+  forgetExecution?(owner: object): void;
+  discardExecution?(owner: object): void;
+  discardSteadyExecution?(owner: object): boolean;
   readonly ownerId: string;
   readonly currentOwnerToken?: ZLinkLocationOwnerToken;
   reclaimOwnerAuthorities?(signal?: AbortSignal): Promise<void>;

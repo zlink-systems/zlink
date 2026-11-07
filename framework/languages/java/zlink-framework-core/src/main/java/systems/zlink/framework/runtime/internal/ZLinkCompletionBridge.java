@@ -63,8 +63,8 @@ public final class ZLinkCompletionBridge {
                 });
     }
 
-    private static void cancelIfIncomplete(CompletableFuture<?> waiter) {
-        if (!waiter.isDone()) waiter.cancel(false);
+    private static void cancelIfIncomplete(Object target) {
+        if (target instanceof CompletableFuture<?> waiter && !waiter.isDone()) waiter.cancel(false);
     }
 
     public static <T> void completeOrDiscard(
@@ -109,37 +109,47 @@ public final class ZLinkCompletionBridge {
 
         @Override
         public boolean complete(T value) {
+            if (finish(null) == FINISHED) return false;
             boolean completed = super.complete(value);
-            if (completed) finish(false, null);
+            if (completed) observeTerminal(null);
             return completed;
         }
 
         @Override
         public boolean completeExceptionally(Throwable failure) {
+            Objects.requireNonNull(failure, "failure");
+            Object target = finish(failure);
+            if (target == FINISHED) return false;
             boolean completed = super.completeExceptionally(failure);
-            if (completed) finish(failure instanceof CancellationException, failure);
+            if (failure instanceof CancellationException) cancelIfIncomplete(target);
+            if (completed) observeTerminal(failure);
             return completed;
         }
 
         @Override
         public boolean cancel(boolean mayInterruptIfRunning) {
+            Object target = finish(CANCELLED);
+            if (target == FINISHED) return isCancelled();
             boolean cancelled = super.cancel(mayInterruptIfRunning);
-            if (cancelled) finish(true, CANCELLED);
+            cancelIfIncomplete(target);
+            if (cancelled) observeTerminal(CANCELLED);
             return cancelled;
         }
 
         @Override
         public void obtrudeValue(T value) {
-            boolean incomplete = !isDone();
+            Object target = finish(null);
             super.obtrudeValue(value);
-            if (incomplete) finish(false, null);
+            if (target != FINISHED) observeTerminal(null);
         }
 
         @Override
         public void obtrudeException(Throwable failure) {
-            boolean incomplete = !isDone();
+            Objects.requireNonNull(failure, "failure");
+            Object target = finish(failure);
             super.obtrudeException(failure);
-            if (incomplete) finish(failure instanceof CancellationException, failure);
+            if (failure instanceof CancellationException) cancelIfIncomplete(target);
+            if (target != FINISHED) observeTerminal(failure);
         }
 
         @Override
@@ -165,11 +175,16 @@ public final class ZLinkCompletionBridge {
             return this;
         }
 
-        private void finish(boolean cancelWaiter, Throwable failure) {
+        private Object finish(Throwable failure) {
             Object target = FORWARDER.getAndSet(this, FINISHED);
-            if (target == FINISHED) return;
-            if (cancelWaiter && target instanceof CompletableFuture<?> waiter)
-                cancelIfIncomplete(waiter);
+            if (target != FINISHED) beforeCompletion(failure);
+            return target;
+        }
+
+        /** Allows the resource owner to settle its terminal cleanup before public completion. */
+        protected void beforeCompletion(Throwable failure) {}
+
+        protected final void observeTerminal(Throwable failure) {
             BiConsumer<CompletableFuture<T>, Throwable> observer = terminalObserver;
             terminalObserver = null;
             if (observer != null) {

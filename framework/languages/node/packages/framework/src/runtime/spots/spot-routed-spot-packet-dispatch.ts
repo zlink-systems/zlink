@@ -1,4 +1,5 @@
 import { dispatchReasonFromError } from '../diagnostics/dispatch-error-details';
+import { runOutsideZLinkActorExecution } from '../actors/actor-execution-context';
 import type {
   RoutingId,
   Type,
@@ -154,107 +155,111 @@ export class ZLinkRoutedSpotPacketDispatch {
     const instanceIntent =
       originalRecord?.activation === 'missing' ||
       (originalRecord?.activation === 'ready' && originalRecord.instanceIntent);
-    const runHandler = async (failure?: unknown) => {
-      try {
-        if (failure !== undefined) throw failure;
-        const current = this.options.resolveActivation(spotId);
-        if (
-          current === undefined ||
-          (!instanceIntent &&
-            (current !== activation ||
-              (originalRecord?.activation === 'ready' &&
-                originalRecord.route.objectGeneration !== current.objectGeneration)))
-        ) {
-          throw createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
-            `Spot '${String(spotId)}' is not active.`
+    const runHandler = (failure?: unknown) =>
+      runOutsideZLinkActorExecution(async () => {
+        try {
+          if (failure !== undefined) throw failure;
+          const current = this.options.resolveActivation(spotId);
+          if (
+            current === undefined ||
+            (!instanceIntent &&
+              (current !== activation ||
+                (originalRecord?.activation === 'ready' &&
+                  originalRecord.route.objectGeneration !== current.objectGeneration)))
+          ) {
+            throw createInternalFrameworkException(
+              ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
+              `Spot '${String(spotId)}' is not active.`
+            );
+          }
+          if (
+            context.activationRecord?.deadlineUnixMs !== undefined &&
+            context.activationRecord.deadlineUnixMs < BigInt(Date.now())
+          ) {
+            throw createInternalFrameworkException(
+              ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+              `Spot '${String(spotId)}' request deadline has expired.`
+            );
+          }
+          const currentRegistrations =
+            current === activation
+              ? registrations
+              : current.handlers
+                  .snapshot()
+                  .filter(
+                    (registration) =>
+                      registration.kind === 'packet' &&
+                      (registration.packetName ?? registration.handlerType.name) ===
+                        (packetName ?? '')
+                  );
+          // Decode only after the Spot has acquired both application admission
+          // and its execution authority.
+          const payload = decodePayload(
+            resolveMessageTypeForDecode(currentRegistrations[0]?.messageType)
           );
+          for (const registration of currentRegistrations) {
+            const handler = await resolveLifecycleHandler(
+              current.spot,
+              registration.handlerType as Type<
+                | ZLinkSpotPacketHandler<ZLinkSpot, unknown>
+                | ZLinkSpotRequestHandler<ZLinkSpot, unknown, unknown>
+              >,
+              this.options.providerResolver
+            );
+            current.serial.currentTurn?.ensureExecutionAllowed();
+            resolveFirstHandlerTurn?.();
+            resolveFirstHandlerTurn = undefined;
+            context.activationRecord?.onHandlerTurnStarted?.();
+            const handlerContext = {
+              channelName: context.channelName,
+              contentType: context.contentType,
+              packetName: packetName!,
+              metadata: zlinkMessageMetadata({}),
+              receivedAt
+            };
+            releaseApplicationJobPermitBeforeHandler();
+            response = await handler.handle(current.spot, payload, handlerContext);
+          }
+        } catch (error) {
+          rejectFirstHandlerTurn?.(error);
+          throw error;
         }
-        if (
-          context.activationRecord?.deadlineUnixMs !== undefined &&
-          context.activationRecord.deadlineUnixMs < BigInt(Date.now())
-        ) {
-          throw createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-            `Spot '${String(spotId)}' request deadline has expired.`
-          );
-        }
-        const currentRegistrations =
-          current === activation
-            ? registrations
-            : current.handlers
-                .snapshot()
-                .filter(
-                  (registration) =>
-                    registration.kind === 'packet' &&
-                    (registration.packetName ?? registration.handlerType.name) ===
-                      (packetName ?? '')
-                );
-        // Decode only after the Spot has acquired both application admission
-        // and its execution authority.
-        const payload = decodePayload(
-          resolveMessageTypeForDecode(currentRegistrations[0]?.messageType)
-        );
-        for (const registration of currentRegistrations) {
-          const handler = await resolveLifecycleHandler(
-            current.spot,
-            registration.handlerType as Type<
-              | ZLinkSpotPacketHandler<ZLinkSpot, unknown>
-              | ZLinkSpotRequestHandler<ZLinkSpot, unknown, unknown>
-            >,
-            this.options.providerResolver
-          );
-          resolveFirstHandlerTurn?.();
-          resolveFirstHandlerTurn = undefined;
-          context.activationRecord?.onHandlerTurnStarted?.();
-          const handlerContext = {
-            channelName: context.channelName,
-            contentType: context.contentType,
-            packetName: packetName!,
-            metadata: zlinkMessageMetadata({}),
-            receivedAt
-          };
-          releaseApplicationJobPermitBeforeHandler();
-          response = await handler.handle(current.spot, payload, handlerContext);
-        }
-      } catch (error) {
-        rejectFirstHandlerTurn?.(error);
-        throw error;
-      }
-    };
+      });
     try {
       if (!returnResponse) {
         detached = true;
         const detachedApplicationPermit = detachApplicationJobPermit();
         try {
-          await activation.serial.postOneWay(
-            async () => {
-              try {
-                await runHandler();
-              } finally {
-                detachedApplicationPermit?.releaseAfterInternalProcessing();
-                applicationClaim?.close();
-              }
-            },
-            (error) => {
-              if (context.onOneWayError === undefined) {
-                this.reportFailure(spotId, packetName, context, false, error);
-              } else if (resolveFirstHandlerTurn === undefined) {
-                context.onOneWayError(error);
-              }
-            },
-            context.workOptions,
-            { signal: context.signal },
-            instanceIntent
-              ? async (failure?: unknown) => {
-                  try {
-                    await runHandler(failure);
-                  } finally {
-                    detachedApplicationPermit?.releaseAfterInternalProcessing();
-                    applicationClaim?.close();
-                  }
+          await runOutsideZLinkActorExecution(() =>
+            activation.serial.postOneWay(
+              async () => {
+                try {
+                  await runHandler();
+                } finally {
+                  detachedApplicationPermit?.releaseAfterInternalProcessing();
+                  applicationClaim?.close();
                 }
-              : undefined
+              },
+              (error) => {
+                if (context.onOneWayError === undefined) {
+                  this.reportFailure(spotId, packetName, context, false, error);
+                } else if (resolveFirstHandlerTurn === undefined) {
+                  context.onOneWayError(error);
+                }
+              },
+              context.workOptions,
+              { signal: context.signal },
+              instanceIntent
+                ? async (failure?: unknown) => {
+                    try {
+                      await runHandler(failure);
+                    } finally {
+                      detachedApplicationPermit?.releaseAfterInternalProcessing();
+                      applicationClaim?.close();
+                    }
+                  }
+                : undefined
+            )
           );
         } catch (error) {
           detached = false;
@@ -270,10 +275,12 @@ export class ZLinkRoutedSpotPacketDispatch {
             `Spot '${spotId}' cannot await a request to its current serial turn.`
           );
         }
-        await activation.serial.execute(
-          runHandler,
-          { ...context.workOptions, onAdmitted: context.onAdmitted },
-          instanceIntent ? runHandler : undefined
+        await runOutsideZLinkActorExecution(() =>
+          activation.serial.execute(
+            runHandler,
+            { ...context.workOptions, onAdmitted: context.onAdmitted },
+            instanceIntent ? runHandler : undefined
+          )
         );
       }
     } catch (error) {

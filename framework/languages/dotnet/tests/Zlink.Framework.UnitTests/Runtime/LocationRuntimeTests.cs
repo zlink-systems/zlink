@@ -730,7 +730,7 @@ public sealed class LocationRuntimeTests
             CancellationToken.None,
             ZLinkExecutionLanePolicy.Default,
             sharedGate: sharedGate,
-            executionAllowed: () => actor.IsLocationExecutionAllowed
+            executionAllowed: () => actor.ExecutionStatus
         );
         var entered = new TaskCompletionSource<ZLinkSerialTurn>(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -811,7 +811,7 @@ public sealed class LocationRuntimeTests
             executionAllowed: () =>
             {
                 Interlocked.Increment(ref delegateCalls);
-                return actor.IsLocationExecutionAllowed;
+                return actor.ExecutionStatus;
             }
         );
         time.ResetReads();
@@ -846,12 +846,12 @@ public sealed class LocationRuntimeTests
         : IZLinkObjectExecutionRecord
     {
         internal int Checks;
-        public bool IsExecutionAllowed
+        public ZLinkObjectExecutionStatus ExecutionStatus
         {
             get
             {
                 Interlocked.Increment(ref Checks);
-                return actor.IsLocationExecutionAllowed;
+                return actor.ExecutionStatus;
             }
         }
     }
@@ -1116,7 +1116,7 @@ public sealed class LocationRuntimeTests
         : IZLinkObjectExecutionRecord
     {
         public int HandlerCalls;
-        public bool IsExecutionAllowed => actor.IsLocationExecutionAllowed;
+        public ZLinkObjectExecutionStatus ExecutionStatus => actor.ExecutionStatus;
     }
 
     private sealed class OutageExecutionActorFactory(OutageExecutionProbe probe)

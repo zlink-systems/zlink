@@ -393,12 +393,14 @@ export class ZLinkSpotActorPacketDispatch {
       messageSerializers: this.options.messageSerializers,
       onAdmitted: () => this.trace(ZLinkMessageFlowOutcome.Admitted, actorId, header, messageKind),
       onHandlerStart: () => {
-        if (this.options.admission?.ownerAdmissionOpen() === false) {
+        if (
+          (this.options.admission?.executionAllowed(actor) ??
+            this.options.admission?.ownerAdmissionOpen()) === false
+        )
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.RequestRejected,
             'Actor handler was rejected because Location owner admission is closed.'
           );
-        }
         // A transferred backlog is returned to the Actor queue as one FIFO
         // prefix. Check the request deadline when its owner turn actually
         // starts, not when that prefix is admitted.
