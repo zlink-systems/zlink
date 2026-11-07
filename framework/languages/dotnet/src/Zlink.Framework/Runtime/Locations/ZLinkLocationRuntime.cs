@@ -17,7 +17,10 @@ internal sealed record ZLinkStoreOutageEpisode(
     TimeSpan Lifetime,
     ZLinkLocationOwnerToken Owner,
     bool Discarded = false
-);
+)
+{
+    internal IReadOnlySet<object> Executions { get; init; } = new HashSet<object>();
+}
 
 internal sealed class ZLinkOwnerLeaseClaimRejectedException(ZLinkOwnerLeaseClaimResult result)
     : InvalidOperationException($"Owner lease claim failed with '{result.GetType().Name}'.");
@@ -101,14 +104,11 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         }
     }
 
-    internal bool IsOwnerAdmissionOpen
-    {
-        get { return AwaitStateLane(_lane.RunAsync(IsOwnerAdmissionOpenOnLane)); }
-    }
+    internal bool IsOwnerAdmissionOpen => IsOwnerAdmissionOpenOnLane();
 
     internal void EnsureOwnerAdmissionOpen()
     {
-        AwaitStateLane(_lane.RunAsync(EnsureOwnerAdmissionOpenOnLane));
+        EnsureOwnerAdmissionOpenOnLane();
     }
 
     internal IZLinkLocationRepository Store => _store;
@@ -129,6 +129,72 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
     internal event Action<ZLinkOwnerLeaseRenewal>? OwnerLeaseRenewed;
 
     internal event Action? OwnerLeaseRenewalFailed;
+
+    internal Func<IReadOnlySet<object>>? CaptureExecutions { get; set; }
+
+    internal event Action<IReadOnlySet<object>>? ExecutionsDiscarded;
+
+    private IReadOnlySet<object> CaptureSteadyExecutionsOnLane()
+    {
+        var candidates = CaptureExecutions?.Invoke() ?? new HashSet<object>();
+        var executions = new HashSet<object>();
+        foreach (var spot in candidates.OfType<ZLinkSpotActivation>())
+            if (
+                !spot.IsDisposed
+                && !spot.HasCommittedClose
+                && !spot._serial.IsPreparing
+                && !spot.HasRelocationBarrier
+            )
+                executions.Add(spot);
+        foreach (var actor in candidates.OfType<ZLinkActorRuntimeState>())
+            if (
+                IsSteadyActor(actor)
+                && (actor.Activation is null || executions.Contains(actor.Activation))
+            )
+                executions.Add(actor);
+        return executions;
+    }
+
+    private static bool IsSteadyActor(ZLinkActorRuntimeState actor) =>
+        actor.Actor is not null
+        && Volatile.Read(ref actor._deferredJoinPending) == 0
+        && !actor.ContextInvalidated
+        && !actor.IsDispatchBlocked
+        && !actor.Handoff.BlocksLocalDispatch;
+
+    internal static bool IsRelocationLifecycleOwned(ZLinkActorRuntimeState actor) =>
+        actor.Handoff.IsSourceMigrationInProgress
+        || (actor.Actor is null && actor.Handoff.RetainsSourceTombstone);
+
+    internal bool IsBoundExecutionOpen => IsExecutionAllowed(null);
+
+    internal bool IsExecutionAllowed(object? execution)
+    {
+        var episode = GetHealthSnapshot().StoreOutage;
+        if (episode is null)
+            return execution is not null || IsOwnerAdmissionOpenOnLane();
+        var retained = !episode.Discarded && episode.Executions.Count > 0;
+        if (execution is null)
+            return retained || IsOwnerAdmissionOpenOnLane();
+        var preserved = episode.Executions.Contains(execution);
+        if (execution is ZLinkActorRuntimeState { Activation: { } parent })
+        {
+            if (!episode.Executions.Contains(parent))
+                return IsOwnerAdmissionOpenOnLane() && (!preserved || retained);
+            if (!retained)
+                return false;
+        }
+        return preserved ? retained : IsOwnerAdmissionOpenOnLane();
+    }
+
+    internal void EnsureRelocationAdmissionOpen()
+    {
+        EnsureOwnerAdmissionOpen();
+        if (GetHealthSnapshot().StoreOutage is not null)
+            throw new InvalidOperationException(
+                "The location Store is unavailable for relocation."
+            );
+    }
 
     internal async ValueTask StartAsync(
         RoutingId nodeRid,
@@ -709,9 +775,20 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                             .ConfigureAwait(false);
                         readingOrRenewing = false;
                         if (renewal is not ZLinkOwnerLeaseRenewResult.Renewed renewed)
+                        {
+                            await _lane
+                                .RunAsync(() =>
+                                {
+                                    _ownerAdmissionDeadline = null;
+                                    ExecutionsDiscarded?.Invoke(
+                                        CaptureExecutions?.Invoke() ?? new HashSet<object>()
+                                    );
+                                })
+                                .ConfigureAwait(false);
                             throw new InvalidOperationException(
                                 "The owner lease token became stale."
                             );
+                        }
                         result = renewed;
                         return await CompleteOwnerLeaseRenewalAsync(
                                 result,
@@ -839,7 +916,10 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
             lease.Deadline.LeaseOperationStartedAt,
             lifetime,
             lease.Token
-        );
+        )
+        {
+            Executions = CaptureSteadyExecutionsOnLane(),
+        };
         UpdateHealth(health => health with { StoreOutage = episode });
         // Use the host clock's one-shot deadline; application turns and mesh peers do not participate.
         using (ExecutionContext.IsFlowSuppressed() ? default : ExecutionContext.SuppressFlow())
@@ -877,6 +957,14 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
         UpdateHealth(health => health with { StoreOutage = episode with { Discarded = true } });
         _storeOutageTimer?.Dispose();
         _storeOutageTimer = null;
+        ExecutionsDiscarded?.Invoke(episode.Executions);
+        if (episode.Executions.Count != 0)
+            UpdateHealth(health =>
+                health with
+                {
+                    StoreOutage = health.StoreOutage! with { Executions = new HashSet<object>() },
+                }
+            );
     }
 
     private async ValueTask<ZLinkOwnerLeaseRenewResult.Renewed?> ConfirmClaimAsync(
@@ -1038,7 +1126,7 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
 
     private bool IsOwnerAdmissionOpenOnLane()
     {
-        var deadline = _ownerAdmissionDeadline;
+        var deadline = Volatile.Read(ref _ownerAdmissionDeadline);
         return deadline is not null
             && _time.GetElapsedTime(deadline.LeaseOperationStartedAt) < deadline.Lifetime;
     }

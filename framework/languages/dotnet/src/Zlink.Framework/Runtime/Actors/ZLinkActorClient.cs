@@ -47,7 +47,9 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         ResolvedActorRoute? fixedRoute = null
     )
     {
-        using var operation = (await runtime.AdmitOperationAsync().ConfigureAwait(false)).Enter();
+        using var operation = (
+            await runtime.AdmitOperationAsync(boundExecution: true).ConfigureAwait(false)
+        ).Enter();
         using var flow = ZLinkFlowContext.EnterCurrentOrCreate(
             ZLinkFlowOrigin.Application,
             runtime.Flow.CaptureEnabled
@@ -112,7 +114,9 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
     {
         var started = timeout is null ? 0 : Stopwatch.GetTimestamp();
         using var operation = (
-            await runtime.AdmitOperationAsync(countAsRequest: true).ConfigureAwait(false)
+            await runtime
+                .AdmitOperationAsync(countAsRequest: true, boundExecution: true)
+                .ConfigureAwait(false)
         ).Enter();
         using var flow = ZLinkFlowContext.EnterCurrentOrCreate(
             ZLinkFlowOrigin.Application,

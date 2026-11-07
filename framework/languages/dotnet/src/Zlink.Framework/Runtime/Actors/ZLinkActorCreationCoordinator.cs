@@ -225,7 +225,7 @@ internal sealed class ZLinkActorCreationCoordinator(
                 actorType,
                 ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
                 getActorSpotNode()?.RoutingId ?? default,
-                deactivate: _ => runtime.DeactivateActorOnOwnershipLossAsync(actorId),
+                deactivate: _ => runtime.DeactivateActorOnOwnershipLossAsync(state),
                 activate: ct =>
                     ActivateRelocatedActorCoreAsync(
                         state,
@@ -444,7 +444,7 @@ internal sealed class ZLinkActorCreationCoordinator(
                 actorType,
                 ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
                 getActorSpotNode()?.RoutingId ?? default,
-                deactivate: _ => runtime.DeactivateActorOnOwnershipLossAsync(actorId),
+                deactivate: _ => runtime.DeactivateActorOnOwnershipLossAsync(state),
                 activate: ct =>
                     ActivateActorCoreAsync(
                         state,

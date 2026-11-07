@@ -6,6 +6,12 @@ namespace Zlink.Framework.Runtime.Spots;
 
 internal abstract partial class ZLinkSpotActivation
 {
+    internal void ForgetDiscardedActorMembership(IZLinkActor actor)
+    {
+        if (_actors.RemoveIfCurrent(actor))
+            SignalPerActorMembersDrainedIfNeeded();
+    }
+
     private static readonly TimeSpan ActorHandoffPollInterval = TimeSpan.FromMilliseconds(10);
 
     private readonly HashSet<ZLinkActorId> _actorsLeavingForEntrySpot = [];
@@ -16,6 +22,7 @@ internal abstract partial class ZLinkSpotActivation
     )
     {
         EnsureContextOperationAllowed();
+        _runtime.LocationLifecycle?.EnsureOwnerAdmissionOpen();
         ArgumentNullException.ThrowIfNull(actor);
         if (
             ZLinkBoundSessionDispatchScope.TryDefer(
@@ -61,6 +68,7 @@ internal abstract partial class ZLinkSpotActivation
         DateTimeOffset? absoluteDeadline = null
     )
     {
+        _runtime.LocationLifecycle?.EnsureOwnerAdmissionOpen();
         ArgumentNullException.ThrowIfNull(request);
 
         if (!_actorJoins.TryResolve(out var descriptor) || descriptor is null)

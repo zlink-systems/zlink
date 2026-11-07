@@ -47,7 +47,7 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
             registration.InboundDispatchOptions,
             ApplicationJobQueue
         );
-        TimerScheduler = new ZLinkTimerScheduler();
+        TimerScheduler = new ZLinkTimerScheduler(registration.TimeProvider);
         TaskRunner = new ZLinkRuntimeTaskRunner(
             ErrorSink,
             StopTokenSource.Token,
