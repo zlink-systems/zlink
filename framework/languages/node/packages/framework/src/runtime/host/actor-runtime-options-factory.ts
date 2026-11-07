@@ -36,7 +36,7 @@ import type { ZLinkActorJoinRelocation } from '../actors/actor-join-relocation';
 
 export interface ZLinkActorRuntimeOptionsFactoryOptions {
   readonly requests?: RequestRuntime;
-  readonly discardActorActivation?: (actor: ZLinkActor) => void;
+  readonly discardActorActivation?: (actor: ZLinkActor, error: unknown) => void;
   readonly terminateActorActivation: (
     actor: ZLinkActor,
     terminal: () => Promise<void>
