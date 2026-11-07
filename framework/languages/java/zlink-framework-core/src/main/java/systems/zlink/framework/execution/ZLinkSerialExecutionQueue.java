@@ -516,6 +516,11 @@ public final class ZLinkSerialExecutionQueue {
         boolean closing = transition != null && transition.committed.getAsBoolean();
         boolean retainedMessage = (closingAdmissionSealed || closing) && retains.test(message);
         if (closingAdmissionSealed || closing && !retainedMessage) {
+            try {
+                requireMailboxExecution(false);
+            } catch (systems.zlink.framework.errors.ZLinkFrameworkException failure) {
+                return CompletableFuture.failedFuture(failure);
+            }
             if (retainedMessage) {
                 return CompletableFuture.failedFuture(
                         ZLinkFrameworkErrorOrigin.ownerFenceRefusal(
@@ -878,9 +883,12 @@ public final class ZLinkSerialExecutionQueue {
     private void requireEntryExecution(Entry entry) {
         if (entry == null) return;
         ZLinkSerialExecutionQueue mailbox = entry.ownerMailbox == null ? this : entry.ownerMailbox;
-        mailbox.requireExecution(!isLifecycleTurn(entry));
-        if (mailbox.timerOwner != null)
-            mailbox.timerOwner.requireExecution(!isLifecycleTurn(entry));
+        mailbox.requireMailboxExecution(!isLifecycleTurn(entry));
+    }
+
+    private void requireMailboxExecution(boolean application) {
+        requireExecution(application);
+        if (timerOwner != null) timerOwner.requireExecution(application);
     }
 
     /** Cancel accepted application work using the queue's existing ownership/release path. */
@@ -903,17 +911,27 @@ public final class ZLinkSerialExecutionQueue {
                         schedule = requestDrainLocked();
                     }
                     for (Entry entry : pending) {
-                        entry.result.cancel(false);
+                        completeDiscardedApplication(entry);
                         cancelPending(entry);
                     }
                     for (Entry entry : continuations) {
                         release(entry);
                         entry.relocationRelease.run();
-                        entry.result.cancel(false);
+                        completeDiscardedApplication(entry);
                     }
                     scheduleDrainIfNeeded(schedule, null);
                     return null;
                 });
+    }
+
+    private void completeDiscardedApplication(Entry entry) {
+        try {
+            requireEntryExecution(entry);
+        } catch (systems.zlink.framework.errors.ZLinkFrameworkException failure) {
+            entry.result.completeExceptionally(failure);
+            return;
+        }
+        entry.result.cancel(false);
     }
 
     public void close() {

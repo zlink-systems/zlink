@@ -8,7 +8,10 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationStoreFailure;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimed;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseFound;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseGenerationExhausted;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseMissing;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReadResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 
@@ -365,7 +368,9 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                             && retained == episode
                             && (episode.discarded || cutoffReached(episode)))) {
                 discard();
-                throw new OwnerLeaseAdmissionClosedException();
+                throw systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin.framework(
+                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.NOT_FOUND,
+                        "The resolved owner no longer owns this incarnation.");
             }
             if (!application || isOwnerAdmissionOpenCore()) return;
             if (episode != null && retained == episode && storeOutageRetention) return;
@@ -450,12 +455,29 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
 
     private boolean latchOutageCore(StoreOutage episode) {
         if (!episode.discarded && cutoffReached(episode)) {
-            episode.discarded = true;
-            for (Execution execution : java.util.List.copyOf(executions)) {
-                if (execution.retained == episode) execution.discardCore();
-            }
+            discardOutageCore(episode);
         }
         return episode.discarded;
+    }
+
+    private void discardOutageCore(StoreOutage episode) {
+        if (episode.discarded) return;
+        episode.discarded = true;
+        for (Execution execution : java.util.List.copyOf(executions)) {
+            if (execution.retained == episode) execution.discardCore();
+        }
+    }
+
+    private boolean discardChangedOwnerLeaseCore(
+            StoreOutage episode,
+            ZLinkLocationOwnerToken expected,
+            ZLinkOwnerLeaseReadResult exact) {
+        if (!(exact instanceof ZLinkOwnerLeaseFound found) || expected.equals(found.token()))
+            return false;
+        executionOpen = false;
+        ownerAdmissionRevoked = true;
+        discardOutageCore(episode);
+        return true;
     }
 
     private void observeSuccessfulLeaseCore(
@@ -776,7 +798,9 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                 (result, failure) ->
                                         stateLane.<Supplier<CompletionStage<Boolean>>>runAsync(
                                                 () -> {
-                                                    if (!started || !token.equals(ownerToken)) {
+                                                    if (!started
+                                                            || !ownsStartupCore(lifecycle)
+                                                            || !token.equals(ownerToken)) {
                                                         return () ->
                                                                 CompletableFuture.completedFuture(
                                                                         false);
@@ -796,6 +820,13 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                                             .locations
                                                                             .ZLinkOwnerLeaseRenewed
                                                                     renewed) {
+                                                        // A pre-outage response cannot establish
+                                                        // recovery of this episode.
+                                                        if (outage != null
+                                                                && state.outage() != outage)
+                                                            return () ->
+                                                                    CompletableFuture
+                                                                            .completedFuture(false);
                                                         boolean admissionWasOpen =
                                                                 isOwnerAdmissionOpenCore();
                                                         recordSuccessfulRenewalCore(
@@ -815,6 +846,17 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                     recordRenewalFailureCore(
                                                             "owner lease renewal was stale");
                                                     executionOpen = false;
+                                                    if (outage != null) {
+                                                        StoreOutage episode = outage;
+                                                        long reclaimAfter =
+                                                                ownerLeaseReclaimAfterCore();
+                                                        return () ->
+                                                                reclaimExpiredOwnerLease(
+                                                                        token,
+                                                                        episode,
+                                                                        reclaimAfter,
+                                                                        lifecycle);
+                                                    }
                                                     ownerAdmissionRevoked = true;
                                                     return () ->
                                                             claimOwnerLease(lifecycle)
@@ -828,6 +870,70 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                         .thenCompose(stage -> stage)
                         .thenCompose(Supplier::get);
         return reportRenewalFailure(renewal, lifecycle);
+    }
+
+    private long ownerLeaseReclaimAfterCore() {
+        // Admission is lease lifetime minus margin; reclaim needs lifetime plus margin.
+        return saturatingAdd(
+                ownerAdmissionDeadlineNanos, ownerLeaseFencingMargin.multipliedBy(2).toNanos());
+    }
+
+    private CompletionStage<Boolean> reclaimExpiredOwnerLease(
+            ZLinkLocationOwnerToken token,
+            StoreOutage episode,
+            long reclaimAfter,
+            CompletableFuture<Void> lifecycle) {
+        if (monotonicNow.getAsLong() - reclaimAfter < 0L)
+            return CompletableFuture.completedFuture(false);
+        long deadline = saturatingAdd(monotonicNow.getAsLong(), ownerLeaseRenewTimeout.toNanos());
+        return observeLeaseOperation(
+                        () ->
+                                withinDeadline(
+                                        () -> stores.ownerLeaseStore().readOwnerLease(ownerId),
+                                        deadline))
+                .thenCompose(
+                        exact ->
+                                stateLane.<Supplier<CompletionStage<Boolean>>>runAsync(
+                                        () -> {
+                                            if (!started
+                                                    || !ownsStartupCore(lifecycle)
+                                                    || !token.equals(ownerToken)
+                                                    || outage != episode)
+                                                return () ->
+                                                        CompletableFuture.completedFuture(false);
+                                            if (discardChangedOwnerLeaseCore(episode, token, exact))
+                                                return () ->
+                                                        CompletableFuture.completedFuture(false);
+                                            // A concurrent successful renew may have extended this
+                                            // token while the read was pending.
+                                            if (monotonicNow.getAsLong()
+                                                            - ownerLeaseReclaimAfterCore()
+                                                    < 0L)
+                                                return () ->
+                                                        CompletableFuture.completedFuture(false);
+                                            boolean expired =
+                                                    exact instanceof ZLinkOwnerLeaseMissing
+                                                            || exact
+                                                                            instanceof
+                                                                            ZLinkOwnerLeaseFound
+                                                                                    found
+                                                                    && !found.leaseExpiresAt()
+                                                                            .isAfter(
+                                                                                    found
+                                                                                            .storeNow());
+                                            if (!expired)
+                                                return () ->
+                                                        CompletableFuture.completedFuture(false);
+                                            return () ->
+                                                    claimOwnerLease(lifecycle, deadline)
+                                                            .thenCompose(
+                                                                    ignored ->
+                                                                            republishAfterOwnerLeaseRecovery(
+                                                                                    lifecycle,
+                                                                                    false))
+                                                            .thenApply(ignored -> true);
+                                        }))
+                .thenCompose(Supplier::get);
     }
 
     /** Records renewal failures only for the lifecycle that requested them. */
@@ -854,11 +960,24 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     }
 
     private CompletionStage<Void> claimOwnerLease(CompletableFuture<Void> lifecycle) {
+        long deadlineNanos =
+                saturatingAdd(monotonicNow.getAsLong(), ownerLeaseRenewTimeout.toNanos());
+        return claimOwnerLease(lifecycle, deadlineNanos);
+    }
+
+    private CompletionStage<Void> claimOwnerLease(
+            CompletableFuture<Void> lifecycle, long deadlineNanos) {
+        StoreOutage episode = outage;
+        ZLinkLocationOwnerToken previousToken = ownerToken;
         long operationStartedNanos = monotonicNow.getAsLong();
-        long deadlineNanos = saturatingAdd(operationStartedNanos, ownerLeaseRenewTimeout.toNanos());
+        if (deadlineNanos - operationStartedNanos <= 0L)
+            return CompletableFuture.failedFuture(
+                    new TimeoutException("owner lease operation timed out"));
         return resolveOwnerLeaseClaim(
                         deadlineNanos,
-                        stores.ownerLeaseStore().claimOwnerLease(ownerId, ownerLeaseTtl))
+                        stores.ownerLeaseStore().claimOwnerLease(ownerId, ownerLeaseTtl),
+                        episode,
+                        previousToken)
                 .handle(
                         (claimed, failure) ->
                                 installOwnerLease(
@@ -868,6 +987,14 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
 
     private CompletionStage<ZLinkOwnerLeaseClaimed> resolveOwnerLeaseClaim(
             long deadlineNanos, CompletionStage<ZLinkOwnerLeaseClaimResult> claimOperation) {
+        return resolveOwnerLeaseClaim(deadlineNanos, claimOperation, null, null);
+    }
+
+    private CompletionStage<ZLinkOwnerLeaseClaimed> resolveOwnerLeaseClaim(
+            long deadlineNanos,
+            CompletionStage<ZLinkOwnerLeaseClaimResult> claimOperation,
+            StoreOutage episode,
+            ZLinkLocationOwnerToken previousToken) {
         return withinDeadline(claimOperation, deadlineNanos)
                 .<CompletionStage<ZLinkOwnerLeaseClaimResult>>handle(
                         (result, failure) -> {
@@ -883,7 +1010,8 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                 instanceof
                                                 systems.zlink.framework.runtime.internal.locations
                                                         .ZLinkOwnerLeaseClaimConflict
-                                        ? confirmClaimAfterConflict(result, deadlineNanos)
+                                        ? confirmClaimAfterConflict(
+                                                result, deadlineNanos, episode, previousToken)
                                         : CompletableFuture.completedFuture(result))
                 .thenCompose(
                         result -> {
@@ -924,21 +1052,32 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     }
 
     private CompletionStage<ZLinkOwnerLeaseClaimResult> confirmClaimAfterConflict(
-            ZLinkOwnerLeaseClaimResult conflict, long deadlineNanos) {
+            ZLinkOwnerLeaseClaimResult conflict,
+            long deadlineNanos,
+            StoreOutage episode,
+            ZLinkLocationOwnerToken previousToken) {
         return observeLeaseOperation(
                         () ->
                                 withinDeadline(
                                         () -> stores.ownerLeaseStore().readOwnerLease(ownerId),
                                         deadlineNanos))
+                .thenCompose(
+                        exact ->
+                                stateLane.runAsync(
+                                        () -> {
+                                            if (episode != null
+                                                    && outage == episode
+                                                    && previousToken.equals(ownerToken)
+                                                    && discardChangedOwnerLeaseCore(
+                                                            episode, previousToken, exact))
+                                                throw new OwnerLeaseClaimRejectedException(
+                                                        "owner lease changed during recovery");
+                                            return exact;
+                                        }))
                 .handle(
                         (result, failure) ->
                                 failure == null
-                                                && result
-                                                        instanceof
-                                                        systems.zlink.framework.runtime.internal
-                                                                        .locations
-                                                                        .ZLinkOwnerLeaseFound
-                                                                found
+                                                && result instanceof ZLinkOwnerLeaseFound found
                                                 && ownerId.equals(found.token().ownerId())
                                         ? new ZLinkOwnerLeaseClaimed(
                                                 found.token(),
@@ -956,12 +1095,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                         deadlineNanos))
                 .thenCompose(
                         result ->
-                                result
-                                                        instanceof
-                                                        systems.zlink.framework.runtime.internal
-                                                                        .locations
-                                                                        .ZLinkOwnerLeaseFound
-                                                                found
+                                result instanceof ZLinkOwnerLeaseFound found
                                                 && ownerId.equals(found.token().ownerId())
                                         ? CompletableFuture.completedFuture(
                                                 new ZLinkOwnerLeaseClaimed(
@@ -1277,12 +1411,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                         result ->
                                 stateLane.runAsync(
                                         () -> {
-                                            if (result
-                                                            instanceof
-                                                            systems.zlink.framework.runtime.internal
-                                                                            .locations
-                                                                            .ZLinkOwnerLeaseFound
-                                                                    found
+                                            if (result instanceof ZLinkOwnerLeaseFound found
                                                     && ownerId.equals(found.token().ownerId())
                                                     && !found.token().equals(ownerToken)
                                                     && (claimedToken != null
