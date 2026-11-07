@@ -64,6 +64,18 @@ inline framework_error_kind_t map_submit_result_error_kind (zlink::submit_result
     return map_submit_result_exception (result, {}).kind ();
 }
 
+inline framework_exception_t map_node_request_submit_exception (zlink::submit_result_t result)
+{
+    if (result == zlink::submit_result_t::not_found)
+        return framework_exception_t (framework_error_kind_t::not_found,
+                                      "MeshNode request target was not found");
+    if (result == zlink::submit_result_t::terminated)
+        return detail::make_boundary_exception (detail::boundary_error_t::shutdown,
+                                                "MeshNode request runtime is stopped");
+    return framework_exception_t (map_submit_result_error_kind (result),
+                                  "MeshNode request was not submitted");
+}
+
 inline framework_exception_t map_request_result_exception (zlink::request_result_t result,
                                                            std::string message)
 {
