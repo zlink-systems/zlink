@@ -34,6 +34,28 @@ public final class ZLinkServiceM6AWireCodec {
                     ServiceWireConstants.FRAMEWORK_MULTIPART_PACKET_NAME,
                     ServiceWireConstants.FRAMEWORK_MULTIPART_CONTENT_TYPE);
 
+    private volatile java.util.Map<String, byte[]> channelNames = java.util.Map.of();
+
+    /** Prepares only the encoded names; topology remains the sole selection authority. */
+    public void prepareChannelNames(java.util.Collection<String> names) {
+        var previous = channelNames;
+        var prepared = new java.util.HashMap<String, byte[]>();
+        for (String name : names) {
+            byte[] bytes = name == null ? null : previous.get(name);
+            prepared.put(name, bytes == null ? Writer.text8Bytes(name, "channelName") : bytes);
+        }
+        channelNames = java.util.Map.copyOf(prepared);
+    }
+
+    public boolean hasPreparedChannelName(String name) {
+        return name != null && channelNames.containsKey(name);
+    }
+
+    byte[] channelNameBytes(String name) {
+        byte[] prepared = name == null ? null : channelNames.get(name);
+        return prepared == null ? Writer.text8Bytes(name, "channelName") : prepared;
+    }
+
     public byte[] encodeAdmission(int command, ZLinkServiceNodeDescriptor descriptor) {
         requireAdmissionCommand(command);
         Objects.requireNonNull(descriptor, "descriptor");
@@ -229,7 +251,7 @@ public final class ZLinkServiceM6AWireCodec {
     }
 
     public byte[] encodeChannelSendHeader(String channelName, int flags) {
-        byte[] channel = Writer.text8Bytes(channelName, "channelName");
+        byte[] channel = channelNameBytes(channelName);
         byte[] header =
                 prefixBytes(
                         ServiceWireConstants.COMMAND_CHANNEL_SEND,
@@ -258,7 +280,7 @@ public final class ZLinkServiceM6AWireCodec {
 
     public byte[] encodeChannelRequestHeader(long correlation, String channelName, int flags) {
         requireCorrelation(correlation);
-        byte[] channel = Writer.text8Bytes(channelName, "channelName");
+        byte[] channel = channelNameBytes(channelName);
         return prefix(
                         ServiceWireConstants.COMMAND_CHANNEL_REQUEST,
                         flags,
@@ -291,6 +313,11 @@ public final class ZLinkServiceM6AWireCodec {
     }
 
     public Reply decodeReplyHeader(byte[] frame) {
+        return decodeReplyHeader(frame == null ? null : ByteBuffer.wrap(frame));
+    }
+
+    /** Reads the binding-owned header without copying or changing the caller's buffer. */
+    public Reply decodeReplyHeader(ByteBuffer frame) {
         int header = decodeHeaderFields(frame);
         if ((header >>> Byte.SIZE) != ServiceWireConstants.COMMAND_REPLY || (header & 0xff) != 0) {
             throw protocol("invalid reply header");
@@ -305,7 +332,7 @@ public final class ZLinkServiceM6AWireCodec {
         //  reply decoder, matching Node/.NET's decodeReplyHeader semantics.
         //  Do not call Reader.end(reader) here: it would reject a reply that
         //  carries a non-empty tail.
-        ByteBuffer reader = Reader.view(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
+        ByteBuffer reader = Reader.view(frame).position(ZLinkServiceWireCodec.PREFIX_BYTES);
         long correlation = Reader.opaqueNonzeroU64(reader, "correlation");
         int terminal = Reader.intU32(reader, "terminalResult");
         int failure = Reader.intU32(reader, "failureCode");
@@ -555,17 +582,37 @@ public final class ZLinkServiceM6AWireCodec {
     }
 
     private static int decodeHeaderFields(byte[] frame) {
-        if (frame == null || frame.length < ZLinkServiceWireCodec.PREFIX_BYTES) {
+        requirePrefix(frame == null ? 0 : frame.length);
+        return decodeHeaderFields(frame[0], frame[1], frame[2], frame[3], frame[4]);
+    }
+
+    private static int decodeHeaderFields(ByteBuffer frame) {
+        requirePrefix(frame == null ? 0 : frame.remaining());
+        int offset = frame.position();
+        return decodeHeaderFields(
+                frame.get(offset),
+                frame.get(offset + 1),
+                frame.get(offset + 2),
+                frame.get(offset + 3),
+                frame.get(offset + 4));
+    }
+
+    private static void requirePrefix(int length) {
+        if (length < ZLinkServiceWireCodec.PREFIX_BYTES) {
             throw protocol("truncated service wire prefix");
         }
-        if (Byte.toUnsignedInt(frame[0]) != ServiceWireConstants.MAGIC_0
-                || Byte.toUnsignedInt(frame[1]) != ServiceWireConstants.MAGIC_1) {
+    }
+
+    private static int decodeHeaderFields(
+            byte magic0, byte magic1, byte major, byte command, byte flags) {
+        if (Byte.toUnsignedInt(magic0) != ServiceWireConstants.MAGIC_0
+                || Byte.toUnsignedInt(magic1) != ServiceWireConstants.MAGIC_1) {
             throw protocol("invalid service wire magic");
         }
-        if (Byte.toUnsignedInt(frame[2]) != ServiceWireConstants.WIRE_MAJOR) {
+        if (Byte.toUnsignedInt(major) != ServiceWireConstants.WIRE_MAJOR) {
             throw protocol("unsupported service wire major");
         }
-        return (Byte.toUnsignedInt(frame[3]) << Byte.SIZE) | Byte.toUnsignedInt(frame[4]);
+        return (Byte.toUnsignedInt(command) << Byte.SIZE) | Byte.toUnsignedInt(flags);
     }
 
     public byte[] encodeReject(int reason) {

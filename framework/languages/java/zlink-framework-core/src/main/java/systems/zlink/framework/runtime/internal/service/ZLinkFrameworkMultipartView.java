@@ -72,6 +72,17 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
                 new Object[] {ZLinkEncodedPayloadAccess.borrow(body)}, null);
     }
 
+    /** Moves a binding receive owner into a record without copying its payload frames. */
+    public static ZLinkFrameworkMultipartView received(
+            systems.zlink.contracts.messaging.Received received) {
+        List<Message> messages = received.parts();
+        Object[] parts = new Object[messages.size()];
+        for (int index = 0; index < parts.length; index++) {
+            parts[index] = messages.get(index).dataBuffer();
+        }
+        return new ZLinkFrameworkMultipartView(parts, received);
+    }
+
     /** Takes ownership of one already materialized outbound message. */
     public static ZLinkFrameworkMultipartView owned(Message body) {
         return new ZLinkFrameworkMultipartView(
@@ -98,8 +109,9 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
     }
 
     /** The byte length of one part, without materializing it. */
-    static int partSize(List<Message> parts, int index) {
+    public static int partSize(List<Message> parts, int index) {
         Object value = partValue(parts, index);
+        if (value == null) return 0;
         if (value instanceof byte[] bytes) {
             return bytes.length;
         }

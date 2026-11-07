@@ -222,7 +222,7 @@ public final class ZLinkCodecRegistration
      */
     public ZLinkMessageSerializer serializerForReceivedContentType(
             String contentType, ZLinkMessageSerializer jsonFallback) {
-        return resolveReceivedSerializer(contentType, receivedSerializers(jsonFallback));
+        return resolveReceivedSerializer(contentType, serializers, jsonFallback);
     }
 
     public static ZLinkMessageSerializer serializerForSendingContentType(
@@ -247,7 +247,7 @@ public final class ZLinkCodecRegistration
         if (serializer instanceof CompositeSerializer composite) {
             return composite.serializerForReceivedContentType(contentType);
         }
-        return resolveReceivedSerializer(contentType, receivedSerializers(serializer, Map.of()));
+        return resolveReceivedSerializer(contentType, Map.of(), serializer);
     }
 
     public static ZLinkMessageSerializer serializerForReceivedStreamCodec(
@@ -309,7 +309,21 @@ public final class ZLinkCodecRegistration
         return Optional.ofNullable(match);
     }
 
+    /** Prepares a registered message type before dispatch can use it. */
+    public void prepare(Class<?> type, ZLinkMessageSerializer serializer) {
+        SendSelection selected = sendSelectionFor(type, true);
+        ZLinkMessageSerializer resolved =
+                selected.serializer() == null
+                        ? serializerForPayloadType(serializer, type)
+                        : selected.serializer();
+        resolved.prepare(type);
+    }
+
     public SendSelection sendSelectionFor(Class<?> type) {
+        return sendSelectionFor(type, false);
+    }
+
+    private SendSelection sendSelectionFor(Class<?> type, boolean registered) {
         if (type == null) {
             return SendSelection.JSON;
         }
@@ -331,7 +345,7 @@ public final class ZLinkCodecRegistration
                                                     entry.getValue().serializer(),
                                                     entry.getValue().names()))
                             .orElse(SendSelection.JSON);
-            if (sendTypeCache.size() < MAX_TYPE_CACHE_ENTRIES) {
+            if (registered || sendTypeCache.size() < MAX_TYPE_CACHE_ENTRIES) {
                 selected =
                         new SendSelection(
                                 selected.contentType(),
@@ -360,32 +374,18 @@ public final class ZLinkCodecRegistration
         return selected.serializer();
     }
 
-    private Map<String, RegisteredSerializer> receivedSerializers(
-            ZLinkMessageSerializer jsonFallback) {
-        return receivedSerializers(jsonFallback, serializers);
-    }
-
-    private static Map<String, RegisteredSerializer> receivedSerializers(
-            ZLinkMessageSerializer jsonFallback,
-            Map<String, RegisteredSerializer> registeredSerializers) {
-        Objects.requireNonNull(jsonFallback, "jsonFallback");
-        RegisteredSerializer defaultJson =
-                new RegisteredSerializer(
-                        jsonFallback, ignored -> false, false, SendSelection.JSON.names());
-        Map<String, RegisteredSerializer> received = new LinkedHashMap<>();
-        received.put(DEFAULT_JSON_CONTENT_TYPE, defaultJson);
-        received.put(LEGACY_JSON_CONTENT_TYPE, defaultJson);
-        received.putAll(registeredSerializers);
-        return immutableOrderedCopy(received);
-    }
-
     private static ZLinkMessageSerializer resolveReceivedSerializer(
-            String contentType, Map<String, RegisteredSerializer> receivedSerializers) {
+            String contentType,
+            Map<String, RegisteredSerializer> receivedSerializers,
+            ZLinkMessageSerializer jsonFallback) {
+        Objects.requireNonNull(jsonFallback, "jsonFallback");
         if (!isCanonicalWireContentType(contentType)) {
             throw protocolError("received payload content type is not a canonical bare media type");
         }
         RegisteredSerializer registered = receivedSerializers.get(contentType);
         if (registered == null) {
+            if (DEFAULT_JSON_CONTENT_TYPE.equals(contentType)
+                    || LEGACY_JSON_CONTENT_TYPE.equals(contentType)) return jsonFallback;
             throw protocolError(
                     "No payload serializer is registered for received content type '"
                             + contentType
@@ -543,7 +543,7 @@ public final class ZLinkCodecRegistration
         CompositeSerializer(ZLinkCodecRegistration registration, ZLinkMessageSerializer fallback) {
             this.registration = registration;
             this.fallback = fallback;
-            this.receivedSerializers = registration.receivedSerializers(fallback);
+            this.receivedSerializers = immutableOrderedCopy(registration.serializers);
         }
 
         @Override
@@ -577,7 +577,7 @@ public final class ZLinkCodecRegistration
         }
 
         private ZLinkMessageSerializer serializerForReceivedContentType(String contentType) {
-            return resolveReceivedSerializer(contentType, receivedSerializers);
+            return resolveReceivedSerializer(contentType, receivedSerializers, fallback);
         }
 
         private ZLinkMessageSerializer serializerForReceivedStreamCodec(ZLinkStreamCodec codec) {

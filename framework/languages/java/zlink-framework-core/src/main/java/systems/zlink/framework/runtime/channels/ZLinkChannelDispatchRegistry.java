@@ -118,8 +118,16 @@ final class ZLinkChannelDispatchRegistry {
             ZLinkSerialExecutionQueue queue,
             Supplier<CompletionStage<Void>> operation,
             CompletableFuture<Void> admission) {
+        return enqueueChannel(queue, operation, admission, null);
+    }
+
+    CompletionStage<Void> enqueueChannel(
+            ZLinkSerialExecutionQueue queue,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission,
+            java.util.function.Consumer<Throwable> completion) {
         return ZLinkHandlerDispatch.enqueue(
-                queue, operation, admission, handlerDrains.tryClaim("channels"), null);
+                queue, operation, admission, handlerDrains.tryClaim("channels"), completion);
     }
 
     CompletionStage<Void> awaitQuiescence() {

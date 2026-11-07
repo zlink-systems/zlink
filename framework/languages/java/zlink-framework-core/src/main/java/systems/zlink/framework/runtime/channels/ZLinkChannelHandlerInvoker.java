@@ -59,6 +59,10 @@ final class ZLinkChannelHandlerInvoker {
         this.meshName = meshName;
     }
 
+    void prepare(Class<?> type) {
+        codecs.prepare(type, serializer);
+    }
+
     <T> CompletionStage<T> executeHandler(Supplier<CompletionStage<T>> operation) {
         try {
             return ZLinkFlowContext.propagate(
