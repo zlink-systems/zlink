@@ -134,7 +134,8 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                         ZLinkChannelReplyWriter.CreateReplyHeader(
                             ZLinkMessageKind.Response,
                             channelName,
-                            header
+                            header,
+                            endpoint.ReplyHeader
                         ),
                         dispatch.Value,
                         endpoint.ReplyType
@@ -288,7 +289,8 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                     ZLinkChannelReplyWriter.CreateReplyHeader(
                         ZLinkMessageKind.Response,
                         channelName,
-                        header
+                        header,
+                        endpoint.ReplyHeader
                     ),
                     dispatch.Value,
                     endpoint.ReplyType

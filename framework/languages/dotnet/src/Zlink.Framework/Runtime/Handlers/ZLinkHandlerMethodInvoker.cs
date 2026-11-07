@@ -65,8 +65,10 @@ internal static class ZLinkHandlerMethodInvokerFactory
                 ? Expression.Block(call, Expression.Constant(null, typeof(object)))
                 : Expression.Convert(call, typeof(object));
 
-        return Expression
+        var invoke = Expression
             .Lambda<ZLinkHandlerMethodInvoker>(body, target, arg0, arg1, arg2, arg3, arg4)
             .Compile();
+        var awaitResult = ZLinkHandlerResultAwaiter.Prepare(method.ReturnType);
+        return (instance, a0, a1, a2, a3, a4) => awaitResult(invoke(instance, a0, a1, a2, a3, a4));
     }
 }

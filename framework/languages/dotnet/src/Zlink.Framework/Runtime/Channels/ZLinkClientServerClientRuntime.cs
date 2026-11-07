@@ -342,7 +342,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                                 .Timeout(state.Timeout),
                             state.Timeout,
                             state.Token,
-                            state.Target.Liveness,
                             requestAdmission: state.Admission
                         ),
                     static (state, result) =>
@@ -1684,7 +1683,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     Socket.Request().Message(probe).Timeout(ZLinkServiceLiveness.PeerTimeout),
                     ZLinkServiceLiveness.PeerTimeout,
                     cancellationToken,
-                    admission,
                     deadlines: _requestDeadlines
                 );
                 reply = await request.ConfigureAwait(false);

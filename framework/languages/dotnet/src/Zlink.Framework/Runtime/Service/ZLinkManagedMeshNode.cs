@@ -1712,6 +1712,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                                     );
                                     // Capture the physical receiver before submission; caller cleanup may retire its entry.
                                     attemptToken.ThrowIfCancellationRequested();
+                                    var replyAdmission = _channelSelection
+                                        .DirectPeer(physicalRoutingId)
+                                        ?.Liveness;
                                     var physical = SubmitNativeWireAsync(
                                             physicalRoutingId,
                                             [
@@ -1724,6 +1727,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                                             operation.Deadline - _deadlineClock.Elapsed,
                                             out var nativeAdmission,
                                             CancellationToken.None,
+                                            admission: replyAdmission,
                                             requestAdmission: requestAdmission
                                         )
                                         .AsTask();
@@ -1733,7 +1737,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                                         physical,
                                         decode,
                                         chunks,
-                                        publishReady
+                                        publishReady,
+                                        receiveAdmission: replyAdmission
                                     );
 
                                     async Task SubmitChunksAsync()
@@ -6181,8 +6186,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ZLinkMessageParts.DisposeAll(parts);
 
     // One logical source consumes this node's router/monitor and owns its
-    // deadlines and permits. The process pool transfers the physical receive
-    // role only after all ready sources finish their finite turns.
+    // deadlines and permits. The process receiver resumes each finite source
+    // turn independently of application workers.
     private async Task ReceiveLoopAsync(CancellationToken cancellationToken)
     {
         var events = new ZLinkProcessExecutionPool.ReceiveEvent[ReceivePollSourceCount];
@@ -6222,8 +6227,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         return;
                     if (receiveReady)
                         DrainRawSocket(cancellationToken);
-                    var livenessDeadline = ProcessInfrastructure(now);
-                    waitBound = ExpireOperations();
+                    var livenessDeadline = await ProcessInfrastructureAsync(now)
+                        .ConfigureAwait(false);
+                    waitBound = await ExpireOperationsAsync().ConfigureAwait(false);
                     if (livenessDeadline != TimeSpan.MaxValue)
                     {
                         var remaining = livenessDeadline - Stopwatch.GetElapsedTime(0);
@@ -10235,9 +10241,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    internal TimeSpan ProcessInfrastructure(long now)
+    internal TimeSpan ProcessInfrastructure(long now) =>
+        AwaitStateLane(ProcessInfrastructureAsync(now));
+
+    internal async ValueTask<TimeSpan> ProcessInfrastructureAsync(long now)
     {
-        (ControlSendKey Key, byte[] Head)[] CollectDueHelloRetries()
+        async ValueTask<(ControlSendKey Key, byte[] Head)[]> CollectDueHelloRetries()
         {
             var activity = Volatile.Read(ref _admissionActivityTicks);
             if (
@@ -10246,36 +10255,38 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     < ZLinkServiceLiveness.ProbeInterval.Ticks
             )
                 return [];
-            return RunInboundOperationState(() =>
-            {
-                // Admission or another management turn may have changed activity.
-                var activity = _admissionActivityTicks;
-                var elapsed = _deadlineClock.Elapsed.Ticks;
-                if (
-                    activity == NoAdmissionActivityTicks
-                    || elapsed - activity < ZLinkServiceLiveness.ProbeInterval.Ticks
-                )
-                    return Array.Empty<(ControlSendKey Key, byte[] Head)>();
-                Volatile.Write(ref _admissionActivityTicks, elapsed);
-                return _controlSends
-                    .Where(entry =>
-                        entry.Key.Command == ServiceWireConstants.Command.Hello
-                        && entry.Value.Pending is not null
+            return await _inboundOperationLane
+                .RunAsync(() =>
+                {
+                    // Admission or another management turn may have changed activity.
+                    var activity = _admissionActivityTicks;
+                    var elapsed = _deadlineClock.Elapsed.Ticks;
+                    if (
+                        activity == NoAdmissionActivityTicks
+                        || elapsed - activity < ZLinkServiceLiveness.ProbeInterval.Ticks
                     )
-                    .Select(entry => (entry.Key, entry.Value.Pending!))
-                    .ToArray();
-            });
+                        return Array.Empty<(ControlSendKey Key, byte[] Head)>();
+                    Volatile.Write(ref _admissionActivityTicks, elapsed);
+                    return _controlSends
+                        .Where(entry =>
+                            entry.Key.Command == ServiceWireConstants.Command.Hello
+                            && entry.Value.Pending is not null
+                        )
+                        .Select(entry => (entry.Key, entry.Value.Pending!))
+                        .ToArray();
+                })
+                .ConfigureAwait(false);
         }
-        var retries = CollectDueHelloRetries();
+        var retries = await CollectDueHelloRetries().ConfigureAwait(false);
         // Spec 08 §4.2: the management work of a receive rotation reads the
         // node state in one node turn — the routes that still need a Hello and
         // the liveness activity of every admitted peer.
-        var (helloRoutes, activities, nextLiveness, failure) = AwaitStateLane(
-            _lane.RunAsync(
+        var (helloRoutes, activities, nextLiveness, failure) = await _lane
+            .RunAsync(
                 static state => state.Node.CollectInfrastructureUnderLock(state.Now),
                 (Node: this, Now: now)
             )
-        );
+            .ConfigureAwait(false);
         if (
             (retries.Length != 0 || helloRoutes is { Count: > 0 })
             && _peerAdmissionSealed?.Invoke() != true
@@ -10810,39 +10821,21 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     )
     {
         RoutingId selectedTarget = default;
+        ZLinkServiceLiveness? replyAdmission = null;
         var operationId = NextStandaloneOperationId();
         var reply = await RunDeadlineRequestAsync(
                 timeout,
                 cancellationToken,
-                async (pending, terminal) =>
+                DecodeChannelReply,
+                produce: null,
+                submit: operation =>
                 {
-                    var target = await WaitForChannelTargetAsync(
-                            channelName,
-                            terminal,
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false);
-                    selectedTarget = target.TargetRid;
-                    if (
-                        !_operations.ContainsKey(pending.OperationId.Low)
-                        || pending.Deadline <= _deadlineClock.Elapsed
-                    )
-                        return await terminal.ConfigureAwait(false);
-                    return await SubmitNativeWireAsync(
-                            target.PhysicalRid,
-                            CreateApplicationWire(
-                                ServiceWireConstants.Command.ChannelRequest,
-                                operationId.Low,
-                                channelName,
-                                parts,
-                                metadata
-                            ),
-                            pending.Deadline - _deadlineClock.Elapsed,
-                            out _,
-                            cancellationToken,
-                            requestAdmission: requestAdmission
-                        )
-                        .ConfigureAwait(false);
+                    var pending = (PendingOperation<IReadOnlyList<Message>>)operation;
+                    _ = ObserveNativeDeadlineReplyAsync(
+                        pending,
+                        ProduceAsync(pending, pending.Completion),
+                        DecodeChannelReply
+                    );
                 },
                 requestAdmission: requestAdmission
             )
@@ -10853,6 +10846,45 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             channelName: channelName
         );
         return DecodeDirectApplicationReply(operationId.Low, reply);
+
+        IReadOnlyList<Message> DecodeChannelReply(ManagedRequestCompletion completion)
+        {
+            var parts = DecodeDeadlineReply(completion);
+            replyAdmission?.RecordReceived(Stopwatch.GetTimestamp());
+            return parts;
+        }
+
+        async Task<IReadOnlyList<Message>> ProduceAsync(
+            PendingOperation<IReadOnlyList<Message>> pending,
+            Task<IReadOnlyList<Message>> terminal
+        )
+        {
+            var target = await WaitForChannelTargetAsync(channelName, terminal, cancellationToken)
+                .ConfigureAwait(false);
+            selectedTarget = target.TargetRid;
+            replyAdmission = _channelSelection.DirectPeer(target.PhysicalRid)?.Liveness;
+            if (
+                !_operations.ContainsKey(pending.OperationId.Low)
+                || pending.Deadline <= _deadlineClock.Elapsed
+            )
+                return await terminal.ConfigureAwait(false);
+            return await SubmitNativeWireAsync(
+                    target.PhysicalRid,
+                    CreateApplicationWire(
+                        ServiceWireConstants.Command.ChannelRequest,
+                        operationId.Low,
+                        channelName,
+                        parts,
+                        metadata
+                    ),
+                    pending.Deadline - _deadlineClock.Elapsed,
+                    out _,
+                    cancellationToken,
+                    admission: replyAdmission,
+                    requestAdmission: requestAdmission
+                )
+                .ConfigureAwait(false);
+        }
     }
 
     internal ZLinkMeshDirectPeer RequireDirectPeer(
@@ -11052,6 +11084,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 && ReferenceEquals(currentOperation, operation)
                 && operation.Deadline > _deadlineClock.Elapsed
             )
+            {
+                admission ??= _channelSelection.DirectPeer(target)?.Liveness;
                 _ = ObserveNativeDeadlineReplyAsync(
                     operation,
                     SubmitNativeWireAsync(
@@ -11064,8 +11098,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                             requestAdmission
                         )
                         .AsTask(),
-                    decode
+                    decode,
+                    receiveAdmission: admission
                 );
+            }
             else
             {
                 DisposeParts(messages);
@@ -11124,7 +11160,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         Task<IReadOnlyList<Message>> physical,
         Func<ManagedRequestCompletion, TReply> decode,
         Task? progress = null,
-        Action<TReply>? publish = null
+        Action<TReply>? publish = null,
+        ZLinkServiceLiveness? receiveAdmission = null
     )
     {
         TReply reply = default!;
@@ -11134,6 +11171,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             // The physical receiver owns its codec independently of the retired C1 entry.
             replyParts = await physical.ConfigureAwait(false);
+            receiveAdmission?.RecordReceived(Stopwatch.GetTimestamp());
             reply = decode(new ManagedRequestCompletion(RequestResult.Ok, replyParts));
         }
         catch (Exception error)
@@ -11304,33 +11342,19 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ZLinkStateLane.ObserveWork("native-submit");
                 request = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
                     socket.Request(target).Messages(messages).Timeout(timeout),
-                    timeout,
                     out nativeAdmission,
                     cancellationToken,
-                    admission,
                     requestAdmission: requestAdmission
                 );
                 ownershipTransferred = true;
             }
-            return new ValueTask<IReadOnlyList<Message>>(
-                ObserveDirectWireReplyAsync(request, admission)
-            );
+            return new ValueTask<IReadOnlyList<Message>>(request);
         }
         finally
         {
             if (!ownershipTransferred)
                 DisposeParts(messages);
         }
-    }
-
-    private static async Task<IReadOnlyList<Message>> ObserveDirectWireReplyAsync(
-        Task<IReadOnlyList<Message>> request,
-        ZLinkServiceLiveness? admission
-    )
-    {
-        var reply = await request.ConfigureAwait(false);
-        admission?.RecordReceived(Stopwatch.GetTimestamp());
-        return reply;
     }
 
     private static ZLinkServiceWireCodec.RelocationReadyRecord DecodeCanonicalRelocationPrepareReply(
@@ -11553,6 +11577,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         IReadOnlyList<Message>? ownedWire = wire;
         TReply reply = default!;
+        ZLinkServiceLiveness? replyAdmission = null;
         Exception? failure = null;
         try
         {
@@ -11592,46 +11617,46 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                             start: pending =>
                             {
                                 var frames = Interlocked.Exchange(ref ownedWire, null)!;
-                                _ = ObserveProgressAsync(
-                                    pending,
-                                    ObserveNativeDeadlineReplyAsync(
-                                        (PendingOperation<TReply>)pending,
-                                        ZLinkDurableRequest
-                                            .RequestAsync(
-                                                frames,
-                                                pending.DeadlineStartTimestamp,
-                                                pending.DeadlineTimeout,
-                                                (parts, remaining, token) =>
-                                                    SubmitNativeWireAsync(
-                                                        peer!.PhysicalRoutingId,
-                                                        parts,
-                                                        pending.Deadline - _deadlineClock.Elapsed,
-                                                        token,
-                                                        peer.Liveness,
-                                                        requestAdmission
-                                                    ),
-                                                cancellationToken,
-                                                () =>
+                                _ = ObserveNativeDeadlineReplyAsync(
+                                    (PendingOperation<TReply>)pending,
+                                    ZLinkDurableRequest
+                                        .RequestAsync(
+                                            frames,
+                                            pending.DeadlineStartTimestamp,
+                                            pending.DeadlineTimeout,
+                                            (parts, remaining, token) =>
+                                            {
+                                                replyAdmission = peer!.Liveness;
+                                                return SubmitNativeWireAsync(
+                                                    peer!.PhysicalRoutingId,
+                                                    parts,
+                                                    pending.Deadline - _deadlineClock.Elapsed,
+                                                    token,
+                                                    peer.Liveness,
+                                                    requestAdmission
+                                                );
+                                            },
+                                            cancellationToken,
+                                            () =>
+                                            {
+                                                if (initial)
                                                 {
-                                                    if (initial)
-                                                    {
-                                                        initial = false;
-                                                        return route;
-                                                    }
-                                                    return RunState(() =>
-                                                        ObservePeerRouteUnderOwner(
-                                                            target,
-                                                            targetNodeGeneration,
-                                                            out peer
-                                                        )
-                                                    );
-                                                },
-                                                _deadlineTimeProvider,
-                                                completion
-                                            )
-                                            .AsTask(),
-                                        Decode
-                                    )
+                                                    initial = false;
+                                                    return route;
+                                                }
+                                                return RunState(() =>
+                                                    ObservePeerRouteUnderOwner(
+                                                        target,
+                                                        targetNodeGeneration,
+                                                        out peer
+                                                    )
+                                                );
+                                            },
+                                            _deadlineTimeProvider,
+                                            completion
+                                        )
+                                        .AsTask(),
+                                    Decode
                                 );
                             }
                         );
@@ -11652,7 +11677,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 var lifetime = suppliedLifetime ?? ownedLifetime;
                 requestAdmission ??= new ZLinkRequestAdmission();
                 if (ownerOperation is not null)
-                    reply = decodeReply(
+                    reply = DecodePhysicalReply(
                         await ProduceAsync(ownerOperation, null, pendingToken).ConfigureAwait(false)
                     );
                 else
@@ -11721,6 +11746,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                                     DisposeParts(frames);
                                     throw;
                                 }
+                                replyAdmission = peer.Liveness;
                                 return SubmitNativeWireAsync(
                                     peer.PhysicalRoutingId,
                                     frames,
@@ -11754,7 +11780,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return reply;
 
         TReply Decode(ManagedRequestCompletion completion) =>
-            decodeReply(DecodeDeadlineReply(completion));
+            DecodePhysicalReply(DecodeDeadlineReply(completion));
+
+        TReply DecodePhysicalReply(IReadOnlyList<Message> parts)
+        {
+            replyAdmission?.RecordReceived(Stopwatch.GetTimestamp());
+            return decodeReply(parts);
+        }
     }
 
     internal async Task CompleteNativeDurableRequestAsync(
@@ -12698,11 +12730,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         >= ZLinkReceiveBatchBudget.MaximumMilliseconds;
 
     // Index visits and terminal publication share one owner turn and time budget.
-    internal TimeSpan ExpireOperations()
+    internal TimeSpan ExpireOperations() => AwaitStateLane(ExpireOperationsAsync());
+
+    internal ValueTask<TimeSpan> ExpireOperationsAsync()
     {
         var now = _deadlineClock.Elapsed;
         if (now.Ticks >= Volatile.Read(ref _nextDeadlineVisitTicks))
-            return RunOperation(_expireOperations);
+            return _operationLane.RunAsync(_expireOperations);
         var waitUntil = TimeSpan.FromTicks(Volatile.Read(ref _nextDeadlineVisitTicks));
         var activity = Volatile.Read(ref _admissionActivityTicks);
         if (activity != NoAdmissionActivityTicks)
@@ -12713,9 +12747,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 waitUntil = admissionDeadline;
         }
         if (waitUntil == TimeSpan.MaxValue)
-            return Timeout.InfiniteTimeSpan;
+            return new(Timeout.InfiniteTimeSpan);
         var remaining = waitUntil - now;
-        return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+        return new(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero);
     }
 
     private TimeSpan ExpireOperationsUnderOwner()

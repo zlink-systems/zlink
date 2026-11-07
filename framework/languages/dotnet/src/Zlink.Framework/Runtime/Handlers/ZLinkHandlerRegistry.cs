@@ -62,7 +62,14 @@ internal sealed class ZLinkHandlerRegistry
     internal void PrepareInstances(
         IServiceProvider services,
         ZLinkFrameworkRegistration registration
-    ) =>
+    )
+    {
+        foreach (var endpoint in _requests.Values.SelectMany(static endpoints => endpoints))
+            endpoint.ReplyHeader = ZLinkEnvelopeCodec.PrepareResponse(
+                endpoint.ExplicitChannelName ?? string.Empty,
+                endpoint.ReplyType,
+                registration.Codecs
+            );
         ZLinkScopedHandlerInstanceOwner.Validate(
             services,
             _requests
@@ -81,6 +88,7 @@ internal sealed class ZLinkHandlerRegistry
                 )
                 .Select(static endpoint => endpoint.DeclaringType)
         );
+    }
 
     public ZLinkHandlerEndpointDescriptor GetRequest(
         string channelName,
