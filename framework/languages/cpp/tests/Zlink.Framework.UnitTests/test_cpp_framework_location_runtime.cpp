@@ -622,7 +622,7 @@ class requested_peer_store_t final : public in_memory_location_repository_t
 
     zlink::framework::task_t<
       zlink::framework::location_page_t<zlink::framework::mesh_node_descriptor_t>>
-    list_mesh_nodes (std::string mesh, zlink::framework::location_page_request_t = {}) override
+    list_mesh_nodes_core (std::string mesh, zlink::framework::location_page_request_t = {}) override
     {
         const bool include_peer = visible.load ();
         if (++reads == 1) {
@@ -786,7 +786,7 @@ class held_coordinator_read_store_t final : public in_memory_location_repository
     std::atomic<unsigned> refreshes = 0;
 
     zlink::framework::task_t<page_t>
-    list_mesh_nodes (std::string, zlink::framework::location_page_request_t = {}) override
+    list_mesh_nodes_core (std::string, zlink::framework::location_page_request_t = {}) override
     {
         const auto round = ++reads;
         if (!hold_capacity) {
@@ -996,7 +996,7 @@ class ordered_coordinator_store_t final : public in_memory_location_repository_t
     }
     zlink::framework::task_t<
       zlink::framework::location_page_t<zlink::framework::mesh_node_descriptor_t>>
-    list_mesh_nodes (std::string mesh, zlink::framework::location_page_request_t = {}) override
+    list_mesh_nodes_core (std::string mesh, zlink::framework::location_page_request_t = {}) override
     {
         using namespace zlink::framework;
         const auto round = ++reads;
@@ -2553,7 +2553,7 @@ class ready_auto_store_t : public in_memory_location_repository_t
 {
   public:
     task_t<location_page_t<mesh_node_descriptor_t>>
-    list_mesh_nodes (std::string, location_page_request_t) override
+    list_mesh_nodes_core (std::string, location_page_request_t) override
     {
         mesh_node_descriptor_t peer;
         peer.mesh_name = "l4-mesh";
@@ -3488,21 +3488,21 @@ class outage_memory_t final : public in_memory_location_repository_t
     bool hold_read = false;
     bool hold_renew = false;
     task_completion_source_t<void> resume;
-    task_t<authority_read_result_t> read_authority (authority_key_t key,
-                                                    std::stop_token cancellation = {}) override
+    task_t<authority_read_result_t> read_authority_core (authority_key_t key,
+                                                         std::stop_token cancellation = {}) override
     {
         if (forbid_io) {
             ++forbidden_calls;
             return task_t<authority_read_result_t> (result_t<authority_read_result_t>::failure (
               framework_error_kind_t::internal_failure, "injected outage authority read"));
         }
-        return in_memory_location_repository_t::read_authority (std::move (key), cancellation);
+        return in_memory_location_repository_t::read_authority_core (std::move (key), cancellation);
     }
     task_t<authority_compare_exchange_result_t>
-    compare_exchange_authority (authority_key_t key,
-                                std::string version,
-                                authority_mutation_t mutation,
-                                std::stop_token cancellation = {}) override
+    compare_exchange_authority_core (authority_key_t key,
+                                     std::string version,
+                                     authority_mutation_t mutation,
+                                     std::stop_token cancellation = {}) override
     {
         if (forbid_io) {
             ++forbidden_calls;
@@ -3510,8 +3510,57 @@ class outage_memory_t final : public in_memory_location_repository_t
               result_t<authority_compare_exchange_result_t>::failure (
                 framework_error_kind_t::internal_failure, "injected outage authority CAS"));
         }
-        return in_memory_location_repository_t::compare_exchange_authority (
+        return in_memory_location_repository_t::compare_exchange_authority_core (
           std::move (key), std::move (version), std::move (mutation), cancellation);
+    }
+    template <typename T> task_t<T> forbidden ()
+    {
+        ++forbidden_calls;
+        return task_t<T> (result_t<T>::failure (framework_error_kind_t::internal_failure,
+                                                "injected forbidden Store entry"));
+    }
+    task_t<location_page_t<mesh_node_descriptor_t>>
+    list_mesh_nodes_core (std::string mesh, location_page_request_t page = {}) override
+    {
+        if (forbid_io)
+            return forbidden<location_page_t<mesh_node_descriptor_t>> ();
+        return in_memory_location_repository_t::list_mesh_nodes_core (std::move (mesh),
+                                                                      std::move (page));
+    }
+    task_t<object_reserve_result_t> reserve_core (object_reserve_request_t request,
+                                                  std::stop_token cancellation = {}) override
+    {
+        if (forbid_io)
+            return forbidden<object_reserve_result_t> ();
+        return in_memory_location_repository_t::reserve_core (std::move (request), cancellation);
+    }
+    task_t<object_complete_creation_result_t>
+    complete_creation_core (object_complete_creation_request_t request,
+                            std::stop_token cancellation = {}) override
+    {
+        if (forbid_io)
+            return forbidden<object_complete_creation_result_t> ();
+        return in_memory_location_repository_t::complete_creation_core (std::move (request),
+                                                                        cancellation);
+    }
+    task_t<object_commit_result_t>
+    commit_core (object_commit_request_t request,
+                 std::stop_token cancellation = {},
+                 std::chrono::system_clock::time_point deadline = {}) override
+    {
+        if (forbid_io)
+            return forbidden<object_commit_result_t> ();
+        return in_memory_location_repository_t::commit_core (std::move (request), cancellation,
+                                                             deadline);
+    }
+    task_t<aggregate_prepare_result_t>
+    prepare_aggregate_core (aggregate_prepare_request_t request,
+                            std::stop_token cancellation = {}) override
+    {
+        if (forbid_io)
+            return forbidden<aggregate_prepare_result_t> ();
+        return in_memory_location_repository_t::prepare_aggregate_core (std::move (request),
+                                                                        cancellation);
     }
     task_t<owner_lease_renew_result_t> renew_owner_lease (location_owner_token_t token,
                                                           std::chrono::milliseconds ttl) override
@@ -3562,8 +3611,8 @@ class StoreOutageRetention : public ::testing::TestWithParam<bool>
 
     void move_to (monotonic_time at) { clock_now.store (at); }
     location_options_t options;
-    void registered_owner (bool shared, bool retained);
-    void discard_retained (bool shared, bool retained);
+    void registered_owner (bool shared, bool retained, int loss = 0);
+    void discard_retained (bool shared, bool retained, bool rejoin = false);
 
     void claim (location_runtime_t &runtime)
     {
@@ -3574,7 +3623,7 @@ class StoreOutageRetention : public ::testing::TestWithParam<bool>
     }
 };
 
-void StoreOutageRetention::discard_retained (bool shared, bool retained)
+void StoreOutageRetention::discard_retained (bool shared, bool retained, bool rejoin)
 {
     options.store_outage_retention = retained;
     location_runtime_t runtime (store (), options, "discard-owner");
@@ -3684,6 +3733,22 @@ void StoreOutageRetention::discard_retained (bool shared, bool retained)
     add_actor ("late", entry, true);
     late_spot_gate->confirm_execution_ready (clock_now.load ());
     provider.forbid_io = memory.forbid_io = true;
+    const auto check_store_closed = [&] {
+        const auto check = [] (const auto &result) {
+            ASSERT_FALSE (result);
+            EXPECT_EQ (framework_error_kind_t::unavailable, result.error_kind ());
+        };
+        check (store ().reserve ({}).result ());
+        check (store ().read_authority (actor_authority_key ("rejoined-actor")).result ());
+        check (store ().list_mesh_nodes ("discard-mesh").result ());
+    };
+    if (rejoin) {
+        move_to (*lease_access::snapshot (runtime)->admission_deadline + 1ms);
+        ASSERT_LT (clock_now.load (), episode->cutoff);
+        detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+        EXPECT_FALSE (episode->discarded.load ());
+        check_store_closed ();
+    }
     int handlers = 0, completed = 0;
     std::map<std::string, int> starts;
     serial_work_options_t pending;
@@ -3691,7 +3756,7 @@ void StoreOutageRetention::discard_retained (bool shared, bool retained)
         EXPECT_FALSE (timer->disposed.load ());
         EXPECT_FALSE (result);
         if (!result)
-            EXPECT_EQ (framework_error_kind_t::shutting_down, result.error_kind ());
+            EXPECT_EQ (framework_error_kind_t::not_found, result.error_kind ());
         ++completed;
     };
     for (const auto &id : {"member", "late-member", "independent", "early-member"}) {
@@ -3721,6 +3786,8 @@ void StoreOutageRetention::discard_retained (bool shared, bool retained)
     move_to (episode->cutoff);
     detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
     EXPECT_TRUE (episode->discarded.load ());
+    if (rejoin)
+        check_store_closed ();
     EXPECT_FALSE (spot_gate->execution_allowed ());
     EXPECT_TRUE (gates.at ("late-member")->execution_allowed ());
     EXPECT_FALSE (gates.at ("early-member")->execution_allowed ());
@@ -3776,13 +3843,71 @@ void StoreOutageRetention::discard_retained (bool shared, bool retained)
     provider.forbid_io = memory.forbid_io = false;
     auto current = lease_access::snapshot (runtime);
     auto token = *current->token;
-    ++token.lease_generation;
-    lease_access::accept (runtime, token, *current->renewed_at + 30s, *current->renewed_at,
-                          clock_now.load (), false);
+    if (rejoin) {
+        advance (1ms);
+        check_store_closed ();
+        // Release the fixture Store lease to model expiry without waiting on wall time.
+        ASSERT_TRUE (std::holds_alternative<owner_lease_released_t> (
+          store ().release_owner_lease (token).result ().value ()));
+        lease_access::heartbeat (runtime, clock_now.load ());
+        const auto recovered = lease_access::snapshot (runtime);
+        ASSERT_TRUE (lease_access::usable_at (runtime, clock_now.load ()));
+        EXPECT_NE (token.lease_generation, recovered->token->lease_generation);
+        EXPECT_EQ (episode, recovered->outage);
+        EXPECT_TRUE (episode->discarded.load ());
+
+        mesh_node_descriptor_t descriptor;
+        descriptor.mesh_name = "discard-mesh";
+        descriptor.rid = zlink::routing_id_t::from ("discard-node");
+        descriptor.lifecycle_generation = 1;
+        descriptor.descriptor_revision = 1;
+        descriptor.endpoint = "tcp://127.0.0.1:7001";
+        descriptor.owner_id = recovered->token->owner_id;
+        descriptor.lease_generation = recovered->token->lease_generation;
+        descriptor.object_role = object_role_t::server;
+        descriptor.security_identity = "default";
+        descriptor.state = framework_runtime_state_t::serving;
+        descriptor.object_capabilities = {
+          {placement_object_kind_t::actor, "player", maintenance_policy_kind_t::snapshot, true, 0}};
+        descriptor.capacity.actors.limit = 1;
+        ASSERT_EQ (location_write_status_t::stored,
+                   store ()
+                     .update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                     .result ()
+                     .value ()
+                     .status);
+        object_reserve_request_t request;
+        request.key = {placement_object_kind_t::actor, "rejoined-actor"};
+        request.intent.stable_type = "player";
+        request.target = {descriptor.mesh_name, node_rid_t::from_string ("discard-node"), 1,
+                          *recovered->token};
+        request.creating_payload = {std::byte{0}};
+        request.capacity_bundle.actor_slots = 1;
+        const auto reservation = store ().reserve (request).result ();
+        EXPECT_TRUE (reservation);
+        if (reservation)
+            EXPECT_TRUE (std::holds_alternative<object_reserved_t> (reservation.value ()));
+        const auto authority =
+          store ().read_authority (actor_authority_key ("rejoined-actor")).result ();
+        EXPECT_TRUE (authority);
+        if (authority)
+            EXPECT_TRUE (std::holds_alternative<authority_snapshot_t> (authority.value ()));
+        const auto nodes = store ().list_mesh_nodes ("discard-mesh").result ();
+        EXPECT_TRUE (nodes);
+        if (nodes)
+            EXPECT_EQ (1u, nodes.value ().items.size ());
+    } else {
+        ++token.lease_generation;
+        lease_access::accept (runtime, token, *current->renewed_at + 30s, *current->renewed_at,
+                              clock_now.load (), false);
+    }
     for (const auto &id : {"independent", "member", "late-member", "early-member"})
         EXPECT_FALSE (gates.at (id)->try_post ("after-new-claim", [&] { ++handlers; }));
     EXPECT_FALSE (spot_gate->try_post ("after-new-claim", [&] { ++handlers; }));
     EXPECT_FALSE (timer_queue->try_post ("after-new-claim", [&] { ++handlers; }));
+    scheduler->run_all ();
+    EXPECT_EQ (0, handlers);
+    EXPECT_EQ (6, completed);
     for (const auto &[_, queue] : gates)
         queue->cancel_pending ();
     for (const auto &context : contexts) {
@@ -3792,6 +3917,145 @@ void StoreOutageRetention::discard_retained (bool shared, bool retained)
     scheduler->run_all ();
     node->spot_contexts_by_id.clear ();
     mesh.stop ();
+}
+
+TEST_P (StoreOutageRetention, CacheIntervalRefusesNewStoreWork)
+{
+    for (bool retained : {false, true}) {
+        options.store_outage_retention = retained;
+        location_runtime_t runtime (store (), options,
+                                    "admission-owner-" + std::to_string (retained));
+        lease_access::clock (runtime, [&] { return clock_now.load (); });
+        claim (runtime);
+        test::manual_internal_scheduler_t scheduler;
+        auto bound = std::make_shared<serial_execution_queue_t> (scheduler);
+        bound->set_execution_policy (runtime.execution_policy ());
+        bound->confirm_execution_ready (clock_now.load ());
+        scheduler.run_all ();
+        advance (5s);
+        lease_access::communication_failure (runtime);
+        const auto episode = lease_access::snapshot (runtime)->outage;
+        ASSERT_TRUE (episode);
+        int handlers = 0;
+        for (const auto at :
+             {*lease_access::snapshot (runtime)->admission_deadline, episode->cutoff}) {
+            move_to (at);
+            detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+            ASSERT_TRUE (bound->try_post ("cached-bound-message", [&] { ++handlers; }));
+            scheduler.run_all ();
+            EXPECT_EQ (retained ? 1 : 0, handlers);
+            provider.forbid_io = memory.forbid_io = true;
+            const auto check = [] (const auto &result) {
+                EXPECT_FALSE (result);
+                if (!result) {
+                    EXPECT_NE (nullptr, result.error ());
+                    if (result.error ())
+                        EXPECT_EQ (framework_error_kind_t::unavailable, result.error_kind ());
+                }
+            };
+            check (store ().read_authority ({"uncached-route"}).result ());
+            check (store ().list_mesh_nodes ("uncached-mesh").result ());
+            check (store ().prepare_aggregate ({}).result ());
+            check (store ().reserve ({}).result ());
+            check (store ().commit ({}).result ());
+            check (store ().complete_creation ({}).result ());
+            check (store ()
+                     .compare_exchange_authority ({"relocation"}, "old", authority_retarget_t{})
+                     .result ());
+            EXPECT_EQ (0, provider.forbidden_calls.load ());
+            EXPECT_EQ (0, memory.forbidden_calls.load ());
+            provider.forbid_io = memory.forbid_io = false;
+        }
+        bound->cancel_pending ();
+        scheduler.run_all ();
+    }
+}
+
+TEST_P (StoreOutageRetention, AdmissionGuardCountsEveryMemoryStoreEntry)
+{
+    memory.forbid_io = true;
+    EXPECT_FALSE (memory.list_mesh_nodes ("guard").result ());
+    EXPECT_FALSE (memory.reserve ({}).result ());
+    EXPECT_FALSE (memory.commit ({}).result ());
+    EXPECT_FALSE (memory.complete_creation ({}).result ());
+    EXPECT_FALSE (memory.prepare_aggregate ({}).result ());
+    EXPECT_EQ (5, memory.forbidden_calls.load ());
+}
+
+TEST_P (StoreOutageRetention, ObjectCloseKeepsShuttingDownResultInBothExecutionModes)
+{
+    for (bool shared : {false, true}) {
+        location_runtime_t runtime (store (), options, "close-owner");
+        lease_access::clock (runtime, [&] { return clock_now.load (); });
+        test::manual_internal_scheduler_t scheduler;
+        auto spot = std::make_shared<serial_execution_queue_t> (
+          scheduler, serial_execution_queue_options_t{},
+          serial_execution_queue_t::error_handler_t{},
+          shared ? serial_lane_policy_t::spot_wide () : serial_lane_policy_t::per_actor_spot ());
+        auto actor = std::make_shared<serial_execution_queue_t> (scheduler);
+        actor->attach_spot_gate (spot);
+        int handlers = 0, completed = 0;
+        serial_work_options_t pending;
+        pending.completion = [&] (result_t<void> result) {
+            EXPECT_FALSE (result);
+            EXPECT_EQ (framework_error_kind_t::shutting_down, result.error_kind ());
+            ++completed;
+        };
+        for (const auto &queue : {spot, actor}) {
+            queue->set_execution_policy (runtime.execution_policy ());
+            ASSERT_TRUE (queue->try_post ("before-close", [&] { ++handlers; }, pending));
+        }
+        actor->cancel_pending ();
+        spot->cancel_pending ();
+        scheduler.run_all ();
+        EXPECT_EQ (0, handlers);
+        EXPECT_EQ (2, completed);
+    }
+}
+
+TEST_P (StoreOutageRetention, OutagePolicyReportsOwnershipLostAtCutoff)
+{
+    using status_t = serial_execution_queue_t::execution_status_t;
+    for (bool shared : {false, true}) {
+        options.store_outage_retention = true;
+        location_runtime_t runtime (store (), options, "cutoff-result-owner");
+        lease_access::clock (runtime, [&] { return clock_now.load (); });
+        claim (runtime);
+        test::manual_internal_scheduler_t scheduler;
+        auto spot = std::make_shared<serial_execution_queue_t> (
+          scheduler, serial_execution_queue_options_t{},
+          serial_execution_queue_t::error_handler_t{},
+          shared ? serial_lane_policy_t::spot_wide () : serial_lane_policy_t::per_actor_spot ());
+        auto actor = std::make_shared<serial_execution_queue_t> (scheduler);
+        actor->attach_spot_gate (spot);
+        for (const auto &queue : {spot, actor}) {
+            queue->set_execution_policy (runtime.execution_policy ());
+            queue->confirm_execution_ready (clock_now.load ());
+        }
+        scheduler.run_all ();
+        advance (5s);
+        lease_access::communication_failure (runtime);
+        const auto episode = lease_access::snapshot (runtime)->outage;
+        int handlers = 0, completed = 0;
+        serial_work_options_t pending;
+        pending.completion = [&] (result_t<void> result) {
+            EXPECT_FALSE (result);
+            EXPECT_EQ (framework_error_kind_t::not_found, result.error_kind ());
+            ++completed;
+        };
+        for (const auto &queue : {spot, actor})
+            ASSERT_TRUE (queue->try_post ("before-cutoff", [&] { ++handlers; }, pending));
+        move_to (episode->cutoff);
+        detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+        for (const auto &queue : {actor, spot}) {
+            EXPECT_EQ (status_t::ownership_lost, queue->execution_status ());
+            queue->cancel_pending ();
+        }
+        scheduler.run_all ();
+        EXPECT_EQ (0, handlers);
+        EXPECT_EQ (2, completed);
+        store ().release_owner_lease (*lease_access::snapshot (runtime)->token).result ().value ();
+    }
 }
 
 TEST_P (StoreOutageRetention, StoreCallGuardRejectsReadsAndWrites)
@@ -3814,6 +4078,14 @@ TEST_P (StoreOutageRetention, DiscardRetainedPerActorRetention)
 TEST_P (StoreOutageRetention, DiscardRetainedSpotWideRetention)
 {
     discard_retained (true, true);
+}
+TEST_P (StoreOutageRetention, NewClaimReopensStoreAfterDiscardPerActor)
+{
+    discard_retained (false, true, true);
+}
+TEST_P (StoreOutageRetention, NewClaimReopensStoreAfterDiscardSpotWide)
+{
+    discard_retained (true, true, true);
 }
 TEST_P (StoreOutageRetention, DiscardRetainedPerActorDefault)
 {
@@ -3905,9 +4177,11 @@ TEST_P (StoreOutageRetention, ExecutionGateConsumesOutageLatchInBothExecutionMod
             auto actor = std::make_shared<serial_execution_queue_t> (scheduler);
             actor->attach_spot_gate (spot);
             // Supply the Location latch to the gate without duplicating its deadline policy.
-            const auto policy = [&runtime] {
+            const auto policy = [&runtime] (const serial_execution_queue_t &) {
                 const auto episode = lease_access::snapshot (runtime)->outage;
-                return !episode || !episode->discarded.load (std::memory_order_acquire);
+                return !episode || !episode->discarded.load (std::memory_order_acquire)
+                         ? serial_execution_queue_t::execution_status_t::allowed
+                         : serial_execution_queue_t::execution_status_t::ownership_lost;
             };
             spot->set_execution_policy (policy);
             actor->set_execution_policy (policy);
@@ -3926,7 +4200,7 @@ TEST_P (StoreOutageRetention, ExecutionGateConsumesOutageLatchInBothExecutionMod
             serial_work_options_t queued;
             queued.completion = [&] (result_t<void> result) {
                 EXPECT_FALSE (result);
-                EXPECT_EQ (framework_error_kind_t::shutting_down, result.error_kind ());
+                EXPECT_EQ (framework_error_kind_t::not_found, result.error_kind ());
                 ++completions;
             };
             ASSERT_TRUE (actor->try_post ("queued-actor", [&] { ++messages; }, queued));
@@ -4094,7 +4368,7 @@ TEST_P (StoreOutageRetention, OutagePolicyAllowsLifecycleAndLateCompletionWithou
     }
 }
 
-void StoreOutageRetention::registered_owner (bool shared, bool retained)
+void StoreOutageRetention::registered_owner (bool shared, bool retained, int loss)
 {
     options.store_outage_retention = retained;
     location_runtime_t runtime (store (), options, "registered-owner");
@@ -4164,10 +4438,12 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained)
     detail::spot_node_runtime_t owner (node);
     location_lifecycle_t lifecycle (runtime);
     owner.bind_location_lifecycle (lifecycle);
-    native->configure_location_execution (runtime.execution_clock (),
-                                          [&] (stateful::object_ref_t object) {
-                                              return owner.prepare_store_ready (std::move (object));
-                                          });
+    native->configure_location_execution (
+      runtime.execution_clock (),
+      [&] (stateful::object_ref_t object) {
+          return owner.prepare_store_ready (std::move (object));
+      },
+      runtime.bound_execution_owner ());
     const auto commit = [&] (placement_object_kind_t kind, std::string id, std::string type) {
         object_reserve_request_t request;
         request.key = {kind, id};
@@ -4236,6 +4512,178 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained)
     };
     commit (placement_object_kind_t::user_spot, "registered-spot", "room");
     commit (placement_object_kind_t::actor, "early", "player");
+    if (loss == -1) {
+        auto executor = context->ensure_spot_serial_executor ();
+        scheduler->run_all ();
+        advance (5s);
+        lease_access::communication_failure (runtime);
+        const auto episode = lease_access::snapshot (runtime)->outage;
+        ASSERT_TRUE (episode);
+        move_to (*lease_access::snapshot (runtime)->admission_deadline);
+        protocol::spot_route_fence_t route{.spot_id = "registered-spot",
+                                           .object_generation = 1,
+                                           .target_node_routing_id = descriptor.rid.to_bytes (),
+                                           .target_node_generation = 1,
+                                           .authority_owner_generation = 1,
+                                           .owner_lease_generation =
+                                             static_cast<std::uint64_t> (token.lease_generation)};
+        stateful::accepted_record_authority_query_t actor_query;
+        actor_query.target = *native->objects ().find (stateful::object_kind_t::actor, "early");
+        actor_query.requested_authority_owner_generation =
+          actor_query.target.authority_owner_generation;
+        actor_query.target_node_routing_id = descriptor.rid.to_bytes ();
+        actor_query.target_node_generation = 1;
+        actor_query.source_node_routing_id = descriptor.rid.to_bytes ();
+        actor_query.source_node_generation = 1;
+        actor_query.source_original =
+          mesh::request_source_t{std::make_shared<const mesh_node_descriptor_t> (descriptor)};
+        provider.forbid_io = memory.forbid_io = true;
+        const auto actor_authority =
+          native->accepted_record_authority (actor_query, runtime.current_owner_observation ())
+            .result ()
+            .value ();
+        EXPECT_EQ (retained, actor_authority.has_value ());
+        auto prepared = owner.prepare_spot_dispatch ("registered-spot", route).result ();
+        EXPECT_EQ (retained, bool (prepared));
+        if (prepared)
+            prepared.value ()->terminal ();
+        EXPECT_EQ (0, provider.forbidden_calls.load ());
+        EXPECT_EQ (0, memory.forbidden_calls.load ());
+        move_to (episode->cutoff);
+        detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+        EXPECT_FALSE (owner.prepare_spot_dispatch ("registered-spot", route).result ());
+        EXPECT_FALSE (
+          native->accepted_record_authority (actor_query, runtime.current_owner_observation ())
+            .result ()
+            .value ());
+        provider.forbid_io = memory.forbid_io = false;
+        executor->close ();
+        scheduler->run_all ();
+        context->node.reset ();
+        node->spot_contexts_by_id.clear ();
+        return;
+    }
+    if (loss != 0) {
+        node->snapshot.routing_id = descriptor.rid;
+        context->actor_count = 2;
+        commit (placement_object_kind_t::actor, "late", "player");
+        node->actor_instances["player:early"] = std::make_shared<int> (1);
+        node->actor_instances["player:late"] = std::make_shared<int> (2);
+        const std::weak_ptr<void> early_instance = node->actor_instances.at ("player:early");
+        const std::weak_ptr<void> late_instance = node->actor_instances.at ("player:late");
+        runtime
+          .on_execution_discard (
+            [weak = std::weak_ptr (node)] (auto policy) {
+                if (auto state = weak.lock ())
+                    detail::spot_node_runtime_t (state).request_location_execution_discard (
+                      std::move (policy));
+            },
+            [weak = std::weak_ptr (node),
+             owner_id = runtime.owner_id ()] (authority_key_t key, authority_snapshot_t snapshot) {
+                if (auto state = weak.lock ())
+                    detail::spot_node_runtime_t (state).observe_location_authority (
+                      std::move (key), std::move (snapshot), owner_id);
+            })
+          .result ()
+          .value ();
+        auto finished = std::make_shared<task_completion_source_t<bool>> ();
+        context->merged_close_results.push_back (
+          [finished] (result_t<bool> result) { finished->complete (std::move (result)); });
+        auto executor = context->ensure_spot_serial_executor ();
+        auto early = executor->actor_executor ("player:early")->queue ();
+        auto late = executor->actor_executor ("player:late")->queue ();
+        auto spot_gate = executor->spot_queue ();
+        const auto key =
+          loss % 2 == 0 ? spot_authority_key ("registered-spot") : actor_authority_key ("early");
+        const auto before = store ().read_authority (key).result ().value ();
+        const auto snapshot = std::get<authority_snapshot_t> (before);
+        const authority_mutation_t mutation =
+          loss > 2 ? authority_mutation_t{authority_retarget_t{snapshot.payload,
+                                                               snapshot.allocation.target}}
+                   : authority_mutation_t{authority_reincarnate_t{snapshot.payload}};
+        const auto changed = store ()
+                               .compare_exchange_authority (key, snapshot.store_version, mutation)
+                               .result ()
+                               .value ();
+        ASSERT_TRUE (std::holds_alternative<authority_stored_t> (changed));
+        scheduler->run_all ();
+        advance (5s);
+        lease_access::communication_failure (runtime);
+        const auto episode = lease_access::snapshot (runtime)->outage;
+        ASSERT_TRUE (episode);
+        int handlers = 0;
+        std::atomic_int cancelled{0};
+        auto cancellations = std::make_shared<task_completion_source_t<void>> ();
+        auto cancellations_finished = cancellations->task ();
+        const auto expected_cancellations = loss % 2 == 0 ? 2 : 1;
+        serial_work_options_t pending;
+        pending.completion = [&] (result_t<void> result) {
+            EXPECT_FALSE (result);
+            if (!result && result.error ())
+                EXPECT_EQ (framework_error_kind_t::not_found, result.error_kind ());
+            if (cancelled.fetch_add (1) + 1 == expected_cancellations)
+                cancellations->complete (result_t<void>::success ());
+        };
+        ASSERT_TRUE (early->try_post ("lost-actor", [&] { ++handlers; }, pending));
+        if (loss % 2 == 0)
+            ASSERT_TRUE (spot_gate->try_post ("lost-spot", [&] { ++handlers; }, pending));
+        // This exact read confirms a changed incarnation before T.
+        store ().read_authority (key).result ().value ();
+        lease_access::lane (runtime).run_sync ([] {});
+        node->lane.run_sync ([] {});
+        native->objects ().find_async (stateful::object_kind_t::actor, "early").result ().value ();
+        node->lane.run_sync ([] {});
+        provider.forbid_io = memory.forbid_io = true;
+        scheduler->run_all ();
+        scheduler->run_until (cancellations_finished);
+        if (loss % 2 == 0 && spot_gate->closed ()) {
+            auto closed = finished->task ();
+            scheduler->run_until (closed);
+            EXPECT_TRUE (closed.result ().value ());
+        }
+        EXPECT_EQ (0, handlers);
+        EXPECT_EQ (expected_cancellations, cancelled.load ());
+        EXPECT_TRUE (early->closed ());
+        if (loss % 2 == 0) {
+            EXPECT_TRUE (late->closed ());
+            EXPECT_TRUE (spot_gate->closed ());
+        } else {
+            ASSERT_TRUE (late->try_post ("other-preserved", [&] { ++handlers; }));
+            scheduler->run_all ();
+            EXPECT_EQ (1, handlers);
+            EXPECT_FALSE (late_instance.expired ());
+            EXPECT_FALSE (episode->discarded.load ());
+            move_to (episode->cutoff);
+            detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+            lease_access::lane (runtime).run_sync ([] {});
+            node->lane.run_sync ([] {});
+            scheduler->run_all ();
+            EXPECT_TRUE (late->closed ());
+            auto closed = finished->task ();
+            scheduler->run_until (closed);
+            EXPECT_TRUE (closed.result ().value ());
+        }
+        EXPECT_TRUE (early_instance.expired ());
+        EXPECT_TRUE (late_instance.expired ());
+        EXPECT_EQ (0, provider.forbidden_calls.load ());
+        EXPECT_EQ (0, memory.forbidden_calls.load ());
+        provider.forbid_io = memory.forbid_io = false;
+        const auto token_before_claim = *lease_access::snapshot (runtime)->token;
+        store ().release_owner_lease (token_before_claim).result ().value ();
+        lease_access::heartbeat (runtime, clock_now.load ());
+        ASSERT_TRUE (lease_access::snapshot (runtime)->token);
+        EXPECT_NE (token_before_claim.lease_generation,
+                   lease_access::snapshot (runtime)->token->lease_generation);
+        lease_access::heartbeat (runtime, clock_now.load ());
+        EXPECT_FALSE (early->try_post ("cannot-resume", [&] { ++handlers; }));
+        if (loss % 2 == 0)
+            EXPECT_FALSE (spot_gate->try_post ("cannot-resume-spot", [&] { ++handlers; }));
+        executor->close ();
+        scheduler->run_all ();
+        context->node.reset ();
+        node->spot_contexts_by_id.clear ();
+        return;
+    }
     std::vector<std::shared_ptr<detail::spot_context_state_t>> excluded_spots;
     auto closing = std::make_shared<task_completion_source_t<host::spot_close_commit_t>> ();
     auto closing_finished = std::make_shared<task_completion_source_t<bool>> ();
@@ -4697,6 +5145,225 @@ TEST_P (StoreOutageRetention, ConflictMissingAndStaleDoNotOpenEpisode)
     EXPECT_FALSE (lease_access::snapshot (runtime)->outage);
     lease_access::heartbeat (runtime, clock_now.load ());
     EXPECT_FALSE (lease_access::snapshot (runtime)->outage);
+}
+
+TEST_P (StoreOutageRetention, ConfirmedActorLossPerActorDefault)
+{
+    registered_owner (false, false, 1);
+}
+
+TEST_P (StoreOutageRetention, ConfirmedActorLossPerActorRetention)
+{
+    registered_owner (false, true, 1);
+}
+
+TEST_P (StoreOutageRetention, ConfirmedActorLossSpotWideDefault)
+{
+    registered_owner (true, false, 1);
+}
+
+TEST_P (StoreOutageRetention, ConfirmedActorLossSpotWideRetention)
+{
+    registered_owner (true, true, 1);
+}
+
+TEST_P (StoreOutageRetention, ConfirmedSpotLossPerActorDefault)
+{
+    registered_owner (false, false, 2);
+}
+
+TEST_P (StoreOutageRetention, ConfirmedSpotLossPerActorRetention)
+{
+    registered_owner (false, true, 2);
+}
+
+TEST_P (StoreOutageRetention, ConfirmedSpotLossSpotWideDefault)
+{
+    registered_owner (true, false, 2);
+}
+
+TEST_P (StoreOutageRetention, ConfirmedSpotLossSpotWideRetention)
+{
+    registered_owner (true, true, 2);
+}
+
+TEST_P (StoreOutageRetention, ConfirmedActorOwnerGenerationLossPerActorDefault)
+{
+    registered_owner (false, false, 3);
+}
+
+TEST_P (StoreOutageRetention, ConfirmedActorOwnerGenerationLossPerActorRetention)
+{
+    registered_owner (false, true, 3);
+}
+
+TEST_P (StoreOutageRetention, ConfirmedActorOwnerGenerationLossSpotWideDefault)
+{
+    registered_owner (true, false, 3);
+}
+
+TEST_P (StoreOutageRetention, ConfirmedActorOwnerGenerationLossSpotWideRetention)
+{
+    registered_owner (true, true, 3);
+}
+
+TEST_P (StoreOutageRetention, ConfirmedSpotOwnerGenerationLossPerActorDefault)
+{
+    registered_owner (false, false, 4);
+}
+
+TEST_P (StoreOutageRetention, ConfirmedSpotOwnerGenerationLossPerActorRetention)
+{
+    registered_owner (false, true, 4);
+}
+
+TEST_P (StoreOutageRetention, ConfirmedSpotOwnerGenerationLossSpotWideDefault)
+{
+    registered_owner (true, false, 4);
+}
+
+TEST_P (StoreOutageRetention, ConfirmedSpotOwnerGenerationLossSpotWideRetention)
+{
+    registered_owner (true, true, 4);
+}
+
+TEST_P (StoreOutageRetention, PendingStopAndOwnershipLossHaveDifferentResults)
+{
+    using status_t = serial_execution_queue_t::execution_status_t;
+    for (bool shared : {false, true})
+        for (auto status : {status_t::stopped, status_t::ownership_lost}) {
+            test::manual_internal_scheduler_t scheduler;
+            auto spot = std::make_shared<serial_execution_queue_t> (
+              scheduler, serial_execution_queue_options_t{},
+              serial_execution_queue_t::error_handler_t{},
+              shared ? serial_lane_policy_t::spot_wide ()
+                     : serial_lane_policy_t::per_actor_spot ());
+            auto actor = std::make_shared<serial_execution_queue_t> (scheduler);
+            actor->attach_spot_gate (spot);
+            auto gate = shared ? spot : actor;
+            int handlers = 0, completed = 0;
+            serial_work_options_t pending;
+            pending.completion = [&] (result_t<void> result) {
+                EXPECT_FALSE (result);
+                EXPECT_EQ (status == status_t::stopped ? framework_error_kind_t::shutting_down
+                                                       : framework_error_kind_t::not_found,
+                           result.error_kind ());
+                ++completed;
+            };
+            ASSERT_TRUE (gate->try_post ("pending", [&] { ++handlers; }, pending));
+            gate->cancel_pending (status);
+            scheduler.run_all ();
+            EXPECT_EQ (0, handlers);
+            EXPECT_EQ (1, completed);
+            actor->cancel_pending ();
+            spot->cancel_pending ();
+            scheduler.run_all ();
+        }
+}
+
+TEST_P (StoreOutageRetention, TerminalCauseSurvivesParentDiscardAndLaterPolicy)
+{
+    using status_t = serial_execution_queue_t::execution_status_t;
+    for (bool shared : {false, true})
+        for (bool stopped_first : {false, true}) {
+            test::manual_internal_scheduler_t scheduler;
+            auto spot = std::make_shared<serial_execution_queue_t> (
+              scheduler, serial_execution_queue_options_t{},
+              serial_execution_queue_t::error_handler_t{},
+              shared ? serial_lane_policy_t::spot_wide ()
+                     : serial_lane_policy_t::per_actor_spot ());
+            auto actor = std::make_shared<serial_execution_queue_t> (scheduler);
+            actor->attach_spot_gate (spot);
+            int handlers = 0, completed = 0;
+            serial_work_options_t pending;
+            pending.completion = [&] (result_t<void> result) {
+                EXPECT_FALSE (result);
+                EXPECT_EQ (stopped_first ? framework_error_kind_t::shutting_down
+                                         : framework_error_kind_t::not_found,
+                           result.error_kind ());
+                ++completed;
+            };
+            ASSERT_TRUE (actor->try_post ("pending", [&] { ++handlers; }, pending));
+            if (stopped_first)
+                actor->cancel_pending ();
+            ASSERT_TRUE (spot->fence_execution ());
+            // A subsequent retention/Ready publication cannot replace the terminal fence.
+            spot->set_execution_policy ([] { return true; });
+            EXPECT_EQ (status_t::ownership_lost, spot->execution_status ());
+            EXPECT_FALSE (spot->execution_allowed ());
+            actor->cancel_pending ();
+            spot->cancel_pending ();
+            scheduler.run_all ();
+            EXPECT_EQ (0, handlers);
+            EXPECT_EQ (1, completed);
+        }
+}
+
+TEST_P (StoreOutageRetention, StaleLeaseKeepsObjectsAndOriginalEpisodeUntilCutoff)
+{
+    for (bool retained : {false, true}) {
+        options.store_outage_retention = retained;
+        location_runtime_t runtime (store (), options, "stale-owner-" + std::to_string (retained));
+        lease_access::clock (runtime, [&] { return clock_now.load (); });
+        claim (runtime);
+        test::manual_internal_scheduler_t scheduler;
+        auto gate = std::make_shared<serial_execution_queue_t> (scheduler);
+        gate->set_execution_policy (runtime.execution_policy ());
+        gate->confirm_execution_ready (clock_now.load ());
+        int discarded = 0;
+        runtime
+          .on_execution_discard ([&] (auto allowed) {
+              if (allowed (*gate) != serial_execution_queue_t::execution_status_t::allowed) {
+                  ++discarded;
+                  gate->cancel_pending ();
+              }
+          })
+          .result ()
+          .value ();
+        scheduler.run_all ();
+        advance (5s);
+        lease_access::communication_failure (runtime);
+        const auto episode = lease_access::snapshot (runtime)->outage;
+        ASSERT_TRUE (episode);
+        const auto old_token = *lease_access::snapshot (runtime)->token;
+        store ().release_owner_lease (old_token).result ().value ();
+        lease_access::heartbeat (runtime, clock_now.load ());
+        ASSERT_TRUE (lease_access::snapshot (runtime)->token);
+        EXPECT_NE (old_token.lease_generation,
+                   lease_access::snapshot (runtime)->token->lease_generation);
+        EXPECT_EQ (episode, lease_access::snapshot (runtime)->outage);
+        EXPECT_EQ (0, discarded);
+        int handlers = 0;
+        ASSERT_TRUE (gate->try_post ("after-stale-and-claim", [&] { ++handlers; }));
+        scheduler.run_all ();
+        EXPECT_EQ (1, handlers);
+        move_to (episode->cutoff);
+        detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+        scheduler.run_all ();
+        EXPECT_EQ (1, discarded);
+        EXPECT_TRUE (gate->closed ());
+        EXPECT_FALSE (gate->try_post ("after-cutoff", [&] { ++handlers; }));
+    }
+}
+
+TEST_P (StoreOutageRetention, CachedBoundSpotRoutePerActorDefault)
+{
+    registered_owner (false, false, -1);
+}
+
+TEST_P (StoreOutageRetention, CachedBoundSpotRoutePerActorRetention)
+{
+    registered_owner (false, true, -1);
+}
+
+TEST_P (StoreOutageRetention, CachedBoundSpotRouteSpotWideDefault)
+{
+    registered_owner (true, false, -1);
+}
+
+TEST_P (StoreOutageRetention, CachedBoundSpotRouteSpotWideRetention)
+{
+    registered_owner (true, true, -1);
 }
 
 INSTANTIATE_TEST_SUITE_P (BothRepositories, StoreOutageRetention, ::testing::Bool ());

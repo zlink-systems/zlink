@@ -151,7 +151,7 @@ class in_memory_location_repository_t : public location_repository_t
     }
 
     task_t<location_page_t<mesh_node_descriptor_t>>
-    list_mesh_nodes (std::string mesh_name, location_page_request_t page = {}) override
+    list_mesh_nodes_core (std::string mesh_name, location_page_request_t page = {}) override
     {
         return _lane.run_task ([this, mesh_name = std::move (mesh_name), page = std::move (page)] {
             std::vector<mesh_node_descriptor_t> matched;
@@ -475,8 +475,8 @@ class in_memory_location_repository_t : public location_repository_t
           .get ();
     }
 
-    task_t<authority_read_result_t> read_authority (authority_key_t key,
-                                                    std::stop_token cancellation = {}) override
+    task_t<authority_read_result_t> read_authority_core (authority_key_t key,
+                                                         std::stop_token cancellation = {}) override
     {
         if (cancellation.stop_requested ())
             return cancelled<authority_read_result_t> ();
@@ -495,10 +495,10 @@ class in_memory_location_repository_t : public location_repository_t
     }
 
     task_t<authority_compare_exchange_result_t>
-    compare_exchange_authority (authority_key_t key,
-                                std::string expected_store_version,
-                                authority_mutation_t mutation,
-                                std::stop_token cancellation = {}) override
+    compare_exchange_authority_core (authority_key_t key,
+                                     std::string expected_store_version,
+                                     authority_mutation_t mutation,
+                                     std::stop_token cancellation = {}) override
     {
         if (cancellation.stop_requested ())
             return cancelled<authority_compare_exchange_result_t> ();
@@ -740,8 +740,8 @@ class in_memory_location_repository_t : public location_repository_t
     }
 
     task_t<object_complete_creation_result_t>
-    complete_creation (object_complete_creation_request_t request,
-                       std::stop_token cancellation = {}) override
+    complete_creation_core (object_complete_creation_request_t request,
+                            std::stop_token cancellation = {}) override
     {
         if (cancellation.stop_requested ())
             return cancelled<object_complete_creation_result_t> ();
@@ -839,8 +839,8 @@ class in_memory_location_repository_t : public location_repository_t
           });
     }
 
-    task_t<object_reserve_result_t> reserve (object_reserve_request_t request,
-                                             std::stop_token cancellation = {}) override
+    task_t<object_reserve_result_t> reserve_core (object_reserve_request_t request,
+                                                  std::stop_token cancellation = {}) override
     {
         if (cancellation.stop_requested ())
             return cancelled<object_reserve_result_t> ();
@@ -935,9 +935,9 @@ class in_memory_location_repository_t : public location_repository_t
     }
 
     task_t<object_commit_result_t>
-    commit (object_commit_request_t request,
-            std::stop_token cancellation = {},
-            std::chrono::system_clock::time_point operation_deadline = {}) override
+    commit_core (object_commit_request_t request,
+                 std::stop_token cancellation = {},
+                 std::chrono::system_clock::time_point operation_deadline = {}) override
     {
         if (cancellation.stop_requested ())
             return cancelled<object_commit_result_t> ();
@@ -1033,8 +1033,8 @@ class in_memory_location_repository_t : public location_repository_t
     }
 
     task_t<aggregate_prepare_result_t>
-    prepare_aggregate (aggregate_prepare_request_t request,
-                       std::stop_token cancellation = {}) override
+    prepare_aggregate_core (aggregate_prepare_request_t request,
+                            std::stop_token cancellation = {}) override
     {
         if (cancellation.stop_requested ())
             return cancelled<aggregate_prepare_result_t> ();
