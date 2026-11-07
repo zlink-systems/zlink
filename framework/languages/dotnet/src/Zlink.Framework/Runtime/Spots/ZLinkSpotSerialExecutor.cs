@@ -82,7 +82,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             IsApplicationStartAllowed,
             sharedGate: _executionMode == ZLinkUserSpotExecutionMode.SpotWide,
             sharedOwner: sharedOwner,
-            executionAllowed: () => _activation?.IsLocationExecutionAllowed != false
+            executionAllowed: () =>
+                _activation?.ExecutionStatus ?? ZLinkObjectExecutionStatus.Allowed
         );
         queue.GateOperation = _executionGateObserved;
         return queue;

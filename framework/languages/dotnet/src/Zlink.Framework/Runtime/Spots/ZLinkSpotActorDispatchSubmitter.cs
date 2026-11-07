@@ -201,7 +201,7 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         DateTimeOffset receivedAt
     ) : IZLinkObjectExecutionRecord
     {
-        public bool IsExecutionAllowed => RuntimeState.IsLocationExecutionAllowed;
+        public ZLinkObjectExecutionStatus ExecutionStatus => RuntimeState.ExecutionStatus;
         public ZLinkSpotActorPacketDispatcher Dispatcher { get; } = dispatcher;
 
         public IZLinkActor Actor { get; } = actor;
@@ -227,7 +227,7 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         DateTimeOffset receivedAt
     ) : IZLinkObjectExecutionRecord
     {
-        public bool IsExecutionAllowed => RuntimeState.IsLocationExecutionAllowed;
+        public ZLinkObjectExecutionStatus ExecutionStatus => RuntimeState.ExecutionStatus;
         public ZLinkSpotActorPacketDispatcher Dispatcher { get; } = dispatcher;
 
         public IZLinkActor Actor { get; } = actor;
