@@ -21,6 +21,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutc
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 
@@ -400,8 +401,8 @@ final class RouteRequestCall implements ZLinkRequestCall {
                                     submitNode(node, effectiveTimeout, replyType, metric, started),
                             failure -> {
                                 payload.close();
-                                this.<TReply>requestResult(metric, started)
-                                        .completeExceptionally(failure);
+                                this.<TReply>requestResult(replyType, metric, started)
+                                        .rejectSubmission(failure);
                             }));
         }
     }
@@ -415,37 +416,14 @@ final class RouteRequestCall implements ZLinkRequestCall {
         if (metadata != null) {
             throw new UnsupportedOperationException("request metadata is not available");
         }
-        CompletableFuture<TReply> result = requestResult(metric, started);
         var operationId = ZLinkServiceOperationIds.next();
         List<Message> requestParts = requestParts(operationId, Map.of());
+        var result = requestResult(replyType, metric, started, operationId, requestParts);
         try {
-            CompletionStage<ZLinkBackendReceived> operation =
-                    runtime.requestRoute(
-                            operationId, router, target, requestParts, timeout, requestAdmission);
-            ZLinkCompletionBridge.forwardCancellation(result, operation);
-            operation.whenComplete(
-                    (reply, failure) -> {
-                        ZLinkFrameworkMultipartView.closeAll(requestParts);
-                        if (failure != null) {
-                            result.completeExceptionally(
-                                    ZLinkChannelCallRuntime.requestFailure(failure));
-                            return;
-                        }
-                        if (result.isDone()) {
-                            reply.close();
-                            return;
-                        }
-                        try {
-                            runtime.completeReply(reply, replyType, result);
-                        } catch (RuntimeException ex) {
-                            result.completeExceptionally(ex);
-                        } finally {
-                            reply.close();
-                        }
-                    });
+            runtime.requestRoute(
+                    operationId, router, target, requestParts, timeout, requestAdmission, result);
         } catch (RuntimeException | Error failure) {
-            ZLinkFrameworkMultipartView.closeAll(requestParts);
-            result.completeExceptionally(failure);
+            result.rejectSubmission(failure);
         }
         return result;
     }
@@ -458,14 +436,14 @@ final class RouteRequestCall implements ZLinkRequestCall {
             long started) {
         ZLinkApplicationMetadata metadata =
                 this.metadata == null ? ZLinkApplicationMetadata.empty() : this.metadata;
-        CompletableFuture<TReply> result = requestResult(metric, started);
         var operationId = ZLinkServiceOperationIds.next();
         List<Message> requestParts = requestParts(operationId, metadata.values());
+        var result = requestResult(replyType, metric, started, operationId, requestParts);
         try {
             Optional<Integer> classified = node.classifyNodeSendTarget(target);
             if (classified.isPresent()) {
                 int status = classified.orElseThrow();
-                result.completeExceptionally(
+                result.rejectSubmission(
                         switch (status) {
                             case ZLinkOneWayCalls.TARGET_NOT_FOUND ->
                                     new ZLinkFrameworkException(
@@ -485,43 +463,39 @@ final class RouteRequestCall implements ZLinkRequestCall {
                         });
                 return result;
             }
-            CompletionStage<ZLinkBackendReceived> operation =
-                    runtime.requestNode(
-                            operationId,
-                            node,
-                            target,
-                            metadata.encode(),
-                            requestParts,
-                            timeout,
-                            requestAdmission);
-            ZLinkCompletionBridge.forwardCancellation(result, operation);
-            operation.whenComplete(
-                    (reply, failure) -> {
-                        if (failure != null) {
-                            result.completeExceptionally(
-                                    ZLinkChannelCallRuntime.requestFailure(failure));
-                            return;
-                        }
-                        try {
-                            runtime.completeReply(reply, replyType, result);
-                        } catch (RuntimeException error) {
-                            result.completeExceptionally(error);
-                        } finally {
-                            reply.close();
-                        }
-                    });
+            runtime.requestNode(
+                    operationId,
+                    node,
+                    target,
+                    metadata.encode(),
+                    requestParts,
+                    timeout,
+                    requestAdmission,
+                    result);
         } catch (RuntimeException | Error error) {
-            result.completeExceptionally(error);
-        } finally {
-            ZLinkFrameworkMultipartView.closeAll(requestParts);
+            result.rejectSubmission(error);
         }
         return result;
     }
 
-    private <TReply> CompletableFuture<TReply> requestResult(
-            ZLinkRequestMetrics.Series metric, long started) {
-        return ZLinkCompletionBridge.newCancellationFuture(
+    private <TReply> ZLinkServiceOperationRegistry.Operation<TReply> requestResult(
+            Class<TReply> replyType, ZLinkRequestMetrics.Series metric, long started) {
+        return requestResult(replyType, metric, started, ZLinkServiceOperationIds.next(), null);
+    }
+
+    private <TReply> ZLinkServiceOperationRegistry.Operation<TReply> requestResult(
+            Class<TReply> replyType,
+            ZLinkRequestMetrics.Series metric,
+            long started,
+            java.util.UUID id,
+            List<Message> requestParts) {
+        return ZLinkServiceOperationRegistry.<ZLinkBackendReceived, TReply>prepareOperation(
+                id,
+                reply -> runtime.decodeReply(reply, replyType),
+                null,
+                ZLinkChannelCallRuntime::requestFailure,
                 (result, error) -> {
+                    if (requestParts != null) ZLinkFrameworkMultipartView.closeAll(requestParts);
                     completeMetric(metric, started, error);
                     ZLinkMessageFlowTracer.TerminalTracePoint terminal =
                             runtime.flow().beginRequestTerminal(error, result);
@@ -933,8 +907,11 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                             failure -> {
                                 payload.close();
                                 this.<TReply>requestResult(
-                                                ZLinkDispatchErrorSurface.CHANNEL, metric, started)
-                                        .completeExceptionally(failure);
+                                                replyType,
+                                                ZLinkDispatchErrorSurface.CHANNEL,
+                                                metric,
+                                                started)
+                                        .rejectSubmission(failure);
                             }));
         }
     }
@@ -945,8 +922,7 @@ final class ChannelRequestCall implements ZLinkRequestCall {
             Class<TReply> replyType,
             ZLinkRequestMetrics.Series metric,
             long started) {
-        CompletableFuture<TReply> result =
-                requestResult(ZLinkDispatchErrorSurface.CHANNEL, metric, started);
+        var operationId = ZLinkServiceOperationIds.next();
         String reqPacket = packetName.orElse(null);
         List<Message> requestParts =
                 runtime.registeredEnvelopeParts(
@@ -956,10 +932,17 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                         payload,
                         contentType,
                         metadata == null ? Map.of() : metadata.values(),
-                        ZLinkServiceOperationIds.next(),
+                        operationId,
                         channelNames,
                         names);
-        result.whenComplete((ignored, error) -> ZLinkFrameworkMultipartView.closeAll(requestParts));
+        var result =
+                requestResult(
+                        replyType,
+                        ZLinkDispatchErrorSurface.CHANNEL,
+                        metric,
+                        started,
+                        operationId,
+                        requestParts);
         try {
             Duration remaining = timeout;
             if (remaining.isZero() || remaining.isNegative()) {
@@ -985,30 +968,9 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                                 null,
                                 null));
             }
-            CompletionStage<ZLinkBackendReceived> operation =
-                    runtime.requestClient(target, requestParts, remaining, requestAdmission);
-            ZLinkCompletionBridge.forwardCancellation(result, operation);
-            operation.whenComplete(
-                    (reply, failure) -> {
-                        if (failure != null) {
-                            result.completeExceptionally(
-                                    ZLinkChannelCallRuntime.requestFailure(failure));
-                            return;
-                        }
-                        if (result.isDone()) {
-                            reply.close();
-                            return;
-                        }
-                        try {
-                            runtime.completeReply(reply, replyType, result);
-                        } catch (RuntimeException ex) {
-                            result.completeExceptionally(ex);
-                        } finally {
-                            reply.close();
-                        }
-                    });
+            runtime.requestClient(target, requestParts, remaining, requestAdmission, result);
         } catch (RuntimeException | Error failure) {
-            result.completeExceptionally(failure);
+            result.rejectSubmission(failure);
         }
         return result;
     }
@@ -1021,8 +983,6 @@ final class ChannelRequestCall implements ZLinkRequestCall {
             long started) {
         ZLinkApplicationMetadata metadata =
                 this.metadata == null ? ZLinkApplicationMetadata.empty() : this.metadata;
-        CompletableFuture<TReply> result =
-                requestResult(ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL, metric, started);
         var operationId = ZLinkServiceOperationIds.next();
         List<Message> parts =
                 runtime.registeredEnvelopeParts(
@@ -1035,44 +995,53 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                         operationId,
                         channelNames,
                         names);
+        var result =
+                requestResult(
+                        replyType,
+                        ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
+                        metric,
+                        started,
+                        operationId,
+                        parts);
         try {
-            CompletionStage<ZLinkBackendReceived> operation =
-                    runtime.requestChannel(
-                            operationId,
-                            node,
-                            channelName,
-                            metadata.encode(),
-                            parts,
-                            timeout,
-                            requestAdmission);
-            ZLinkCompletionBridge.forwardCancellation(result, operation);
-            operation.whenComplete(
-                    (reply, failure) -> {
-                        ZLinkFrameworkMultipartView.closeAll(parts);
-                        if (failure != null) {
-                            result.completeExceptionally(
-                                    ZLinkChannelCallRuntime.requestFailure(failure));
-                            return;
-                        }
-                        try {
-                            runtime.completeReply(reply, replyType, result);
-                        } catch (RuntimeException error) {
-                            result.completeExceptionally(error);
-                        } finally {
-                            reply.close();
-                        }
-                    });
+            runtime.requestChannel(
+                    operationId,
+                    node,
+                    channelName,
+                    metadata.encode(),
+                    parts,
+                    timeout,
+                    requestAdmission,
+                    result);
         } catch (RuntimeException | Error failure) {
-            ZLinkFrameworkMultipartView.closeAll(parts);
-            result.completeExceptionally(failure);
+            result.rejectSubmission(failure);
         }
         return result;
     }
 
-    private <TReply> CompletableFuture<TReply> requestResult(
-            ZLinkDispatchErrorSurface surface, ZLinkRequestMetrics.Series metric, long started) {
-        return ZLinkCompletionBridge.newCancellationFuture(
+    private <TReply> ZLinkServiceOperationRegistry.Operation<TReply> requestResult(
+            Class<TReply> replyType,
+            ZLinkDispatchErrorSurface surface,
+            ZLinkRequestMetrics.Series metric,
+            long started) {
+        return requestResult(
+                replyType, surface, metric, started, ZLinkServiceOperationIds.next(), null);
+    }
+
+    private <TReply> ZLinkServiceOperationRegistry.Operation<TReply> requestResult(
+            Class<TReply> replyType,
+            ZLinkDispatchErrorSurface surface,
+            ZLinkRequestMetrics.Series metric,
+            long started,
+            java.util.UUID id,
+            List<Message> requestParts) {
+        return ZLinkServiceOperationRegistry.<ZLinkBackendReceived, TReply>prepareOperation(
+                id,
+                reply -> runtime.decodeReply(reply, replyType),
+                null,
+                ZLinkChannelCallRuntime::requestFailure,
                 (result, error) -> {
+                    if (requestParts != null) ZLinkFrameworkMultipartView.closeAll(requestParts);
                     completeMetric(metric, started, error);
                     ZLinkMessageFlowTracer.TerminalTracePoint terminal =
                             runtime.flow().beginRequestTerminal(error, result);

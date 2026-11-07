@@ -133,6 +133,52 @@ internal abstract record ZLinkAuthorityMutation
         ZLinkLocationOwnerToken ExpectedOwner
     ) : ZLinkAuthorityMutation;
 
+    internal static void Validate(ZLinkAuthorityMutation mutation)
+    {
+        if (mutation is not Put put)
+            return;
+        var preserve = put.GenerationTransition == ZLinkAuthorityGenerationTransition.Preserve;
+        var reincarnate =
+            put.GenerationTransition == ZLinkAuthorityGenerationTransition.Reincarnate;
+        var newOwner = put.GenerationTransition == ZLinkAuthorityGenerationTransition.NewOwner;
+        if (
+            !preserve && !reincarnate && !newOwner
+            || (preserve || reincarnate)
+                && (put.TargetAllocation is not null || put.TargetAuthorityOwnerGeneration != 0)
+            || reincarnate && put.TargetOwner is not null
+            || newOwner
+                && (
+                    put.TargetOwner is null
+                    || put.TargetAllocation
+                        is not {
+                            State: ZLinkPlacementAllocationState.Active,
+                            DescriptorLifecycleGeneration: > 0
+                        }
+                )
+            || put.TargetOwner is { } owner
+                && (string.IsNullOrWhiteSpace(owner.OwnerId) || owner.LeaseGeneration <= 0)
+        )
+            throw new ArgumentException(
+                "The authority mutation is inconsistent.",
+                nameof(mutation)
+            );
+    }
+
+    internal static bool MatchesPreservedOwner(ZLinkAuthoritySnapshot current, Put put) =>
+        put.GenerationTransition != ZLinkAuthorityGenerationTransition.Preserve
+        || put.TargetOwner is not { } target
+        || target.OwnerId == current.OwnerId
+            && target.LeaseGeneration > current.OwnerLeaseGeneration;
+
+    internal static bool MatchesPreservedDescriptor(
+        ZLinkAuthoritySnapshot current,
+        ZLinkMeshNodeDescriptor descriptor
+    ) =>
+        descriptor.MeshName == current.Allocation.Descriptor.MeshName
+        && descriptor.Rid == current.Allocation.Descriptor.Rid
+        && descriptor.LifecycleGeneration == current.Allocation.DescriptorLifecycleGeneration
+        && descriptor.OwnerId == current.OwnerId;
+
     public sealed record Delete : ZLinkAuthorityMutation;
 }
 

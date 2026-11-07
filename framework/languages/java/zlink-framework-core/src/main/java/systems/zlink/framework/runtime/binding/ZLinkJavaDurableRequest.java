@@ -135,7 +135,7 @@ public final class ZLinkJavaDurableRequest<T> {
                         if (failure == null) requestAdmission.complete(null);
                         else requestAdmission.completeExceptionally(failure);
                     });
-        operations.submitTerminal(
+        operations.<T>submitTerminal(
                 id,
                 timeout,
                 terminal -> {
@@ -169,7 +169,7 @@ public final class ZLinkJavaDurableRequest<T> {
             UUID id,
             BiConsumer<T, Throwable> terminal,
             CompletableFuture<Void> admission,
-            CompletionStage<T> caller) {
+            CompletionStage<?> caller) {
         return attempt(
                 prepare,
                 submit,
@@ -196,7 +196,7 @@ public final class ZLinkJavaDurableRequest<T> {
             UUID id,
             BiConsumer<T, Throwable> terminal,
             CompletableFuture<Void> admission,
-            CompletionStage<T> caller,
+            CompletionStage<?> caller,
             Runnable abandon) {
         // A new request reads the observer's published route without entering its lane.
         // Only requests that need to wait allocate an observer and capture failure history.
@@ -222,7 +222,7 @@ public final class ZLinkJavaDurableRequest<T> {
                 abandon);
     }
 
-    private static <T> CompletionStage<T> waitForAdmission(
+    private static <T> CompletionStage<?> waitForAdmission(
             Supplier<List<byte[]>> prepare,
             Submit<T> submit,
             Supplier<PeerRouteObservation> route,
@@ -233,7 +233,7 @@ public final class ZLinkJavaDurableRequest<T> {
             UUID id,
             BiConsumer<T, Throwable> terminal,
             CompletableFuture<Void> admission,
-            CompletionStage<T> caller,
+            CompletionStage<?> caller,
             Runnable abandon) {
         var request =
                 new ZLinkJavaDurableRequest<>(

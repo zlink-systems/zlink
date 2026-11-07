@@ -46,29 +46,39 @@ final class ZLinkNodeOperationOwnerTest {
                 assertTrue(entered.await(1, TimeUnit.SECONDS));
                 var nodeA = node(registryA, a, () -> CompletableFuture.completedFuture(reply()));
                 var nodeB = node(registryB, b, () -> CompletableFuture.completedFuture(reply()));
+                var idA = UUID.randomUUID();
+                var idB = UUID.randomUUID();
                 var pendingA =
                         new ZLinkStateLane()
                                 .runAsync(
                                         () ->
                                                 calls.requestNode(
-                                                        UUID.randomUUID(),
+                                                        idA,
                                                         nodeA,
                                                         TARGET,
                                                         new byte[0],
                                                         List.of(),
                                                         TIMEOUT,
-                                                        new CompletableFuture<>()))
+                                                        new CompletableFuture<>(),
+                                                        systems.zlink.framework.runtime.internal
+                                                                .service
+                                                                .ZLinkServiceOperationRegistry
+                                                                .<ZLinkBackendReceived>
+                                                                        prepareOperation(idA)))
                                 .toCompletableFuture()
                                 .get(1, TimeUnit.SECONDS);
                 var completedB =
                         calls.requestNode(
-                                UUID.randomUUID(),
+                                idB,
                                 nodeB,
                                 TARGET,
                                 new byte[0],
                                 List.of(),
                                 TIMEOUT,
-                                new CompletableFuture<>());
+                                new CompletableFuture<>(),
+                                systems.zlink.framework.runtime.internal.service
+                                        .ZLinkServiceOperationRegistry
+                                        .<ZLinkBackendReceived>prepareOperation(idB));
                 completedB.toCompletableFuture().get(1, TimeUnit.SECONDS).close();
                 assertFalse(pendingA.toCompletableFuture().isDone());
                 release.countDown();
@@ -99,15 +109,19 @@ final class ZLinkNodeOperationOwnerTest {
                                 return binding;
                             });
             sockets.registerSpotRouterNode("node", node);
+            var id = UUID.randomUUID();
             var request =
                     calls.requestNode(
-                            UUID.randomUUID(),
+                            id,
                             node,
                             TARGET,
                             new byte[0],
                             List.of(),
                             TIMEOUT,
-                            new CompletableFuture<>());
+                            new CompletableFuture<>(),
+                            systems.zlink.framework.runtime.internal.service
+                                    .ZLinkServiceOperationRegistry
+                                    .<ZLinkBackendReceived>prepareOperation(id));
             assertTrue(entered.await(1, TimeUnit.SECONDS));
             calls.beginClose();
             sockets.rejectPendingAdmission();
@@ -150,15 +164,20 @@ final class ZLinkNodeOperationOwnerTest {
                                                 operations,
                                                 args[4],
                                                 "the source node owns the pending entry");
-                                        yield operations.submit(
+                                        operations.<ZLinkBackendReceived>submitTerminal(
                                                 (UUID) args[5],
                                                 (Duration) args[3],
-                                                () -> {
+                                                terminal -> {
                                                     assertTrue(lane.isOnLane());
                                                     assertEquals(1, operations.pendingCount());
-                                                    return binding.get();
+                                                    var physical = binding.get();
+                                                    physical.whenComplete(terminal);
+                                                    return physical;
                                                 },
-                                                ZLinkBackendReceived::close);
+                                                ZLinkBackendReceived::close,
+                                                (ZLinkServiceOperationRegistry.Operation<?>)
+                                                        args[7]);
+                                        yield null;
                                     }
                                     default -> throw new AssertionError(method.getName());
                                 });

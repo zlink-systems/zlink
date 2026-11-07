@@ -55,7 +55,6 @@ final class ZLinkChannelDispatchReporter {
 
     void replyShutdownOnAdmissionRejected(
             CompletableFuture<Void> admission,
-            Message payload,
             ZLinkBackendRouterSocket router,
             ZLinkBackendReceived received,
             ZLinkDispatchErrorSurface surface,
@@ -63,10 +62,9 @@ final class ZLinkChannelDispatchReporter {
             String channelName,
             String sourceRid,
             systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader) {
-        onAdmissionRejected(
-                admission,
-                payload::close,
-                failure ->
+        admission.whenComplete(
+                (ignored, failure) -> {
+                    if (failure != null)
                         replyError(
                                 router,
                                 received,
@@ -80,7 +78,8 @@ final class ZLinkChannelDispatchReporter {
                                 new ZLinkFrameworkException(
                                         ZLinkFrameworkErrorKind.SHUTTING_DOWN,
                                         "channel runtime is closing",
-                                        failure)));
+                                        failure));
+                });
     }
 
     void replyError(

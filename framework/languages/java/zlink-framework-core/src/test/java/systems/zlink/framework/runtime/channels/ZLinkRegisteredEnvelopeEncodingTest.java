@@ -72,6 +72,14 @@ final class ZLinkRegisteredEnvelopeEncodingTest {
                                                 .ZLinkInternalSpotNode.class
                                     },
                                     (proxy, method, arguments) -> {
+                                        if (method.isDefault()
+                                                && method.getParameterCount() == 8
+                                                && (method.getName().equals("requestToNode")
+                                                        || method.getName()
+                                                                .equals("requestToChannel")))
+                                            return java.lang.reflect.InvocationHandler
+                                                    .invokeDefault(proxy, method, arguments);
+
                                         if ((method.getName().equals("requestToNode")
                                                 || method.getName().equals("requestToChannel"))) {
                                             @SuppressWarnings("unchecked")

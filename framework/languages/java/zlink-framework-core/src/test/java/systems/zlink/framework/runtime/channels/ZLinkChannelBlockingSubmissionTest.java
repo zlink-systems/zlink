@@ -441,32 +441,42 @@ final class ZLinkChannelBlockingSubmissionTest {
                                         if (method.getName().equals("requestToChannel")) {
                                             var operations =
                                                     (ZLinkServiceOperationRegistry) args[4];
-                                            return operations.submit(
+                                            operations.<ZLinkBackendReceived>submitTerminal(
                                                     (UUID) args[5],
                                                     (Duration) args[3],
-                                                    () -> {
+                                                    terminal -> {
                                                         submissions.incrementAndGet();
                                                         submitted.countDown();
-                                                        return replyReady.thenApply(
-                                                                ignored -> {
-                                                                    var bytes =
-                                                                            new ZLinkJsonMessageSerializer()
-                                                                                    .serialize(
-                                                                                            new Reply(
-                                                                                                    "accepted"))
-                                                                                    .bytes();
-                                                                    return new ZLinkBackendReceived(
-                                                                            ZLinkBackendRequestResult
-                                                                                    .OK,
-                                                                            Optional.empty(),
-                                                                            Optional.empty(),
-                                                                            Optional.empty(),
-                                                                            List.of(
-                                                                                    Message.from(
-                                                                                            bytes)));
-                                                                });
+                                                        var physical =
+                                                                replyReady.thenApply(
+                                                                        ignored -> {
+                                                                            var bytes =
+                                                                                    new ZLinkJsonMessageSerializer()
+                                                                                            .serialize(
+                                                                                                    new Reply(
+                                                                                                            "accepted"))
+                                                                                            .bytes();
+                                                                            return new ZLinkBackendReceived(
+                                                                                    ZLinkBackendRequestResult
+                                                                                            .OK,
+                                                                                    Optional
+                                                                                            .empty(),
+                                                                                    Optional
+                                                                                            .empty(),
+                                                                                    Optional
+                                                                                            .empty(),
+                                                                                    List.of(
+                                                                                            Message
+                                                                                                    .from(
+                                                                                                            bytes)));
+                                                                        });
+                                                        physical.whenComplete(terminal);
+                                                        return physical;
                                                     },
-                                                    ZLinkBackendReceived::close);
+                                                    ZLinkBackendReceived::close,
+                                                    (ZLinkServiceOperationRegistry.Operation<?>)
+                                                            args[7]);
+                                            return null;
                                         }
                                         throw new AssertionError(
                                                 "unexpected backend call: " + method);

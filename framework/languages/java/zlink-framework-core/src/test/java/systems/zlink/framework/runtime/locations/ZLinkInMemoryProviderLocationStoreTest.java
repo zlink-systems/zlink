@@ -353,9 +353,15 @@ final class ZLinkInMemoryProviderLocationStoreTest {
             assertInstanceOf(ZLinkStoreScanCursor.class, page.value().nextCursor());
         }
 
-        assertThrows(
-                IllegalStateException.class,
-                () -> store.scan(new ZLinkStoreScanRequest("bound/", null, 1), ACTIVE));
+        var failure =
+                assertThrows(
+                        java.util.concurrent.CompletionException.class,
+                        () ->
+                                store.scan(new ZLinkStoreScanRequest("bound/", null, 1), ACTIVE)
+                                        .toCompletableFuture()
+                                        .orTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                                        .join());
+        assertInstanceOf(IllegalStateException.class, failure.getCause());
     }
 
     private static final class MutableClock extends Clock {

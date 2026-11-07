@@ -465,6 +465,13 @@ final class ZLinkChannelSubmissionFailureTest {
                         ZLinkChannelSubmissionFailureTest.class.getClassLoader(),
                         new Class<?>[] {ZLinkInternalSpotNode.class},
                         (proxy, method, arguments) -> {
+                            if (method.isDefault()
+                                    && method.getParameterCount() == 8
+                                    && (method.getName().equals("requestToNode")
+                                            || method.getName().equals("requestToChannel")))
+                                return java.lang.reflect.InvocationHandler.invokeDefault(
+                                        proxy, method, arguments);
+
                             if (method.getName().equals("requestToChannel")) {
                                 attempts.incrementAndGet();
                                 throw failure;
@@ -484,14 +491,20 @@ final class ZLinkChannelSubmissionFailureTest {
                                 ZLinkServiceOperationRegistry operations =
                                         (ZLinkServiceOperationRegistry) arguments[4];
                                 java.util.UUID operationId = (java.util.UUID) arguments[5];
-                                return operations.submit(
-                                        operationId,
-                                        (Duration) arguments[3],
-                                        () -> {
-                                            attempts.incrementAndGet();
-                                            return new CompletableFuture<>();
-                                        },
-                                        ignored -> {});
+                                operations
+                                        .<systems.zlink.framework.runtime.internal.backend
+                                                        .ZLinkBackendReceived>
+                                                submitTerminal(
+                                                        operationId,
+                                                        (Duration) arguments[3],
+                                                        terminal -> {
+                                                            attempts.incrementAndGet();
+                                                            return new CompletableFuture<>();
+                                                        },
+                                                        ignored -> {},
+                                                        (ZLinkServiceOperationRegistry.Operation<?>)
+                                                                arguments[7]);
+                                return null;
                             }
                             return defaultValue(method.getReturnType());
                         });

@@ -209,12 +209,11 @@ final class ZLinkJavaSocketSupport {
                                             Optional.empty(),
                                             Optional.empty(),
                                             Optional.empty(),
-                                            replyParts.stream().map(Message::from).toList()),
+                                            replyParts),
                                     null);
                         } catch (RuntimeException | Error error) {
-                            terminal.accept(null, error);
-                        } finally {
                             Message.closeAll(replyParts);
+                            terminal.accept(null, error);
                         }
                     });
         } catch (RuntimeException failure) {
@@ -229,16 +228,9 @@ final class ZLinkJavaSocketSupport {
                 received.getRoutingId(),
                 Optional.empty(),
                 Optional.empty(),
-                received.parts().stream().map(Message::from).toList(),
-                hasReplyToken
-                        ? replyParts -> {
-                            try {
-                                submitReply(received.reply(), replyParts);
-                            } finally {
-                                received.close();
-                            }
-                        }
-                        : null,
-                received::close);
+                systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView
+                        .received(received),
+                hasReplyToken ? replyParts -> submitReply(received.reply(), replyParts) : null,
+                () -> {});
     }
 }
