@@ -81,6 +81,10 @@ export class ZLinkSpotSerialTurn {
     return this.executionClaim?.resume() ?? true;
   }
 
+  ensureExecutionAllowed(): void {
+    this.executionClaim?.start?.();
+  }
+
   releaseBoundExecutionClaim(): void {
     this.executionClaim?.release();
     this.executionClaim = undefined;
@@ -293,6 +297,18 @@ export interface ZLinkExecutionBarrierClaim {
   /** The turn yielded; it no longer runs until resume() admits it again. */
   suspend(): void;
   resume(): boolean;
+  start?(): void;
+}
+
+function requireClaimExecution(this: {
+  executionAllowed?: (owner: object | undefined) => boolean | undefined;
+  executionOwner?: object;
+}): void {
+  if (this.executionAllowed?.(this.executionOwner) === false)
+    throw createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.RequestRejected,
+      'Object execution was rejected because Location owner admission is closed.'
+    );
 }
 
 interface ZLinkExecutionBarrierWaiter {
@@ -315,6 +331,27 @@ export class ZLinkExecutionBarrier {
   private readonly admissionWaiters: ZLinkExecutionBarrierWaiter[] = [];
   private readonly quiescenceWaiters = new Set<() => void>();
   private committedSeal?: ZLinkExecutionBarrierSeal;
+  private captureExecutionPolicy?: () =>
+    ((owner: object | undefined) => boolean | undefined) | undefined;
+  private captureExecutionOwner?: () => object | undefined;
+
+  setExecutionPolicy(
+    capture: () => ((owner: object | undefined) => boolean | undefined) | undefined,
+    captureOwner?: () => object | undefined
+  ): void {
+    this.captureExecutionPolicy = capture;
+    this.captureExecutionOwner = captureOwner;
+  }
+
+  allowsExecution(): boolean | undefined {
+    return this.captureExecutionPolicy?.()?.(this.captureExecutionOwner?.());
+  }
+
+  discard(): void {
+    if (this.committedSeal !== undefined) return;
+    const seal = this.currentSeal ?? this.seal('close');
+    this.commit(seal);
+  }
 
   get isSealed(): boolean {
     return this.currentSeal !== undefined || this.committedSeal !== undefined;
@@ -432,6 +469,8 @@ export class ZLinkExecutionBarrier {
   }
 
   private createClaim(): ZLinkExecutionBarrierClaim {
+    const allowed = this.captureExecutionPolicy?.();
+    const executionOwner = this.captureExecutionOwner?.();
     this.activeClaims++;
     let state: 'active' | 'suspended' | 'released' = 'active';
     let yielded = false;
@@ -443,8 +482,14 @@ export class ZLinkExecutionBarrier {
       state = 'released';
       this.notifyQuiescence();
     };
-    return {
+    const claim: ZLinkExecutionBarrierClaim & {
+      executionAllowed?: (owner: object | undefined) => boolean | undefined;
+      executionOwner?: object;
+    } = {
       release,
+      executionAllowed: allowed,
+      executionOwner,
+      start: requireClaimExecution,
       suspend: () => {
         if (state !== 'active') return;
         state = 'suspended';
@@ -460,6 +505,7 @@ export class ZLinkExecutionBarrier {
         if (state !== 'suspended') return state === 'active';
         if (
           this.committedSeal !== undefined ||
+          allowed?.(executionOwner) === false ||
           (this.currentSeal !== undefined && this.currentSeal.kind !== 'close')
         ) {
           release();
@@ -471,6 +517,7 @@ export class ZLinkExecutionBarrier {
         return true;
       }
     };
+    return claim;
   }
 
   private requireCurrent(seal: ZLinkExecutionBarrierSeal): void {

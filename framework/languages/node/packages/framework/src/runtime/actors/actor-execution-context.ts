@@ -7,6 +7,7 @@ interface ZLinkActorExecutionContext {
 }
 
 const actorExecutionStorage = new AsyncLocalStorage<ZLinkActorExecutionContext>();
+const hiddenActiveProperty = Object.freeze({ enumerable: false });
 
 /** Runs one Actor handler while retaining its Actor FIFO claim across Yield. */
 export function runZLinkActorExecution<T>(
@@ -15,6 +16,7 @@ export function runZLinkActorExecution<T>(
   operation: () => Promise<T> | T
 ): Promise<T> {
   const context: ZLinkActorExecutionContext = { actorId, spotId, active: true };
+  Object.defineProperty(context, 'active', hiddenActiveProperty);
   return actorExecutionStorage.run(context, async () => {
     try {
       return await operation();
@@ -34,7 +36,10 @@ export function currentZLinkActorExecution():
     }>
   | undefined {
   const context = actorExecutionStorage.getStore();
-  return context?.active === true
-    ? { actorId: context.actorId, spotId: context.spotId }
-    : undefined;
+  return context?.active === true ? context : undefined;
+}
+
+/** Runs Spot work outside the submitting Actor's execution scope. */
+export function runOutsideZLinkActorExecution<T>(operation: () => T): T {
+  return actorExecutionStorage.exit(operation);
 }

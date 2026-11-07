@@ -52,6 +52,7 @@ export class ZLinkActorCreationCoordinator {
           if (state.isMoving || state.remoteActorPacketTarget !== undefined) {
             return;
           }
+          if (state.actor !== undefined) lifecycle.discardExecution(state.actor);
           this.options.actorDestroyedCleanup?.(actorId);
           state.clearAfterDestroy();
         },
@@ -190,6 +191,7 @@ export class ZLinkActorCreationCoordinator {
     }
 
     try {
+      this.options.admission?.requireActorCreate(actorId, state.meshName);
       state.bindActor(actor, context);
       if (nativeActorNode !== undefined) {
         const actorRef = state.nativeActorRef!;
