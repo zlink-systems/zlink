@@ -38,6 +38,12 @@ void completion_sink_t::operator() (operation_terminal_t terminal,
 }
 
 struct operation_completion_item_t;
+struct completion_item_delete_t
+{
+    void operator() (operation_completion_item_t *item) const noexcept;
+};
+using completion_item_ptr_t =
+  std::unique_ptr<operation_completion_item_t, completion_item_delete_t>;
 struct operation_registry_drain_state_t;
 
 class operation_registry_state_t : public std::enable_shared_from_this<operation_registry_state_t>
@@ -102,7 +108,7 @@ class operation_registry_state_t : public std::enable_shared_from_this<operation
 
     struct pending_t
     {
-        std::unique_ptr<operation_completion_item_t> completion;
+        completion_item_ptr_t completion;
         std::vector<std::uint8_t> target_routing_id;
         call_id_t id;
         clock_t::time_point deadline;
@@ -120,14 +126,14 @@ class operation_registry_state_t : public std::enable_shared_from_this<operation
         return found == end ? pending.end () : found;
     }
     // C1's single terminal take; an empty completion is the only settled marker.
-    std::unique_ptr<operation_completion_item_t> take_completion (pending_t &pending)
+    completion_item_ptr_t take_completion (pending_t &pending)
     {
         auto completion = std::exchange (pending.completion, {});
         if (completion)
             --_pending_count;
         return completion;
     }
-    bool take (const call_id_t &id, std::unique_ptr<operation_completion_item_t> &completion);
+    bool take (const call_id_t &id, completion_item_ptr_t &completion);
     bool index_deadline (const call_id_t &id, clock_t::time_point deadline, pending_t &pending);
     void unindex_deadline (pending_t &pending) noexcept;
     void clear_deadlines () noexcept;
@@ -210,19 +216,32 @@ struct operation_completion_item_t
         request_metric.complete (terminal);
     }
 
+    std::shared_ptr<void> storage_owner;
     std::optional<std::stop_callback<operation_cancellation_t>> cancellation;
     detail::completion_dispatcher_borrow_t dispatcher{};
     operation_registry_state_t::callback_t callback;
     std::shared_ptr<operation_registry_drain_state_t> drain_state;
     operation_terminal_t terminal = operation_terminal_t::transport_failed;
     std::optional<result_t<zlink::message_t>> payload;
-    std::unique_ptr<operation_completion_item_t> next;
+    completion_item_ptr_t next;
     mesh_request_metric_t request_metric;
 };
 
+static_assert (sizeof (operation_completion_item_t)
+               <= detail::request_capture_storage_t::completion_storage_size);
+static_assert (alignof (operation_completion_item_t) <= alignof (std::max_align_t));
+
+void completion_item_delete_t::operator() (operation_completion_item_t *item) const noexcept
+{
+    if (auto owner = std::move (item->storage_owner))
+        std::destroy_at (item);
+    else
+        delete item;
+}
+
 struct operation_completion_chain_t
 {
-    void append (std::unique_ptr<operation_completion_item_t> completion,
+    void append (completion_item_ptr_t completion,
                  operation_terminal_t terminal,
                  result_t<zlink::message_t> payload = result_t<zlink::message_t>::success ({}),
                  std::optional<operation_terminal_t> request_terminal = {}) noexcept
@@ -239,7 +258,7 @@ struct operation_completion_chain_t
         ++size;
     }
 
-    std::unique_ptr<operation_completion_item_t> head;
+    completion_item_ptr_t head;
     operation_completion_item_t *tail = nullptr;
     std::size_t size = 0;
 };
@@ -263,7 +282,7 @@ void post_completions (operation_completion_chain_t completions) noexcept
           [item = completion.get ()] {
               // Keep the TLS drain identity valid through callback-capture destruction.
               const auto drain_lifetime = item->drain_state;
-              const std::unique_ptr<operation_completion_item_t> completion (item);
+              const completion_item_ptr_t completion (item);
               try {
                   completion->callback (completion->terminal, std::move (*completion->payload));
               }
@@ -349,7 +368,7 @@ void operation_registry_state_t::clear_deadlines () noexcept
 
 namespace
 {
-void notify (std::unique_ptr<operation_completion_item_t> completion,
+void notify (completion_item_ptr_t completion,
              operation_terminal_t terminal,
              result_t<zlink::message_t> payload,
              std::optional<operation_terminal_t> request_terminal = {}) noexcept
@@ -379,8 +398,15 @@ bool operation_registry_state_t::register_operation (call_id_t id,
     prepared.request = std::move (request);
     prepared.id = id;
     prepared.deadline = deadline;
-    prepared.completion = std::make_unique<operation_completion_item_t> (
-      callback_t{}, _drain_state, detail::borrow_completion_dispatcher ());
+    auto storage = callback.completion_storage ();
+    auto *completion =
+      storage
+        ? std::construct_at (static_cast<operation_completion_item_t *> (storage.get ()),
+                             callback_t{}, _drain_state, detail::borrow_completion_dispatcher ())
+        : new operation_completion_item_t (callback_t{}, _drain_state,
+                                           detail::borrow_completion_dispatcher ());
+    prepared.completion.reset (completion);
+    completion->storage_owner = std::move (storage);
     prepared.completion->request_metric = std::move (request_metric);
     if (cancellation.stop_possible ())
         prepared.completion->cancellation.emplace (cancellation,
@@ -510,8 +536,7 @@ void operation_registry_state_t::unindex_deadline (pending_t &pending) noexcept
     _entries.erase (found);
 }
 
-bool operation_registry_state_t::take (const call_id_t &id,
-                                       std::unique_ptr<operation_completion_item_t> &completion)
+bool operation_registry_state_t::take (const call_id_t &id, completion_item_ptr_t &completion)
 {
     {
         std::lock_guard lock (_mutex);
@@ -534,7 +559,7 @@ bool operation_registry_state_t::complete (const call_id_t &id,
                                            before_dispatch_t before_dispatch,
                                            operation_terminal_t request_terminal)
 {
-    std::unique_ptr<operation_completion_item_t> completion;
+    completion_item_ptr_t completion;
     if (!take (id, completion)) {
         return false;
     }
@@ -555,7 +580,7 @@ bool operation_registry_state_t::complete (const call_id_t &id,
 
 namespace
 {
-task_t<void> finish_completion_async (std::unique_ptr<operation_completion_item_t> completion,
+task_t<void> finish_completion_async (completion_item_ptr_t completion,
                                       std::function<task_t<void> ()> before_dispatch)
 {
     const auto prepared = co_await runtime::await_result (before_dispatch ());
@@ -568,7 +593,7 @@ task_t<void> finish_completion_async (std::unique_ptr<operation_completion_item_
 bool operation_registry_state_t::complete_async (const call_id_t &id,
                                                  std::function<task_t<void> ()> before_dispatch)
 {
-    std::unique_ptr<operation_completion_item_t> completion;
+    completion_item_ptr_t completion;
     if (!take (id, completion))
         return false;
     // The existing completion reservation retains the drain until preparation ends.
@@ -578,7 +603,7 @@ bool operation_registry_state_t::complete_async (const call_id_t &id,
 
 bool operation_registry_state_t::cancel (const call_id_t &id)
 {
-    std::unique_ptr<operation_completion_item_t> completion;
+    completion_item_ptr_t completion;
     if (!take (id, completion)) {
         return false;
     }
@@ -603,7 +628,7 @@ bool operation_registry_state_t::fail (const call_id_t &id,
     if (terminal == operation_terminal_t::completed) {
         throw std::invalid_argument ("failure terminal cannot be completed");
     }
-    std::unique_ptr<operation_completion_item_t> completion;
+    completion_item_ptr_t completion;
     if (!take (id, completion)) {
         return false;
     }
@@ -622,7 +647,7 @@ bool operation_registry_state_t::fail (const call_id_t &id,
 
 bool operation_registry_state_t::unregister (const call_id_t &id)
 {
-    std::unique_ptr<operation_completion_item_t> completion;
+    completion_item_ptr_t completion;
     if (!take (id, completion))
         return false;
     completion.reset ();
@@ -722,7 +747,7 @@ std::size_t operation_registry_state_t::expire_on_owner (clock_t::time_point now
                 break;
             auto *current = _deadline_cursor;
             _deadline_cursor = current->deadline_next;
-            std::unique_ptr<operation_completion_item_t> completion;
+            completion_item_ptr_t completion;
             if (current->completion && current->deadline <= now)
                 completion = take_completion (*current);
             const bool live = bool (current->completion);

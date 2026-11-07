@@ -551,7 +551,7 @@ void verify_record_payload_is_exclusive ()
     bool rejected = false;
     try {
         (void) protocol::decode_application_header (
-          {flat.packet_name, flat.content_type, std::move (truncated)});
+          {flat.packet_name (), flat.content_type (), std::move (truncated)});
     }
     catch (const protocol::service_wire_error_t &) {
         rejected = true;

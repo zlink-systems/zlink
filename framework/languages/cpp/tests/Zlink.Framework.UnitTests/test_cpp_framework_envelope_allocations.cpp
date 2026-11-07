@@ -511,3 +511,73 @@ TEST (EnvelopeDeadline, IntegerUtcMatchesCalendarBoundaries)
         }
     }
 }
+
+TEST (EnvelopeAllocations, CsitesHeaderViewsRetainWireAcrossCopiesAndSuspension)
+{
+    namespace msg = zlink::framework::runtime::messaging;
+    msg::envelope_codec_t codec;
+    const std::string packet (128, 'p');
+    std::optional<msg::envelope_header_t> short_retained;
+    auto short_wire = codec.encode_header (
+      msg::envelope_header_t{.channel_name = "c", .message_name = "m", .content_type = "x/y"});
+    const auto container_allocations = zlink::framework::tests::count_allocations ([&] {
+        auto decoded = codec.decode_header_view (short_wire, false);
+        ASSERT_TRUE (decoded);
+        decoded.value ().retained_header.message = std::move (short_wire);
+        short_retained.emplace (std::move (decoded.value ()));
+    });
+    std::optional<msg::envelope_header_t> retained;
+    {
+        msg::envelope_header_t header{.channel_name = "mesh",
+                                      .message_name = packet,
+                                      .content_type = "application/json",
+                                      .correlation_id = std::string (48, 'c')};
+        auto wire = codec.encode_header (header);
+        auto warm = codec.decode_header (wire, false);
+        ASSERT_TRUE (warm);
+        const auto start = reinterpret_cast<std::uintptr_t> (wire.data ());
+        const auto allocations = zlink::framework::tests::count_allocations ([&] {
+            auto decoded = codec.decode_header_view (wire, false);
+            ASSERT_TRUE (decoded);
+            decoded.value ().retained_header.message = std::move (wire);
+            retained.emplace (std::move (decoded.value ()));
+        });
+        EXPECT_EQ (allocations, container_allocations);
+        std::printf ("csites header views=%zu container=%zu\n", allocations, container_allocations);
+        const auto text = reinterpret_cast<std::uintptr_t> (retained->message_name.data ());
+        EXPECT_GE (text, start);
+        EXPECT_LT (text, start + retained->retained_header.message->size ());
+    }
+    *retained = *retained;
+    EXPECT_TRUE (retained->retained_header.message.has_value ());
+    EXPECT_EQ (retained->message_name, packet);
+    auto moved = std::move (*retained);
+    retained.reset ();
+    EXPECT_EQ (moved.message_name, packet);
+    auto copied = moved;
+    moved = {};
+    EXPECT_EQ (copied.message_name, packet);
+    auto reply = zlink::framework::detail::channel_reply_writer_t{}.create_reply_header (
+      msg::message_kind_t::response, "mesh", copied);
+    EXPECT_EQ (reply.message_name.data (), copied.message_name.data ());
+    const auto wire = codec.encode_header (reply);
+    EXPECT_EQ (codec.decode_header (wire).value ().message_name, packet);
+}
+
+TEST (EnvelopeDeadline, CsitesInlineDeadlineSurvivesHeaderMoveAndCopy)
+{
+    namespace msg = zlink::framework::runtime::messaging;
+    msg::client_call_codec_t calls;
+    auto first = calls.create_envelope (msg::message_kind_t::request, "mesh", "packet",
+                                        std::chrono::seconds (30));
+    ASSERT_TRUE (first.deadline);
+    const std::string expected (*first.deadline);
+    auto moved = std::move (first);
+    first = {};
+    auto copied = moved;
+    moved = {};
+    EXPECT_EQ (std::string (*copied.deadline), expected);
+    const auto wire = msg::envelope_codec_t{}.encode_header (copied);
+    EXPECT_EQ (std::string (*msg::envelope_codec_t{}.decode_header (wire).value ().deadline),
+               expected);
+}
