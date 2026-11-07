@@ -2381,6 +2381,27 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             ZLinkServiceOperationRegistry operationOwner,
             UUID operationId,
             CompletableFuture<Void> requestAdmission) {
+        return requestNode(
+                target,
+                metadata,
+                parts,
+                timeout,
+                operationOwner,
+                operationId,
+                requestAdmission,
+                ZLinkServiceOperationRegistry.<ZLinkBackendReceived>prepareOperation(
+                        operationId == null ? ZLinkServiceOperationIds.next() : operationId));
+    }
+
+    <R> CompletionStage<R> requestNode(
+            RoutingId target,
+            byte[] metadata,
+            List<Message> parts,
+            Duration timeout,
+            ZLinkServiceOperationRegistry operationOwner,
+            UUID operationId,
+            CompletableFuture<Void> requestAdmission,
+            ZLinkServiceOperationRegistry.Operation<R> receiver) {
         RouterSocket router = requireStarted();
         long correlation = allocateCorrelation();
         int flags =
@@ -2398,7 +2419,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     operationOwner,
                     operationId,
                     null,
-                    requestAdmission);
+                    requestAdmission,
+                    receiver);
         } catch (RuntimeException | Error failure) {
             Message.closeAll(frames);
             throw failure;
@@ -2413,6 +2435,27 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             ZLinkServiceOperationRegistry operationOwner,
             UUID operationId,
             CompletableFuture<Void> requestAdmission) {
+        return requestChannel(
+                channelName,
+                metadata,
+                parts,
+                timeout,
+                operationOwner,
+                operationId,
+                requestAdmission,
+                ZLinkServiceOperationRegistry.<ZLinkBackendReceived>prepareOperation(
+                        operationId == null ? ZLinkServiceOperationIds.next() : operationId));
+    }
+
+    <R> CompletionStage<R> requestChannel(
+            String channelName,
+            byte[] metadata,
+            List<Message> parts,
+            Duration timeout,
+            ZLinkServiceOperationRegistry operationOwner,
+            UUID operationId,
+            CompletableFuture<Void> requestAdmission,
+            ZLinkServiceOperationRegistry.Operation<R> receiver) {
         String selectedChannel = requireChannel(channelName);
         RouterSocket router = requireStarted();
         long correlation = allocateCorrelation();
@@ -2440,9 +2483,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             selectedChannel,
                             ZLinkServiceTopologyRegistry.ChannelSelectionFailure.NO_MEMBER);
                 }
-                return CompletableFuture.failedFuture(
+                receiver.rejectSubmission(
                         ZLinkOneWayCalls.failureForStatus(
                                 unavailableChannelStatus(selectedChannel)));
+                return receiver;
             }
             return request(
                     router,
@@ -2453,7 +2497,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     operationOwner,
                     operationId,
                     target.orElseThrow().liveness(),
-                    requestAdmission);
+                    requestAdmission,
+                    receiver);
         } catch (RuntimeException | Error failure) {
             Message.closeAll(frames);
             throw failure;
@@ -5148,15 +5193,39 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             UUID operationId,
             ZLinkServiceLivenessRegistry.PeerState admission,
             CompletableFuture<Void> requestAdmission) {
+        return request(
+                router,
+                target,
+                frames,
+                timeout,
+                correlation,
+                operationOwner,
+                operationId,
+                admission,
+                requestAdmission,
+                ZLinkServiceOperationRegistry.<ZLinkBackendReceived>prepareOperation(
+                        operationId == null ? ZLinkServiceOperationIds.next() : operationId));
+    }
+
+    private <R> CompletionStage<R> request(
+            RouterSocket router,
+            RoutingId target,
+            List<Message> frames,
+            Duration timeout,
+            long correlation,
+            ZLinkServiceOperationRegistry operationOwner,
+            UUID operationId,
+            ZLinkServiceLivenessRegistry.PeerState admission,
+            CompletableFuture<Void> requestAdmission,
+            ZLinkServiceOperationRegistry.Operation<R> completion) {
         if (operationOwner == null) {
             operationOwner = operations;
-            operationId = ZLinkServiceOperationIds.next();
+            operationId = completion.id();
         }
         var registry = operationOwner;
         var requestId = operationId;
-        var completion = operationOwner.<ZLinkBackendReceived>prepareOperation(operationId);
         operationOwner
-                .submitTerminal(
+                .<ZLinkBackendReceived>submitTerminal(
                         operationId,
                         timeout,
                         terminal ->
@@ -8855,7 +8924,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             RoutingId target,
             ZLinkServiceOperationRegistry registry,
             UUID id,
-            CompletionStage<T> caller,
+            CompletionStage<?> caller,
             BiConsumer<T, Throwable> terminal,
             List<Message> frames,
             CompletableFuture<Void> requestAdmission,

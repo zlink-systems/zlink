@@ -27,7 +27,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -70,17 +69,31 @@ final class ZLinkChannelCallRuntimeTest {
         List<CompletableFuture<ZLinkBackendReceived>> replies = new ArrayList<>(8_194);
         Duration timeout = Duration.ofSeconds(10);
         for (int index = 0; index <= 4_096; index++) {
+            var identityForRoute = ZLinkServiceOperationIds.next();
             replies.add(
                     calls.requestRoute(
-                                    ZLinkServiceOperationIds.next(),
+                                    identityForRoute,
                                     router,
                                     RoutingId.from("completion-cap-target"),
                                     List.of(),
                                     timeout,
-                                    null)
+                                    null,
+                                    systems.zlink.framework.runtime.internal.service
+                                            .ZLinkServiceOperationRegistry
+                                            .<ZLinkBackendReceived>prepareOperation(
+                                                    identityForRoute))
                             .toCompletableFuture());
             replies.add(
-                    calls.requestClient(dealer, List.of(), timeout, null).toCompletableFuture());
+                    calls.requestClient(
+                                    dealer,
+                                    List.of(),
+                                    timeout,
+                                    null,
+                                    systems.zlink.framework.runtime.internal.service
+                                            .ZLinkServiceOperationRegistry
+                                            .<ZLinkBackendReceived>prepareOperation(
+                                                    ZLinkServiceOperationIds.next()))
+                            .toCompletableFuture());
         }
         CompletableFuture.allOf(replies.toArray(CompletableFuture[]::new))
                 .get(10, TimeUnit.SECONDS);
@@ -140,9 +153,28 @@ final class ZLinkChannelCallRuntimeTest {
         var timeout = Duration.ofSeconds(1);
         var requests =
                 List.of(
-                        calls.requestNode(identity, node, target, null, List.of(), timeout, null),
+                        calls.requestNode(
+                                identity,
+                                node,
+                                target,
+                                null,
+                                List.of(),
+                                timeout,
+                                null,
+                                systems.zlink.framework.runtime.internal.service
+                                        .ZLinkServiceOperationRegistry
+                                        .<ZLinkBackendReceived>prepareOperation(identity)),
                         calls.requestChannel(
-                                identity, node, "missing", null, List.of(), timeout, null),
+                                identity,
+                                node,
+                                "missing",
+                                null,
+                                List.of(),
+                                timeout,
+                                null,
+                                systems.zlink.framework.runtime.internal.service
+                                        .ZLinkServiceOperationRegistry
+                                        .<ZLinkBackendReceived>prepareOperation(identity)),
                         calls.requestToSpot(
                                 "missing", target, "spot", 1, 1, 1, List.of(), timeout, identity,
                                 null));
@@ -157,47 +189,21 @@ final class ZLinkChannelCallRuntimeTest {
     }
 
     @Test
-    void disabledFlowCaptureReturnsTheBindingStageWithoutADependent() {
-        var source = new CompletableFuture<ZLinkBackendReceived>();
-        var ambient = ZLinkFlowContext.create(ZLinkFlowOrigin.APPLICATION);
-        try (var ignored = ZLinkFlowContext.enter(ambient)) {
-            try (var suppressed =
-                    ZLinkFlowContext.enterCurrentOrCreate(ZLinkFlowOrigin.APPLICATION, false)) {
-                assertNull(ZLinkFlowContext.current());
-                assertSame(source, ZLinkChannelCallRuntime.preserveCurrentFlow(source));
-                assertEquals(0, source.getNumberOfDependents());
-            }
-            assertSame(ambient, ZLinkFlowContext.current());
-        }
-    }
-
-    @Test
-    void enabledFlowCaptureRestoresTheFlowForCompletionAndThenRestoresTheThread() {
-        var source = new CompletableFuture<ZLinkBackendReceived>();
+    void disabledFlowCaptureDoesNotAddADependentToTheFinalReceiver() {
         var captured = ZLinkFlowContext.create(ZLinkFlowOrigin.APPLICATION);
-        CompletableFuture<ZLinkFlowContext.State> observed;
-        try (var ignored = ZLinkFlowContext.enter(captured)) {
-            observed =
-                    ZLinkChannelCallRuntime.preserveCurrentFlow(source)
-                            .thenApply(value -> ZLinkFlowContext.current())
-                            .toCompletableFuture();
+        try (var ignored = ZLinkFlowContext.enter(captured);
+                var suppressed =
+                        ZLinkFlowContext.enterCurrentOrCreate(ZLinkFlowOrigin.APPLICATION, false)) {
+            assertNull(ZLinkFlowContext.current());
+            var receiver =
+                    systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry
+                            .<String>prepareOperation(ZLinkServiceOperationIds.next());
+            assertSame(
+                    receiver,
+                    systems.zlink.framework.execution.ZLinkSerialExecutionQueue.manageCurrent(
+                            receiver));
+            assertEquals(0, receiver.getNumberOfDependents());
         }
-        assertNull(ZLinkFlowContext.current());
-        source.complete(null);
-        assertSame(captured, observed.join());
-        assertNull(ZLinkFlowContext.current());
-    }
-
-    @Test
-    void capturedRequestCancellationReachesTheBindingWaiter() {
-        var source = new CompletableFuture<ZLinkBackendReceived>();
-        var captured = ZLinkFlowContext.create(ZLinkFlowOrigin.APPLICATION);
-        CompletionStage<ZLinkBackendReceived> request;
-        try (var ignored = ZLinkFlowContext.enter(captured)) {
-            request = ZLinkChannelCallRuntime.preserveCurrentFlow(source);
-        }
-        assertTrue(request.toCompletableFuture().cancel(false));
-        assertTrue(source.isCancelled());
     }
 
     @Test
@@ -255,7 +261,16 @@ final class ZLinkChannelCallRuntimeTest {
                                 });
         try {
             var operation =
-                    calls.requestClient(dealer, List.of(), timeout, null).toCompletableFuture();
+                    calls.requestClient(
+                                    dealer,
+                                    List.of(),
+                                    timeout,
+                                    null,
+                                    systems.zlink.framework.runtime.internal.service
+                                            .ZLinkServiceOperationRegistry
+                                            .<ZLinkBackendReceived>prepareOperation(
+                                                    ZLinkServiceOperationIds.next()))
+                            .toCompletableFuture();
             assertFalse(operation.isDone());
             calls.beginClose();
             CompletionException completion =
@@ -277,7 +292,16 @@ final class ZLinkChannelCallRuntimeTest {
             assertEquals(1, attempts.get());
 
             var rejected =
-                    calls.requestClient(dealer, List.of(), timeout, null).toCompletableFuture();
+                    calls.requestClient(
+                                    dealer,
+                                    List.of(),
+                                    timeout,
+                                    null,
+                                    systems.zlink.framework.runtime.internal.service
+                                            .ZLinkServiceOperationRegistry
+                                            .<ZLinkBackendReceived>prepareOperation(
+                                                    ZLinkServiceOperationIds.next()))
+                            .toCompletableFuture();
             CompletionException closed = assertThrows(CompletionException.class, rejected::join);
             assertEquals(
                     ZLinkFrameworkErrorKind.SHUTTING_DOWN,

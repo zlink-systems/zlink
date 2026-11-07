@@ -607,6 +607,52 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             UUID operationId,
             CompletableFuture<Void> requestAdmission);
 
+    default <R> void requestToNode(
+            RoutingId target,
+            byte[] metadata,
+            List<Message> parts,
+            Duration timeout,
+            ZLinkServiceOperationRegistry operations,
+            UUID id,
+            CompletableFuture<Void> admission,
+            ZLinkServiceOperationRegistry.Operation<R> receiver) {
+        operations.<ZLinkBackendReceived>submitTerminal(
+                id,
+                timeout,
+                terminal -> {
+                    var physical =
+                            requestToNode(
+                                    target, metadata, parts, timeout, operations, id, admission);
+                    physical.whenComplete(terminal);
+                    return physical;
+                },
+                ZLinkBackendReceived::close,
+                receiver);
+    }
+
+    default <R> void requestToChannel(
+            String channel,
+            byte[] metadata,
+            List<Message> parts,
+            Duration timeout,
+            ZLinkServiceOperationRegistry operations,
+            UUID id,
+            CompletableFuture<Void> admission,
+            ZLinkServiceOperationRegistry.Operation<R> receiver) {
+        operations.<ZLinkBackendReceived>submitTerminal(
+                id,
+                timeout,
+                terminal -> {
+                    var physical =
+                            requestToChannel(
+                                    channel, metadata, parts, timeout, operations, id, admission);
+                    physical.whenComplete(terminal);
+                    return physical;
+                },
+                ZLinkBackendReceived::close,
+                receiver);
+    }
+
     CompletionStage<List<Message>> requestToActor(
             ZLinkServiceM6BWireCodec.ActorRouteFence actor,
             List<Message> parts,

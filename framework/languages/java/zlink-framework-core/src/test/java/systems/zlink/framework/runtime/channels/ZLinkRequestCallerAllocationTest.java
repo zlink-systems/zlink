@@ -234,9 +234,9 @@ public final class ZLinkRequestCallerAllocationTest {
         Message borrowedBody;
         Message retained;
         int mockRequests;
-        int terminalCallbacks;
-        int payloadReleases;
-        int replyReleases;
+        volatile int terminalCallbacks;
+        volatile int payloadReleases;
+        volatile int replyReleases;
         int cancellations;
 
         Fixture(Terminal terminal) {
@@ -277,6 +277,14 @@ public final class ZLinkRequestCallerAllocationTest {
                                     getClass().getClassLoader(),
                                     new Class<?>[] {ZLinkInternalSpotNode.class},
                                     (proxy, method, arguments) -> {
+                                        if (method.isDefault()
+                                                && method.getParameterCount() == 8
+                                                && (method.getName().equals("requestToNode")
+                                                        || method.getName()
+                                                                .equals("requestToChannel")))
+                                            return java.lang.reflect.InvocationHandler
+                                                    .invokeDefault(proxy, method, arguments);
+
                                         return switch (method.getName()) {
                                             case "requestToNode" -> {
                                                 @SuppressWarnings("unchecked")
@@ -349,13 +357,22 @@ public final class ZLinkRequestCallerAllocationTest {
             caller.whenComplete((value, failure) -> terminalCallbacks++);
             if (terminal == Terminal.REPLY) bindingReply.complete(reply());
             else if (terminal == Terminal.CANCELLATION) {
-                if (!caller.cancel(false) || !bindingReply.isCancelled())
-                    throw new AssertionError(
-                            "public caller cancellation must reach its backend waiter");
+                if (!caller.cancel(false)) throw new AssertionError("caller cancellation rejected");
                 ZLinkBackendReceived late = reply();
-                if (bindingReply.complete(late))
-                    throw new AssertionError("late completion changed cancellation");
-                late.close();
+                if (publicCaller) {
+                    // The registry owns logical cancellation; the physical producer keeps its
+                    // lifetime.
+                    if (bindingReply.isDone())
+                        throw new AssertionError("physical producer ended early");
+                    if (!bindingReply.complete(late))
+                        throw new AssertionError("physical reply was lost");
+                } else {
+                    if (!bindingReply.isCancelled())
+                        throw new AssertionError("direct waiter was not cancelled");
+                    if (bindingReply.complete(late))
+                        throw new AssertionError("late completion changed cancellation");
+                    late.close();
+                }
             }
             try {
                 Object result = caller.join();
@@ -379,6 +396,17 @@ public final class ZLinkRequestCallerAllocationTest {
                             || request.getResult() != RequestResult.TIMED_OUT) throw failure;
                 } else throw failure;
             }
+            // Submit §9 permits physical cleanup after the public result. Wait for the
+            // payload owners themselves before checking the per-operation release counts.
+            long guard = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+            while (!retained.empty()
+                    || (publicCaller && !borrowedBody.empty())
+                    || (terminal != Terminal.TIMEOUT && replyReleases != mockRequests)
+                    || terminalCallbacks != mockRequests) {
+                if (System.nanoTime() - guard >= 0)
+                    throw new AssertionError("request resources did not release");
+                Thread.onSpinWait();
+            }
             if (!retained.empty()) throw new AssertionError("backend payload leaked");
             if (publicCaller && !borrowedBody.empty())
                 throw new AssertionError("caller payload leaked");
@@ -393,7 +421,10 @@ public final class ZLinkRequestCallerAllocationTest {
                     terminal == Terminal.TIMEOUT ? 0 : SAMPLES,
                     replyReleases,
                     "successful and rejected late replies each release their payload");
-            assertEquals(terminal == Terminal.CANCELLATION ? SAMPLES : 0, cancellations);
+            assertEquals(
+                    terminal == Terminal.CANCELLATION && !publicCaller ? SAMPLES : 0,
+                    cancellations,
+                    "logical cancellation preserves the physical producer");
             assertEquals(
                     publicCaller ? SAMPLES : 0,
                     serializer.serialized,
