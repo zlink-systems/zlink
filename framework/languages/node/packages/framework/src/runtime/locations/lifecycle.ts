@@ -1,18 +1,33 @@
 import type { ActorRef, RoutingId } from '../../contracts/Common';
+import { decodeAuthorityKey } from './authority-key-codec';
+import { decodeActorAuthorityIdentity } from '../actors/actor-authority-publication';
 import { ZLinkSpotKind } from '../../contracts/Spots';
+import { routingIdsEqual } from '../routing-id';
+import { rewriteActorAuthorityOwner } from '../actors/actor-authority-publication';
+import { rewriteServiceAuthorityOwner } from '../foundation/service-authority-payload-codec';
+import { isIndeterminateLocationStoreFailure } from './location-store-failure';
 import {
   ZLinkActorLocationClaims,
   type ZLinkActorClaimActivation,
   type ZLinkActorClaimResult
 } from './actor-location-claims';
 import { ZLinkActorSessionRouteClaims } from './actor-session-route-claims';
-import type { ZLinkActorLocation, ZLinkLocationWriteStatus } from './internal-location-contracts';
+import type {
+  ZLinkAuthorityKey,
+  ZLinkAuthoritySnapshot,
+  ZLinkActorLocation,
+  ZLinkLocationWriteStatus
+} from './internal-location-contracts';
 import type {
   ZLinkActorLocationStore,
   ZLinkAuthorityStore,
   ZLinkSpotLocationStore
 } from './internal-store-contracts';
-import type { IZLinkLocationLifecycleRuntime, ZLinkOwnershipLostEvent } from './lifecycle-runtime';
+import type {
+  ZLinkExecutionRecovery,
+  IZLinkLocationLifecycleRuntime,
+  ZLinkOwnershipLostEvent
+} from './lifecycle-runtime';
 import {
   type ZLinkInstanceClosingAuthority,
   type ZLinkTrackedInstanceAuthority,
@@ -36,7 +51,7 @@ export class ZLinkLocationLifecycle {
     private readonly runtime: IZLinkLocationLifecycleRuntime,
     actorStore: ZLinkActorLocationStore,
     entryMeshName = '',
-    authorityStore?: ZLinkAuthorityStore,
+    private readonly authorityStore?: ZLinkAuthorityStore,
     spotStore?: ZLinkSpotLocationStore,
     invalidateSpotRoute?: (spotId: RoutingId) => void
   ) {
@@ -65,7 +80,9 @@ export class ZLinkLocationLifecycle {
   }
 
   trackExecution(owner: object, steadyReady: () => boolean, discard: () => void): void {
-    this.runtime.trackExecution?.(owner, steadyReady, discard);
+    this.runtime.trackExecution?.(owner, steadyReady, discard, (reference) =>
+      this.captureRecovery(reference)
+    );
   }
 
   forgetExecution(owner: object): void {
@@ -218,10 +235,151 @@ export class ZLinkLocationLifecycle {
     this.spotClaims.trackInstanceAuthority(input);
   }
 
-  async reclaimOwnerRows(): Promise<void> {
-    await this.runtime.reclaimOwnerAuthorities?.();
-    await this.actorClaims.reclaimOwnerRows();
-    await this.spotClaims.reclaimOwnerRows();
+  async reclaimOwnerRows(publication?: Promise<void>, signal?: AbortSignal): Promise<void> {
+    const excluded = await this.runtime.reclaimOwnerAuthorities?.(
+      publication,
+      signal,
+      (key, expected, confirmed) => this.confirmAuthority(key, confirmed, expected)
+    );
+    await this.actorClaims.reclaimOwnerRows(excluded);
+    await this.spotClaims.reclaimOwnerRows(excluded);
+  }
+
+  confirmAuthority(
+    key: ZLinkAuthorityKey,
+    authority: ZLinkAuthoritySnapshot,
+    expected?: ZLinkRecoveryAuthorityFence
+  ): void {
+    if (expected !== undefined && !sameRecoveryIncarnation(authority, expected)) return;
+    const kind = authority.allocation.objectKind;
+    if (kind === 'actor') {
+      const identity = decodeActorAuthorityIdentity(authority.payload, authority.objectGeneration);
+      if (identity !== undefined)
+        this.actorClaims.confirmAuthority(
+          identity.actor.actorId,
+          authority,
+          expected?.storeVersion.value
+        );
+    } else {
+      const identity = decodeAuthorityKey(key);
+      this.spotClaims.confirmAuthority(
+        authority.allocation.descriptor.meshName,
+        identity.globalId as unknown as RoutingId,
+        authority,
+        expected?.storeVersion.value
+      );
+    }
+  }
+
+  private captureRecovery(reference: WeakRef<object>): ZLinkExecutionRecovery | undefined {
+    const execution = reference.deref();
+    if (execution === undefined) return undefined;
+    const tracked =
+      this.actorClaims.recoveryAuthority(execution) ?? this.spotClaims.recoveryAuthority(execution);
+    const key = tracked?.key;
+    const snapshot = tracked?.fence;
+    const fence =
+      snapshot === undefined
+        ? undefined
+        : {
+            storeVersion: snapshot.storeVersion,
+            ownerId: snapshot.ownerId,
+            ownerLeaseGeneration: snapshot.ownerLeaseGeneration,
+            objectGeneration: snapshot.objectGeneration,
+            authorityOwnerGeneration: snapshot.authorityOwnerGeneration,
+            allocation: snapshot.allocation
+          };
+    const store = this.authorityStore;
+    if (key === undefined || fence === undefined || store === undefined) return undefined;
+    let submission:
+      | {
+          readonly owner: Parameters<ZLinkExecutionRecovery['run']>[0];
+          readonly operation: ReturnType<ZLinkAuthorityStore['compareExchangeAuthority']>;
+        }
+      | undefined;
+    return {
+      key,
+      meshName: fence.allocation.descriptor.meshName,
+      incarnation: fence,
+      run: async (owner, canSubmit, signal) => {
+        const current = await store.readAuthority(key, signal);
+        const original =
+          current.kind === 'snapshot' &&
+          sameRecoveryIncarnation(current, fence) &&
+          current.storeVersion.value === fence.storeVersion.value &&
+          current.ownerLeaseGeneration === fence.ownerLeaseGeneration;
+        if (submission === undefined) {
+          if (!original || owner.ownerId !== fence.ownerId) return false;
+          if (owner.leaseGeneration === fence.ownerLeaseGeneration) return true;
+          const payload =
+            current.allocation.objectKind === 'actor'
+              ? rewriteActorAuthorityOwner(current.payload, owner)
+              : rewriteServiceAuthorityOwner(current.payload, owner);
+          if (payload === undefined || !canSubmit()) return false;
+          submission = {
+            owner,
+            operation: store.compareExchangeAuthority(
+              key,
+              fence.storeVersion,
+              {
+                kind: 'rebindOwnerLease',
+                expectedOwner: {
+                  ownerId: fence.ownerId,
+                  leaseGeneration: fence.ownerLeaseGeneration
+                },
+                targetOwner: owner,
+                payload
+              },
+              signal
+            )
+          };
+        }
+        const submitted = submission;
+        if (
+          owner.ownerId !== submitted.owner.ownerId ||
+          owner.leaseGeneration !== submitted.owner.leaseGeneration
+        )
+          return false;
+        let confirmed: Awaited<ReturnType<ZLinkAuthorityStore['readAuthority']>>;
+        let failure: unknown;
+        try {
+          if (original) {
+            const result = await submitted.operation;
+            if (result.kind !== 'stored') return false;
+            confirmed = { ...result, kind: 'snapshot' };
+          } else confirmed = current;
+        } catch (error) {
+          if (!isIndeterminateLocationStoreFailure(error, signal)) throw error;
+          failure = error;
+          confirmed = await store.readAuthority(key, signal);
+        }
+        if (
+          confirmed.kind !== 'snapshot' ||
+          !sameRecoveryIncarnation(confirmed, fence) ||
+          confirmed.ownerLeaseGeneration !== submitted.owner.leaseGeneration
+        ) {
+          if (failure !== undefined) throw failure;
+          return false;
+        }
+        const currentExecution = reference.deref();
+        const currentTracked =
+          currentExecution === undefined
+            ? undefined
+            : (this.actorClaims.recoveryAuthority(currentExecution) ??
+              this.spotClaims.recoveryAuthority(currentExecution));
+        if (
+          currentTracked === undefined ||
+          currentTracked.key.value !== key.value ||
+          !sameRecoveryIncarnation(confirmed, currentTracked.fence)
+        )
+          return false;
+        if (currentTracked.fence.ownerLeaseGeneration === submitted.owner.leaseGeneration)
+          return true;
+        if (currentTracked.fence.storeVersion.value !== fence.storeVersion.value) return false;
+        this.confirmAuthority(key, confirmed, fence);
+        return true;
+      }
+    };
   }
 
   async bindActorSessionRoute(
@@ -253,4 +411,34 @@ function inferSpotStore(actorStore: ZLinkActorLocationStore): ZLinkSpotLocationS
     return actorStore as unknown as ZLinkSpotLocationStore;
   }
   return undefined;
+}
+
+export type ZLinkRecoveryAuthorityFence = Pick<
+  ZLinkAuthoritySnapshot,
+  | 'storeVersion'
+  | 'ownerId'
+  | 'ownerLeaseGeneration'
+  | 'objectGeneration'
+  | 'authorityOwnerGeneration'
+> & {
+  readonly allocation: Pick<
+    ZLinkAuthoritySnapshot['allocation'],
+    'descriptor' | 'descriptorLifecycleGeneration'
+  >;
+};
+
+function sameRecoveryIncarnation(
+  current: ZLinkAuthoritySnapshot,
+  fence: ZLinkRecoveryAuthorityFence
+): boolean {
+  return (
+    current.allocation.state === 'active' &&
+    current.ownerId === fence.ownerId &&
+    current.objectGeneration === fence.objectGeneration &&
+    current.authorityOwnerGeneration === fence.authorityOwnerGeneration &&
+    current.allocation.descriptor.meshName === fence.allocation.descriptor.meshName &&
+    routingIdsEqual(current.allocation.descriptor.rid, fence.allocation.descriptor.rid) &&
+    current.allocation.descriptorLifecycleGeneration ===
+      fence.allocation.descriptorLifecycleGeneration
+  );
 }

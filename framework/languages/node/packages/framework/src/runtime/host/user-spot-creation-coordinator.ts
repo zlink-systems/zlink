@@ -71,7 +71,11 @@ export interface ZLinkUserSpotCreationCoordinatorOptions {
   ) => Promise<ServiceUserSpotOperationResult>;
   readonly decodeRemoteReply?: (payload: Uint8Array) => unknown;
   /** Records the committed Ready fence on the owning MeshNode before publication. */
-  readonly publishReadyRoute?: (meshName: string, route: ServiceDirectSpotRouteFence) => void;
+  readonly publishReadyRoute?: (
+    meshName: string,
+    route: ServiceDirectSpotRouteFence,
+    authority: ZLinkAuthoritySnapshot
+  ) => void;
   /** Removes the committed Ready fence after the authority is deleted. */
   readonly forgetReadyRoute?: (meshName: string, route: ServiceDirectSpotRouteFence) => void;
 }
@@ -553,7 +557,8 @@ export class ZLinkUserSpotCreationCoordinator {
       };
       this.options.publishReadyRoute?.(
         committed.ready.allocation.descriptor.meshName,
-        readySpotRoute(record.spotId, committed.ready)
+        readySpotRoute(record.spotId, committed.ready),
+        committed.ready
       );
       await local.publication?.publish();
       return {
