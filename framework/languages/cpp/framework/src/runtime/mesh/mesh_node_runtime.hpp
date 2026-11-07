@@ -433,6 +433,11 @@ class mesh_node_runtime_t
                     bool accept_application_receive = true,
                     std::function<bool ()> next_application_receive = {},
                     std::optional<zlink::poll_event_flag_t> readiness = {});
+    task_t<std::size_t>
+    dispatch_hosted_ready (runtime::mesh::service_mailbox_t::application_dispatch_t dispatch,
+                           bool accept_application_receive = true,
+                           std::function<bool ()> next_application_receive = {},
+                           std::optional<zlink::poll_event_flag_t> readiness = {});
     host::node_status_t status () const;
     task_t<std::tuple<std::vector<std::string>, std::int32_t, std::int32_t>>
     monitoring_configuration_async () const;

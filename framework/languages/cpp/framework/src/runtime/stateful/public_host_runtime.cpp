@@ -264,7 +264,7 @@ void report_stateful_dispatch_error (
             const auto *identity = accepted ? accepted->identity () : nullptr;
             const auto &turn = identity ? *identity : delivery.turn;
             stateful::with_accepted_application (turn, [&] (auto, const auto &application) {
-                event.packet_name = application.packet_name;
+                event.packet_name = application.packet_name ();
                 event.flow_id = application.flow_id;
                 event.flow_origin = application.flow_origin;
                 const auto header_part = identity
@@ -1215,6 +1215,34 @@ public_host_runtime_t::public_host_runtime_t (host_options_t options) :
 public_host_runtime_t::~public_host_runtime_t ()
 {
     close ();
+}
+
+void public_host_runtime_t::configure_location_execution (
+  std::function<std::chrono::steady_clock::time_point ()> clock,
+  std::function<task_t<runtime::serial_execution_queue_t::ready_confirmation_t> (
+    stateful::object_ref_t)> observer)
+{
+    if (!clock || !observer)
+        throw std::invalid_argument (
+          "Location execution observation requires a clock and an owner");
+    _lifecycle_configuration_lane.run_sync ([&] {
+        if (_started)
+            throw std::logic_error ("Location execution must be configured before host start");
+        _location_execution_clock = std::move (clock);
+        _store_ready_observer = std::move (observer);
+    });
+}
+
+task_t<std::function<void ()>>
+public_host_runtime_t::prepare_store_ready (stateful::object_ref_t object)
+{
+    if (!_store_ready_observer)
+        co_return std::function<void ()>{};
+    auto writer = co_await _store_ready_observer (std::move (object));
+    if (!writer)
+        co_return std::function<void ()>{};
+    co_return
+      [writer = std::move (writer), clock = _location_execution_clock] { writer (clock ()); };
 }
 
 void public_host_runtime_t::configure_stateful_dispatch (
@@ -2770,6 +2798,10 @@ task_t<std::size_t> public_host_runtime_t::recover_instance_spot_activations ()
             }
             auto released = *completed_state;
             released.activation_recovery.reset ();
+            auto confirm = co_await prepare_store_ready (
+              {stateful::object_kind_t::instance_spot, state->spot_id, completed.object_generation,
+               completed.authority_owner_generation, completed.allocation.target.mesh_name,
+               std::string (completed.allocation.target.node_rid.value ())});
             const auto cleared = co_await store->compare_exchange_authority (
               entry.key, completed.store_version,
               authority_restore_t{encode_instance_spot_authority_payload (released),
@@ -2778,6 +2810,8 @@ task_t<std::size_t> public_host_runtime_t::recover_instance_spot_activations ()
                 co_await activation_terminal.finish (false);
                 continue;
             }
+            if (confirm)
+                confirm ();
             relocations->remove (recovery_pointer.reference);
             co_await activation_terminal.finish ();
             ++recovered;
@@ -2997,6 +3031,7 @@ spot_handle_t public_host_runtime_t::bind_relocation_spot (stateful::object_ref_
 task_t<stateful::stateful_error_t>
 public_host_runtime_t::advance_local_actor_authority (stateful::object_ref_t committed)
 {
+    auto confirm = co_await prepare_store_ready (committed);
     const auto host = shared_from_this ();
     const auto previous = co_await _spot_actor_index_lane.run_task (
       [&] () -> std::optional<std::pair<std::string, stateful::object_ref_t>> {
@@ -3011,7 +3046,7 @@ public_host_runtime_t::advance_local_actor_authority (stateful::object_ref_t com
       co_await host->_objects.advance_local_actor_authority (committed, previous->first);
     if (advanced != stateful::stateful_error_t::none)
         co_return advanced;
-    co_return co_await _spot_actor_index_lane.run_task ([&] {
+    const auto published = co_await _spot_actor_index_lane.run_task ([&] {
         const auto found = _actors.find (committed.key);
         if (found == _actors.end ())
             return stateful::stateful_error_t::not_found;
@@ -3023,6 +3058,9 @@ public_host_runtime_t::advance_local_actor_authority (stateful::object_ref_t com
         found->second.second = committed;
         return stateful::stateful_error_t::none;
     });
+    if (published == stateful::stateful_error_t::none && confirm)
+        confirm ();
+    co_return published;
 }
 
 actor_handle_t public_host_runtime_t::create_actor (std::string actor_type, std::string actor_id)
@@ -5178,7 +5216,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
                       .reason = detail::dispatch_reason_from_error (&error),
                       .action = activation->request ? dispatch_error_action_t::reply_error
                                                     : dispatch_error_action_t::drop,
-                      .packet_name = owned_command->application_payload.packet_name,
+                      .packet_name = owned_command->application_payload.packet_name (),
                       .spot_id = activation->target.spot_id,
                       .source_rid =
                         zlink::routing_id_t::from (activation->source_node_routing_id).to_string (),
@@ -5260,7 +5298,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
                           .outcome = message_flow_outcome_t::dropped,
                           .surface = dispatch_error_surface_t::instance_spot,
                           .message_kind = dispatch_message_kind_t::send,
-                          .packet_name = owned_command->application_payload.packet_name,
+                          .packet_name = owned_command->application_payload.packet_name (),
                           .source_rid =
                             zlink::routing_id_t::from (activation->source_node_routing_id)
                               .to_string (),
@@ -6092,6 +6130,11 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
             result.application_reply.reset ();
         } else {
             ready_state.activation_recovery.reset ();
+            auto confirm = co_await prepare_store_ready (
+              {stateful::object_kind_t::instance_spot, request.target.spot_id,
+               ready_snapshot.object_generation, ready_snapshot.authority_owner_generation,
+               ready_snapshot.allocation.target.mesh_name,
+               std::string (ready_snapshot.allocation.target.node_rid.value ())});
             const auto cleared = co_await run_blocking_step<authority_compare_exchange_result_t> (
               [store, authority_key, version = terminal_snapshot->snapshot.store_version,
                payload = encode_instance_spot_authority_payload (ready_state)] {
@@ -6099,6 +6142,8 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
                                                             authority_put_t{payload});
               });
             if (std::holds_alternative<authority_stored_t> (cleared)) {
+                if (confirm)
+                    confirm ();
                 instance_relocations->remove (recovery_root.reference);
             } else {
                 fail_preparation ();
@@ -7129,6 +7174,7 @@ public_host_runtime_t::dispatch_user_spot_batch (
                               std::move (materialized.application_reply));
                     continue;
                 }
+                auto confirm = co_await prepare_store_ready (exact_ref);
                 const auto committed =
                   co_await store->commit ({{placement_object_kind_t::user_spot, global_id},
                                            fence,
@@ -7148,6 +7194,8 @@ public_host_runtime_t::dispatch_user_spot_batch (
                       protocol::user_spot_create_result_t::rejected, {}, 0);
                     continue;
                 }
+                if (confirm)
+                    confirm ();
                 auto local_commit = co_await _objects.commit_create_async (local.attempt);
                 if (local_commit != stateful::stateful_error_t::none) {
                     std::vector<std::uint8_t> creation_bytes;
@@ -7438,11 +7486,30 @@ public_host_runtime_t::dispatch_ready (mesh::service_mailbox_t::application_disp
                                        std::function<bool ()> next_application_receive,
                                        std::optional<zlink::poll_event_flag_t> waited)
 {
-    if (!dispatch) {
+    return dispatch_ready_impl (std::move (dispatch), accept_application_receive,
+                                std::move (next_application_receive), waited,
+                                !_transport->mailbox ().has_application_dispatch ());
+}
+
+task_t<std::size_t> public_host_runtime_t::dispatch_hosted_ready (
+  mesh::service_mailbox_t::application_dispatch_t dispatch,
+  bool accept_application_receive,
+  std::function<bool ()> next_application_receive,
+  std::optional<zlink::poll_event_flag_t> waited)
+{
+    return dispatch_ready_impl (std::move (dispatch), accept_application_receive,
+                                std::move (next_application_receive), waited, false);
+}
+
+task_t<std::size_t> public_host_runtime_t::dispatch_ready_impl (
+  mesh::service_mailbox_t::application_dispatch_t dispatch,
+  bool accept_application_receive,
+  std::function<bool ()> next_application_receive,
+  std::optional<zlink::poll_event_flag_t> waited,
+  bool standalone)
+{
+    if (!dispatch)
         throw std::invalid_argument ("framework public host dispatch callback is required");
-    }
-    // The mailbox dispatcher is bound at host start and unbound after receive shutdown.
-    const bool standalone = !_transport->mailbox ().has_application_dispatch ();
     const auto now = mesh::service_liveness_registry_t::clock_t::now ();
     (void) co_await _relocation_wire->retry_terminal_relays (now);
     (void) _relocation_wire->reap_terminal_tombstones (now);
@@ -8526,6 +8593,25 @@ std::optional<zlink::poll_event_flag_t> public_host_runtime_t::wait_for_dispatch
   bool accept_application_receive,
   std::optional<std::chrono::steady_clock::time_point> next_activity) noexcept
 {
+    return wait_for_dispatch_activity_impl (timeout, accept_application_receive, next_activity,
+                                            true);
+}
+
+std::optional<zlink::poll_event_flag_t> public_host_runtime_t::wait_for_hosted_dispatch_activity (
+  std::chrono::milliseconds timeout,
+  bool accept_application_receive,
+  std::optional<std::chrono::steady_clock::time_point> next_activity) noexcept
+{
+    return wait_for_dispatch_activity_impl (timeout, accept_application_receive, next_activity,
+                                            false);
+}
+
+std::optional<zlink::poll_event_flag_t> public_host_runtime_t::wait_for_dispatch_activity_impl (
+  std::chrono::milliseconds timeout,
+  bool accept_application_receive,
+  std::optional<std::chrono::steady_clock::time_point> next_activity,
+  bool standalone) noexcept
+{
     try {
         if (next_activity) {
             const auto now = std::chrono::steady_clock::now ();
@@ -8536,7 +8622,9 @@ std::optional<zlink::poll_event_flag_t> public_host_runtime_t::wait_for_dispatch
             if (timeout < std::chrono::milliseconds::zero () || remaining < timeout)
                 timeout = remaining;
         }
-        return _transport->wait_for_activity (timeout, accept_application_receive);
+        return standalone
+                 ? _transport->wait_for_activity (timeout, accept_application_receive)
+                 : _transport->wait_for_hosted_activity (timeout, accept_application_receive);
     }
     catch (...) {
         _options.mesh.runtime_failures->report (std::current_exception ());

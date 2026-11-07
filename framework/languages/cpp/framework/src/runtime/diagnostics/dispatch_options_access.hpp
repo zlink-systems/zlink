@@ -7,12 +7,35 @@
 #include "runtime/diagnostics/process_telemetry_delivery.hpp"
 
 #include <functional>
+#include <variant>
 #include <optional>
 #include <type_traits>
 #include <utility>
 
 namespace zlink::framework::detail
 {
+
+// Hosted dispatch borrows one immutable configuration. Standalone dispatchers
+// retain their value configuration in the same invocation frame.
+class retained_dispatch_options_t
+{
+  public:
+    retained_dispatch_options_t () = default;
+    retained_dispatch_options_t (dispatch_options_t value) : _value (std::move (value)) {}
+    explicit retained_dispatch_options_t (std::shared_ptr<const dispatch_options_t> value) :
+        _value (std::move (value))
+    {
+    }
+    operator const dispatch_options_t & () const noexcept
+    {
+        if (const auto *shared = std::get_if<std::shared_ptr<const dispatch_options_t>> (&_value))
+            return **shared;
+        return std::get<dispatch_options_t> (_value);
+    }
+
+  private:
+    std::variant<dispatch_options_t, std::shared_ptr<const dispatch_options_t>> _value;
+};
 
 class dispatch_options_access_t
 {

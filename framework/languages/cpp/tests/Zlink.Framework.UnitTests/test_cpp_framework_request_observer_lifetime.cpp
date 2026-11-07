@@ -227,8 +227,8 @@ measurement_t verify_pending_reply_after_submission_task_destruction (std::size_
                       else {
                           const auto decoded = protocol::decode_application_payload (
                             protocol::message_bytes (reply.value ()), false);
-                          if (decoded.packet_name != "Reply"
-                              || decoded.content_type != "application/json"
+                          if (decoded.packet_name () != "Reply"
+                              || decoded.content_type () != "application/json"
                               || decoded.payload_bytes () != payload.payload_bytes ())
                               callback_failed.store (true, std::memory_order_release);
                       }

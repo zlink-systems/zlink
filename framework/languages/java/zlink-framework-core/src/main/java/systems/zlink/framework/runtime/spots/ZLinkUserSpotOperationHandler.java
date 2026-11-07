@@ -666,6 +666,7 @@ final class ZLinkUserSpotOperationHandler
                         meshName,
                         node.status().routingId(),
                         node.status().lifecycleGeneration());
+        runtime.ensureOwnerAdmissionOpen();
         return authorityStore
                 .commit(admission.reservation(), ready, request.intent().deadlineUnixMs())
                 .thenCompose(

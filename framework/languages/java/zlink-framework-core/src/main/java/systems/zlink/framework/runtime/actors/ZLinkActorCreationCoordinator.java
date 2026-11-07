@@ -633,13 +633,15 @@ public final class ZLinkActorCreationCoordinator
                         meshName,
                         node.status().routingId(),
                         node.status().lifecycleGeneration());
+        actors.locations.ensureOwnerAdmissionOpen();
         return locations
                 .commit(reservation, ready, terminal, request.intent().deadlineUnixMs())
                 .thenCompose(
                         status -> {
                             if (status == ZLinkObjectCommitResult.COMMITTED
                                     || status == ZLinkObjectCommitResult.ALREADY_COMMITTED) {
-                                return response(envelope);
+                                return actors.confirmReady(actor.actorId())
+                                        .thenCompose(ignored -> response(envelope));
                             }
                             return actors.discardReservedActor(actor.actorId())
                                     .thenCompose(

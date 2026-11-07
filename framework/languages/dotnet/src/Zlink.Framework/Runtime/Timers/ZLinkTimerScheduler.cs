@@ -130,7 +130,7 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
                     cancellationToken
                 );
                 var wake = _wake.WaitAsync(waitCancellation.Token);
-                var deadline = Task.Delay(next.Delay.Value, waitCancellation.Token);
+                var deadline = Task.Delay(next.Delay.Value, TimeProvider, waitCancellation.Token);
                 await Task.WhenAny(wake, deadline).ConfigureAwait(false);
                 waitCancellation.Cancel();
                 try

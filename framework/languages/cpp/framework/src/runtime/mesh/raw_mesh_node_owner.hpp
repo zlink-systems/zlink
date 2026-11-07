@@ -481,6 +481,13 @@ class raw_mesh_node_owner_t
     std::optional<zlink::poll_event_flag_t>
     wait_for_activity (std::chrono::milliseconds timeout,
                        bool accept_application_receive = true) noexcept;
+    std::optional<zlink::poll_event_flag_t>
+    wait_for_hosted_activity (std::chrono::milliseconds timeout,
+                              bool accept_application_receive = true) noexcept;
+    template <bool Hosted>
+    std::optional<zlink::poll_event_flag_t>
+    wait_for_activity_impl (std::chrono::milliseconds timeout,
+                            bool accept_application_receive) noexcept;
     void signal_activity () noexcept;
     std::size_t last_pump_bytes () const;
     // A rotation with no probe, timeout or admission retry due returns at once (spec 08

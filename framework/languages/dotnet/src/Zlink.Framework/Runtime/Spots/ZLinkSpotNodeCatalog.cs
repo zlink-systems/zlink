@@ -1269,8 +1269,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                 node.RoutingId,
                 node.MeshStatus().LifecycleGeneration,
                 activation.SpotKind,
-                deactivate: async ct =>
-                    _ = await CloseAsync(activation.SpotId, ct).ConfigureAwait(false),
+                deactivate: _ => runtime.DiscardLocationExecutionAsync(activation),
                 cancellationToken
             )
             .ConfigureAwait(false);
@@ -1737,6 +1736,7 @@ internal sealed class ZLinkSpotNodeCatalog(
 
     private void PublishActivationLocked(ZLinkSpotActivation activation)
     {
+        lifecycle?.EnsureOwnerAdmissionOpen();
         // Ready includes the Location Store commit. Until publication the existing
         // Spot ingress queue owns multicast payloads without running handlers.
         activation.AttachNativeDispatch();
@@ -1786,7 +1786,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                 node.MeshStatus().LifecycleGeneration,
                 spotKind,
                 authorityOwnerGeneration,
-                deactivate: async ct => _ = await CloseAsync(spotId, ct).ConfigureAwait(false),
+                deactivate: _ => runtime.DiscardLocationExecutionAsync(activation),
                 cancellationToken
             )
             .ConfigureAwait(false);
@@ -2429,9 +2429,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                                 node.RoutingId,
                                 node.MeshStatus().LifecycleGeneration,
                                 successor.SpotKind,
-                                deactivate: async ct =>
-                                    _ = await CloseAsync(successor.SpotId, ct)
-                                        .ConfigureAwait(false),
+                                deactivate: _ => runtime.DiscardLocationExecutionAsync(successor),
                                 cancellationToken
                             )
                             .ConfigureAwait(false);
@@ -2548,6 +2546,16 @@ internal sealed class ZLinkSpotNodeCatalog(
             .ConfigureAwait(false);
         ZLinkRuntimeMetrics.RecordSpotClosed(registration.SpotNodeName, activation.KindName);
         failures.ThrowIfAny();
+    }
+
+    internal async ValueTask DiscardLocationExecutionAsync(
+        ZLinkSpotActivation activation,
+        Func<ValueTask> discardMembers
+    )
+    {
+        var completion = activation.DiscardLocationExecutionAsync(discardMembers);
+        await _lane.RunAsync(() => RemoveActivationLocked(activation)).ConfigureAwait(false);
+        await completion.ConfigureAwait(false);
     }
 
     private async ValueTask RemoveActivationAsync(ZLinkSpotActivation? activation)

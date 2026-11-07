@@ -274,7 +274,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                 _spots,
                 node,
                 registration,
-                frameworkRegistration.Codecs
+                frameworkRegistration.Codecs,
+                locationLifecycle
             );
             node.SetUserSpotOperationTarget(_userSpotOperationTarget);
         }
@@ -1208,6 +1209,11 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     {
         return await _spots.GetOrCreateAsync(spotType, requestedSpotId, request, cancellationToken);
     }
+
+    internal ValueTask DiscardLocationExecutionAsync(
+        ZLinkSpotActivation activation,
+        Func<ValueTask> discardMembers
+    ) => _spots.DiscardLocationExecutionAsync(activation, discardMembers);
 
     public ValueTask<ZLinkSpotInfo?> GetAsync(string spotId, CancellationToken cancellationToken)
     {

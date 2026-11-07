@@ -65,20 +65,21 @@ extern "C" int __wrap_zlink_poller_wait (void *poller,
 
 using receive_wait_host_t = zlink::framework::runtime::host::public_host_runtime_t;
 using receive_wait_deadline_t = std::optional<std::chrono::steady_clock::time_point>;
-extern "C" bool real_receive_wait (receive_wait_host_t *,
-                                   std::chrono::milliseconds,
-                                   bool,
-                                   receive_wait_deadline_t) noexcept
+using receive_wait_result_t = std::optional<zlink::poll_event_flag_t>;
+extern "C" receive_wait_result_t real_receive_wait (receive_wait_host_t *,
+                                                    std::chrono::milliseconds,
+                                                    bool,
+                                                    receive_wait_deadline_t) noexcept
   __asm__ ("__real_" ZLINK_TEST_RECEIVE_WAIT_SYMBOL);
-extern "C" bool wrapped_receive_wait (receive_wait_host_t *,
-                                      std::chrono::milliseconds,
-                                      bool,
-                                      receive_wait_deadline_t) noexcept
+extern "C" receive_wait_result_t wrapped_receive_wait (receive_wait_host_t *,
+                                                       std::chrono::milliseconds,
+                                                       bool,
+                                                       receive_wait_deadline_t) noexcept
   __asm__ ("__wrap_" ZLINK_TEST_RECEIVE_WAIT_SYMBOL);
-extern "C" bool wrapped_receive_wait (receive_wait_host_t *host,
-                                      std::chrono::milliseconds timeout,
-                                      bool accept_receive,
-                                      receive_wait_deadline_t deadline) noexcept
+extern "C" receive_wait_result_t wrapped_receive_wait (receive_wait_host_t *host,
+                                                       std::chrono::milliseconds timeout,
+                                                       bool accept_receive,
+                                                       receive_wait_deadline_t deadline) noexcept
 {
     {
         std::unique_lock lock (observation_mutex);

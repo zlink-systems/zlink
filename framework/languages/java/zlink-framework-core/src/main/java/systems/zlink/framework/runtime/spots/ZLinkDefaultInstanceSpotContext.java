@@ -26,6 +26,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
 
 final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, SpotDispatchLine {
+    final systems.zlink.framework.runtime.locations.ZLinkLocationRuntime.Execution execution;
     private final ZLinkSpotContextHost host;
     private final ZLinkWorkerPool workerPool;
     private final ZLinkSpotHandlerLoader handlerLoader;
@@ -88,6 +89,8 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
                         handlerInstances,
                         (timerName, operation) ->
                                 enqueueDispatch(() -> host.runWithOutbound(outbound, operation)));
+        execution = host.execution(this);
+        dispatchQueue.executionPolicy(execution);
     }
 
     void bind(ZLinkInstanceSpot value, ZLinkInstanceSpotActivation owner) {
@@ -121,7 +124,13 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
 
     CompletionStage<Void> completeRecoveredPreparation(
             Throwable failure, Supplier<CompletionStage<Void>> discard) {
-        return dispatchQueue.completeActivationPreparation(null, failure, discard);
+        return (failure == null && execution != null
+                        ? execution.ready()
+                        : CompletableFuture.<Void>completedFuture(null))
+                .thenCompose(
+                        ignored ->
+                                dispatchQueue.completeActivationPreparation(
+                                        null, failure, discard));
     }
 
     CompletionStage<Void> completeActivationRecovery(
@@ -130,23 +139,41 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
                     message,
             Throwable failure,
             Supplier<CompletionStage<Void>> discard) {
-        return dispatchQueue.completeActivationPreparation(
-                candidate -> {
-                    if (!(candidate instanceof ZLinkBackendReceived received)) return false;
-                    return received.activationMessage()
-                            .filter(
-                                    first ->
-                                            first.operationHigh() == message.operationHigh()
-                                                    && first.operationLow()
-                                                            == message.operationLow()
-                                                    && first.sourceNodeRid()
-                                                            .equals(message.sourceNodeRid())
-                                                    && first.sourceNodeGeneration()
-                                                            == message.sourceNodeGeneration())
-                            .isPresent();
-                },
-                failure,
-                discard);
+        return (failure == null && execution != null
+                        ? execution.ready()
+                        : CompletableFuture.<Void>completedFuture(null))
+                .thenCompose(
+                        ignored ->
+                                dispatchQueue.completeActivationPreparation(
+                                        candidate -> {
+                                            if (!(candidate
+                                                    instanceof ZLinkBackendReceived received))
+                                                return false;
+                                            return received.activationMessage()
+                                                    .filter(
+                                                            first ->
+                                                                    first.operationHigh()
+                                                                                    == message
+                                                                                            .operationHigh()
+                                                                            && first.operationLow()
+                                                                                    == message
+                                                                                            .operationLow()
+                                                                            && first.sourceNodeRid()
+                                                                                    .equals(
+                                                                                            message
+                                                                                                    .sourceNodeRid())
+                                                                            && first
+                                                                                            .sourceNodeGeneration()
+                                                                                    == message
+                                                                                            .sourceNodeGeneration())
+                                                    .isPresent();
+                                        },
+                                        failure,
+                                        discard));
+    }
+
+    CompletionStage<Void> confirmReady() {
+        return execution == null ? CompletableFuture.completedFuture(null) : execution.ready();
     }
 
     CompletionStage<Void> finishActivationPreparation() {
@@ -186,6 +213,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
     }
 
     CompletionStage<Void> closeResourcesAsync() {
+        if (execution != null) execution.close();
         return closeTimersAsync()
                 .whenComplete(
                         (ignored, failure) -> {
@@ -284,7 +312,6 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
             CompletableFuture<Void> admission) {
-        host.ensureOwnerAdmissionOpen();
         return dispatchQueue.enqueue(() -> runLifecycleExecution(operation), admission);
     }
 
@@ -313,7 +340,6 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
             ZLinkBackendReceived received,
             Supplier<CompletionStage<Void>> operation,
             CompletableFuture<Void> admission) {
-        host.ensureOwnerAdmissionOpen();
         return dispatchQueue.enqueueMessage(
                 received,
                 DefaultInstanceSpotContext::hasInstanceIntent,

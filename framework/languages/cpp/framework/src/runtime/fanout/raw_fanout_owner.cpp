@@ -109,8 +109,8 @@ task_t<void> raw_fanout_publisher_t::publish (std::string channel_name,
     messaging::envelope_header_t header;
     header.kind = messaging::message_kind_t::publish;
     header.channel_name = std::move (channel_name);
-    header.message_name = payload.packet_name;
-    header.content_type = payload.content_type;
+    header.message_name = payload.packet_name ();
+    header.content_type = payload.content_type ();
     header.topic = topic;
     auto parts = messaging::envelope_codec_t{}.encode_raw_body_parts (
       header, zlink::message_t::from (std::move (payload.payload_bytes ())));

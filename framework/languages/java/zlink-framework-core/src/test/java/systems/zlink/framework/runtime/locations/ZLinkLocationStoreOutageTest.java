@@ -15,7 +15,7 @@ import java.time.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 
-final class ZLinkLocationStoreOutageTest {
+public final class ZLinkLocationStoreOutageTest {
     private static final Duration TTL = Duration.ofSeconds(30);
     private static final Duration MARGIN = Duration.ofSeconds(5);
 
@@ -244,14 +244,372 @@ final class ZLinkLocationStoreOutageTest {
         }
     }
 
-    private static final class Fixture implements AutoCloseable {
-        final AtomicLong now = new AtomicLong(100);
+    @RepeatedTest(100)
+    void ordinaryTurnsDoNotReadClockAndExpiredAdmissionStillBlocksNewTurns() {
+        for (boolean provider : new boolean[] {false, true}) {
+            for (boolean retention : new boolean[] {false, true}) {
+                try (var f = new Fixture(provider, retention)) {
+                    var spot =
+                            new systems.zlink.framework.execution.ZLinkSerialExecutionQueue(
+                                    Runnable::run,
+                                    systems.zlink.framework.execution.ZLinkExecutionLanePolicy
+                                            .spot());
+                    var actor =
+                            new systems.zlink.framework.execution.ZLinkSerialExecutionQueue(
+                                    Runnable::run,
+                                    systems.zlink.framework.execution.ZLinkExecutionLanePolicy
+                                            .actorDelivery());
+                    var timer =
+                            systems.zlink.framework.execution.ZLinkSerialExecutionQueue.spotTimer(
+                                    Runnable::run, spot);
+                    var spotExecution = f.runtime.execution(() -> true, () -> discard(spot));
+                    var actorExecution = f.runtime.execution(() -> true, () -> discard(actor));
+                    spotExecution.ready().toCompletableFuture().join();
+                    actorExecution.ready().toCompletableFuture().join();
+                    spot.executionPolicy(spotExecution);
+                    actor.executionPolicy(
+                            application -> {
+                                spotExecution.check(application);
+                                actorExecution.check(application);
+                            });
+                    long reads = f.clockReads.get();
+                    for (int turn = 0; turn < 100; turn++) {
+                        for (var queue : java.util.List.of(spot, actor, timer)) {
+                            queue.enqueue(() -> CompletableFuture.completedFuture(null), null)
+                                    .toCompletableFuture()
+                                    .join();
+                        }
+                    }
+                    assertEquals(
+                            reads,
+                            f.clockReads.get(),
+                            "ordinary Spot, member Actor and timer turns");
+                    var creating =
+                            new systems.zlink.framework.execution.ZLinkSerialExecutionQueue(
+                                    Runnable::run,
+                                    systems.zlink.framework.execution.ZLinkExecutionLanePolicy
+                                            .spot());
+                    bind(f.runtime, creating, () -> false, () -> discard(creating));
+                    f.failRenewal();
+                    creating.enqueue(() -> CompletableFuture.completedFuture(null), null)
+                            .toCompletableFuture()
+                            .join();
+                    f.now.set(100L + Duration.ofSeconds(25).toNanos());
+                    assertThrows(
+                            CompletionException.class,
+                            () ->
+                                    creating.enqueue(
+                                                    () -> CompletableFuture.completedFuture(null),
+                                                    null)
+                                            .toCompletableFuture()
+                                            .join());
+                }
+            }
+        }
+    }
+
+    @RepeatedTest(100)
+    void executionGateContract() {
+        for (boolean provider : new boolean[] {false, true}) {
+            for (boolean retention : new boolean[] {false, true}) {
+                retainedGate(provider, retention);
+                lateCompletion(provider, retention);
+                ineligibleActivations(provider, retention);
+                staleLeaseRecovery(provider, retention);
+                retainedRecovery(provider, retention);
+            }
+        }
+    }
+
+    private void retainedGate(boolean provider, boolean retention) {
+        try (var f = new Fixture(provider, retention)) {
+            var queue =
+                    new systems.zlink.framework.execution.ZLinkSerialExecutionQueue(
+                            Runnable::run,
+                            systems.zlink.framework.execution.ZLinkExecutionLanePolicy.spot());
+            var timer =
+                    systems.zlink.framework.execution.ZLinkSerialExecutionQueue.spotTimer(
+                            Runnable::run, queue);
+            var cleaned = new java.util.concurrent.atomic.AtomicInteger();
+            bind(
+                    f.runtime,
+                    queue,
+                    () -> true,
+                    () -> {
+                        cleaned.incrementAndGet();
+                        discard(queue);
+                    });
+            f.now.incrementAndGet();
+            f.failRenewal();
+            long cutoff = f.runtime.ownerLeaseSnapshot().outageCutoffNanos();
+            f.now.set(cutoff - 1);
+            var calls = new java.util.concurrent.atomic.AtomicInteger();
+            queue.enqueue(
+                            () -> {
+                                calls.incrementAndGet();
+                                return CompletableFuture.completedFuture(null);
+                            },
+                            null)
+                    .toCompletableFuture()
+                    .join();
+            timer.enqueue(
+                            () -> {
+                                calls.incrementAndGet();
+                                return CompletableFuture.completedFuture(null);
+                            },
+                            null)
+                    .toCompletableFuture()
+                    .join();
+            assertEquals(2, calls.get());
+            if (retention)
+                assertThrows(IllegalStateException.class, f.runtime::ensureOwnerAdmissionOpen);
+            var hold = new CompletableFuture<Void>();
+            var started = new CompletableFuture<Void>();
+            var active =
+                    queue.enqueue(
+                            () -> {
+                                started.complete(null);
+                                return hold;
+                            },
+                            null);
+            started.join();
+            var queued =
+                    queue.enqueue(
+                                    () -> {
+                                        calls.incrementAndGet();
+                                        return CompletableFuture.completedFuture(null);
+                                    },
+                                    null)
+                            .toCompletableFuture();
+            f.now.set(cutoff);
+            f.fireCutoff();
+            assertEquals(1, cleaned.get(), "T cleans the incarnation without another turn");
+            assertTrue(queued.isDone(), "accepted queue entries are disposed at T");
+            hold.complete(null);
+            active.toCompletableFuture().join();
+            assertEquals(2, calls.get());
+            assertThrows(
+                    CompletionException.class,
+                    () ->
+                            timer.enqueue(
+                                            () -> {
+                                                calls.incrementAndGet();
+                                                return CompletableFuture.completedFuture(null);
+                                            },
+                                            null)
+                                    .toCompletableFuture()
+                                    .join());
+            f.store.response = null;
+            f.runtime.renewOwnerLeaseOnce().toCompletableFuture().join();
+            assertThrows(
+                    RuntimeException.class,
+                    () ->
+                            queue.enqueue(
+                                            () -> {
+                                                calls.incrementAndGet();
+                                                return CompletableFuture.completedFuture(null);
+                                            },
+                                            null)
+                                    .toCompletableFuture()
+                                    .join());
+            assertEquals(2, calls.get(), "Store recovery cannot reopen a discarded incarnation");
+            f.store.response = CompletableFuture.completedFuture(new ZLinkOwnerLeaseRenewStale());
+            f.store.claimResponse =
+                    CompletableFuture.completedFuture(
+                            new ZLinkOwnerLeaseClaimed(
+                                    new ZLinkLocationOwnerToken("outage-owner", 2),
+                                    Instant.EPOCH.plus(TTL),
+                                    Instant.EPOCH));
+            assertTrue(f.runtime.renewOwnerLeaseOnce().toCompletableFuture().join());
+            assertThrows(
+                    RuntimeException.class,
+                    () ->
+                            queue.enqueue(
+                                            () -> {
+                                                calls.incrementAndGet();
+                                                return CompletableFuture.completedFuture(null);
+                                            },
+                                            null)
+                                    .toCompletableFuture()
+                                    .join());
+            assertEquals(1, cleaned.get());
+            assertEquals(2, calls.get());
+            assertThrows(
+                    RuntimeException.class,
+                    () ->
+                            queue.enqueueLifecycleBarrier(
+                                            () -> {
+                                                calls.incrementAndGet();
+                                                return CompletableFuture.completedFuture(null);
+                                            })
+                                    .toCompletableFuture()
+                                    .join());
+            assertEquals(2, calls.get());
+        }
+    }
+
+    private void lateCompletion(boolean provider, boolean retention) {
+        try (var f = new Fixture(provider, retention)) {
+            var queue =
+                    new systems.zlink.framework.execution.ZLinkSerialExecutionQueue(
+                            Runnable::run,
+                            systems.zlink.framework.execution.ZLinkExecutionLanePolicy
+                                    .spotReturningGate());
+            bind(f.runtime, queue, () -> true, () -> discard(queue));
+            var remote = new CompletableFuture<Void>();
+            var started = new CompletableFuture<Void>();
+            var resumed = new java.util.concurrent.atomic.AtomicInteger();
+            var result =
+                    queue.enqueue(
+                            () -> {
+                                started.complete(null);
+                                return systems.zlink.framework.execution.ZLinkSerialExecutionQueue
+                                        .manageCurrentInTurn(remote)
+                                        .thenRun(resumed::incrementAndGet);
+                            },
+                            null);
+            started.join();
+            f.failRenewal();
+            f.now.set(f.runtime.ownerLeaseSnapshot().outageCutoffNanos());
+            f.fireCutoff();
+            remote.complete(null);
+            assertThrows(CompletionException.class, () -> result.toCompletableFuture().join());
+            assertEquals(0, resumed.get(), "late completion cannot enter a disposed handler turn");
+        }
+    }
+
+    private void ineligibleActivations(boolean provider, boolean retention) {
+        try (var f = new Fixture(provider, retention)) {
+            var creating =
+                    new systems.zlink.framework.execution.ZLinkSerialExecutionQueue(
+                            Runnable::run,
+                            systems.zlink.framework.execution.ZLinkExecutionLanePolicy.spot());
+            var relocating =
+                    new systems.zlink.framework.execution.ZLinkSerialExecutionQueue(
+                            Runnable::run,
+                            systems.zlink.framework.execution.ZLinkExecutionLanePolicy.spot());
+            bind(f.runtime, relocating, () -> false, () -> discard(relocating));
+            f.failRenewal();
+            bind(f.runtime, creating, () -> true, () -> discard(creating));
+            f.now.set(100L + Duration.ofSeconds(25).toNanos());
+            for (var queue : java.util.List.of(creating, relocating)) {
+                assertThrows(
+                        CompletionException.class,
+                        () ->
+                                queue.enqueue(() -> CompletableFuture.completedFuture(null), null)
+                                        .toCompletableFuture()
+                                        .join());
+            }
+        }
+    }
+
+    private void retainedRecovery(boolean provider, boolean retention) {
+        try (var f = new Fixture(provider, retention)) {
+            var queue =
+                    new systems.zlink.framework.execution.ZLinkSerialExecutionQueue(
+                            Runnable::run,
+                            systems.zlink.framework.execution.ZLinkExecutionLanePolicy.spot());
+            var cleaned = new java.util.concurrent.atomic.AtomicInteger();
+            bind(f.runtime, queue, () -> true, cleaned::incrementAndGet);
+            var entered = new CompletableFuture<Void>();
+            var release = new CompletableFuture<Void>();
+            var active =
+                    queue.enqueue(
+                            () -> {
+                                entered.complete(null);
+                                return release;
+                            },
+                            null);
+            entered.join();
+            var calls = new java.util.concurrent.atomic.AtomicInteger();
+            var pending =
+                    queue.enqueue(
+                            () -> {
+                                calls.incrementAndGet();
+                                return CompletableFuture.completedFuture(null);
+                            },
+                            null);
+            f.failRenewal();
+            long cutoff = f.runtime.ownerLeaseSnapshot().outageCutoffNanos();
+            f.now.set(cutoff - 1);
+            f.store.response = null;
+            assertTrue(f.runtime.renewOwnerLeaseOnce().toCompletableFuture().join());
+            assertNull(f.runtime.ownerLeaseSnapshot().outageObservedAtNanos());
+            release.complete(null);
+            active.toCompletableFuture().join();
+            pending.toCompletableFuture().join();
+            assertEquals(1, calls.get());
+            assertEquals(0, cleaned.get());
+            queue.close();
+        }
+    }
+
+    private void staleLeaseRecovery(boolean provider, boolean retention) {
+        try (var f = new Fixture(provider, retention)) {
+            var queue =
+                    new systems.zlink.framework.execution.ZLinkSerialExecutionQueue(
+                            Runnable::run,
+                            systems.zlink.framework.execution.ZLinkExecutionLanePolicy.spot());
+            var cleanup = new java.util.concurrent.atomic.AtomicInteger();
+            bind(
+                    f.runtime,
+                    queue,
+                    () -> true,
+                    () -> {
+                        cleanup.incrementAndGet();
+                        discard(queue);
+                    });
+            f.failRenewal();
+            long cutoff = f.runtime.ownerLeaseSnapshot().outageCutoffNanos();
+            f.store.response = CompletableFuture.completedFuture(new ZLinkOwnerLeaseRenewStale());
+            f.store.claimResponse =
+                    CompletableFuture.completedFuture(
+                            new ZLinkOwnerLeaseClaimed(
+                                    new ZLinkLocationOwnerToken("outage-owner", 2),
+                                    Instant.EPOCH.plus(TTL),
+                                    Instant.EPOCH));
+            assertTrue(f.runtime.renewOwnerLeaseOnce().toCompletableFuture().join());
+            assertEquals(
+                    0, cleanup.get(), "stale lease alone does not prove object ownership loss");
+            assertEquals(cutoff, f.runtime.ownerLeaseSnapshot().outageCutoffNanos());
+            queue.enqueue(() -> CompletableFuture.completedFuture(null), null)
+                    .toCompletableFuture()
+                    .join();
+            f.now.set(cutoff);
+            f.fireCutoff();
+            assertEquals(1, cleanup.get());
+            assertThrows(
+                    CompletionException.class,
+                    () ->
+                            queue.enqueue(() -> CompletableFuture.completedFuture(null), null)
+                                    .toCompletableFuture()
+                                    .join());
+        }
+    }
+
+    private static void bind(
+            ZLinkLocationRuntime runtime,
+            systems.zlink.framework.execution.ZLinkSerialExecutionQueue queue,
+            java.util.function.BooleanSupplier steady,
+            Runnable cleanup) {
+        var execution = runtime.execution(steady, cleanup);
+        execution.ready().toCompletableFuture().join();
+        queue.executionPolicy(execution);
+    }
+
+    private static void discard(systems.zlink.framework.execution.ZLinkSerialExecutionQueue queue) {
+        queue.discardApplications().toCompletableFuture().join();
+    }
+
+    public static final class Fixture implements AutoCloseable {
+        public final AtomicLong now = new AtomicLong(100);
+        final AtomicLong clockReads = new AtomicLong();
         final ZLinkLocationFirstHeartbeatTest.RecordingScheduler scheduler =
                 new ZLinkLocationFirstHeartbeatTest.RecordingScheduler();
         final LeaseStore store;
-        final ZLinkLocationRuntime runtime;
+        public final ZLinkLocationRuntime runtime;
 
-        Fixture(boolean provider, boolean retention) {
+        public Fixture(boolean provider, boolean retention) {
             var clock = Clock.fixed(Instant.EPOCH, ZoneOffset.UTC);
             ZLinkLocationRepository backing =
                     provider
@@ -267,21 +625,24 @@ final class ZLinkLocationStoreOutageTest {
                             Duration.ofSeconds(5),
                             Duration.ofSeconds(3),
                             MARGIN,
-                            now::get,
+                            () -> {
+                                clockReads.incrementAndGet();
+                                return now.get();
+                            },
                             scheduler,
                             new ZLinkStateLane(Runnable::run));
             if (retention) runtime.setStoreOutageRetention(true);
             runtime.start(RoutingId.from("node")).toCompletableFuture().join();
         }
 
-        void failRenewal() {
+        public void failRenewal() {
             store.response =
                     CompletableFuture.failedFuture(
                             new IllegalStateException("provider unavailable"));
             assertFalse(runtime.renewOwnerLeaseOnce().toCompletableFuture().join());
         }
 
-        void fireCutoff() {
+        public void fireCutoff() {
             for (var task : java.util.List.copyOf(scheduler.tasks)) {
                 if (!task.isCancelled()
                         && task.getDelay(TimeUnit.NANOSECONDS) > Duration.ofSeconds(5).toNanos())
