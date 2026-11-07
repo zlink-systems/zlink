@@ -1224,6 +1224,74 @@ public sealed class LocationRuntimeTests
         }
     }
 
+    [Theory]
+    [InlineData(ZLinkUserSpotExecutionMode.PerActor)]
+    [InlineData(ZLinkUserSpotExecutionMode.SpotWide)]
+    public async Task StoreOutageDiscard_After_Spot_Finalization_Releases_Local_Member(
+        ZLinkUserSpotExecutionMode mode
+    )
+    {
+        var time = new ControllableTimeProvider();
+        var services = new ServiceCollection().AddSingleton(new OutageExecutionProbe());
+        services.AddZLinkFramework(builder =>
+        {
+            builder.DisableImplicitHandlerAutoRegistration();
+            builder.UseTestLocationStore();
+            builder.AddRelocationStore(new InMemoryRelocationStore());
+            builder.UseTestTimeProvider(time);
+            var server = builder
+                .AddRouteMesh("discard-finalized")
+                .Listen("tcp://127.0.0.1:0")
+                .Objects()
+                .Server();
+            server.AddSpotFactory<OutageExecutionSpot>(
+                "outage-execution",
+                factory => factory.ExecutionMode(mode).RecreateOnRelocation()
+            );
+            server.AddEntrySpot<OutageExecutionEntry>();
+            server.AddActorFactory<OutageExecutionActor, OutageExecutionActorFactory>(
+                "outage-actor",
+                factory => factory.DisableRelocation()
+            );
+        });
+        await using var provider = services.BuildServiceProvider();
+        var runtime = provider.GetRequiredService<ZLinkFrameworkRuntime>();
+        var hosted = provider
+            .GetServices<IHostedService>()
+            .Single(service => service is ZLinkFrameworkHostedService);
+        await hosted.StartAsync(CancellationToken.None);
+        try
+        {
+            await provider
+                .GetRequiredService<IZLinkSpotManager>()
+                .GetOrCreate("steady", "outage-execution")
+                .InMesh("discard-finalized")
+                .Async();
+            var spot = Assert.Single(runtime.GetSpotNodeRuntime("discard-finalized").Spots);
+            await provider
+                .GetRequiredService<IZLinkActorManager>()
+                .Create("moving-member", "outage-actor")
+                .InMesh("discard-finalized")
+                .Async();
+            Assert.True(runtime.TryGetActorState("moving-member", out var member));
+            member.JoinSpot(spot);
+            member.Handoff.BeginCapture();
+            // Reproduce the order in which ordinary disposal wins finalization
+            // before Location discard has submitted this member's cleanup.
+            Assert.NotNull(member.Actor);
+            var disposal = spot.DisposeAsync().AsTask();
+            await runtime.DiscardLocationExecutionAsync(spot);
+            await disposal;
+            Assert.Null(member.Actor);
+            Assert.True(member.ContextInvalidated);
+        }
+        finally
+        {
+            await runtime.ForceStopAsync(CancellationToken.None);
+            await provider.GetRequiredService<ZLinkLocationRuntime>().StopAsync();
+        }
+    }
+
     private sealed class OutageExecutionSpot(IZLinkSpotContext context, OutageExecutionProbe probe)
         : IZLinkSpot
     {

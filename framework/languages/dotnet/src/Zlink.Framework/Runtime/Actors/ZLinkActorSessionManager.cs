@@ -49,8 +49,10 @@ internal sealed partial class ZLinkActorSessionManager(
     internal async ValueTask InvalidateSpotActorRuntimeAsync(ZLinkSpotActivation activation)
     {
         var failures = new ZLinkFailureCollector();
-        foreach (var actorId in activation.SnapshotActorIds())
-            if (TryGetState(actorId, out var state))
+        // Runtime placement owns local membership, including Actors absent
+        // from the Spot's published application membership registry.
+        foreach (var state in await SnapshotStatesAsync().ConfigureAwait(false))
+            if (ReferenceEquals(state.Activation, activation))
                 await failures
                     .CaptureAsync(() =>
                         state.InvalidateRuntimeGenerationAfterDispatchesAsync(activation)
