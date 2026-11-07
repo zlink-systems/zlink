@@ -74,7 +74,7 @@ public final class ZLinkLocationStoreOutageTest {
             assertEquals(
                     opened.outageObservedAtNanos(),
                     f.runtime.ownerLeaseSnapshot().outageObservedAtNanos());
-            // Reclaim a new lease before the old renewal response arrives.
+            // Stale during an outage cannot reclaim before normal expiration.
             f.store.response = CompletableFuture.completedFuture(new ZLinkOwnerLeaseRenewStale());
             f.store.claimResponse =
                     CompletableFuture.completedFuture(
@@ -82,8 +82,8 @@ public final class ZLinkLocationStoreOutageTest {
                                     new ZLinkLocationOwnerToken("outage-owner", 2),
                                     Instant.EPOCH.plus(TTL),
                                     Instant.EPOCH));
-            assertTrue(f.runtime.renewOwnerLeaseOnce().toCompletableFuture().join());
-            assertEquals(2, f.runtime.ownerLeaseSnapshot().token().leaseGeneration());
+            assertFalse(f.runtime.renewOwnerLeaseOnce().toCompletableFuture().join());
+            assertEquals(1, f.runtime.ownerLeaseSnapshot().token().leaseGeneration());
             assertEquals(cutoff, f.runtime.ownerLeaseSnapshot().outageCutoffNanos());
             late.complete(new ZLinkOwnerLeaseRenewed(Instant.EPOCH.plus(TTL), Instant.EPOCH));
             assertFalse(pending.toCompletableFuture().join());
@@ -94,7 +94,9 @@ public final class ZLinkLocationStoreOutageTest {
             f.fireCutoff();
             assertTrue(f.runtime.ownerLeaseSnapshot().outageDiscarded());
             assertEquals(
-                    !retention, f.runtime.isOwnerAdmissionOpen(), "the latch is observation-only");
+                    false,
+                    f.runtime.isOwnerAdmissionOpen(),
+                    "normal expiration has not permitted a new claim");
             // No mesh or application turn exists. A later success cannot clear the latch.
             f.store.response =
                     CompletableFuture.completedFuture(
@@ -420,7 +422,7 @@ public final class ZLinkLocationStoreOutageTest {
                                     new ZLinkLocationOwnerToken("outage-owner", 2),
                                     Instant.EPOCH.plus(TTL),
                                     Instant.EPOCH));
-            assertTrue(f.runtime.renewOwnerLeaseOnce().toCompletableFuture().join());
+            assertFalse(f.runtime.renewOwnerLeaseOnce().toCompletableFuture().join());
             assertThrows(
                     RuntimeException.class,
                     () ->
@@ -568,7 +570,7 @@ public final class ZLinkLocationStoreOutageTest {
                                     new ZLinkLocationOwnerToken("outage-owner", 2),
                                     Instant.EPOCH.plus(TTL),
                                     Instant.EPOCH));
-            assertTrue(f.runtime.renewOwnerLeaseOnce().toCompletableFuture().join());
+            assertFalse(f.runtime.renewOwnerLeaseOnce().toCompletableFuture().join());
             assertEquals(
                     0, cleanup.get(), "stale lease alone does not prove object ownership loss");
             assertEquals(cutoff, f.runtime.ownerLeaseSnapshot().outageCutoffNanos());
