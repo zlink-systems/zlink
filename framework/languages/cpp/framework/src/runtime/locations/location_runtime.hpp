@@ -366,13 +366,13 @@ class location_runtime_t
 
     task_t<void> register_metric_scope (std::string kind, std::string name)
     {
-        return _lane->run_task ([this, kind = std::move (kind),
-                                 name = std::move (name)] () mutable {
-            const auto scope = std::pair{std::move (kind), std::move (name)};
-            if (std::find (_metric_scopes.begin (), _metric_scopes.end (), scope)
-                == _metric_scopes.end ())
-                _metric_scopes.push_back (scope);
-        });
+        return _lane->run_task (
+          [this, kind = std::move (kind), name = std::move (name)] () mutable {
+              const auto scope = std::pair{std::move (kind), std::move (name)};
+              if (std::find (_metric_scopes.begin (), _metric_scopes.end (), scope)
+                  == _metric_scopes.end ())
+                  _metric_scopes.push_back (scope);
+          });
     }
 
 
