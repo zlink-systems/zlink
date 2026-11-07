@@ -18,10 +18,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
-import java.util.function.Supplier;
 
 /** Atomic opaque Store used by the built-in in-memory configuration. */
 public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationStore {
@@ -52,14 +49,13 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
             ZLinkStoreKey key, ZLinkStoreCancellation cancellation) {
         requireActive(cancellation);
         String value = requireKey(key);
-        return inStateLane(
+        return stateLane.runNowOrQueue(
                 () -> {
                     Instant now = clock.instant();
                     Entry entry = live(value, now);
-                    return completed(
-                            entry == null
-                                    ? new ZLinkStoreReadMissing(now)
-                                    : new ZLinkStoreReadFound(entry.value(now)));
+                    return entry == null
+                            ? new ZLinkStoreReadMissing(now)
+                            : new ZLinkStoreReadFound(entry.value(now));
                 });
     }
 
@@ -71,12 +67,12 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
         List<ZLinkStoreCondition> conditions = List.copyOf(request.conditions());
         List<ZLinkStoreMutation> mutations = List.copyOf(request.mutations());
         validateUniqueKeys(conditions, mutations);
-        return inStateLane(
+        return stateLane.runNowOrQueue(
                 () -> {
                     Instant now = clock.instant();
                     for (ZLinkStoreCondition condition : conditions) {
                         if (!matches(condition, now)) {
-                            return completed(new ZLinkStoreWriteConflict(now));
+                            return new ZLinkStoreWriteConflict(now);
                         }
                     }
                     Map<ZLinkStoreKey, ZLinkStoreVersion> putVersions = new LinkedHashMap<>();
@@ -96,7 +92,7 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
                             putVersions.put(put.key(), next);
                         }
                     }
-                    return completed(new ZLinkStoreWriteApplied(Map.copyOf(putVersions), now));
+                    return new ZLinkStoreWriteApplied(Map.copyOf(putVersions), now);
                 });
     }
 
@@ -113,7 +109,7 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
             throw new IllegalArgumentException(
                     "scan prefix exceeds " + MAXIMUM_KEY_BYTES + " UTF-8 bytes");
         }
-        return inStateLane(
+        return stateLane.runNowOrQueue(
                 () -> {
                     Instant now = clock.instant();
                     removeExpiredSnapshots(now);
@@ -161,7 +157,7 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
                     }
                     if (items == null || offset < 0 || offset > items.size()) {
                         snapshots.remove(snapshotId);
-                        return completed(new ZLinkStoreScanExpired());
+                        return new ZLinkStoreScanExpired();
                     }
                     int end = offset;
                     long encodedBytes = 0;
@@ -190,24 +186,8 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
                     if (next == null) {
                         snapshots.remove(snapshotId);
                     }
-                    return completed(
-                            new ZLinkStoreScanPageResult(new ZLinkStoreScanPage(page, next, now)));
+                    return new ZLinkStoreScanPageResult(new ZLinkStoreScanPage(page, next, now));
                 });
-    }
-
-    private <T> T inStateLane(Supplier<T> work) {
-        try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
     }
 
     private void removeExpiredSnapshots(Instant now) {
@@ -317,10 +297,6 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
         if (Objects.requireNonNull(cancellation, "cancellation").isCancellationRequested()) {
             throw new CancellationException();
         }
-    }
-
-    private static <T> CompletionStage<T> completed(T value) {
-        return CompletableFuture.completedFuture(value);
     }
 
     private record Entry(byte[] bytes, ZLinkStoreVersion version, Instant expiresAt) {

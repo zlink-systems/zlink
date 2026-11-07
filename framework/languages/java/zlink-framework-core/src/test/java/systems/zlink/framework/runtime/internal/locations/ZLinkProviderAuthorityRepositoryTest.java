@@ -3954,6 +3954,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
         private final CompletableFuture<ZLinkStoreWriteResult> release = new CompletableFuture<>();
         private CompletableFuture<ZLinkAggregatePrepareResult> prepare;
         private boolean entered;
+        private final CompletableFuture<Void> entrySignal = new CompletableFuture<>();
 
         private PausedParticipantStore(ZLinkLocationStore delegate, ZLinkStoreKey pauseKey) {
             this.delegate = delegate;
@@ -3965,6 +3966,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                     new ZLinkProviderAuthorityRepository(this)
                             .prepareAggregate(request, () -> false)
                             .toCompletableFuture();
+            entrySignal.orTimeout(5, java.util.concurrent.TimeUnit.SECONDS).join();
             assertTrue(entered, "prepare did not reach the participant write boundary");
             assertFalse(prepare.isDone());
         }
@@ -3985,6 +3987,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                             mutation instanceof ZLinkStorePut put
                                                     && put.key().equals(pauseKey))) {
                 entered = true;
+                entrySignal.complete(null);
                 return release;
             }
             return delegate.write(request, cancellation);
@@ -4001,7 +4004,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
             release.complete(
                     new systems.zlink.framework.locationprovider.ZLinkStoreWriteConflict(
                             Instant.now()));
-            if (prepare != null) prepare.join();
+            if (prepare != null) prepare.orTimeout(5, java.util.concurrent.TimeUnit.SECONDS).join();
         }
     }
 
