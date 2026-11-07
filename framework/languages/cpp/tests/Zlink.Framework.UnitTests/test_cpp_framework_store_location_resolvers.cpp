@@ -190,8 +190,8 @@ class test_location_repository_t : public zlink::framework::location_repository_
 
     zlink::framework::task_t<
       zlink::framework::location_page_t<zlink::framework::mesh_node_descriptor_t>>
-    list_mesh_nodes (std::string mesh_name,
-                     zlink::framework::location_page_request_t page = {}) override
+    list_mesh_nodes_core (std::string mesh_name,
+                          zlink::framework::location_page_request_t page = {}) override
     {
         return _inner.list_mesh_nodes (std::move (mesh_name), std::move (page));
     }
@@ -273,8 +273,8 @@ class test_location_repository_t : public zlink::framework::location_repository_
     }
 
     zlink::framework::task_t<zlink::framework::authority_read_result_t>
-    read_authority (zlink::framework::authority_key_t key,
-                    std::stop_token cancellation = {}) override
+    read_authority_core (zlink::framework::authority_key_t key,
+                         std::stop_token cancellation = {}) override
     {
         ++authority_read_count;
         if (fail_authority_queries) {
@@ -296,10 +296,10 @@ class test_location_repository_t : public zlink::framework::location_repository_
     }
 
     zlink::framework::task_t<zlink::framework::authority_compare_exchange_result_t>
-    compare_exchange_authority (zlink::framework::authority_key_t key,
-                                std::string expected_store_version,
-                                zlink::framework::authority_mutation_t mutation,
-                                std::stop_token cancellation = {}) override
+    compare_exchange_authority_core (zlink::framework::authority_key_t key,
+                                     std::string expected_store_version,
+                                     zlink::framework::authority_mutation_t mutation,
+                                     std::stop_token cancellation = {}) override
     {
         return _inner.compare_exchange_authority (
           std::move (key), std::move (expected_store_version), std::move (mutation), cancellation);
@@ -329,8 +329,8 @@ class test_location_repository_t : public zlink::framework::location_repository_
     }
 
     zlink::framework::task_t<zlink::framework::object_reserve_result_t>
-    reserve (zlink::framework::object_reserve_request_t request,
-             std::stop_token cancellation = {}) override
+    reserve_core (zlink::framework::object_reserve_request_t request,
+                  std::stop_token cancellation = {}) override
     {
         if (force_reserve_conflict.exchange (false, std::memory_order_acq_rel)) {
             return zlink::framework::task_t<zlink::framework::object_reserve_result_t> (
@@ -342,16 +342,16 @@ class test_location_repository_t : public zlink::framework::location_repository_
     }
 
     zlink::framework::task_t<zlink::framework::object_complete_creation_result_t>
-    complete_creation (zlink::framework::object_complete_creation_request_t request,
-                       std::stop_token cancellation = {}) override
+    complete_creation_core (zlink::framework::object_complete_creation_request_t request,
+                            std::stop_token cancellation = {}) override
     {
         return _inner.complete_creation (std::move (request), cancellation);
     }
 
     zlink::framework::task_t<zlink::framework::object_commit_result_t>
-    commit (zlink::framework::object_commit_request_t request,
-            std::stop_token cancellation = {},
-            std::chrono::system_clock::time_point operation_deadline = {}) override
+    commit_core (zlink::framework::object_commit_request_t request,
+                 std::stop_token cancellation = {},
+                 std::chrono::system_clock::time_point operation_deadline = {}) override
     {
         return _inner.commit (std::move (request), cancellation, operation_deadline);
     }
@@ -366,8 +366,8 @@ class test_location_repository_t : public zlink::framework::location_repository_
     }
 
     zlink::framework::task_t<zlink::framework::aggregate_prepare_result_t>
-    prepare_aggregate (zlink::framework::aggregate_prepare_request_t request,
-                       std::stop_token cancellation = {}) override
+    prepare_aggregate_core (zlink::framework::aggregate_prepare_request_t request,
+                            std::stop_token cancellation = {}) override
     {
         return _inner.prepare_aggregate (std::move (request), cancellation);
     }

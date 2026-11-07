@@ -303,7 +303,7 @@ class provider_location_repository_t final : public location_repository_t
     }
 
     task_t<location_page_t<mesh_node_descriptor_t>>
-    list_mesh_nodes (std::string mesh_name, location_page_request_t page = {}) override
+    list_mesh_nodes_core (std::string mesh_name, location_page_request_t page = {}) override
     {
         auto listed = co_await list_descriptors<mesh_node_descriptor_t> (
           prefix_mesh (mesh_name), std::move (page), [] (const nlohmann::json &record) {
@@ -389,8 +389,8 @@ class provider_location_repository_t final : public location_repository_t
           });
     }
 
-    task_t<authority_read_result_t> read_authority (authority_key_t key,
-                                                    std::stop_token cancellation = {}) override
+    task_t<authority_read_result_t> read_authority_core (authority_key_t key,
+                                                         std::stop_token cancellation = {}) override
     {
         if (cancellation.stop_requested ())
             co_return co_await cancelled<authority_read_result_t> ();
@@ -398,22 +398,22 @@ class provider_location_repository_t final : public location_repository_t
     }
 
     task_t<authority_compare_exchange_result_t>
-    compare_exchange_authority (authority_key_t key,
-                                std::string expected_store_version,
-                                authority_mutation_t mutation,
-                                std::stop_token cancellation = {}) override
+    compare_exchange_authority_core (authority_key_t key,
+                                     std::string expected_store_version,
+                                     authority_mutation_t mutation,
+                                     std::stop_token cancellation = {}) override
     {
-        return compare_exchange_authority (std::move (key), std::move (expected_store_version),
-                                           std::move (mutation), cancellation, std::nullopt);
+        return compare_exchange_authority_core (std::move (key), std::move (expected_store_version),
+                                                std::move (mutation), cancellation, std::nullopt);
     }
 
   private:
     task_t<authority_compare_exchange_result_t>
-    compare_exchange_authority (authority_key_t key,
-                                std::string expected_store_version,
-                                authority_mutation_t mutation,
-                                std::stop_token cancellation,
-                                std::optional<std::chrono::steady_clock::time_point> deadline)
+    compare_exchange_authority_core (authority_key_t key,
+                                     std::string expected_store_version,
+                                     authority_mutation_t mutation,
+                                     std::stop_token cancellation,
+                                     std::optional<std::chrono::steady_clock::time_point> deadline)
     {
         const auto *put = std::get_if<authority_put_t> (&mutation);
         const auto operation_deadline = put ? put->operation_deadline : deadline;
@@ -664,8 +664,8 @@ class provider_location_repository_t final : public location_repository_t
           std::chrono::time_point_cast<std::chrono::milliseconds> (*found->value.expires_at)}};
     }
 
-    task_t<object_reserve_result_t> reserve (object_reserve_request_t request,
-                                             std::stop_token cancellation = {}) override
+    task_t<object_reserve_result_t> reserve_core (object_reserve_request_t request,
+                                                  std::stop_token cancellation = {}) override
     {
         object_reservation_fence_t fence;
         std::optional<store_version_t> reclaim_version;
@@ -1283,8 +1283,8 @@ class provider_location_repository_t final : public location_repository_t
 
   public:
     task_t<object_complete_creation_result_t>
-    complete_creation (object_complete_creation_request_t request,
-                       std::stop_token cancellation = {}) override
+    complete_creation_core (object_complete_creation_request_t request,
+                            std::stop_token cancellation = {}) override
     {
         if (cancellation.stop_requested ())
             co_return detail::result_access_t::failure<object_complete_creation_result_t> (
@@ -1315,8 +1315,8 @@ class provider_location_repository_t final : public location_repository_t
             object_commit_request_t commit_request{request.key, request.fence,
                                                    created->ready_payload};
             const auto committed =
-              co_await commit (std::move (commit_request), cancellation, &terminal, store_now,
-                               publication.operation_deadline);
+              co_await commit_core (std::move (commit_request), cancellation, &terminal, store_now,
+                                    publication.operation_deadline);
             if (const auto *value = std::get_if<object_committed_t> (&committed))
                 co_return object_complete_creation_result_t{
                   object_creation_completed_result_t{std::move (terminal), value->ready}};
@@ -1349,11 +1349,11 @@ class provider_location_repository_t final : public location_repository_t
     }
 
     task_t<object_commit_result_t>
-    commit (object_commit_request_t request,
-            std::stop_token cancellation = {},
-            std::chrono::system_clock::time_point operation_deadline = {}) override
+    commit_core (object_commit_request_t request,
+                 std::stop_token cancellation = {},
+                 std::chrono::system_clock::time_point operation_deadline = {}) override
     {
-        return commit (std::move (request), cancellation, nullptr, {}, operation_deadline);
+        return commit_core (std::move (request), cancellation, nullptr, {}, operation_deadline);
     }
 
     task_t<object_abort_result_t>
@@ -1365,11 +1365,12 @@ class provider_location_repository_t final : public location_repository_t
     }
 
   private:
-    task_t<object_commit_result_t> commit (object_commit_request_t request,
-                                           std::stop_token cancellation,
-                                           const creation_terminal_record_t *terminal,
-                                           std::chrono::system_clock::time_point terminal_store_now,
-                                           std::chrono::system_clock::time_point operation_deadline)
+    task_t<object_commit_result_t>
+    commit_core (object_commit_request_t request,
+                 std::stop_token cancellation,
+                 const creation_terminal_record_t *terminal,
+                 std::chrono::system_clock::time_point terminal_store_now,
+                 std::chrono::system_clock::time_point operation_deadline)
     {
         for (;;) {
             if (cancellation.stop_requested ())
@@ -1512,8 +1513,8 @@ class provider_location_repository_t final : public location_repository_t
 
   public:
     task_t<aggregate_prepare_result_t>
-    prepare_aggregate (aggregate_prepare_request_t request,
-                       std::stop_token cancellation = {}) override
+    prepare_aggregate_core (aggregate_prepare_request_t request,
+                            std::stop_token cancellation = {}) override
     {
         if (cancellation.stop_requested ())
             co_return co_await cancelled<aggregate_prepare_result_t> ();
@@ -1698,8 +1699,8 @@ class provider_location_repository_t final : public location_repository_t
                         if (aggregate_record_matches_request (raced, request, *inventory_tree)
                             && (status == aggregate_status::preparing
                                 || status == aggregate_status::prepared))
-                            co_return co_await prepare_aggregate (std::move (request),
-                                                                  cancellation);
+                            co_return co_await prepare_aggregate_core (std::move (request),
+                                                                       cancellation);
                     }
                     co_return aggregate_prepare_result_t{aggregate_prepare_conflict_t{}};
                 }
@@ -2405,7 +2406,7 @@ class provider_location_repository_t final : public location_repository_t
                 continue;
             check_deadline ();
             if (snapshot.allocation.state == placement_allocation_state_t::active) {
-                auto result = co_await compare_exchange_authority (
+                auto result = co_await compare_exchange_authority_core (
                   *logical, snapshot.store_version, authority_delete_t{}, {}, deadline);
                 if (std::holds_alternative<authority_deleted_t> (result))
                     ++removed;

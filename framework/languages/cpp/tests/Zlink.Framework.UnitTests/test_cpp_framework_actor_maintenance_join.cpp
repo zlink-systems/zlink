@@ -5310,11 +5310,11 @@ class accepted_source_repository_t final : public fw::runtime::in_memory_locatio
     std::optional<fw::owner_lease_read_result_t> lease_override;
     int mesh_reads = 0, lease_reads = 0;
     fw::task_t<fw::location_page_t<fw::mesh_node_descriptor_t>>
-    list_mesh_nodes (std::string mesh, fw::location_page_request_t page = {}) override
+    list_mesh_nodes_core (std::string mesh, fw::location_page_request_t page = {}) override
     {
         ++mesh_reads;
-        return in_memory_location_repository_t::list_mesh_nodes (std::move (mesh),
-                                                                 std::move (page));
+        return in_memory_location_repository_t::list_mesh_nodes_core (std::move (mesh),
+                                                                      std::move (page));
     }
     fw::task_t<fw::owner_lease_read_result_t> read_owner_lease (std::string owner_id) override
     {
