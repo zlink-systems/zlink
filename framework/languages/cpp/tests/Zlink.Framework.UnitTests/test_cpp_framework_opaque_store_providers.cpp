@@ -67,7 +67,7 @@ struct location_runtime_test_access_t
 
     static void settle_publication (location_runtime_t &runtime)
     {
-        runtime._lane.run_checked ([] {}).get ();
+        runtime._lane->run_checked ([] {}).get ();
         task_completion_source_t<void> completion;
         infrastructure_executor ()->submit (
           [&] { completion.complete (result_t<void>::success ()); });
@@ -4598,16 +4598,16 @@ class join_result_repository_t final : public in_memory_location_repository_t
         _inner (inner), _fault (fault)
     {
     }
-    task_t<authority_read_result_t> read_authority (authority_key_t key,
-                                                    std::stop_token cancellation = {}) override
+    task_t<authority_read_result_t> read_authority_core (authority_key_t key,
+                                                         std::stop_token cancellation = {}) override
     {
         co_return co_await _inner.read_authority (std::move (key), cancellation);
     }
     task_t<authority_compare_exchange_result_t>
-    compare_exchange_authority (authority_key_t key,
-                                std::string expected,
-                                authority_mutation_t mutation,
-                                std::stop_token cancellation = {}) override
+    compare_exchange_authority_core (authority_key_t key,
+                                     std::string expected,
+                                     authority_mutation_t mutation,
+                                     std::stop_token cancellation = {}) override
     {
         ++commits;
         if (const auto *put = std::get_if<authority_put_t> (&mutation))

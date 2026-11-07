@@ -149,7 +149,7 @@ class deferred_node_lookup_t final : public fw::runtime::in_memory_location_repo
     fw::task_completion_source_t<fw::location_page_t<fw::mesh_node_descriptor_t>> lookup;
     unsigned calls = 0;
     fw::task_t<fw::location_page_t<fw::mesh_node_descriptor_t>>
-    list_mesh_nodes (std::string, fw::location_page_request_t = {}) override
+    list_mesh_nodes_core (std::string, fw::location_page_request_t = {}) override
     {
         ++calls;
         if (calls == 1)
