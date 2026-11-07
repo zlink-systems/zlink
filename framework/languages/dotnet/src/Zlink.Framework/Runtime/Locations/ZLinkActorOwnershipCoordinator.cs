@@ -1749,7 +1749,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
             && currentAuthority.NodeRid != sourceAuthority.NodeRid;
     }
 
-    private static ReadOnlyMemory<byte> EncodeAuthorityPayload(
+    internal static ReadOnlyMemory<byte> EncodeAuthorityPayload(
         ReadOnlyMemory<byte> current,
         ZLinkActorAuthorityPayload payload
     )
@@ -1843,6 +1843,27 @@ internal sealed class ZLinkActorOwnershipCoordinator(
             );
     }
 
+    internal ValueTask CaptureRecoveryAuthoritiesAsync(ZLinkStoreOutageEpisode episode) =>
+        _lane.RunAsync(() =>
+        {
+            foreach (var actor in episode.Executions.OfType<ZLinkActorRuntimeState>())
+                if (
+                    _actors.TryGetValue(actor.RuntimeActorId, out var tracked)
+                    && actor.NativeActorRef?.Generation == tracked.Snapshot.ObjectGeneration
+                )
+                    tracked.PreservedSnapshot = tracked.Snapshot;
+        });
+
+    internal ValueTask<ZLinkAuthoritySnapshot?> ReadPreservedAuthorityAsync(
+        ZLinkActorRuntimeState actor
+    ) =>
+        _lane.RunAsync(() =>
+            _actors.TryGetValue(actor.RuntimeActorId, out var tracked)
+            && actor.NativeActorRef?.Generation == tracked.PreservedSnapshot?.ObjectGeneration
+                ? tracked.PreservedSnapshot
+                : null
+        );
+
     internal ValueTask UpdateTrackedSnapshotAsync(
         ZLinkActorId actorId,
         ZLinkAuthoritySnapshot snapshot
@@ -1850,7 +1871,16 @@ internal sealed class ZLinkActorOwnershipCoordinator(
         _lane.RunAsync(() =>
         {
             if (_actors.TryGetValue(actorId, out var tracked))
+            {
                 tracked.Snapshot = snapshot;
+                if (
+                    ZLinkActorAuthorityPayloadCodec.TryDecode(
+                        snapshot.Payload.Span,
+                        out var payload
+                    )
+                )
+                    tracked.Payload = payload;
+            }
         });
 
     internal ValueTask UpdateTrackedSnapshotAsync(
@@ -1889,6 +1919,7 @@ internal sealed class ZLinkActorOwnershipCoordinator(
     )
     {
         public ZLinkAuthoritySnapshot Snapshot { get; set; } = snapshot;
+        public ZLinkAuthoritySnapshot? PreservedSnapshot { get; set; }
 
         public ZLinkActorAuthorityPayload Payload { get; set; } = payload;
 
