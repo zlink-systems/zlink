@@ -462,6 +462,38 @@ final class ZLinkP4RuntimeRecoveryTest {
             notifyAll();
         }
 
+        /**
+         * Waits until {@code condition} holds. Store counters and the bind callbacks wake the wait;
+         * state flipped elsewhere (for example {@code paused()}) is re-checked every few
+         * milliseconds. Fails with {@code what} after a bounded deadline.
+         */
+        void awaitCondition(String what, java.util.function.BooleanSupplier condition) {
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+            // The condition is evaluated outside the monitor so it cannot deadlock with callbacks.
+            while (!condition.getAsBoolean()) {
+                long left = deadline - System.nanoTime();
+                if (left <= 0) fail("timed out waiting for " + what);
+                try {
+                    synchronized (this) {
+                        TimeUnit.NANOSECONDS.timedWait(this, Math.min(left, 5_000_000L));
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    fail("interrupted waiting for " + what);
+                }
+            }
+        }
+
+        void awaitPublications(int expected) {
+            awaitCondition(
+                    expected + " descriptor submissions, saw " + publications,
+                    () -> publications >= expected);
+        }
+
+        void awaitReads(int expected) {
+            awaitCondition(expected + " store reads, saw " + reads, () -> reads >= expected);
+        }
+
         /** Waits until the Preserve CAS count reaches {@code expected}; fails after the deadline. */
         synchronized void awaitWrites(int expected) {
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
@@ -516,10 +548,14 @@ final class ZLinkP4RuntimeRecoveryTest {
                             },
                             snapshot -> {
                                 applied.incrementAndGet();
+                                signal();
                                 return CompletableFuture.completedFuture(null);
                             },
                             () -> null,
-                            disposed::incrementAndGet);
+                            () -> {
+                                disposed.incrementAndGet();
+                                signal();
+                            });
             await(execution.ready());
             return execution;
         }
@@ -614,6 +650,7 @@ final class ZLinkP4RuntimeRecoveryTest {
             assertThrows(IllegalStateException.class, () -> b.check(true));
             assertEquals(0, appliedB.get(), "CAS without descriptor confirmation cannot reopen");
             f.publication.complete(null);
+            f.awaitCondition("b to resume", () -> appliedB.get() == 1 && !b.paused());
             b.check(true);
             assertThrows(IllegalStateException.class, () -> a.check(true));
             f.heldWrites.get(key).complete(f.awaitSubmitted(key));
@@ -752,6 +789,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                 f.at(35, 0);
                 f.publication = new CompletableFuture<>();
                 var recovery = f.runtime.renewOwnerLeaseOnce();
+                f.awaitPublications(1);
                 var pending =
                         queue.enqueue(
                                 () -> {
@@ -841,7 +879,9 @@ final class ZLinkP4RuntimeRecoveryTest {
                     f.heldReads.put(key, held);
                     f.outage();
                     f.at(35, 0);
+                    int readsBefore = f.reads;
                     var renewal = f.runtime.renewOwnerLeaseOnce();
+                    f.awaitReads(readsBefore + 1);
                     f.at(37, offset);
                     held.complete(exact);
                     await(renewal);
@@ -906,6 +946,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                             var held = new CompletableFuture<ZLinkAuthorityWriteResult>();
                             f.heldWrites.put(key, held);
                             var renewal = f.runtime.renewOwnerLeaseOnce();
+                            f.awaitWrites(1);
                             f.at(40, offset);
                             held.complete(f.awaitSubmitted(key));
                             await(renewal);
@@ -958,11 +999,12 @@ final class ZLinkP4RuntimeRecoveryTest {
                 f.outage();
                 f.at(35, 0);
                 var renewal = f.runtime.renewOwnerLeaseOnce();
+                var parentResult = f.awaitSubmitted(parentKey);
                 var dispatched = queue.enqueue(() -> CompletableFuture.completedFuture(null), null);
                 assertTrue(member.paused());
                 assertEquals(0, actorApplied.get());
                 assertFalse(dispatched.toCompletableFuture().isDone());
-                held.complete(f.awaitSubmitted(parentKey));
+                held.complete(parentResult);
                 await(renewal);
                 await(dispatched);
                 assertFalse(parent.paused());
@@ -1018,6 +1060,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                 f.at(35, 0);
                 f.publication = new CompletableFuture<>();
                 var renewal = f.runtime.renewOwnerLeaseOnce();
+                f.awaitPublications(1);
                 remote.complete(null);
                 await(queue.enqueueLifecycleBarrier(() -> CompletableFuture.completedFuture(null)));
                 assertEquals(0, calls.get());
@@ -1095,6 +1138,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                     var recovery = f.runtime.renewOwnerLeaseOnce();
                     f.awaitWrites(2);
                     assertEquals(2, f.writes);
+                    f.awaitCondition("b to resume", () -> appliedB.get() == 1 && !b.paused());
                     assertEquals(1, appliedB.get());
                     assertEquals(0, appliedA.get());
                     assertTrue(a.paused());
@@ -1232,6 +1276,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                 f.at(35, 0);
                 f.publication = new CompletableFuture<>();
                 f.runtime.renewOwnerLeaseOnce();
+                f.awaitPublications(1);
             }
             var pending =
                     queue.enqueue(
@@ -1270,8 +1315,9 @@ final class ZLinkP4RuntimeRecoveryTest {
                 f.outage();
                 f.at(35, 0);
                 var recovery = f.runtime.renewOwnerLeaseOnce();
+                var late = f.awaitSubmitted(key);
                 f.runtime.close();
-                held.complete(f.awaitSubmitted(key));
+                held.complete(late);
                 await(recovery);
                 assertEquals(1, disposed.get());
                 assertEquals(0, applied.get());
@@ -1299,8 +1345,9 @@ final class ZLinkP4RuntimeRecoveryTest {
                 f.outage();
                 f.at(35, 0);
                 var recovery = f.runtime.renewOwnerLeaseOnce();
+                var late = f.awaitSubmitted(key);
                 a.close();
-                held.complete(f.awaitSubmitted(key));
+                held.complete(late);
                 await(recovery);
                 assertEquals(0, applied.get());
                 assertEquals(1, disposed.get());
@@ -1325,6 +1372,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                 f.at(35, 0);
                 f.publication = new CompletableFuture<>();
                 var recovery = f.runtime.renewOwnerLeaseOnce();
+                f.awaitPublications(1);
                 f.at(36, 0);
                 f.unavailable = true;
                 assertFalse(await(f.runtime.renewOwnerLeaseOnce()));
@@ -1522,6 +1570,8 @@ final class ZLinkP4RuntimeRecoveryTest {
                 f.outage();
                 f.at(35, 0);
                 var recovery = f.runtime.renewOwnerLeaseOnce();
+                var late = f.awaitSubmitted(key);
+                f.awaitCondition("b to stay unpaused", () -> !b.paused());
                 assertTrue(a.paused());
                 assertFalse(b.paused());
                 f.at(40, 0);
@@ -1530,6 +1580,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                             && task.getDelay(TimeUnit.NANOSECONDS)
                                     > Duration.ofSeconds(5).toNanos()) task.run();
                 }
+                f.awaitCondition("a to be discarded", () -> disposedA.get() == 1);
                 assertEquals(1, disposedA.get());
                 assertEquals(0, disposedB.get());
                 int reads = f.clockReads;
@@ -1538,7 +1589,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                         reads,
                         f.clockReads,
                         "a discarded peer cannot add a clock read to the recovered owner");
-                held.complete(f.awaitSubmitted(key));
+                held.complete(late);
                 await(recovery);
                 f.at(41, 0);
                 await(f.runtime.renewOwnerLeaseOnce());
