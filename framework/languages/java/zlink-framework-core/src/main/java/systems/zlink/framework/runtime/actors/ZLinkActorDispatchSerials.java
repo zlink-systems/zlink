@@ -204,12 +204,7 @@ final class ZLinkActorDispatchSerials {
         if (turn.incarnation() instanceof ZLinkActorRuntime.DefaultActorContext context) {
             turn.activation()
                     .relocationLane()
-                    .executionPolicy(
-                            application -> {
-                                if (turn.target() instanceof ZLinkSpotSerialExecutor spot)
-                                    spot.requireExecution(application);
-                                if (context.execution != null) context.execution.check(application);
-                            });
+                    .executionPolicy(new IncarnationExecution(turn, context));
         }
         CompletionStage<Void> barrier = lifecycleBarriers.get(turn.actorId());
         if (barrier == null
@@ -231,6 +226,25 @@ final class ZLinkActorDispatchSerials {
                             () -> ZLinkSerialExecutionQueue.yieldCurrent(lifecycle), null);
         }
         return turn;
+    }
+
+    private record IncarnationExecution(
+            QueuedTurn turn, ZLinkActorRuntime.DefaultActorContext context)
+            implements ZLinkSerialExecutionQueue.ExecutionPolicy,
+                    systems.zlink.framework.runtime.internal.execution.ZLinkExecutionAvailability {
+        public void check(boolean application) {
+            if (turn.target() instanceof ZLinkSpotSerialExecutor spot)
+                spot.requireExecution(application);
+            if (context.execution != null) context.execution.check(application);
+        }
+
+        public boolean paused() {
+            return context.execution != null && context.execution.paused();
+        }
+
+        public void onResume(Runnable resume) {
+            if (context.execution != null) context.execution.onResume(resume);
+        }
     }
 
     private void retainLifecycleBarrierOnRegistry(

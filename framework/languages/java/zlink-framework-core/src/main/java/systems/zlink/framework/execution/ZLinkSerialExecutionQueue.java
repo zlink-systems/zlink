@@ -873,6 +873,10 @@ public final class ZLinkSerialExecutionQueue {
 
     public void executionPolicy(ExecutionPolicy policy) {
         executionPolicy = policy;
+        if (policy
+                instanceof
+                systems.zlink.framework.runtime.internal.execution.ZLinkExecutionAvailability
+                        availability) availability.onResume(this::resumePending);
     }
 
     public void requireExecution(boolean application) {
@@ -1821,6 +1825,12 @@ public final class ZLinkSerialExecutionQueue {
 
     private boolean applicationStartAllowed(Entry candidate) {
         ZLinkSerialExecutionQueue owner = timerOwner == null ? this : timerOwner;
+        if (owner.executionPolicy
+                        instanceof
+                        systems.zlink.framework.runtime.internal.execution
+                                        .ZLinkExecutionAvailability
+                                availability
+                && availability.paused()) return false;
         if (timerOwner != null && owner.relocation != null) return false;
         Entry lifecycle = suspendedLifecycle == null ? active : suspendedLifecycle;
         ActivationPreparation<?> preparation =
