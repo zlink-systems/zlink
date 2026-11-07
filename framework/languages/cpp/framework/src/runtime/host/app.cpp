@@ -3374,6 +3374,7 @@ try {
     _apply_zlink_framework ();
     _state->config.load_cli (argc, argv);
     detail::serializer_registry_access_t::freeze (_state->serializers);
+    _state->handlers.bind_codecs (_state->serializers);
     _state->config.model ().set ("host.signal_handlers", "installed");
     g_stop_signal_requested = 0;
     std::signal (SIGINT, handle_process_signal);

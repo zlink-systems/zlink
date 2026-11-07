@@ -3290,7 +3290,7 @@ void verify_raw_owner_node_send_and_liveness (
         for (const auto &record : claim.records) {
             const auto payload = protocol::decode_application_payload (
               protocol::message_bytes (record->parts.back ()), false);
-            assert (payload.packet_name == "SaturatedControl");
+            assert (payload.packet_name () == "SaturatedControl");
             const auto &body = payload.payload_bytes ();
             assert (body.size () == 512u * 1024u);
             assert (

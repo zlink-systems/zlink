@@ -127,6 +127,12 @@ class request_capture_storage_t
             capture->destroy (capture);
         }
     }
+    std::pmr::memory_resource *resource () noexcept { return &_resource; }
+    // One C1 completion travels from registration to its independent delivery turn.
+    // It has explicit destruction ownership and does not consume capture arena space.
+    static constexpr std::size_t completion_storage_size = 512;
+    void *completion_storage () noexcept { return _completion.data (); }
+
     template <bool Callable = true, typename T> auto *store (T value)
     {
         using stored_t = stored_capture_t<T, Callable>;
@@ -144,6 +150,7 @@ class request_capture_storage_t
     }
 
   private:
+    alignas (std::max_align_t) std::array<std::byte, completion_storage_size> _completion;
     alignas (std::max_align_t) std::array<std::byte, 640> _buffer;
     std::pmr::monotonic_buffer_resource _resource{_buffer.data (), _buffer.size ()};
     capture_t *_captures = nullptr;
@@ -228,6 +235,15 @@ template <typename... TArgs> class request_callback_t
     }
 
     bool has_request_storage () const noexcept { return _storage != nullptr; }
+    std::shared_ptr<void> completion_storage () const noexcept
+    {
+        return _storage ? std::shared_ptr<void> (_owner, _storage->completion_storage ())
+                        : std::shared_ptr<void>{};
+    }
+    std::pmr::memory_resource *resource () const noexcept
+    {
+        return _storage ? _storage->resource () : std::pmr::get_default_resource ();
+    }
 
     template <typename TOwner, typename TCallback>
     static request_callback_t from_storage (const std::shared_ptr<TOwner> &owner,

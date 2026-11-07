@@ -224,6 +224,11 @@ void serializer_registry_t::set_resolved_serializer_cache_capacity_for_tests (
     _state->resolved_serializer_cache_capacity.store (capacity, std::memory_order_release);
 }
 
+bool detail::serializer_registry_access_t::frozen (const serializer_registry_t &registry) noexcept
+{
+    return registry._state->frozen.load (std::memory_order_acquire);
+}
+
 void serializer_registry_t::freeze () noexcept
 {
     _state->frozen.store (true, std::memory_order_release);

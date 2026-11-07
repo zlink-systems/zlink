@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 
 #include "runtime/channels/route_handler_invoker.hpp"
 #include "runtime/channels/route_internal_packet_dispatcher.hpp"
@@ -27,7 +28,7 @@ class route_packet_dispatcher_t
       serializer_registry_t &serializers,
       const route_handler_registry_t &handlers,
       const route_internal_packet_dispatcher_t &internal_packets,
-      dispatch_options_t dispatch_options = {},
+      retained_dispatch_options_t dispatch_options = {},
       const handler_registry_t *filters = nullptr,
       handler_dispatch_kind_t send_dispatch_kind = handler_dispatch_kind_t::node_direct_send,
       handler_dispatch_kind_t request_dispatch_kind = handler_dispatch_kind_t::node_direct_request,
@@ -64,7 +65,7 @@ class route_packet_dispatcher_t
     const handler_registry_t *_filters = nullptr;
     const route_internal_packet_dispatcher_t *_internal_packets = nullptr;
     route_handler_invoker_t _invoker;
-    dispatch_options_t _dispatch_options;
+    retained_dispatch_options_t _dispatch_options;
     handler_dispatch_kind_t _send_dispatch_kind = handler_dispatch_kind_t::node_direct_send;
     handler_dispatch_kind_t _request_dispatch_kind = handler_dispatch_kind_t::node_direct_request;
     std::function<void ()> _before_application_handler;

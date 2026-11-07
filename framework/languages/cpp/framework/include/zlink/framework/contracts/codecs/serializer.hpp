@@ -307,7 +307,26 @@ class serializer_registry_t
             return *std::static_pointer_cast<const serializer_t<T>> (cached);
         }
 
-        serializer_t<T> selected = [&] {
+        auto selected = make_serializer<T> ();
+        auto candidate = std::make_shared<const serializer_t<T>> (std::move (selected));
+        const auto resolved = cache_serializer (type, candidate);
+        return *std::static_pointer_cast<const serializer_t<T>> (resolved);
+    }
+
+    encoded_payload_t serialize (std::type_index type, const void *value) const;
+    void deserialize (std::type_index type, const encoded_payload_t &payload, void *out) const;
+    bool contains (std::type_index type) const;
+    std::string content_type (std::type_index type) const;
+
+  private:
+    friend struct detail::serializer_registry_access_t;
+    friend struct detail::serializer_registry_test_access_t;
+    friend class codec_registration_context_t;
+
+    template <typename T> serializer_t<T> make_serializer () const
+    {
+        const auto type = std::type_index (typeid (T));
+        return [&] {
             auto registered = erased_serializer (type);
             if (!registered) {
                 if constexpr (requires { detail::service_packet_codec_t<T>::make_serializer (); }) {
@@ -362,20 +381,7 @@ class serializer_registry_t
               },
               std::move (registered->content_type));
         }();
-        auto candidate = std::make_shared<const serializer_t<T>> (std::move (selected));
-        const auto resolved = cache_serializer (type, candidate);
-        return *std::static_pointer_cast<const serializer_t<T>> (resolved);
     }
-
-    encoded_payload_t serialize (std::type_index type, const void *value) const;
-    void deserialize (std::type_index type, const encoded_payload_t &payload, void *out) const;
-    bool contains (std::type_index type) const;
-    std::string content_type (std::type_index type) const;
-
-  private:
-    friend struct detail::serializer_registry_access_t;
-    friend struct detail::serializer_registry_test_access_t;
-    friend class codec_registration_context_t;
 
     explicit serializer_registry_t (std::shared_ptr<detail::serializer_registry_state_t> state) :
         _state (std::move (state))
@@ -436,6 +442,53 @@ struct serializer_registry_access_t
     }
 
     static void freeze (serializer_registry_t &registry) noexcept { registry.freeze (); }
+    static bool frozen (const serializer_registry_t &registry) noexcept;
+    template <typename T> static serializer_t<T> bind (const serializer_registry_t &registry)
+    {
+        return registry.make_serializer<T> ();
+    }
+};
+
+template <typename TPayload>
+TPayload deserialize_typed_payload (const serializer_t<TPayload> &serializer,
+                                    const zlink::message_t &message,
+                                    std::string_view content_type)
+{
+    if (!content_type.empty () && content_type != serializer.content_type ())
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     "inbound content type does not match the typed handler codec");
+    return serializer.deserialize (encoded_payload_from_raw (message));
+}
+
+// A handler's immutable construction plan retains descriptors from its registry.
+// Standalone invocations before host startup retain the ordinary registry path.
+template <typename TRequest, typename TReply = void> struct handler_codec_plan_t
+{
+    std::optional<serializer_t<TRequest>> request;
+    using reply_t =
+      std::conditional_t<std::is_void_v<TReply>, std::monostate, serializer_t<TReply>>;
+    std::optional<reply_t> reply;
+    void bind (serializer_registry_t &serializers)
+    {
+        if (!serializer_registry_access_t::frozen (serializers))
+            return;
+        request = serializer_registry_access_t::bind<TRequest> (serializers);
+        if constexpr (!std::is_void_v<TReply>)
+            reply = serializer_registry_access_t::bind<TReply> (serializers);
+    }
+    TRequest deserialize (serializer_registry_t &serializers,
+                          const zlink::message_t &message,
+                          std::string_view wire_type) const
+    {
+        return request
+                 ? deserialize_typed_payload (*request, message, wire_type)
+                 : deserialize_typed_payload (serializers.get<TRequest> (), message, wire_type);
+    }
+    template <typename TValue>
+    encoded_payload_t serialize (serializer_registry_t &serializers, const TValue &value) const
+    {
+        return reply ? reply->serialize (value) : serializers.get<TValue> ().serialize (value);
+    }
 };
 
 template <typename TPayload>
@@ -443,12 +496,7 @@ TPayload deserialize_typed_payload (serializer_registry_t &serializers,
                                     const zlink::message_t &message,
                                     std::string_view content_type)
 {
-    const auto serializer = serializers.get<TPayload> ();
-    if (!content_type.empty () && content_type != serializer.content_type ()) {
-        throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                     "inbound content type does not match the typed handler codec");
-    }
-    return serializer.deserialize (encoded_payload_from_raw (message));
+    return deserialize_typed_payload (serializers.get<TPayload> (), message, content_type);
 }
 
 } // namespace detail
