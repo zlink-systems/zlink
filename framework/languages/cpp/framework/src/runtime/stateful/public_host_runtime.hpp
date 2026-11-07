@@ -8,6 +8,7 @@
 #include "runtime/dispatch/receive_batch_budget.hpp"
 #include "runtime/dispatch/blocking_task.hpp"
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/execution/serial_execution_queue.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/stateful/maintenance_runtime.hpp"
@@ -672,6 +673,11 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<bool> send_message_follow (const std::vector<std::uint8_t> &target_routing_id,
                                       const protocol::message_follow_notice_t &notice);
     stateful::stateful_object_runtime_t &objects () noexcept;
+    void configure_location_execution (
+      std::function<std::chrono::steady_clock::time_point ()> clock,
+      std::function<task_t<runtime::serial_execution_queue_t::ready_confirmation_t> (
+        stateful::object_ref_t)> observer);
+    task_t<std::function<void ()>> prepare_store_ready (stateful::object_ref_t object);
     task_t<stateful::stateful_error_t>
     destroy_application_actor_async (std::string actor_id, std::uint64_t object_generation);
     stateful::stream_session_registry_t &sessions () noexcept;
@@ -1453,6 +1459,10 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     std::unique_ptr<completion_owner_t> _completion_owner;
     bool _started = false;
     bool _closing = false;
+    std::function<std::chrono::steady_clock::time_point ()> _location_execution_clock;
+    std::function<task_t<runtime::serial_execution_queue_t::ready_confirmation_t> (
+      stateful::object_ref_t)>
+      _store_ready_observer;
 };
 
 zlink::submit_result_t reply (const reply_token_t &token,

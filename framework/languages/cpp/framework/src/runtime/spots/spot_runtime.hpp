@@ -559,10 +559,12 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
     spot_serial_executor_t (std::shared_ptr<runtime::offload_executor_t> worker_executor,
                             runtime::state_lane_t &state_lane,
                             runtime::serial_lane_policy_t spot_policy,
-                            queue_ptr_t spot_queue = {}) :
+                            queue_ptr_t spot_queue = {},
+                            queue_t::execution_admission_t execution_admission = {}) :
         _worker_executor (std::move (worker_executor)),
         _state_lane (&state_lane),
-        _spot_policy (std::move (spot_policy))
+        _spot_policy (std::move (spot_policy)),
+        _execution_admission (std::move (execution_admission))
     {
         _spot_queue = std::move (spot_queue);
         if (!_spot_queue && _worker_executor) {
@@ -570,6 +572,8 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
                                                      runtime::serial_execution_queue_options_t{},
                                                      queue_t::error_handler_t{}, _spot_policy);
         }
+        if (_spot_queue && _execution_admission)
+            _spot_queue->set_execution_policy (_execution_admission);
     }
 
     struct preparation_t
@@ -945,16 +949,21 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
                && queue->try_post_async (std::move (name), std::move (work), std::move (options));
     }
 
-    void close ()
+    void close (std::vector<task_t<void>> *completions = nullptr)
     {
         std::vector<queue_ptr_t> queues;
         if (!_state_lane || _state_lane->is_on_lane ())
             queues = close_on_lane ();
         else
             queues = _state_lane->run ([this] { return close_on_lane (); }).get ();
-        for (const auto &queue : queues)
-            if (queue)
+        for (const auto &queue : queues) {
+            if (!queue)
+                continue;
+            if (completions)
+                completions->push_back (queue->cancel_pending_async ());
+            else
                 queue->cancel_pending ();
+        }
     }
 
   private:
@@ -1006,6 +1015,8 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
               std::make_shared<actor_executor_t> (_worker_executor, queue_ptr_t{}, _spot_queue);
             executor->queue ()->set_application_start_policy (
               preparation_policy (std::atomic_load (&_preparation)));
+            if (_execution_admission)
+                executor->queue ()->set_execution_policy (_execution_admission);
             publish_actor_executor_snapshot ();
         }
         return executor;
@@ -1040,6 +1051,8 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
         _actor_executors.insert_or_assign (
           actor_id,
           std::make_shared<actor_executor_t> (_worker_executor, std::move (queue), _spot_queue));
+        if (_execution_admission)
+            _actor_executors.at (actor_id)->queue ()->set_execution_policy (_execution_admission);
         _actor_executors.at (actor_id)->queue ()->set_application_start_policy (
           preparation_policy (std::atomic_load (&_preparation)));
         publish_actor_executor_snapshot ();
@@ -1055,6 +1068,9 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
               queue_t::error_handler_t{}, runtime::serial_lane_policy_t::actor_delivery ());
             queue->set_application_start_policy (
               preparation_policy (std::atomic_load (&_preparation)));
+            if (_execution_admission)
+                queue->set_execution_policy (
+                  [spot = _spot_queue] { return spot->execution_allowed (); });
         }
         return queue;
     }
@@ -1111,6 +1127,7 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
     runtime::state_lane_t *_state_lane = nullptr;
     runtime::serial_lane_policy_t _spot_policy;
     queue_ptr_t _spot_queue;
+    queue_t::execution_admission_t _execution_admission;
     std::shared_ptr<preparation_t> _preparation;
     actor_executor_map_t _actor_executors;
     std::map<std::string, queue_ptr_t> _timer_queues;
@@ -1169,6 +1186,8 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
         auto lifetime_guard = shared_from_this ();
         state_sync ([this, close_reason] {
             admission_sealed = true;
+            if (serial_queue)
+                serial_queue->invalidate_execution_ready ();
             closed = close_reason;
         });
 
@@ -1448,7 +1467,11 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
                               ? runtime::serial_lane_policy_t::spot_wide ()
                               : runtime::serial_lane_policy_t::per_actor_spot ();
         spot_serial_executor = std::make_shared<spot_serial_executor_t> (
-          worker_executor, state_lane, policy, serial_queue);
+          worker_executor, state_lane, policy, serial_queue,
+          owner && owner->location_lifecycle
+            ? owner->location_lifecycle->execution_runtime ().execution_policy ()
+            : runtime::serial_execution_queue_t::execution_admission_t{});
+        serial_queue = spot_serial_executor->spot_queue ();
         return spot_serial_executor;
     }
 
@@ -1609,6 +1632,8 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
         }
         if (next_close_reservation == 0)
             next_close_reservation = 1;
+        if (serial_queue)
+            serial_queue->invalidate_execution_ready ();
         close_reservation = token;
         close_reservation_kind = kind;
         const auto found = owner.spot_contexts_by_id.find (std::string (spot_id));
@@ -1966,6 +1991,11 @@ class spot_node_runtime_t
     void record_core_actor_transfer_activation (std::string actor_id,
                                                 std::uint64_t membership_epoch);
     void bind_location_lifecycle (runtime::location_lifecycle_t &lifecycle);
+    void request_location_execution_discard (
+      runtime::serial_execution_queue_t::execution_admission_t allowed);
+    task_t<result_t<bool>> discard_local_actor_async (actor_ref_t actor);
+    task_t<runtime::serial_execution_queue_t::ready_confirmation_t>
+    prepare_store_ready (runtime::stateful::object_ref_t object);
     void bind_spot_location_resolver (std::shared_ptr<runtime::spot_address_resolver_t> resolver);
     void bind_service_provider (service_provider_t &services);
     void bind_drain_flag (std::shared_ptr<std::atomic_bool> flag);
@@ -2402,6 +2432,9 @@ class spot_node_runtime_t
       std::shared_ptr<spot_node_builder_state_t> state,
       std::optional<std::chrono::steady_clock::time_point> next);
     friend struct spot_node_runtime_test_access_t;
+    std::shared_ptr<runtime::serial_execution_queue_t>
+    execution_queue_on_lane (const runtime::stateful::object_ref_t &object);
+    result_t<bool> validate_local_actor_release_on_lane (const actor_ref_t &actor_ref) const;
     result_t<bool> release_local_actor_on_lane (const actor_ref_t &actor_ref);
     static task_t<void>
     retire_relocation_source_in (spot_node_runtime_t self,
@@ -2598,5 +2631,9 @@ class spot_node_runtime_t
 
     std::shared_ptr<spot_node_builder_state_t> _state;
 };
+
+task_t<result_t<void>> cleanup_local_actor_resources (std::shared_ptr<service::mesh_node_t> native,
+                                                      std::optional<service_provider_t> services,
+                                                      actor_ref_t actor);
 
 } // namespace zlink::framework::detail
