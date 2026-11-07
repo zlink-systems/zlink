@@ -201,6 +201,16 @@ final class ZLinkActorDispatchSerials {
     }
 
     private QueuedTurn initializeOnRegistry(QueuedTurn turn) {
+        if (turn.incarnation() instanceof ZLinkActorRuntime.DefaultActorContext context) {
+            turn.activation()
+                    .relocationLane()
+                    .executionPolicy(
+                            application -> {
+                                if (turn.target() instanceof ZLinkSpotSerialExecutor spot)
+                                    spot.requireExecution(application);
+                                if (context.execution != null) context.execution.check(application);
+                            });
+        }
         CompletionStage<Void> barrier = lifecycleBarriers.get(turn.actorId());
         if (barrier == null
                 && turn.incarnation() instanceof ZLinkActorRuntime.DefaultActorContext context) {

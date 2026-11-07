@@ -427,6 +427,8 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
 }
 
 final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
+    final systems.zlink.framework.runtime.locations.ZLinkLocationRuntime.Execution execution;
+
     private final ZLinkSpotContextHost host;
     private final ZLinkWorkerPool workerPool;
     private final ZLinkSpotHandlerLoader handlerLoader;
@@ -575,6 +577,16 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                                 enqueueTimerDispatch(
                                         timerName,
                                         () -> host.runWithOutbound(outbound, operation)));
+        execution = instanceSpot ? null : host.execution(this);
+        serials.spotQueue.executionPolicy(execution);
+    }
+
+    ZLinkSpot<?> spot() {
+        return spot;
+    }
+
+    boolean steady() {
+        return !closeCommitted.getAsBoolean() && serials.spotQueue.steady();
     }
 
     void setSpot(ZLinkSpot<?> spot) {
@@ -691,6 +703,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     }
 
     CompletionStage<Void> closeResourcesAsync() {
+        if (execution != null) execution.close();
         return closeTimerRegistrationsAsync()
                 .whenComplete(
                         (ignored, failure) -> {
@@ -801,7 +814,6 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
     @Override
     public CompletionStage<Void> enqueueDispatch(
             long payloadBytes, Supplier<CompletionStage<Void>> operation) {
-        host.ensureOwnerAdmissionOpen();
         return serials.executeSpot(
                 payloadBytes,
                 () -> {

@@ -43,6 +43,12 @@ public final class ZLinkStoreLocationResolvers
             new ZLinkServiceAuthorityPayloadCodec();
     private final ZLinkActorAuthorityPayloadCodec actorAuthorityCodec =
             new ZLinkActorAuthorityPayloadCodec();
+    private Runnable routeReadAdmission = () -> {};
+
+    public void routeReadAdmission(Runnable admission) {
+        routeReadAdmission = Objects.requireNonNull(admission);
+    }
+
     private final AtomicBoolean authorityStoreFailure = new AtomicBoolean();
 
     public ZLinkStoreLocationResolvers(
@@ -62,6 +68,7 @@ public final class ZLinkStoreLocationResolvers
         if (cached != null) {
             return CompletableFuture.completedFuture(cached);
         }
+        routeReadAdmission.run();
         return observeAuthorityRead(
                         stores.unifiedStore()
                                 .read(ZLinkAuthorityKeyCodec.spot(spotId), () -> false))
@@ -78,6 +85,7 @@ public final class ZLinkStoreLocationResolvers
 
     /** Reads current authority directly; a failed read preserves the positive route cache. */
     public CompletionStage<ActorRoute> readActor(String actorId) {
+        routeReadAdmission.run();
         return observeAuthorityRead(
                         stores.unifiedStore()
                                 .read(ZLinkAuthorityKeyCodec.actor(actorId), () -> false))

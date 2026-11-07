@@ -305,7 +305,7 @@ final class ZLinkActorRelocationStagingTest {
         return prepared;
     }
 
-    private static ZLinkActorRuntime runtime(AtomicInteger destroys) {
+    static ZLinkActorRuntime runtime(AtomicInteger destroys) {
         return runtime(destroys, new AtomicInteger());
     }
 

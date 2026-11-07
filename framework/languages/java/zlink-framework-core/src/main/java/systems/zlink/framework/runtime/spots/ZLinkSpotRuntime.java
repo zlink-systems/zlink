@@ -1280,6 +1280,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     @Override
     public CompletionStage<Optional<SpotRef>> find(String spotId) {
         rejectAfterRelocationReady("User Spot find");
+        ensureOwnerAdmissionOpen();
         Objects.requireNonNull(spotId, "spotId");
         ZLinkLocationRepository store = requireUserSpotAuthorityStore();
         return store.read(
@@ -2874,6 +2875,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     public void attachActorRuntime(ZLinkActorRuntime actorRuntime) {
         actorRuntime.setActorDispatchTargetResolver(this::actorDispatchTargetFor);
+        actorRuntime.setActorTimerDisposer(this::closeActorTimers);
         actorRuntime.setDirectJoinRelocationStores(
                 frameworkRegistration.locations().storeInstance() == null
                         ? null
@@ -4009,6 +4011,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                         || envelope.sourceNodeGeneration()
                                                                 != message.sourceNodeGeneration())
                                                     return CompletableFuture.completedFuture(null);
+                                                ensureOwnerAdmissionOpen();
                                                 return systems.zlink.framework.runtime.locations
                                                         .ZLinkStatefulAuthorityRouteRuntime
                                                         .completeActivationRecovery(
@@ -4078,7 +4081,13 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         ignored ->
                                 recoveryPending
                                         ? CompletableFuture.completedFuture(null)
-                                        : activation.context.finishActivationPreparation())
+                                        : activation
+                                                .context
+                                                .confirmReady()
+                                                .thenCompose(
+                                                        ready ->
+                                                                activation.context
+                                                                        .finishActivationPreparation()))
                 .thenCompose(
                         ignored ->
                                 activation
@@ -4322,6 +4331,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                         .requestEncodedSize(),
                                                                                 1,
                                                                                 0)));
+                                                ensureOwnerAdmissionOpen();
                                                 return store.commit(
                                                                 reservation, ready, deadlineUnixMs)
                                                         .thenCompose(
@@ -5592,7 +5602,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         });
     }
 
-    void closeActorTimersAfterRelocation(String actorId) {
+    void closeActorTimers(String actorId) {
         actorTimerContext(actorId, false)
                 .ifPresent(
                         context -> {
@@ -5786,7 +5796,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     <T> CompletionStage<T> admitApplicationJob(Supplier<CompletionStage<T>> operation) {
         Objects.requireNonNull(operation, "operation");
-        ensureOwnerAdmissionOpen();
         if (systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext.current()
                 .isPresent()) {
             return operation.get();
@@ -5821,11 +5830,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     <T> CompletionStage<T> admitNewApplicationJob(Supplier<CompletionStage<T>> operation) {
         Objects.requireNonNull(operation, "operation");
-        try {
-            ensureOwnerAdmissionOpen();
-        } catch (ZLinkFrameworkException rejected) {
-            return CompletableFuture.failedFuture(rejected);
-        }
         var acquisition =
                 applicationJobQueue
                         .acquire(ZLinkApplicationJobQueue.Origin.LOCAL)
@@ -5858,11 +5862,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ZLinkApplicationJobQueue.Origin origin,
             Supplier<CompletionStage<T>> operation) {
         Objects.requireNonNull(operation, "operation");
-        try {
-            ensureOwnerAdmissionOpen();
-        } catch (ZLinkFrameworkException rejected) {
-            return CompletableFuture.failedFuture(rejected);
-        }
         return applicationJobQueue.acquireAndPublish(
                 origin,
                 task ->
@@ -5975,6 +5974,35 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     @Override
+    systems.zlink.framework.runtime.locations.ZLinkLocationRuntime.Execution execution(
+            DefaultSpotContext context) {
+        if (userSpotLocationRuntime == null) return null;
+        return userSpotLocationRuntime.execution(
+                context::steady,
+                () -> {
+                    actorAdmissions.discardLocalMembers(context.spot());
+                    context.serials.discardApplications();
+                    spotLifecycle.discardExecution(context);
+                });
+    }
+
+    @Override
+    systems.zlink.framework.runtime.locations.ZLinkLocationRuntime.Execution execution(
+            DefaultInstanceSpotContext context) {
+        if (userSpotLocationRuntime == null) return null;
+        return userSpotLocationRuntime.execution(
+                context.ownerQueue()::steady,
+                () -> {
+                    context.ownerQueue().discardApplications();
+                    ZLinkInstanceSpotActivation activation =
+                            instanceSpotActivations.get(context.spotId());
+                    if (activation != null && activation.context == context)
+                        discardInstanceSpotActivation(activation);
+                    else context.closeResourcesAsync();
+                });
+    }
+
+    @Override
     void ensureOwnerAdmissionOpen() {
         if (userSpotLocationRuntime != null) {
             userSpotLocationRuntime.ensureOwnerAdmissionOpen();
@@ -6014,7 +6042,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         dispatch.enqueue(
                                 timerName,
                                 () -> {
-                                    ensureOwnerAdmissionOpen();
+                                    if (spotLifecycle.spotActivationFor(spotId) == null
+                                            && !instanceSpotActivations.containsKey(spotId))
+                                        ensureOwnerAdmissionOpen();
                                     //  Spec 27 §4: a timer callback starts a new flow at every
                                     //  diagnostics level except Off.
                                     if (!flowCaptureEnabled()) {
@@ -6945,6 +6975,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                     return CompletableFuture.completedFuture(false);
                                 }
                             }
+                            if (activation.context.execution != null)
+                                activation.context.execution.discard();
                             return discardInstanceSpotActivation(activation)
                                     .thenApply(ignored -> false);
                         });

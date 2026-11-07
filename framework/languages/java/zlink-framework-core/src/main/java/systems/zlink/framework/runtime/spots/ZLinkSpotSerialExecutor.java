@@ -85,6 +85,10 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
                 sharedSpotGate ? new ZLinkSerialExecutionQueue.SharedSpotGate(spotQueue) : null;
     }
 
+    public void requireExecution(boolean application) {
+        spotQueue.requireExecution(application);
+    }
+
     CompletionStage<Void> executeSpot(
             long payloadBytes, Supplier<CompletionStage<Void>> operation) {
         return spotQueue.enqueueWithPayloadBytes(payloadBytes, operation, null);
@@ -606,6 +610,22 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
                         committed,
                         ignored -> false);
         return spotQueue.isCurrent() ? ZLinkSerialExecutionQueue.yieldCurrent(close) : close;
+    }
+
+    CompletionStage<Void> discardApplications() {
+        return spotQueue
+                .discardApplications()
+                .thenCompose(
+                        ignored -> stateLane.runNowOrQueue(() -> List.copyOf(timerQueues.values())))
+                .thenCompose(
+                        timers ->
+                                CompletableFuture.allOf(
+                                        timers.stream()
+                                                .map(
+                                                        timer ->
+                                                                timer.discardApplications()
+                                                                        .toCompletableFuture())
+                                                .toArray(CompletableFuture[]::new)));
     }
 
     CompletionStage<Void> commitClose() {

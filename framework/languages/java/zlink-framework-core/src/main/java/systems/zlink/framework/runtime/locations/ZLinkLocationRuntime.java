@@ -68,17 +68,20 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     private ScheduledFuture<?> heartbeatTask;
     private boolean storeOutageRetention;
     private Long lastSuccessfulLeaseRequestStartedNanos;
-    private StoreOutage outage;
+    private volatile StoreOutage outage;
+    // Lane-published fast path; deadlines remain owned by the lease/outage policy below.
+    private volatile boolean executionOpen;
+    private final java.util.Set<Execution> executions = new java.util.HashSet<>();
     private ScheduledFuture<?> outageDeadlineTask;
     private StartupLifecycle startupLifecycle;
     private RoutingId nodeRid;
     private boolean started;
-    private long ownerAdmissionDeadlineNanos;
+    private volatile long ownerAdmissionDeadlineNanos;
     // Revocation used to erase the deadline with a zero sentinel. Keep the time for outage capture.
-    private boolean ownerAdmissionRevoked = true;
+    private volatile boolean ownerAdmissionRevoked = true;
     private String lastError;
     private Instant ownerLeaseRenewedAt;
-    private ZLinkLocationOwnerToken ownerToken;
+    private volatile ZLinkLocationOwnerToken ownerToken;
     private ZLinkLocationOwnerToken recoveryPreviousOwnerToken;
     private long ownerLeaseOperationStartedNanos;
     private Function<Boolean, CompletionStage<Void>> ownerLeaseRecoveryListener;
@@ -313,7 +316,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                 });
     }
 
-    /** Lease policy observation only; admission and execution do not consume outage state yet. */
+    /** Lease and outage snapshot for diagnostics; execution consumes the same episode. */
     public OwnerLeaseSnapshot ownerLeaseSnapshot() {
         return inStateLane(
                 () ->
@@ -332,11 +335,77 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
             Long outageCutoffNanos,
             boolean outageDiscarded) {}
 
+    /** Incarnation execution policy; only this owner interprets the outage and lease deadlines. */
+    public final class Execution
+            implements AutoCloseable,
+                    systems.zlink.framework.execution.ZLinkSerialExecutionQueue.ExecutionPolicy {
+        private final java.util.function.BooleanSupplier steady;
+        private final java.util.concurrent.atomic.AtomicReference<Runnable> cleanup;
+        private volatile StoreOutage retained;
+
+        private Execution(java.util.function.BooleanSupplier steady, Runnable cleanup) {
+            this.steady = steady;
+            this.cleanup = new java.util.concurrent.atomic.AtomicReference<>(cleanup);
+        }
+
+        public CompletionStage<Void> ready() {
+            return stateLane.runAsync(
+                    () -> {
+                        if (cleanup.get() != null) executions.add(this);
+                        return null;
+                    });
+        }
+
+        @Override
+        public void check(boolean application) {
+            if (executionOpen && cleanup.get() != null) return;
+            StoreOutage episode = outage;
+            if (cleanup.get() == null
+                    || (episode != null
+                            && retained == episode
+                            && (episode.discarded || cutoffReached(episode)))) {
+                discard();
+                throw new OwnerLeaseAdmissionClosedException();
+            }
+            if (!application || isOwnerAdmissionOpenCore()) return;
+            if (episode != null && retained == episode && storeOutageRetention) return;
+            throw new OwnerLeaseAdmissionClosedException();
+        }
+
+        /** Definitive stale/fence results and the outage latch share this terminal path. */
+        public void discard() {
+            discardCore();
+        }
+
+        private void discardCore() {
+            Runnable action = cleanup.getAndSet(null);
+            if (action == null) return;
+            close();
+            action.run();
+        }
+
+        @Override
+        public void close() {
+            retained = null;
+            if (ZLinkStateLane.current() == stateLane) executions.remove(this);
+            else
+                stateLane.runAsync(
+                        () -> {
+                            executions.remove(this);
+                            return null;
+                        });
+        }
+    }
+
+    public Execution execution(java.util.function.BooleanSupplier steady, Runnable cleanup) {
+        return new Execution(Objects.requireNonNull(steady), Objects.requireNonNull(cleanup));
+    }
+
     private static final class StoreOutage {
         final ZLinkLocationOwnerToken token;
         final long observedAtNanos;
         final long cutoffNanos;
-        boolean discarded;
+        volatile boolean discarded;
 
         StoreOutage(ZLinkLocationOwnerToken token, long observedAtNanos, long cutoffNanos) {
             this.token = token;
@@ -347,6 +416,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
 
     private void observeStoreCommunicationFailureCore(Throwable failure) {
         if (unwrap(failure) instanceof CancellationException) return;
+        executionOpen = false;
         if (!started || outage != null || lastSuccessfulLeaseRequestStartedNanos == null) return;
         long cutoff =
                 storeOutageRetention
@@ -357,6 +427,9 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                         .toNanos())
                         : ownerAdmissionDeadlineNanos;
         StoreOutage episode = new StoreOutage(ownerToken, monotonicNow.getAsLong(), cutoff);
+        for (Execution execution : java.util.List.copyOf(executions)) {
+            if (execution.steady.getAsBoolean()) execution.retained = episode;
+        }
         outage = episode;
         if (latchOutageCore(episode)) return;
         outageDeadlineTask =
@@ -371,8 +444,17 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                         TimeUnit.NANOSECONDS);
     }
 
+    private boolean cutoffReached(StoreOutage episode) {
+        return monotonicNow.getAsLong() - episode.cutoffNanos >= 0L;
+    }
+
     private boolean latchOutageCore(StoreOutage episode) {
-        if (monotonicNow.getAsLong() - episode.cutoffNanos >= 0L) episode.discarded = true;
+        if (!episode.discarded && cutoffReached(episode)) {
+            episode.discarded = true;
+            for (Execution execution : java.util.List.copyOf(executions)) {
+                if (execution.retained == episode) execution.discardCore();
+            }
+        }
         return episode.discarded;
     }
 
@@ -392,6 +474,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                 || operationStartedNanos - lastSuccessfulLeaseRequestStartedNanos >= 0L) {
             lastSuccessfulLeaseRequestStartedNanos = operationStartedNanos;
         }
+        executionOpen = isOwnerAdmissionOpenCore();
     }
 
     private <T> CompletionStage<T> observeLeaseOperation(Supplier<CompletionStage<T>> operation) {
@@ -472,11 +555,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     }
 
     public void ensureOwnerAdmissionOpen() {
-        inStateLane(
-                () -> {
-                    ensureOwnerAdmissionOpenCore();
-                    return null;
-                });
+        ensureOwnerAdmissionOpenCore();
     }
 
     public String lastError() {
@@ -603,6 +682,8 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                                             if (ownsStartupCore(
                                                                                     state.lifecycle()
                                                                                             .completion())) {
+                                                                                executionOpen =
+                                                                                        false;
                                                                                 ownerToken = null;
                                                                                 ownerAdmissionRevoked =
                                                                                         true;
@@ -733,6 +814,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                     }
                                                     recordRenewalFailureCore(
                                                             "owner lease renewal was stale");
+                                                    executionOpen = false;
                                                     ownerAdmissionRevoked = true;
                                                     return () ->
                                                             claimOwnerLease(lifecycle)
@@ -998,6 +1080,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                                             && started
                                                                             && ownsStartupCore(
                                                                                     lifecycle)) {
+                                                                        executionOpen = false;
                                                                         ownerAdmissionRevoked =
                                                                                 true;
                                                                     }
@@ -1114,6 +1197,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         boolean ownsStartup = ownsStartupCore(completion);
         if (!ownsStartup || !started || completion.isCancelled()) {
             if (ownsStartup) {
+                executionOpen = false;
                 ownerToken = null;
                 ownerAdmissionRevoked = true;
             }
@@ -1174,6 +1258,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                             }
                             started = false;
                             cancel(outageDeadlineTask);
+                            executionOpen = false;
                             ownerToken = null;
                             ownerAdmissionRevoked = true;
                             ScheduledFuture<?> current = heartbeatTask;
@@ -1295,6 +1380,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     }
 
     private void recordFailureCore(String message) {
+        executionOpen = false;
         lastError = message == null || message.isBlank() ? "owner lease operation failed" : message;
     }
 
