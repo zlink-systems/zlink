@@ -152,6 +152,27 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
         if (routeDescriptors.Length == 0 && channelEndpoints.Length == 0)
             return null;
 
+        foreach (
+            var descriptor in routeDescriptors.Where(static descriptor =>
+                descriptor.Kind == ZLinkMessageKind.Request
+            )
+        )
+            descriptor.ReplyHeader = ZLinkEnvelopeCodec.PrepareResponse(
+                descriptor.RouterChannelId,
+                descriptor.ReplyType,
+                registration.Codecs
+            );
+        foreach (
+            var endpoint in channelEndpoints.Where(static endpoint =>
+                endpoint.Kind == ZLinkMessageKind.Request
+            )
+        )
+            endpoint.ReplyHeader = ZLinkEnvelopeCodec.PrepareResponse(
+                endpoint.ExplicitChannelName ?? string.Empty,
+                endpoint.ReplyType,
+                registration.Codecs
+            );
+
         ZLinkScopedHandlerInstanceOwner.Prepare(
             services,
             routeDescriptors
@@ -727,7 +748,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
                     header,
                     reply.Message,
                     reply.MessageType,
-                    cancellationToken
+                    cancellationToken,
+                    descriptor.ReplyHeader
                 )
                 .ConfigureAwait(false);
         }
@@ -841,14 +863,16 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
         ZLinkEnvelopeHeader requestHeader,
         object? reply,
         Type? replyType,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkEnvelopeHeader? prepared = null
     ) =>
         SubmitEnvelopeAsync(
             received,
             ZLinkChannelReplyWriter.CreateReplyHeader(
                 ZLinkMessageKind.Response,
                 requestHeader.ChannelName,
-                requestHeader
+                requestHeader,
+                prepared
             ),
             reply,
             replyType,
