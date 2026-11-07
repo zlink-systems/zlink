@@ -281,13 +281,15 @@ final class ZLinkP4RuntimeRecoveryTest {
         CompletableFuture<Void> publication = CompletableFuture.completedFuture(null);
         final Map<String, CompletableFuture<ZLinkAuthorityWriteResult>> heldWrites =
                 new HashMap<>();
-        final Map<String, ZLinkAuthorityWriteResult> submitted = new HashMap<>();
+        final Map<String, ZLinkAuthorityWriteResult> submitted = new ConcurrentHashMap<>();
         final Map<String, CompletableFuture<Void>> beforeWrites = new HashMap<>();
-        int publications;
-        int reads;
-        int writes;
-        int cleanups;
-        int descriptorReads;
+        // Written by whichever thread runs the store call and read by the test thread, so they are
+        // volatile and only incremented under the fixture monitor, which also wakes awaitWrites.
+        volatile int publications;
+        volatile int reads;
+        volatile int writes;
+        volatile int cleanups;
+        volatile int descriptorReads;
         int clockReads;
         int collected;
         final Set<String> loseWrites = new HashSet<>();
@@ -323,7 +325,7 @@ final class ZLinkP4RuntimeRecoveryTest {
 
                         public CompletionStage<ZLinkAuthorityReadResult> read(
                                 String key, ZLinkStoreCancellation cancellation) {
-                            reads++;
+                            countRead();
                             if (synchronousReadFailure)
                                 throw new IllegalStateException(
                                         "synchronous provider read failure");
@@ -337,7 +339,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                                 ZLinkAuthorityMutation mutation,
                                 ZLinkStoreCancellation cancellation) {
                             assertTrue(publications > 0, "descriptor submission precedes Preserve");
-                            writes++;
+                            countWrite();
                             if (failWrites.remove(key))
                                 return CompletableFuture.failedFuture(
                                         new TimeoutException("write not applied"));
@@ -350,6 +352,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                                     .thenCompose(
                                             result -> {
                                                 submitted.put(key, result);
+                                signal();
                                                 if (afterWrite != null) afterWrite.run();
                                                 if (loseWrites.remove(key))
                                                     return CompletableFuture.failedFuture(
@@ -366,7 +369,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                                 ZLinkAuthoritySnapshot snapshot,
                                 ZLinkLocationOwnerToken owner,
                                 ZLinkStoreCancellation cancellation) {
-                            cleanups++;
+                            countCleanup();
                             if (cleanupError)
                                 return CompletableFuture.failedFuture(
                                         new TimeoutException("cleanup provider unavailable"));
@@ -378,7 +381,7 @@ final class ZLinkP4RuntimeRecoveryTest {
 
                         public CompletionStage<ZLinkLocationPage<ZLinkMeshNodeDescriptor>>
                                 listMeshNodes(String mesh, ZLinkPageRequest page) {
-                            descriptorReads++;
+                            countDescriptorRead();
                             return f.repository.listMeshNodes(mesh, page);
                         }
 
@@ -411,7 +414,7 @@ final class ZLinkP4RuntimeRecoveryTest {
             await(runtime.start(f.node.rid()));
             runtime.setOwnerLeaseRecoveryListener(
                     open -> {
-                        publications++;
+                        countPublication();
                         f.owner = runtime.currentOwnerToken();
                         return runtime.writeDescriptor(
                                         f.node,
@@ -428,6 +431,67 @@ final class ZLinkP4RuntimeRecoveryTest {
                                         })
                                 .thenApply(ignored -> null);
                     });
+        }
+
+        private synchronized void signal() {
+            notifyAll();
+        }
+
+        synchronized void countRead() {
+            reads++;
+            notifyAll();
+        }
+
+        synchronized void countWrite() {
+            writes++;
+            notifyAll();
+        }
+
+        synchronized void countCleanup() {
+            cleanups++;
+            notifyAll();
+        }
+
+        synchronized void countDescriptorRead() {
+            descriptorReads++;
+            notifyAll();
+        }
+
+        synchronized void countPublication() {
+            publications++;
+            notifyAll();
+        }
+
+        /** Waits until the Preserve CAS count reaches {@code expected}; fails after the deadline. */
+        synchronized void awaitWrites(int expected) {
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+            while (writes < expected) {
+                long left = deadline - System.nanoTime();
+                if (left <= 0)
+                    fail("timed out waiting for " + expected + " CAS submissions, saw " + writes);
+                try {
+                    TimeUnit.NANOSECONDS.timedWait(this, left);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    fail("interrupted waiting for " + expected + " CAS submissions");
+                }
+            }
+        }
+
+        /** Waits until the CAS for {@code key} has been applied by the store and returns it. */
+        synchronized ZLinkAuthorityWriteResult awaitSubmitted(String key) {
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+            while (!submitted.containsKey(key)) {
+                long left = deadline - System.nanoTime();
+                if (left <= 0) fail("timed out waiting for the CAS of " + key);
+                try {
+                    TimeUnit.NANOSECONDS.timedWait(this, left);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    fail("interrupted waiting for the CAS of " + key);
+                }
+            }
+            return submitted.get(key);
         }
 
         static ZLinkLocationWriteResult confirmPublication(ZLinkLocationWriteResult result) {
@@ -544,6 +608,7 @@ final class ZLinkP4RuntimeRecoveryTest {
             f.at(35, 0);
             f.publication = new CompletableFuture<>();
             var renewal = f.runtime.renewOwnerLeaseOnce();
+            f.awaitWrites(2);
             assertEquals(2, f.writes);
             assertThrows(IllegalStateException.class, () -> a.check(true));
             assertThrows(IllegalStateException.class, () -> b.check(true));
@@ -551,7 +616,7 @@ final class ZLinkP4RuntimeRecoveryTest {
             f.publication.complete(null);
             b.check(true);
             assertThrows(IllegalStateException.class, () -> a.check(true));
-            f.heldWrites.get(key).complete(f.submitted.get(key));
+            f.heldWrites.get(key).complete(f.awaitSubmitted(key));
             assertTrue(await(renewal));
             a.check(true);
             assertEquals(1, appliedA.get());
@@ -569,6 +634,7 @@ final class ZLinkP4RuntimeRecoveryTest {
             f.at(35, 0);
             f.publication = new CompletableFuture<>();
             var renewal = f.runtime.renewOwnerLeaseOnce();
+            f.awaitWrites(1);
             assertEquals(1, f.writes);
             f.at(40, offset);
             f.publication.complete(null);
@@ -841,7 +907,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                             f.heldWrites.put(key, held);
                             var renewal = f.runtime.renewOwnerLeaseOnce();
                             f.at(40, offset);
-                            held.complete(f.submitted.get(key));
+                            held.complete(f.awaitSubmitted(key));
                             await(renewal);
                         }
                         assertEquals(1, f.writes);
@@ -896,7 +962,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                 assertTrue(member.paused());
                 assertEquals(0, actorApplied.get());
                 assertFalse(dispatched.toCompletableFuture().isDone());
-                held.complete(f.submitted.get(parentKey));
+                held.complete(f.awaitSubmitted(parentKey));
                 await(renewal);
                 await(dispatched);
                 assertFalse(parent.paused());
@@ -987,7 +1053,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                     var held = new CompletableFuture<Void>();
                     f.runtime.setOwnerLeaseRecoveryListener(
                             open -> {
-                                f.publications++;
+                                f.countPublication();
                                 f.f.owner = f.runtime.currentOwnerToken();
                                 var first =
                                         f.runtime.writeDescriptor(
@@ -1027,6 +1093,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                     f.outage();
                     f.at(35, 0);
                     var recovery = f.runtime.renewOwnerLeaseOnce();
+                    f.awaitWrites(2);
                     assertEquals(2, f.writes);
                     assertEquals(1, appliedB.get());
                     assertEquals(0, appliedA.get());
@@ -1204,7 +1271,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                 f.at(35, 0);
                 var recovery = f.runtime.renewOwnerLeaseOnce();
                 f.runtime.close();
-                held.complete(f.submitted.get(key));
+                held.complete(f.awaitSubmitted(key));
                 await(recovery);
                 assertEquals(1, disposed.get());
                 assertEquals(0, applied.get());
@@ -1233,7 +1300,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                 f.at(35, 0);
                 var recovery = f.runtime.renewOwnerLeaseOnce();
                 a.close();
-                held.complete(f.submitted.get(key));
+                held.complete(f.awaitSubmitted(key));
                 await(recovery);
                 assertEquals(0, applied.get());
                 assertEquals(1, disposed.get());
@@ -1356,7 +1423,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                         open -> {
                             if (open) return CompletableFuture.completedFuture(null);
                             int attempt = attempts.incrementAndGet();
-                            f.publications++;
+                            f.countPublication();
                             f.f.owner = f.runtime.currentOwnerToken();
                             return f.runtime
                                     .writeDescriptor(
@@ -1410,6 +1477,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                 f.outage();
                 f.at(35, 0);
                 var first = f.runtime.renewOwnerLeaseOnce();
+                f.awaitWrites(1);
                 assertEquals(1, f.writes);
                 f.at(38, 0);
                 for (var task : List.copyOf(f.scheduler.tasks)) {
@@ -1429,7 +1497,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                 f.at(39, 0);
                 network.complete(null);
                 await(applicationObserved);
-                assertInstanceOf(ZLinkAuthorityStored.class, f.submitted.get(key));
+                assertInstanceOf(ZLinkAuthorityStored.class, f.awaitSubmitted(key));
                 f.at(39, 1);
                 await(f.runtime.renewOwnerLeaseOnce());
                 assertEquals(1, f.writes, "late application is confirmed by exact read only");
@@ -1470,7 +1538,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                         reads,
                         f.clockReads,
                         "a discarded peer cannot add a clock read to the recovered owner");
-                held.complete(f.submitted.get(key));
+                held.complete(f.awaitSubmitted(key));
                 await(recovery);
                 f.at(41, 0);
                 await(f.runtime.renewOwnerLeaseOnce());
