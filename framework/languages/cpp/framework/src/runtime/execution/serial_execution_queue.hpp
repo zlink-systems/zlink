@@ -242,6 +242,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     void close ();
     void cancel_waits () noexcept;
     void cancel_pending () noexcept;
+    task_t<void> cancel_pending_async ();
 
     std::size_t pending_count () const;
     std::size_t pending_count (serial_work_lane_t lane) const;
@@ -255,6 +256,17 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     bool allows_yield () const noexcept { return _lane_policy.allows_turn_yield (); }
     using application_start_policy_t = std::function<bool (const std::shared_ptr<const void> &)>;
     void set_application_start_policy (application_start_policy_t policy);
+    // Installs the Location owner's nonblocking, nonthrowing execution decision.
+    // Readiness and accepted-turn completion remain owned by the existing gate.
+    void set_execution_policy (std::function<bool ()> policy);
+    using execution_admission_t = std::function<bool (const serial_execution_queue_t &)>;
+    void set_execution_policy (execution_admission_t policy);
+    using ready_confirmation_t = std::function<void (std::chrono::steady_clock::time_point)>;
+    ready_confirmation_t ready_confirmation () const;
+    void confirm_execution_ready (std::chrono::steady_clock::time_point at);
+    void invalidate_execution_ready ();
+    std::optional<std::chrono::steady_clock::time_point> execution_ready_at () const;
+    bool execution_allowed () const;
     // Installs the SpotWide owner before an Actor mailbox accepts work.
     void attach_spot_gate (std::shared_ptr<serial_execution_queue_t> gate);
 
@@ -459,6 +471,21 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     const serial_lane_policy_t _lane_policy;
     error_handler_t _error_handler;
     application_start_policy_t _application_start_policy;
+    struct execution_policy_t : std::enable_shared_from_this<execution_policy_t>
+    {
+        explicit execution_policy_t (execution_admission_t admit) : admit (std::move (admit)) {}
+        const execution_admission_t admit;
+        // Only lifecycle writers serialize here; turn selection reads ready_at directly.
+        std::mutex ready_mutex;
+        std::shared_ptr<const unsigned char> incarnation =
+          std::make_shared<const unsigned char> (0);
+        std::atomic<std::chrono::steady_clock::rep> ready_at{
+          std::chrono::steady_clock::time_point::min ().time_since_epoch ().count ()};
+    };
+    // Published entries remain valid until queue destruction, including during replacement.
+    // Ready callbacks independently retain the entry they were issued for.
+    std::vector<std::shared_ptr<execution_policy_t>> _execution_policies;
+    std::atomic<execution_policy_t *> _execution_policy{nullptr};
     mutable std::mutex _mutex;
     std::condition_variable _empty;
     lane_state_t _application;

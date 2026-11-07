@@ -1155,6 +1155,86 @@ void serial_execution_queue_t::set_application_start_policy (application_start_p
     });
 }
 
+void serial_execution_queue_t::set_execution_policy (std::function<bool ()> policy)
+{
+    set_execution_policy (policy ? execution_admission_t{[policy = std::move (policy)] (
+                                                           const auto &) { return policy (); }}
+                                 : execution_admission_t{});
+}
+
+void serial_execution_queue_t::set_execution_policy (execution_admission_t policy)
+{
+    {
+        std::lock_guard lock (_mutex);
+        auto entry = policy ? std::make_shared<execution_policy_t> (std::move (policy)) : nullptr;
+        if (entry)
+            _execution_policies.push_back (entry);
+        _execution_policy.store (entry.get (), std::memory_order_release);
+    }
+    notify_control ("execution-policy", [this] {
+        std::unique_lock lock (_mutex, std::defer_lock);
+        if (!owns_shared_gate ())
+            lock.lock ();
+        (void) schedule_drain_locked ();
+    });
+}
+
+serial_execution_queue_t::ready_confirmation_t serial_execution_queue_t::ready_confirmation () const
+{
+    auto *entry = _execution_policy.load (std::memory_order_acquire);
+    if (!entry)
+        return {};
+    auto policy = entry->shared_from_this ();
+    std::lock_guard lock (policy->ready_mutex);
+    return [policy = std::move (policy),
+            incarnation = entry->incarnation] (std::chrono::steady_clock::time_point at) {
+        std::lock_guard lock (policy->ready_mutex);
+        if (policy->incarnation != incarnation)
+            return;
+        auto empty = std::chrono::steady_clock::time_point::min ().time_since_epoch ().count ();
+        policy->ready_at.compare_exchange_strong (empty, at.time_since_epoch ().count (),
+                                                  std::memory_order_release);
+    };
+}
+
+void serial_execution_queue_t::confirm_execution_ready (std::chrono::steady_clock::time_point at)
+{
+    if (auto confirm = ready_confirmation ())
+        confirm (at);
+}
+
+void serial_execution_queue_t::invalidate_execution_ready ()
+{
+    auto *policy = _execution_policy.load (std::memory_order_acquire);
+    if (!policy || !execution_allowed ())
+        return;
+    // A late confirmation cannot publish Ready into a later incarnation. The
+    // writer mutex orders invalidation with confirmation without turn-path RMWs.
+    std::lock_guard lock (policy->ready_mutex);
+    policy->incarnation = std::make_shared<const unsigned char> (0);
+    policy->ready_at.store (
+      std::chrono::steady_clock::time_point::min ().time_since_epoch ().count (),
+      std::memory_order_release);
+}
+
+std::optional<std::chrono::steady_clock::time_point>
+serial_execution_queue_t::execution_ready_at () const
+{
+    const auto *policy = _execution_policy.load (std::memory_order_acquire);
+    if (!policy)
+        return std::nullopt;
+    const auto at = std::chrono::steady_clock::time_point{
+      std::chrono::steady_clock::duration{policy->ready_at.load (std::memory_order_acquire)}};
+    return at == std::chrono::steady_clock::time_point::min () ? std::nullopt
+                                                               : std::make_optional (at);
+}
+
+bool serial_execution_queue_t::execution_allowed () const
+{
+    const auto *policy = _execution_policy.load (std::memory_order_acquire);
+    return !policy || policy->admit (*this);
+}
+
 void serial_execution_queue_t::attach_spot_gate (std::shared_ptr<serial_execution_queue_t> gate)
 {
     if (!gate)
@@ -2462,15 +2542,19 @@ void serial_execution_queue_t::cancel_waits_owned () noexcept
 void serial_execution_queue_t::cancel_pending () noexcept
 {
     close ();
-    notify_control ("cancel-pending", [this] {
-        if (owns_shared_gate ())
-            import_publications ();
-        cancel_pending_owned ();
-    });
+    notify_control ("cancel-pending", [this] { cancel_pending_owned (); });
+}
+
+task_t<void> serial_execution_queue_t::cancel_pending_async ()
+{
+    close ();
+    return control_async<void> ([this] { cancel_pending_owned (); });
 }
 
 void serial_execution_queue_t::cancel_pending_owned () noexcept
 {
+    if (owns_shared_gate ())
+        import_publications ();
     std::vector<work_item_t> cancelled_items;
     std::vector<std::function<void ()>> active_cancellations;
     {
@@ -3021,6 +3105,18 @@ serial_execution_queue_t::next_application_locked () noexcept
       _application.queue.begin (), _application.queue.end (), [this] (const work_item_t &item) {
           if (item.turn->is_resume ())
               return true;
+          // The record's mailbox retains its existing Spot owner in both modes.
+          const auto *execution = item.actor_mailbox ? item.actor_mailbox.get () : this;
+          for (const auto *queue = execution; queue; queue = queue->_spot_gate.get ()) {
+              if (!queue->execution_allowed ()) {
+                  if (!item.actor_mailbox)
+                      return false;
+                  std::lock_guard admission (item.actor_mailbox->_mutex);
+                  const auto member = item.actor_mailbox->next_application_locked ();
+                  // A shared ticket can still settle an already-started handler.
+                  return member.ready && member.next->turn->is_resume ();
+              }
+          }
           const auto *owner = shared_spot_gate ();
           if ((owner ? owner : this)->_relocation_seal) {
               if (!item.actor_mailbox)
