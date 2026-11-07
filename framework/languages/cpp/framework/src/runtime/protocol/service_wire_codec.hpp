@@ -3,6 +3,7 @@
 
 #include "runtime/mesh/service_topology_registry.hpp"
 #include "runtime/operations/call_id.hpp"
+#include "runtime/protocol/application_envelope_encoder.hpp"
 
 #include <service_wire_constants.hpp>
 #include <service_wire_pilot_codec.hpp>
@@ -12,6 +13,7 @@
 #include <zlink/Contracts/Messaging/message.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -88,17 +90,31 @@ struct application_payload_t
     {
     }
 
+    static application_payload_t from_envelope_encoder (application_envelope_encoder_t encode);
+    const application_envelope_encoder_t *envelope_encoder () const noexcept
+    {
+        return std::get_if<application_envelope_encoder_t> (&_body);
+    }
     static application_payload_t from_parts (const multipart_t &parts);
     static application_payload_t from_parts (multipart_t &&parts);
     const multipart_t *parts () const noexcept { return std::get_if<multipart_t> (&_body); }
     const std::vector<std::uint8_t> &payload_bytes () const
     {
+        materialize_envelope ();
         return std::get<byte_payload_t> (_body).bytes;
     }
-    std::vector<std::uint8_t> &payload_bytes () { return std::get<byte_payload_t> (_body).bytes; }
+    std::vector<std::uint8_t> &payload_bytes ()
+    {
+        materialize_envelope ();
+        return std::get<byte_payload_t> (_body).bytes;
+    }
 
     void release_body ()
     {
+        if (envelope_encoder ()) {
+            _body = multipart_t{};
+            return;
+        }
         if (auto *messages = std::get_if<multipart_t> (&_body))
             multipart_t{}.swap (*messages);
         else
@@ -112,14 +128,15 @@ struct application_payload_t
     friend bool operator== (const application_payload_t &, const application_payload_t &);
 
   private:
-    // The codec owns either incoming bytes or outgoing parts, never both.
+    // The codec owns one body representation and materializes it only on demand.
     struct byte_payload_t
     {
         std::string packet_name;
         std::string content_type;
         std::vector<std::uint8_t> bytes;
     };
-    std::variant<byte_payload_t, multipart_t> _body;
+    void materialize_envelope () const;
+    mutable std::variant<byte_payload_t, multipart_t, application_envelope_encoder_t> _body;
 };
 
 // Shared inverse of application_payload_t::from_parts; used by dispatch and diagnostics.
@@ -1036,6 +1053,12 @@ service_wire_header_t decode_header (std::span<const std::uint8_t> bytes);
 std::string decode_channel_send_header (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_application_payload (const application_payload_t &payload);
 zlink::message_t encode_application_payload_message (const application_payload_t &payload);
+zlink::message_t
+encode_application_envelope_message (std::size_t header_size,
+                                     const std::function<void (std::span<std::byte>)> &write_header,
+                                     std::span<const std::byte> body,
+                                     const std::optional<std::string> &flow_id = {},
+                                     std::optional<flow_origin_t> flow_origin = {});
 /* capture_flow gates the observation-only flow pair (flow-correlation §4):
  * false skips it structurally — no semantic validation, no materialization —
  * so malformed observation fields cannot fail a frame at Off or at pure

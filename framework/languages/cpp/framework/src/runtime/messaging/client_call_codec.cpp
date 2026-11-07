@@ -70,6 +70,27 @@ message_parts_t client_call_codec_t::encode_payload_parts (const envelope_header
     return message_parts_t (_codec.encode_header (header, content_type), std::move (body));
 }
 
+message_parts_t client_call_codec_t::encode_payload_parts (
+  envelope_header_t header,
+  encoded_payload_t payload,
+  std::shared_ptr<const detail::request_type_plan_t> type,
+  std::shared_ptr<const detail::prepared_header_fragment_t> channel) const
+{
+    auto body = detail::encoded_payload_to_raw (std::move (payload));
+    return message_parts_t (_codec.encode_header (header, *type, *channel), std::move (body));
+}
+
+message_parts_t client_call_codec_t::encode_service_payload_parts (
+  envelope_header_t header,
+  encoded_payload_t payload,
+  std::shared_ptr<const detail::request_type_plan_t> type,
+  std::shared_ptr<const detail::prepared_header_fragment_t> channel) const
+{
+    auto body = detail::encoded_payload_to_raw (std::move (payload));
+    return message_parts_t::from_envelope_encoder (_codec.prepare_service_payload (
+      std::move (header), std::move (body), std::move (type), std::move (channel)));
+}
+
 envelope_header_t client_call_codec_t::create_envelope (message_kind_t kind,
                                                         std::string channel_name,
                                                         std::string message_name,
