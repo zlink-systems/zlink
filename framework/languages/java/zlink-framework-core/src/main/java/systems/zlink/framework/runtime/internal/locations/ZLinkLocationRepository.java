@@ -71,6 +71,19 @@ public interface ZLinkLocationRepository {
             ZLinkAuthorityMutation mutation,
             ZLinkStoreCancellation cancellation);
 
+    /**
+     * Cleans one locally discarded incarnation after accepted membership additions have settled.
+     * False leaves it for the existing renewal interval; the repository owns Store eligibility.
+     */
+    default CompletionStage<Boolean> cleanupDiscarded(
+            String key,
+            ZLinkAuthoritySnapshot discarded,
+            ZLinkLocationOwnerToken currentOwner,
+            ZLinkStoreCancellation cancellation) {
+        return CompletableFuture.failedFuture(
+                new UnsupportedOperationException("Discard cleanup is not supported"));
+    }
+
     CompletionStage<ZLinkAuthorityScanResult> list(
             String prefix,
             Optional<ZLinkAuthorityScanCursor> cursor,

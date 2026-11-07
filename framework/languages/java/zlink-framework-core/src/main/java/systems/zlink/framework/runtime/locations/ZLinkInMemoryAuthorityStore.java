@@ -114,15 +114,14 @@ final class ZLinkInMemoryAuthorityStore {
 
     public CompletionStage<ZLinkAuthorityReadResult> read(
             String key, ZLinkStoreCancellation cancellation) {
-        return inStateLane(
+        return stateLane.runNowOrQueue(
                 () -> {
                     Instant now = clock.instant();
                     String waitKey = ZLinkOwnerLeaseWaitTracker.authorityRecordKey(key);
                     var observedWait = ownerLeaseWait.snapshot(waitKey);
                     Row row = rows.get(key);
                     if (row == null) ownerLeaseWait.clearIfUnchanged(waitKey, observedWait);
-                    return completed(
-                            row == null ? new ZLinkAuthorityMissing(now) : snapshot(row, now));
+                    return row == null ? new ZLinkAuthorityMissing(now) : snapshot(row, now);
                 });
     }
 
@@ -153,93 +152,120 @@ final class ZLinkInMemoryAuthorityStore {
             ZLinkAuthorityExpectation expectation,
             ZLinkAuthorityMutation mutation,
             ZLinkStoreCancellation cancellation) {
-        return inStateLane(
-                () -> {
-                    Instant now = clock.instant();
-                    String waitKey = ZLinkOwnerLeaseWaitTracker.authorityRecordKey(key);
-                    var observedWait = ownerLeaseWait.snapshot(waitKey);
-                    Row current = rows.get(key);
-                    if (current == null) ownerLeaseWait.clearIfUnchanged(waitKey, observedWait);
-                    if (!matches(current, expectation) || current == null) {
-                        return completed(
-                                new ZLinkAuthorityConflict(
-                                        current == null
-                                                ? new ZLinkAuthorityMissing(now)
-                                                : snapshot(current, now)));
-                    }
-                    if (current.allocation.state() != ZLinkPlacementAllocationState.ACTIVE
-                            || (!(mutation instanceof ZLinkAuthorityRestore)
-                                    && !ownerLeaseIsLive.test(current.owner))) {
-                        return completed(
-                                new ZLinkAuthorityConflict(
-                                        snapshot(current, now),
-                                        ZLinkFrameworkErrorKind.UNAVAILABLE));
-                    }
-                    if (mutation instanceof ZLinkAuthorityDelete) {
-                        adjustActive(current.allocation, current.allocation.capacityBundle(), -1);
-                        rows.remove(key);
-                        ownerLeaseWait.clear(waitKey, current.owner);
-                        return completed(new ZLinkAuthorityDeleted(nextVersion(), now));
-                    }
-                    if (mutation instanceof ZLinkAuthorityRestore restore) {
-                        if (!current.owner.equals(restore.expectedOwner())) {
-                            return completed(new ZLinkAuthorityConflict(snapshot(current, now)));
-                        }
-                        var membershipFailure =
-                                spotMembershipFailure(current.payload, restore.payload(), null);
-                        if (membershipFailure != null)
-                            return completed(
-                                    new ZLinkAuthorityConflict(
-                                            snapshot(current, now), membershipFailure));
-                        if (revision == Long.MAX_VALUE) {
-                            return completed(new ZLinkAuthorityGenerationExhausted());
-                        }
-                        Row stored =
-                                new Row(
-                                        nextVersion(),
-                                        restore.payload(),
-                                        current.objectGeneration,
-                                        current.authorityOwnerGeneration,
-                                        current.owner,
-                                        current.allocation);
-                        rows.put(key, stored);
-                        return completed(stored(stored, now));
-                    }
-                    byte[] reincarnatePayload = ZLinkAuthorityMutation.reincarnatePayload(mutation);
-                    var membershipFailure =
-                            spotMembershipFailure(
-                                    current.payload,
-                                    reincarnatePayload != null
-                                            ? reincarnatePayload
-                                            : ((ZLinkAuthorityPut) mutation).payload(),
-                                    null);
-                    if (membershipFailure != null)
-                        return completed(
-                                new ZLinkAuthorityConflict(
-                                        snapshot(current, now), membershipFailure));
-                    if (revision == Long.MAX_VALUE
-                            || (reincarnatePayload != null
-                                    && (objectGeneration == Long.MAX_VALUE
-                                            || authorityOwnerGeneration == Long.MAX_VALUE))) {
-                        return completed(new ZLinkAuthorityGenerationExhausted());
-                    }
-                    Row stored =
-                            new Row(
-                                    nextVersion(),
-                                    reincarnatePayload != null
-                                            ? reincarnatePayload
-                                            : ((ZLinkAuthorityPut) mutation).payload(),
-                                    reincarnatePayload != null
-                                            ? ++objectGeneration
-                                            : current.objectGeneration,
-                                    reincarnatePayload != null
-                                            ? ++authorityOwnerGeneration
-                                            : current.authorityOwnerGeneration,
-                                    current.owner,
-                                    current.allocation);
-                    rows.put(key, stored);
-                    return completed(stored(stored, now));
-                });
+        return stateLane.runNowOrQueue(
+                () -> compareExchangeOnLane(key, expectation, mutation, cancellation));
+    }
+
+    private ZLinkAuthorityWriteResult compareExchangeOnLane(
+            String key,
+            ZLinkAuthorityExpectation expectation,
+            ZLinkAuthorityMutation mutation,
+            ZLinkStoreCancellation cancellation) {
+        Instant now = clock.instant();
+        String waitKey = ZLinkOwnerLeaseWaitTracker.authorityRecordKey(key);
+        var observedWait = ownerLeaseWait.snapshot(waitKey);
+        Row current = rows.get(key);
+        if (current == null) ownerLeaseWait.clearIfUnchanged(waitKey, observedWait);
+        if (!matches(current, expectation) || current == null) {
+            return new ZLinkAuthorityConflict(
+                    current == null ? new ZLinkAuthorityMissing(now) : snapshot(current, now));
+        }
+        if (current.allocation.state() != ZLinkPlacementAllocationState.ACTIVE
+                || (!(mutation instanceof ZLinkAuthorityRestore)
+                        && !(mutation instanceof ZLinkAuthorityPut preserve
+                                && preserve.preserved() != null)
+                        && !ownerLeaseIsLive.test(current.owner))) {
+            return new ZLinkAuthorityConflict(
+                    snapshot(current, now), ZLinkFrameworkErrorKind.UNAVAILABLE);
+        }
+        if (mutation instanceof ZLinkAuthorityPut preserve && preserve.preserved() != null) {
+            var descriptor =
+                    descriptorLookup.find(
+                            current.allocation.descriptor(),
+                            current.allocation.descriptorLifecycleGeneration(),
+                            preserve.replacementOwner());
+            if (participantIsPrepared(key)
+                    || !preserve.matchesPreserved(snapshot(current, now))
+                    || !snapshot(current, now).steadyReady()
+                    || !preserve.replacementOwner().ownerId().equals(current.owner.ownerId())
+                    || preserve.replacementOwner().leaseGeneration()
+                            == current.owner.leaseGeneration()
+                    || descriptor == null
+                    || descriptor.lifecycleGeneration()
+                            != current.allocation.descriptorLifecycleGeneration()
+                    || !descriptor.ownerId().equals(current.owner.ownerId())
+                    || !ownerLeaseIsLive.test(preserve.replacementOwner()))
+                return new ZLinkAuthorityConflict(snapshot(current, now));
+            if (revision == Long.MAX_VALUE) return new ZLinkAuthorityGenerationExhausted();
+            Row stored =
+                    new Row(
+                            nextVersion(),
+                            preserve.payload(),
+                            current.objectGeneration,
+                            current.authorityOwnerGeneration,
+                            preserve.replacementOwner(),
+                            current.allocation);
+            rows.put(key, stored);
+            ownerLeaseWait.clear(waitKey, current.owner);
+            return stored(stored, now);
+        }
+        if (mutation instanceof ZLinkAuthorityDelete) {
+            adjustActive(current.allocation, current.allocation.capacityBundle(), -1);
+            rows.remove(key);
+            ownerLeaseWait.clear(waitKey, current.owner);
+            return new ZLinkAuthorityDeleted(nextVersion(), now);
+        }
+        if (mutation instanceof ZLinkAuthorityRestore restore) {
+            if (!current.owner.equals(restore.expectedOwner())) {
+                return new ZLinkAuthorityConflict(snapshot(current, now));
+            }
+            var membershipFailure = spotMembershipFailure(current.payload, restore.payload(), null);
+            if (membershipFailure != null)
+                return new ZLinkAuthorityConflict(snapshot(current, now), membershipFailure);
+            if (revision == Long.MAX_VALUE) {
+                return new ZLinkAuthorityGenerationExhausted();
+            }
+            Row stored =
+                    new Row(
+                            nextVersion(),
+                            restore.payload(),
+                            current.objectGeneration,
+                            current.authorityOwnerGeneration,
+                            current.owner,
+                            current.allocation);
+            rows.put(key, stored);
+            return stored(stored, now);
+        }
+        byte[] reincarnatePayload = ZLinkAuthorityMutation.reincarnatePayload(mutation);
+        var membershipFailure =
+                spotMembershipFailure(
+                        current.payload,
+                        reincarnatePayload != null
+                                ? reincarnatePayload
+                                : ((ZLinkAuthorityPut) mutation).payload(),
+                        null);
+        if (membershipFailure != null)
+            return new ZLinkAuthorityConflict(snapshot(current, now), membershipFailure);
+        if (revision == Long.MAX_VALUE
+                || (reincarnatePayload != null
+                        && (objectGeneration == Long.MAX_VALUE
+                                || authorityOwnerGeneration == Long.MAX_VALUE))) {
+            return new ZLinkAuthorityGenerationExhausted();
+        }
+        Row stored =
+                new Row(
+                        nextVersion(),
+                        reincarnatePayload != null
+                                ? reincarnatePayload
+                                : ((ZLinkAuthorityPut) mutation).payload(),
+                        reincarnatePayload != null ? ++objectGeneration : current.objectGeneration,
+                        reincarnatePayload != null
+                                ? ++authorityOwnerGeneration
+                                : current.authorityOwnerGeneration,
+                        current.owner,
+                        current.allocation);
+        rows.put(key, stored);
+        return stored(stored, now);
     }
 
     public CompletionStage<ZLinkAuthorityScanResult> list(
@@ -317,6 +343,30 @@ final class ZLinkInMemoryAuthorityStore {
                 : ZLinkFrameworkErrorKind.UNAVAILABLE;
     }
 
+    CompletionStage<Boolean> cleanupDiscarded(
+            String key,
+            ZLinkAuthoritySnapshot discarded,
+            ZLinkLocationOwnerToken currentOwner,
+            ZLinkStoreCancellation cancellation) {
+        Objects.requireNonNull(discarded, "discarded");
+        Objects.requireNonNull(currentOwner, "currentOwner");
+        if (!currentOwner.ownerId().equals(discarded.ownerId()))
+            throw new IllegalArgumentException("Discard cleanup requires the same owner identity");
+        return stateLane.runNowOrQueue(
+                () -> {
+                    if (cancellation.isCancellationRequested())
+                        throw new java.util.concurrent.CancellationException();
+                    Row current = rows.get(key);
+                    if (current == null) {
+                        String waitKey = ZLinkOwnerLeaseWaitTracker.authorityRecordKey(key);
+                        ownerLeaseWait.clearIfUnchanged(waitKey, ownerLeaseWait.snapshot(waitKey));
+                        return true;
+                    }
+                    if (!discarded.sameIncarnation(snapshot(current, clock.instant()))) return true;
+                    return releaseEndedReservationOnLane(key, current, null, currentOwner);
+                });
+    }
+
     CompletionStage<Boolean> releaseEndedReservation(
             String key, String expectedStoreVersion, ZLinkStoreCancellation cancellation) {
         return inStateLane(
@@ -359,10 +409,20 @@ final class ZLinkInMemoryAuthorityStore {
 
     private boolean releaseEndedReservationOnLane(
             String key, Row current, ZLinkObjectReservationRequest request) {
+        return releaseEndedReservationOnLane(key, current, request, null);
+    }
+
+    private boolean releaseEndedReservationOnLane(
+            String key,
+            Row current,
+            ZLinkObjectReservationRequest request,
+            ZLinkLocationOwnerToken discardedOwner) {
+        boolean discarded = discardedOwner != null;
         boolean active = current.allocation.state() == ZLinkPlacementAllocationState.ACTIVE;
         String waitKey = ZLinkOwnerLeaseWaitTracker.authorityRecordKey(key);
         if (!active) ownerLeaseWait.clear(waitKey, current.owner);
-        if ((active && request == null)
+        if ((active && request == null && !discarded)
+                || (!active && discarded)
                 || (!active
                         && (participantIsPrepared(key)
                                 || !Arrays.equals(
@@ -378,31 +438,9 @@ final class ZLinkInMemoryAuthorityStore {
             } else {
                 boolean steadyReady =
                         !participantIsPrepared(key)
-                                && Arrays.equals(
-                                        current.payload,
-                                        ZLinkCanonicalRelocationAuthorityStateCodec
-                                                .applicationPayloadOrOriginal(current.payload))
-                                && (current.allocation.objectKind()
-                                                == ZLinkPlacementObjectKind.ACTOR
-                                        ? new ZLinkActorAuthorityPayloadCodec()
-                                                .decode(current.payload)
-                                                .filter(
-                                                        actor ->
-                                                                actor.state()
-                                                                        == ZLinkActorAuthorityPayloadCodec
-                                                                                .State.READY)
-                                                .isPresent()
-                                        : new ZLinkServiceAuthorityPayloadCodec()
-                                                .decode(current.payload)
-                                                .filter(
-                                                        spot ->
-                                                                spot.state()
-                                                                                == ZLinkServiceAuthorityPayloadCodec
-                                                                                        .State.READY
-                                                                        && spot.activationRecoveryState()
-                                                                                .isEmpty())
-                                                .isPresent());
-                if (steadyReady) {
+                                && ZLinkAuthoritySnapshot.steadyReady(
+                                        current.payload, current.allocation);
+                if (discarded || steadyReady) {
                     authorityOwnerWaiting = ownerLeaseWait.shouldWait(waitKey, current.owner, true);
                 } else {
                     ownerLeaseWait.clear(waitKey, current.owner);
@@ -417,7 +455,7 @@ final class ZLinkInMemoryAuthorityStore {
         List<String> members = List.of();
         boolean ownerLeaseReleaseBlocked = authorityOwnerWaiting;
         if (active) {
-            if (ownerLive) return false;
+            if (ownerLive && (!discarded || !discardedOwner.equals(current.owner))) return false;
             if (participantIsPrepared(key)
                     || !Arrays.equals(
                             current.payload,
@@ -426,25 +464,31 @@ final class ZLinkInMemoryAuthorityStore {
                 throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.UNAVAILABLE,
                         "Ended authority requires relocation recovery");
-            if (!(request.relocationPolicy()
-                    instanceof ZLinkObjectFactoryRegistration.RelocationPolicy.Disabled))
+            if (!discarded
+                    && !(request.relocationPolicy()
+                            instanceof ZLinkObjectFactoryRegistration.RelocationPolicy.Disabled))
                 throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.UNAVAILABLE, "Object owner lease is unavailable");
             if (current.allocation.objectKind() != ZLinkPlacementObjectKind.ACTOR) {
                 var spot = new ZLinkServiceAuthorityPayloadCodec().decode(current.payload);
                 if (spot.isEmpty()
-                        || spot.get().state() != ZLinkServiceAuthorityPayloadCodec.State.READY
-                        || spot.get().activationRecoveryState().isPresent()) {
+                        || (!discarded
+                                && (spot.get().state()
+                                                != ZLinkServiceAuthorityPayloadCodec.State.READY
+                                        || spot.get().activationRecoveryState().isPresent()))) {
                     throw new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.UNAVAILABLE,
                             "Ended Spot authority is not reclaimable");
                 }
                 if (spot.get().user().isPresent()) {
-                    var endedMembers = endedSpotMembers(key, current, spot.get().spotId());
+                    var endedMembers =
+                            endedSpotMembers(key, current, spot.get().spotId(), discarded);
+                    if (discarded && !endedMembers.members().isEmpty()) return false;
                     members = endedMembers.members();
                     ownerLeaseReleaseBlocked |= endedMembers.ownerLeaseReleaseBlocked();
                 }
             }
+            if (ownerLeaseReleaseBlocked && discarded) return false;
             if (ownerLeaseReleaseBlocked)
                 throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.UNAVAILABLE,
@@ -453,6 +497,15 @@ final class ZLinkInMemoryAuthorityStore {
                 && descriptor != null
                 && descriptor.lifecycleGeneration()
                         == current.allocation.descriptorLifecycleGeneration()) return false;
+        if (discarded && ownerLive) {
+            var result =
+                    compareExchangeOnLane(
+                            key,
+                            new ZLinkAuthorityExpectFound(current.storeVersion),
+                            new ZLinkAuthorityDelete(),
+                            () -> false);
+            return result instanceof ZLinkAuthorityDeleted;
+        }
         if (active) adjustActive(current.allocation, current.allocation.capacityBundle(), -1);
         else adjustPending(current.allocation, current.allocation.capacityBundle(), -1);
         var reservation = reservations.remove(key);
@@ -477,7 +530,8 @@ final class ZLinkInMemoryAuthorityStore {
      */
     private record EndedSpotMembers(List<String> members, boolean ownerLeaseReleaseBlocked) {}
 
-    private EndedSpotMembers endedSpotMembers(String spotKey, Row spot, String spotId) {
+    private EndedSpotMembers endedSpotMembers(
+            String spotKey, Row spot, String spotId, boolean discarded) {
         List<String> members = new ArrayList<>();
         Set<String> batchKeys = new HashSet<>();
         boolean ownerLeaseReleaseBlocked = false;
@@ -493,13 +547,9 @@ final class ZLinkInMemoryAuthorityStore {
                             != systems.zlink.framework.spots.ZLinkSpotKind.USER.value()
                     || !actor.get().currentSpotId().equals(spotId)
                     || actor.get().currentSpotGeneration() != spot.objectGeneration) continue;
-            if (row.allocation.state() != ZLinkPlacementAllocationState.ACTIVE
-                    || participantIsPrepared(entry.getKey())
-                    || !Arrays.equals(
-                            row.payload,
-                            ZLinkCanonicalRelocationAuthorityStateCodec
-                                    .applicationPayloadOrOriginal(row.payload))
-                    || actor.get().state() != ZLinkActorAuthorityPayloadCodec.State.READY)
+            if (discarded) return new EndedSpotMembers(List.of(entry.getKey()), false);
+            if (participantIsPrepared(entry.getKey())
+                    || !ZLinkAuthoritySnapshot.steadyReady(row.payload, row.allocation))
                 throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.UNAVAILABLE,
                         "User Spot still has a relocating or unactivated member");
