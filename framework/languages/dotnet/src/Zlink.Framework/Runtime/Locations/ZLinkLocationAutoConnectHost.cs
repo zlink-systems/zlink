@@ -236,6 +236,8 @@ internal sealed class ZLinkLocationAutoConnectHost
                 );
                 return;
             }
+            _runtime.SubmitRecoveryDescriptorsAsync = token =>
+                SubmitRecoveryDescriptorsAsync(state, token);
             published?.Invoke();
         }
         finally
@@ -430,6 +432,7 @@ internal sealed class ZLinkLocationAutoConnectHost
     {
         await started.ConfigureAwait(false);
         _runtime.OwnerLeaseRenewed -= OnOwnerLeaseRenewed;
+        _runtime.SubmitRecoveryDescriptorsAsync = null;
         await _lifecycleGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
@@ -493,6 +496,28 @@ internal sealed class ZLinkLocationAutoConnectHost
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
         if (failures is { Count: > 1 })
             throw new AggregateException(failures);
+    }
+
+    private async ValueTask<
+        IReadOnlyDictionary<ZLinkMeshNodeDescriptorKey, Task<bool>>
+    > SubmitRecoveryDescriptorsAsync(
+        ZLinkFrameworkComponentState state,
+        CancellationToken cancellationToken
+    )
+    {
+        var owner = await _runtime.GetOwnerTokenAsync().ConfigureAwait(false);
+        foreach (var node in state.SpotNodes.Values)
+            node.RefreshOwnerFence(owner);
+        var confirmations = new Dictionary<ZLinkMeshNodeDescriptorKey, Task<bool>>();
+        foreach (var reconciler in _reconcilers)
+        {
+            var publication = await reconciler
+                .SubmitOwnerRecoveryPublicationAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (publication.Key is { } key)
+                confirmations.Add(key, publication.Confirmation);
+        }
+        return confirmations;
     }
 
     private void OnOwnerLeaseRenewed(ZLinkOwnerLeaseRenewal _renewal) =>

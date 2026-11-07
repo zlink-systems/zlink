@@ -102,7 +102,10 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
                     is ZLinkLocationWriteIntent.NewClaim
                         or ZLinkLocationWriteIntent.FixedRidNewClaim
                         or ZLinkLocationWriteIntent.Renew
-                && ZLinkLocationDescriptorComparison.SameExceptWriteTime(current!, descriptor)
+                && ZLinkLocationDescriptorComparison.SameExceptWriteTime(
+                    WithCurrentPlacementCapacity(current!),
+                    WithCurrentPlacementCapacity(descriptor)
+                )
             )
                 return ZLinkLocationWriteResult.Stored(last, current!.UpdatedAt);
             if (isNewClaim && currentOwnerLive)
@@ -130,7 +133,7 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
                 if (
                     !exists
                     || current!.OwnerId != descriptor.OwnerId
-                    || current.LeaseGeneration != descriptor.LeaseGeneration
+                    || current.LeaseGeneration > descriptor.LeaseGeneration
                     || current.LifecycleGeneration != descriptor.LifecycleGeneration
                     || !MeshNodeImmutableFieldsEqual(current, descriptor)
                     || descriptor.DescriptorRevision <= current.DescriptorRevision
@@ -261,7 +264,7 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
                 && (
                     !exists
                     || current!.OwnerId != descriptor.OwnerId
-                    || current.LeaseGeneration != descriptor.LeaseGeneration
+                    || current.LeaseGeneration > descriptor.LeaseGeneration
                     || current.LifecycleGeneration != descriptor.LifecycleGeneration
                     || current.Endpoint != descriptor.Endpoint
                     || current.SecurityIdentity != descriptor.SecurityIdentity
@@ -371,7 +374,7 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
                 && (
                     !exists
                     || current!.OwnerId != descriptor.OwnerId
-                    || current.LeaseGeneration != descriptor.LeaseGeneration
+                    || current.LeaseGeneration > descriptor.LeaseGeneration
                     || current.LifecycleGeneration != descriptor.LifecycleGeneration
                     || current.Endpoint != descriptor.Endpoint
                     || current.SecurityIdentity != descriptor.SecurityIdentity
@@ -526,7 +529,7 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
         )
         && current.SecurityIdentity == incoming.SecurityIdentity
         && current.OwnerId == incoming.OwnerId
-        && current.LeaseGeneration == incoming.LeaseGeneration
+        && current.LeaseGeneration <= incoming.LeaseGeneration
         && current.ApplicationVersion == incoming.ApplicationVersion
         && current.ObjectRole == incoming.ObjectRole
         && current
