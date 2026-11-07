@@ -2697,8 +2697,8 @@ task_t<actor_join_wire_outcome_t> raw_mesh_node_owner_t::request_actor_join (
            payload
              ? std::optional<
                  protocol::
-                   service_wire_pilot_application_payload_envelope_v1>{{payload->packet_name,
-                                                                        payload->content_type,
+                   service_wire_pilot_application_payload_envelope_v1>{{payload->packet_name (),
+                                                                        payload->content_type (),
                                                                         payload->payload_bytes ()}}
              : std::nullopt});
     }
@@ -3243,8 +3243,8 @@ raw_mesh_node_owner_t::enqueue_received (service_mailbox_record_t record,
             || wire.kind == protocol::command::channelRequest) {
             const auto payload = protocol::decode_application_payload (
               protocol::message_bytes (record.parts[1]), true);
-            if (payload.packet_name == protocol::framework_multipart_packet_name
-                && payload.content_type == protocol::framework_multipart_content_type) {
+            if (payload.packet_name () == protocol::framework_multipart_packet_name
+                && payload.content_type () == protocol::framework_multipart_content_type) {
                 auto parts = protocol::decode_application_parts (payload);
                 messaging::message_parts_t encoded (std::move (parts));
                 auto decoded = messaging::envelope_codec_t{}.decode_header (encoded, true);
@@ -4196,8 +4196,23 @@ std::optional<zlink::poll_event_flag_t>
 raw_mesh_node_owner_t::wait_for_activity (std::chrono::milliseconds timeout,
                                           bool accept_application_receive) noexcept
 {
+    return wait_for_activity_impl<false> (timeout, accept_application_receive);
+}
+
+std::optional<zlink::poll_event_flag_t>
+raw_mesh_node_owner_t::wait_for_hosted_activity (std::chrono::milliseconds timeout,
+                                                 bool accept_application_receive) noexcept
+{
+    return wait_for_activity_impl<true> (timeout, accept_application_receive);
+}
+
+template <bool Hosted>
+std::optional<zlink::poll_event_flag_t>
+raw_mesh_node_owner_t::wait_for_activity_impl (std::chrono::milliseconds timeout,
+                                               bool accept_application_receive) noexcept
+{
     if (_mailbox.pending_messages (service_mailbox_domain_t::infrastructure) != 0
-        || (accept_application_receive && !_mailbox.has_application_dispatch ()
+        || (accept_application_receive && !Hosted && !_mailbox.has_application_dispatch ()
             && _mailbox.pending_messages (service_mailbox_domain_t::application) != 0))
         return zlink::poll_event_flag_t::none;
 

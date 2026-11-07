@@ -467,7 +467,8 @@ internal static class ZLinkFrameworkServiceRegistrar
             provider.GetRequiredService<IZLinkLocationRepository>(),
             provider.GetRequiredService<ZLinkOwnerLeaseTracker>(),
             health: provider.GetRequiredService<ZLinkLocationStoreHealth>(),
-            options: provider.GetRequiredService<ZLinkLocationOptions>()
+            options: provider.GetRequiredService<ZLinkLocationOptions>(),
+            runtime: provider.GetRequiredService<ZLinkLocationRuntime>()
         ));
         services.AddSingleton<IZLinkMeshNodeLocationResolver>(static provider =>
             provider.GetRequiredService<ZLinkStoreLocationResolvers>()

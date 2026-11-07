@@ -264,7 +264,7 @@ void report_stateful_dispatch_error (
             const auto *identity = accepted ? accepted->identity () : nullptr;
             const auto &turn = identity ? *identity : delivery.turn;
             stateful::with_accepted_application (turn, [&] (auto, const auto &application) {
-                event.packet_name = application.packet_name;
+                event.packet_name = application.packet_name ();
                 event.flow_id = application.flow_id;
                 event.flow_origin = application.flow_origin;
                 const auto header_part = identity
@@ -5178,7 +5178,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
                       .reason = detail::dispatch_reason_from_error (&error),
                       .action = activation->request ? dispatch_error_action_t::reply_error
                                                     : dispatch_error_action_t::drop,
-                      .packet_name = owned_command->application_payload.packet_name,
+                      .packet_name = owned_command->application_payload.packet_name (),
                       .spot_id = activation->target.spot_id,
                       .source_rid =
                         zlink::routing_id_t::from (activation->source_node_routing_id).to_string (),
@@ -5260,7 +5260,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
                           .outcome = message_flow_outcome_t::dropped,
                           .surface = dispatch_error_surface_t::instance_spot,
                           .message_kind = dispatch_message_kind_t::send,
-                          .packet_name = owned_command->application_payload.packet_name,
+                          .packet_name = owned_command->application_payload.packet_name (),
                           .source_rid =
                             zlink::routing_id_t::from (activation->source_node_routing_id)
                               .to_string (),
@@ -7438,11 +7438,30 @@ public_host_runtime_t::dispatch_ready (mesh::service_mailbox_t::application_disp
                                        std::function<bool ()> next_application_receive,
                                        std::optional<zlink::poll_event_flag_t> waited)
 {
-    if (!dispatch) {
+    return dispatch_ready_impl (std::move (dispatch), accept_application_receive,
+                                std::move (next_application_receive), waited,
+                                !_transport->mailbox ().has_application_dispatch ());
+}
+
+task_t<std::size_t> public_host_runtime_t::dispatch_hosted_ready (
+  mesh::service_mailbox_t::application_dispatch_t dispatch,
+  bool accept_application_receive,
+  std::function<bool ()> next_application_receive,
+  std::optional<zlink::poll_event_flag_t> waited)
+{
+    return dispatch_ready_impl (std::move (dispatch), accept_application_receive,
+                                std::move (next_application_receive), waited, false);
+}
+
+task_t<std::size_t> public_host_runtime_t::dispatch_ready_impl (
+  mesh::service_mailbox_t::application_dispatch_t dispatch,
+  bool accept_application_receive,
+  std::function<bool ()> next_application_receive,
+  std::optional<zlink::poll_event_flag_t> waited,
+  bool standalone)
+{
+    if (!dispatch)
         throw std::invalid_argument ("framework public host dispatch callback is required");
-    }
-    // The mailbox dispatcher is bound at host start and unbound after receive shutdown.
-    const bool standalone = !_transport->mailbox ().has_application_dispatch ();
     const auto now = mesh::service_liveness_registry_t::clock_t::now ();
     (void) co_await _relocation_wire->retry_terminal_relays (now);
     (void) _relocation_wire->reap_terminal_tombstones (now);
@@ -8526,6 +8545,25 @@ std::optional<zlink::poll_event_flag_t> public_host_runtime_t::wait_for_dispatch
   bool accept_application_receive,
   std::optional<std::chrono::steady_clock::time_point> next_activity) noexcept
 {
+    return wait_for_dispatch_activity_impl (timeout, accept_application_receive, next_activity,
+                                            true);
+}
+
+std::optional<zlink::poll_event_flag_t> public_host_runtime_t::wait_for_hosted_dispatch_activity (
+  std::chrono::milliseconds timeout,
+  bool accept_application_receive,
+  std::optional<std::chrono::steady_clock::time_point> next_activity) noexcept
+{
+    return wait_for_dispatch_activity_impl (timeout, accept_application_receive, next_activity,
+                                            false);
+}
+
+std::optional<zlink::poll_event_flag_t> public_host_runtime_t::wait_for_dispatch_activity_impl (
+  std::chrono::milliseconds timeout,
+  bool accept_application_receive,
+  std::optional<std::chrono::steady_clock::time_point> next_activity,
+  bool standalone) noexcept
+{
     try {
         if (next_activity) {
             const auto now = std::chrono::steady_clock::now ();
@@ -8536,7 +8574,9 @@ std::optional<zlink::poll_event_flag_t> public_host_runtime_t::wait_for_dispatch
             if (timeout < std::chrono::milliseconds::zero () || remaining < timeout)
                 timeout = remaining;
         }
-        return _transport->wait_for_activity (timeout, accept_application_receive);
+        return standalone
+                 ? _transport->wait_for_activity (timeout, accept_application_receive)
+                 : _transport->wait_for_hosted_activity (timeout, accept_application_receive);
     }
     catch (...) {
         _options.mesh.runtime_failures->report (std::current_exception ());

@@ -8,6 +8,12 @@ namespace zlink::framework::detail
 
 struct serializer_registry_test_access_t
 {
+    template <typename T>
+    static bool has_resolved_serializer (const serializer_registry_t &registry)
+    {
+        return static_cast<bool> (registry.cached_serializer (std::type_index (typeid (T))));
+    }
+
     static void set_resolved_serializer_cache_capacity (serializer_registry_t &registry,
                                                         std::size_t capacity) noexcept
     {

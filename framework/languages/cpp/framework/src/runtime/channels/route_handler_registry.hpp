@@ -45,6 +45,7 @@ class route_handler_registry_t
     {
         route_handler_descriptor_t descriptor;
         invoker_t invoker;
+        std::function<void (serializer_registry_t &)> bind_codecs;
     };
 
     const entry_t *resolve (std::string_view router_channel_id,
@@ -59,20 +60,21 @@ class route_handler_registry_t
     {
         const auto packet = packet_name.empty () ? framework::detail::message_name<TMessage> ()
                                                  : std::move (packet_name);
+        auto codecs = std::make_shared<detail::handler_codec_plan_t<TMessage, void>> ();
         return add_handler (
           route_handler_descriptor_t{
             runtime::messaging::message_kind_t::command, std::move (router_channel_id), packet,
             std::type_index (typeid (TOwner)), std::type_index (typeid (TMessage)),
             std::type_index (typeid (void))},
-          [method] (service_provider_t &services, serializer_registry_t &serializers,
-                    const zlink::message_t &message,
-                    const framework::route_message_context_t &context,
-                    detail::handler_start_callback_ref_t before_application_handler)
+          [method, codecs] (service_provider_t &services, serializer_registry_t &serializers,
+                            const zlink::message_t &message,
+                            const framework::route_message_context_t &context,
+                            detail::handler_start_callback_ref_t before_application_handler)
             -> task_t<zlink::message_t> {
               try {
                   auto &owner = services.get_required<TOwner> ();
-                  auto payload = detail::deserialize_typed_payload<TMessage> (
-                    serializers, message, context.content_type.value_or (""));
+                  auto payload =
+                    codecs->deserialize (serializers, message, context.content_type.value_or (""));
                   detail::invoke_prepared_handler (before_application_handler, method, owner,
                                                    payload, context);
                   return task_t<zlink::message_t> (
@@ -81,7 +83,8 @@ class route_handler_registry_t
               catch (...) {
                   return task_t<zlink::message_t> (current_exception_result<zlink::message_t> ());
               }
-          });
+          },
+          [codecs] (serializer_registry_t &serializers) { codecs->bind (serializers); });
     }
 
     template <typename TOwner, typename TMessage>
@@ -92,20 +95,21 @@ class route_handler_registry_t
     {
         const auto packet = packet_name.empty () ? framework::detail::message_name<TMessage> ()
                                                  : std::move (packet_name);
+        auto codecs = std::make_shared<detail::handler_codec_plan_t<TMessage, void>> ();
         return add_handler (
           route_handler_descriptor_t{
             runtime::messaging::message_kind_t::command, std::move (router_channel_id), packet,
             std::type_index (typeid (TOwner)), std::type_index (typeid (TMessage)),
             std::type_index (typeid (void))},
-          [method] (service_provider_t &services, serializer_registry_t &serializers,
-                    const zlink::message_t &message,
-                    const framework::route_message_context_t &context,
-                    detail::handler_start_callback_ref_t before_application_handler)
+          [method, codecs] (service_provider_t &services, serializer_registry_t &serializers,
+                            const zlink::message_t &message,
+                            const framework::route_message_context_t &context,
+                            detail::handler_start_callback_ref_t before_application_handler)
             -> task_t<zlink::message_t> {
               try {
                   auto &owner = services.get_required<TOwner> ();
-                  auto payload = detail::deserialize_typed_payload<TMessage> (
-                    serializers, message, context.content_type.value_or (""));
+                  auto payload =
+                    codecs->deserialize (serializers, message, context.content_type.value_or (""));
                   co_await detail::invoke_prepared_handler (before_application_handler, method,
                                                             owner, payload, context);
                   co_return result_t<zlink::message_t>::success (zlink::message_t{});
@@ -113,7 +117,8 @@ class route_handler_registry_t
               catch (...) {
                   co_return current_exception_result<zlink::message_t> ();
               }
-          });
+          },
+          [codecs] (serializer_registry_t &serializers) { codecs->bind (serializers); });
     }
 
     template <typename TOwner, typename TRequest, typename TReply>
@@ -124,29 +129,31 @@ class route_handler_registry_t
     {
         const auto packet = packet_name.empty () ? framework::detail::message_name<TRequest> ()
                                                  : std::move (packet_name);
+        auto codecs = std::make_shared<detail::handler_codec_plan_t<TRequest, TReply>> ();
         return add_handler (
           route_handler_descriptor_t{
             runtime::messaging::message_kind_t::request, std::move (router_channel_id), packet,
             std::type_index (typeid (TOwner)), std::type_index (typeid (TRequest)),
             std::type_index (typeid (TReply))},
-          [method] (service_provider_t &services, serializer_registry_t &serializers,
-                    const zlink::message_t &message,
-                    const framework::route_message_context_t &context,
-                    detail::handler_start_callback_ref_t before_application_handler)
+          [method, codecs] (service_provider_t &services, serializer_registry_t &serializers,
+                            const zlink::message_t &message,
+                            const framework::route_message_context_t &context,
+                            detail::handler_start_callback_ref_t before_application_handler)
             -> task_t<zlink::message_t> {
               try {
                   auto &owner = services.get_required<TOwner> ();
-                  auto request = detail::deserialize_typed_payload<TRequest> (
-                    serializers, message, context.content_type.value_or (""));
+                  auto request =
+                    codecs->deserialize (serializers, message, context.content_type.value_or (""));
                   return serialize_handler_result (
                     detail::invoke_prepared_handler (before_application_handler, method, owner,
                                                      request, context),
-                    serializers);
+                    serializers, codecs);
               }
               catch (...) {
                   return task_t<zlink::message_t> (current_exception_result<zlink::message_t> ());
               }
-          });
+          },
+          [codecs] (serializer_registry_t &serializers) { codecs->bind (serializers); });
     }
 
     template <typename TOwner, typename TRequest, typename TReply>
@@ -158,33 +165,39 @@ class route_handler_registry_t
     {
         const auto packet = packet_name.empty () ? framework::detail::message_name<TRequest> ()
                                                  : std::move (packet_name);
+        auto codecs = std::make_shared<detail::handler_codec_plan_t<TRequest, TReply>> ();
         return add_handler (
           route_handler_descriptor_t{
             runtime::messaging::message_kind_t::request, std::move (router_channel_id), packet,
             std::type_index (typeid (TOwner)), std::type_index (typeid (TRequest)),
             std::type_index (typeid (TReply))},
-          [method] (service_provider_t &services, serializer_registry_t &serializers,
-                    const zlink::message_t &message,
-                    const framework::route_message_context_t &context,
-                    detail::handler_start_callback_ref_t before_application_handler)
+          [method, codecs] (service_provider_t &services, serializer_registry_t &serializers,
+                            const zlink::message_t &message,
+                            const framework::route_message_context_t &context,
+                            detail::handler_start_callback_ref_t before_application_handler)
             -> task_t<zlink::message_t> {
+              const auto plan = codecs;
               try {
                   auto &owner = services.get_required<TOwner> ();
-                  auto request = detail::deserialize_typed_payload<TRequest> (
-                    serializers, message, context.content_type.value_or (""));
+                  auto request =
+                    plan->deserialize (serializers, message, context.content_type.value_or (""));
                   auto reply = co_await detail::invoke_prepared_handler (
                     before_application_handler, method, owner, request, context);
                   co_return result_t<zlink::message_t>::success (
-                    detail::encoded_payload_to_raw (serializers.get<TReply> ().serialize (reply)));
+                    detail::encoded_payload_to_raw (plan->serialize (serializers, reply)));
               }
               catch (...) {
                   co_return current_exception_result<zlink::message_t> ();
               }
-          });
+          },
+          [codecs] (serializer_registry_t &serializers) { codecs->bind (serializers); });
     }
 
-    route_handler_registry_t &add_handler (route_handler_descriptor_t descriptor,
-                                           invoker_t invoker);
+    route_handler_registry_t &
+    add_handler (route_handler_descriptor_t descriptor,
+                 invoker_t invoker,
+                 std::function<void (serializer_registry_t &)> bind_codecs = {});
+    void bind_codecs (serializer_registry_t &serializers);
 
     const route_handler_descriptor_t *find (std::string_view router_channel_id,
                                             runtime::messaging::message_kind_t kind,

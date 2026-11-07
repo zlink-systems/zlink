@@ -37,6 +37,10 @@ internal sealed class ZLinkLocationLifecycle : IAsyncDisposable
 
     internal bool IsOwnerAdmissionOpen => _runtime.IsOwnerAdmissionOpen;
 
+    internal void EnsureOwnerAdmissionOpen() => _runtime.EnsureOwnerAdmissionOpen();
+
+    internal void EnsureRelocationAdmissionOpen() => _runtime.EnsureRelocationAdmissionOpen();
+
     /// <summary>
     /// Location runtime §10: a relocation target keeps its staging and
     /// resubmits its authority CAS only while this owner lease is still valid.
@@ -134,7 +138,10 @@ internal sealed class ZLinkLocationLifecycle : IAsyncDisposable
         }
 
         if (deactivate is not null)
-            TryRunBackground(deactivate);
+        {
+            var completion = deactivate(CancellationToken.None);
+            _ = TryRunBackgroundAsync(_ => completion);
+        }
     }
 
     private async ValueTask PauseBackgroundWorkCoreAsync(bool pauseActorOwnership)
@@ -178,10 +185,12 @@ internal sealed class ZLinkLocationLifecycle : IAsyncDisposable
         );
     }
 
-    private bool TryRunBackground(Func<CancellationToken, ValueTask> operation)
+    internal async ValueTask<bool> TryRunBackgroundAsync(
+        Func<CancellationToken, ValueTask> operation
+    )
     {
-        return AwaitStateLane(
-            _lane.RunAsync(() =>
+        return await _lane
+            .RunAsync(() =>
             {
                 if (_disposed != 0 || _backgroundStopping)
                     return false;
@@ -193,7 +202,7 @@ internal sealed class ZLinkLocationLifecycle : IAsyncDisposable
                 StartDetachedContinuation(task);
                 return true;
             })
-        );
+            .ConfigureAwait(false);
     }
 
     private Task StartDetached(Func<Task> operation)

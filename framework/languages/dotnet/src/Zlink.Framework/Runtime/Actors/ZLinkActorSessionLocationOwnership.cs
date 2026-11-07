@@ -199,10 +199,7 @@ internal sealed partial class ZLinkActorSessionManager
             )?>(
                 () =>
                 {
-                    if (
-                        state.Handoff.IsSourceMigrationInProgress
-                        || (state.Actor is null && state.Handoff.RetainsSourceTombstone)
-                    )
+                    if (ZLinkLocationRuntime.IsRelocationLifecycleOwned(state))
                         return null;
                     var nativeRef = state.NativeActorRef;
                     return nativeRef is { } nativeActor

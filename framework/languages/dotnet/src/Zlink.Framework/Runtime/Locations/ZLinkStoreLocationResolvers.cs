@@ -16,6 +16,7 @@ namespace Zlink.Framework.Runtime.Locations;
 internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolver
 {
     private readonly IZLinkLocationRepository _store;
+    private readonly ZLinkLocationRuntime? _runtime;
     private readonly ZLinkLiveLocationRows _liveRows;
     private readonly ZLinkLocationStoreHealth? _health;
     private readonly ZLinkOwnerLeaseTracker _leaseTracker;
@@ -37,10 +38,12 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         ZLinkOwnerLeaseTracker leaseTracker,
         ZLinkLocationStoreHealth? health = null,
         ZLinkLocationOptions? options = null,
-        TimeProvider? timeProvider = null
+        TimeProvider? timeProvider = null,
+        ZLinkLocationRuntime? runtime = null
     )
     {
         _store = store;
+        _runtime = runtime;
         _health = health;
         _leaseTracker = leaseTracker;
         _options = options ?? new ZLinkLocationOptions();
@@ -157,6 +160,7 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
             return (cached.Row, true, ZLinkLocationResolutionKind.Ready, null);
         }
 
+        _runtime?.EnsureOwnerAdmissionOpen();
         if (ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"resolve_spot_row spot={key.SpotId} source=store"
@@ -242,6 +246,7 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         ZLinkLocationResolutionKind Kind
     )> ReadActorRowCoreAsync(ZLinkActorLocationKey key, CancellationToken cancellationToken)
     {
+        _runtime?.EnsureOwnerAdmissionOpen();
         var authority = await ZLinkLocationStoreRead
             .ExecuteAsync(
                 _health,

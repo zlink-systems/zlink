@@ -259,6 +259,7 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
 
     CompletionStage<ZLinkSpotActorJoinResult> admitActorJoin(
             Supplier<CompletionStage<ZLinkSpotActorJoinResult>> operation) {
+        host.ensureOwnerAdmissionOpen();
         return host.admitNewApplicationJob(
                 context,
                 systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue.Origin

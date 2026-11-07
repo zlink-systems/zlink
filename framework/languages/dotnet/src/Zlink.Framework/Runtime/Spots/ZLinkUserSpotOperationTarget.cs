@@ -8,7 +8,8 @@ internal sealed class ZLinkUserSpotOperationTarget(
     ZLinkSpotNodeCatalog catalog,
     IZLinkBackendSpotNode node,
     ZLinkSpotNodeRegistration registration,
-    ZLinkCodecRegistryBuilder codecs
+    ZLinkCodecRegistryBuilder codecs,
+    ZLinkLocationLifecycle? locationLifecycle = null
 ) : IUserSpotOperationTarget
 {
     public async ValueTask<UserSpotOperationTerminal> CreateAsync(
@@ -16,6 +17,7 @@ internal sealed class ZLinkUserSpotOperationTarget(
         CancellationToken cancellationToken
     )
     {
+        locationLifecycle?.EnsureOwnerAdmissionOpen();
         var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(operation.SpotId);
         var read = await authorityStore
             .ReadAuthorityAsync(key, cancellationToken)
@@ -134,6 +136,7 @@ internal sealed class ZLinkUserSpotOperationTarget(
         ZLinkObjectCommitResult committed;
         try
         {
+            locationLifecycle?.EnsureOwnerAdmissionOpen();
             committed = await authorityStore
                 .CommitAsync(
                     Reservation(operation, key, snapshot),

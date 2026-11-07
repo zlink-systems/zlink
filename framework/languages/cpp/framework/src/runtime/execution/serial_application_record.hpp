@@ -174,11 +174,7 @@ struct serial_application_record_t
             // The accepted routing identity survives; the invocation is the sole body owner.
             owned.payload = std::vector<std::uint8_t>{};
             const auto discard_body = [] (protocol::application_payload_t &application) {
-                application = protocol::application_payload_t{std::move (application.packet_name),
-                                                              std::move (application.content_type),
-                                                              {},
-                                                              std::move (application.flow_id),
-                                                              application.flow_origin};
+                application.release_body ();
             };
             if (owned.application_record) {
                 std::visit ([&] (auto &value) { discard_body (value.application); },

@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.host;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -114,7 +115,7 @@ final class ZLinkLocationRuntimeHostStartupTest {
     }
 
     @Test
-    void ownerAdmissionDeadlineGatesAndResumesAllOwnerBoundWork() throws Exception {
+    void ownerAdmissionDeadlineDiscardsOldIncarnationsAndAdmitsNewWork() throws Exception {
         ProbeSpot.reset();
         ProbeActorFactory.reset();
         RecoveringLocationStore store = new RecoveringLocationStore(true);
@@ -167,6 +168,7 @@ final class ZLinkLocationRuntimeHostStartupTest {
                     .submit()
                     .toCompletableFuture()
                     .get(2, TimeUnit.SECONDS);
+            ProbeSpot originalSpot = ProbeSpot.last;
             long descriptorRevision = store.descriptors().getFirst().descriptorRevision();
             assertEquals("pong:open", request("open"));
             await(() -> ProbeSpot.timerTicks.get() > 0, Duration.ofSeconds(1));
@@ -210,7 +212,14 @@ final class ZLinkLocationRuntimeHostStartupTest {
                                             > descriptorRevision,
                     Duration.ofSeconds(1));
             runtime.routeMeshRuntimeOptionsInternal().mesh("game").setPlacementWeight(80);
-            assertEquals("pong:recovered", request("recovered"));
+            assertThrows(Exception.class, () -> request("discarded-incarnation"));
+            runtime.spotManager()
+                    .getOrCreate("recovered-probe", "probe")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
+            assertNotSame(originalSpot, ProbeSpot.last);
+            assertEquals("pong:recovered", request("recovered-probe", "recovered"));
             await(() -> ProbeSpot.timerTicks.get() > ticksWhileClosed, Duration.ofSeconds(1));
             ProbeActorFactory.unblock();
             runtime.actorManager()
@@ -225,10 +234,14 @@ final class ZLinkLocationRuntimeHostStartupTest {
     }
 
     private static String request(String value) throws Exception {
+        return request("probe", value);
+    }
+
+    private static String request(String spotId, String value) throws Exception {
         return ProbeSpot.last
                 .context()
                 .outbound()
-                .requestToSpot("probe", new Ping(value))
+                .requestToSpot(spotId, new Ping(value))
                 .timeout(Duration.ofMillis(250))
                 .submit(Pong.class)
                 .toCompletableFuture()

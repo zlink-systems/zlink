@@ -1413,9 +1413,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                             () ->
                                     ZLinkHandlerStages.fromRunnable(
                                             () ->
-                                                    relocationReplies
-                                                            .closeActorTimersAfterRelocation(
-                                                                    owned.actorId())),
+                                                    relocationReplies.closeActorTimers(
+                                                            owned.actorId())),
                             () -> actors.retireCommittedRelocationSource(owned.actorId())));
         }
 

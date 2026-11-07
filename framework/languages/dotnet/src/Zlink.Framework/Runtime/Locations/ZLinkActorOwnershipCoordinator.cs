@@ -92,7 +92,9 @@ internal sealed class ZLinkActorOwnershipCoordinator(
 
         try
         {
+            runtime.EnsureOwnerAdmissionOpen();
             var activated = await activate(cancellationToken).ConfigureAwait(false);
+            runtime.EnsureOwnerAdmissionOpen();
             return new ZLinkActorClaimActivation<TActor>(activated, null);
         }
         catch (Exception activationFailure)
