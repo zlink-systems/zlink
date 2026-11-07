@@ -224,6 +224,10 @@ final class ZLinkActorSpotAdmission {
         return actors;
     }
 
+    void discardLocalMembers(systems.zlink.framework.spots.ZLinkSpot<?> spot) {
+        if (actors != null) actors.discardLocalMembers(spot);
+    }
+
     ZLinkActorRuntime runtime() {
         return requireActors();
     }

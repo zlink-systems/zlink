@@ -16,6 +16,16 @@ import java.util.function.Supplier;
 abstract class ZLinkSpotContextHost {
     void ensureOwnerAdmissionOpen() {}
 
+    systems.zlink.framework.runtime.locations.ZLinkLocationRuntime.Execution execution(
+            DefaultSpotContext context) {
+        return null;
+    }
+
+    systems.zlink.framework.runtime.locations.ZLinkLocationRuntime.Execution execution(
+            DefaultInstanceSpotContext context) {
+        return null;
+    }
+
     abstract Executor serialExecutor();
 
     /** Executor for runtime control work that must progress during relocation. */
