@@ -858,7 +858,8 @@ raw_client_server_server_t::next_liveness_activity_owned () const
 task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_record_t &request,
                                                 const protocol::application_payload_t &payload)
 {
-    return reply (request, zlink::message_t::from (payload.payload_bytes ()), payload.content_type);
+    return reply (request, zlink::message_t::from (payload.payload_bytes ()),
+                  payload.content_type ());
 }
 
 task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_record_t &request,
@@ -1535,7 +1536,7 @@ task_t<zlink::submit_result_t>
 raw_client_server_client_t::send (const protocol::application_payload_t &payload,
                                   std::map<std::string, std::string> metadata)
 {
-    return send (payload.packet_name, payload.content_type,
+    return send (payload.packet_name (), payload.content_type (),
                  zlink::message_t::from (payload.payload_bytes ()), std::move (metadata));
 }
 
@@ -1595,7 +1596,7 @@ raw_client_server_client_t::request (const protocol::application_payload_t &payl
                                      std::chrono::milliseconds timeout,
                                      std::map<std::string, std::string> metadata)
 {
-    return request (payload.packet_name, payload.content_type,
+    return request (payload.packet_name (), payload.content_type (),
                     zlink::message_t::from (payload.payload_bytes ()), timeout,
                     std::move (metadata));
 }

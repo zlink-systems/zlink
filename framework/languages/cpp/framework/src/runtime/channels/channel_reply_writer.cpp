@@ -11,18 +11,18 @@ namespace zlink::framework::detail
 
 runtime::messaging::envelope_header_t channel_reply_writer_t::create_reply_header (
   runtime::messaging::message_kind_t kind,
-  std::string channel_name,
+  std::string_view channel_name,
   const runtime::messaging::envelope_header_t &request) const
 {
     return {.kind = kind,
-            .channel_name = std::move (channel_name),
-            .message_name = request.message_name,
-            .content_type = request.content_type,
-            .correlation_id = request.correlation_id};
+            .channel_name = runtime::messaging::header_text_t::view (channel_name),
+            .message_name = runtime::messaging::header_text_t::view (request.message_name),
+            .content_type = runtime::messaging::header_text_t::view (request.content_type),
+            .correlation_id = runtime::messaging::header_text_t::view (request.correlation_id)};
 }
 
 runtime::messaging::envelope_header_t
-channel_reply_writer_t::create_error_header (std::string channel_name,
+channel_reply_writer_t::create_error_header (std::string_view channel_name,
                                              const runtime::messaging::envelope_header_t &request,
                                              const framework_exception_t &error) const
 {

@@ -38,7 +38,7 @@ class client_call_codec_t
 
     message_parts_t encode_payload_parts (const envelope_header_t &header,
                                           encoded_payload_t payload,
-                                          const std::string &content_type) const;
+                                          std::string_view content_type) const;
 
     template <typename TEncodePayload>
     message_parts_t encode_node_send_parts (const std::string &channel_name,

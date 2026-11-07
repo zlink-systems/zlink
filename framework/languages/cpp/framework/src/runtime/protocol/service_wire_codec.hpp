@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -81,11 +82,9 @@ struct application_payload_t
                            std::vector<std::uint8_t> bytes,
                            std::optional<std::string> flow = {},
                            std::optional<flow_origin_t> origin = {}) :
-        packet_name (std::move (packet)),
-        content_type (std::move (content)),
         flow_id (std::move (flow)),
         flow_origin (origin),
-        _body (std::move (bytes))
+        _body (byte_payload_t{std::move (packet), std::move (content), std::move (bytes)})
     {
     }
 
@@ -94,15 +93,19 @@ struct application_payload_t
     const multipart_t *parts () const noexcept { return std::get_if<multipart_t> (&_body); }
     const std::vector<std::uint8_t> &payload_bytes () const
     {
-        return std::get<std::vector<std::uint8_t>> (_body);
+        return std::get<byte_payload_t> (_body).bytes;
     }
-    std::vector<std::uint8_t> &payload_bytes ()
-    {
-        return std::get<std::vector<std::uint8_t>> (_body);
-    }
+    std::vector<std::uint8_t> &payload_bytes () { return std::get<byte_payload_t> (_body).bytes; }
 
-    std::string packet_name;
-    std::string content_type;
+    void release_body ()
+    {
+        if (auto *messages = std::get_if<multipart_t> (&_body))
+            multipart_t{}.swap (*messages);
+        else
+            std::vector<std::uint8_t>{}.swap (std::get<byte_payload_t> (_body).bytes);
+    }
+    const std::string &packet_name () const noexcept;
+    const std::string &content_type () const noexcept;
     std::optional<std::string> flow_id;
     std::optional<flow_origin_t> flow_origin;
 
@@ -110,12 +113,20 @@ struct application_payload_t
 
   private:
     // The codec owns either incoming bytes or outgoing parts, never both.
-    std::variant<std::vector<std::uint8_t>, multipart_t> _body;
+    struct byte_payload_t
+    {
+        std::string packet_name;
+        std::string content_type;
+        std::vector<std::uint8_t> bytes;
+    };
+    std::variant<byte_payload_t, multipart_t> _body;
 };
 
 // Shared inverse of application_payload_t::from_parts; used by dispatch and diagnostics.
 application_payload_t::multipart_t decode_application_parts (const application_payload_t &payload);
 zlink::message_t decode_application_header (const application_payload_t &payload);
+std::size_t decode_application_part_views (const application_payload_t &payload,
+                                           std::span<std::span<const std::byte>> descriptors);
 
 struct spot_route_fence_t
 {
@@ -1033,6 +1044,9 @@ application_payload_t decode_application_payload (std::span<const std::uint8_t> 
                                                   bool capture_flow = true);
 std::vector<std::span<const std::byte>>
 decode_application_part_views (std::span<const std::uint8_t> bytes, bool capture_flow = true);
+std::pmr::vector<std::span<const std::byte>> decode_application_part_views (
+  std::span<const std::uint8_t> bytes, bool capture_flow, std::pmr::memory_resource *storage);
+
 application_payload_t::multipart_t decode_application_parts (zlink::message_t &&bytes,
                                                              bool capture_flow = true);
 

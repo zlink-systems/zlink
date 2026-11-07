@@ -64,11 +64,23 @@ route_handler_invoker_t::invoke (const route_handler_registry_t::entry_t &handle
     // Frame-local terminal ownership follows scope, payload and callback cleanup.
     auto completed = result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt);
     try {
-        completed = complete ? complete (result)
-                    : result
-                      ? result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt)
-                      : propagate_failure<std::optional<route_dispatch_reply_t>> (
-                          result, "routed handler failed");
+        completed = std::visit (
+          [&] (const auto &completion) {
+              using completion_type = std::decay_t<decltype (completion)>;
+              if constexpr (std::is_same_v<completion_type, route_request_completion_t>)
+                  return completion (result, context);
+              else {
+                  if constexpr (std::is_same_v<completion_type, callback_completion_t>) {
+                      if (completion)
+                          return completion (result);
+                  }
+                  return result
+                           ? result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt)
+                           : propagate_failure<std::optional<route_dispatch_reply_t>> (
+                               result, "routed handler failed");
+              }
+          },
+          complete);
     }
     catch (...) {
         completed = current_exception_result<std::optional<route_dispatch_reply_t>> ();
