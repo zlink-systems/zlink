@@ -949,7 +949,8 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
                && queue->try_post_async (std::move (name), std::move (work), std::move (options));
     }
 
-    void close (std::vector<task_t<void>> *completions = nullptr)
+    void close (std::vector<task_t<void>> *completions = nullptr,
+                queue_t::execution_status_t status = queue_t::execution_status_t::stopped)
     {
         std::vector<queue_ptr_t> queues;
         if (!_state_lane || _state_lane->is_on_lane ())
@@ -960,9 +961,9 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
             if (!queue)
                 continue;
             if (completions)
-                completions->push_back (queue->cancel_pending_async ());
+                completions->push_back (queue->cancel_pending_async (status));
             else
-                queue->cancel_pending ();
+                queue->cancel_pending (status);
         }
     }
 
@@ -1993,7 +1994,13 @@ class spot_node_runtime_t
     void bind_location_lifecycle (runtime::location_lifecycle_t &lifecycle);
     void request_location_execution_discard (
       runtime::serial_execution_queue_t::execution_admission_t allowed);
-    task_t<result_t<bool>> discard_local_actor_async (actor_ref_t actor);
+    void observe_location_authority (authority_key_t key,
+                                     authority_snapshot_t snapshot,
+                                     std::string expected_owner);
+    task_t<result_t<bool>>
+    discard_local_actor_async (actor_ref_t actor,
+                               runtime::serial_execution_queue_t::execution_status_t status =
+                                 runtime::serial_execution_queue_t::execution_status_t::stopped);
     task_t<runtime::serial_execution_queue_t::ready_confirmation_t>
     prepare_store_ready (runtime::stateful::object_ref_t object);
     void bind_spot_location_resolver (std::shared_ptr<runtime::spot_address_resolver_t> resolver);

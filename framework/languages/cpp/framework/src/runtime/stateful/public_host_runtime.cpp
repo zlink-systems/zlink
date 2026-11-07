@@ -1220,7 +1220,9 @@ public_host_runtime_t::~public_host_runtime_t ()
 void public_host_runtime_t::configure_location_execution (
   std::function<std::chrono::steady_clock::time_point ()> clock,
   std::function<task_t<runtime::serial_execution_queue_t::ready_confirmation_t> (
-    stateful::object_ref_t)> observer)
+    stateful::object_ref_t)> observer,
+  std::function<std::optional<location_owner_token_t> (const runtime::serial_execution_queue_t &)>
+    bound_owner)
 {
     if (!clock || !observer)
         throw std::invalid_argument (
@@ -1230,6 +1232,7 @@ void public_host_runtime_t::configure_location_execution (
             throw std::logic_error ("Location execution must be configured before host start");
         _location_execution_clock = std::move (clock);
         _store_ready_observer = std::move (observer);
+        _bound_execution_owner = std::move (bound_owner);
     });
 }
 
@@ -1364,6 +1367,22 @@ public_host_runtime_t::accepted_record_authority (
             || query.target_node_generation != local.lifecycle_generation)
             throw detail_make_boundary_exception (detail::boundary_error_t::stale_generation,
                                                   "accepted target fence is stale");
+        // Admission has ended: only the exact mailbox's retained execution owner may accept.
+        // Healthy admission continues without this state-lane lookup.
+        if (!owner && _bound_execution_owner) {
+            auto gate = _objects.execution_gate (query.target);
+            return continue_task<authority_t> (
+              std::move (gate),
+              [self = shared_from_this (), query = std::move (query),
+               sources] (std::shared_ptr<runtime::serial_execution_queue_t> queue) mutable {
+                  auto token = queue ? self->_bound_execution_owner (*queue) : std::nullopt;
+                  if (!token)
+                      return task_t<authority_t> (result_t<authority_t>::success (std::nullopt));
+                  return self->accepted_record_authority (
+                    std::move (query),
+                    std::make_shared<const location_owner_token_t> (std::move (*token)), sources);
+              });
+        }
         const auto finish =
           [owner = std::move (owner)] (stateful::accepted_record_authority_query_t query) {
               authority_t accepted;
