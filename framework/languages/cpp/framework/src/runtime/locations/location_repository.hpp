@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/operations/call_id.hpp"
+#include "runtime/locations/actor_authority_payload.hpp"
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
 #include <zlink/framework/contracts/locations/diagnostics.hpp>
@@ -27,6 +28,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -64,6 +66,8 @@ struct spot_type_capacity_delta_t
     placement_object_kind_t object_kind = placement_object_kind_t::user_spot;
     std::string stable_type;
     std::uint32_t slots = 0;
+
+    bool operator== (const spot_type_capacity_delta_t &) const = default;
 };
 
 struct placement_capacity_bundle_t
@@ -71,6 +75,8 @@ struct placement_capacity_bundle_t
     std::uint32_t actor_slots = 0;
     std::uint32_t spot_slots = 0;
     std::optional<spot_type_capacity_delta_t> spot_type;
+
+    bool operator== (const placement_capacity_bundle_t &) const = default;
 };
 
 struct placement_allocation_t
@@ -88,6 +94,8 @@ struct pending_object_creation_t
     std::string request_content_reference;
     std::array<std::byte, 32> request_sha256{};
     std::uint32_t request_encoded_size = 0;
+
+    bool operator== (const pending_object_creation_t &) const = default;
 };
 
 struct authority_snapshot_t
@@ -100,6 +108,17 @@ struct authority_snapshot_t
     std::chrono::system_clock::time_point store_now;
     placement_allocation_t allocation;
     std::optional<pending_object_creation_t> pending_creation;
+
+    bool same_incarnation (const authority_snapshot_t &other) const
+    {
+        const auto &target = allocation.target;
+        const auto &next = other.allocation.target;
+        return object_generation == other.object_generation
+               && authority_owner_generation == other.authority_owner_generation
+               && owner.owner_id == other.owner.owner_id && target.mesh_name == next.mesh_name
+               && target.node_rid.value () == next.node_rid.value ()
+               && target.node_lifecycle_generation == next.node_lifecycle_generation;
+    }
 };
 
 struct authority_missing_t
@@ -151,6 +170,69 @@ struct authority_put_t
 {
     std::vector<std::byte> payload;
     std::optional<std::chrono::steady_clock::time_point> operation_deadline;
+    std::shared_ptr<const std::pair<authority_snapshot_t, location_owner_token_t>> preservation;
+
+    static authority_put_t preserve (authority_snapshot_t snapshot, location_owner_token_t owner)
+    {
+        auto payload = snapshot.payload;
+        const auto replace = [&] (auto value, auto encode) {
+            value.owner_id = owner.owner_id;
+            value.owner_lease_generation = static_cast<std::uint64_t> (owner.lease_generation);
+            return encode (value);
+        };
+        if (const auto actor = runtime::decode_direct_actor_authority_payload (payload))
+            payload = replace (
+              *actor, [] (const auto &v) { return runtime::encode_actor_authority_payload (v); });
+        else if (const auto spot = runtime::decode_direct_user_spot_authority_payload (payload))
+            payload = replace (*spot, [] (const auto &v) {
+                return runtime::encode_user_spot_authority_payload (v);
+            });
+        else if (const auto spot = runtime::decode_instance_spot_authority_payload (payload))
+            payload = replace (*spot, [] (const auto &v) {
+                return runtime::encode_instance_spot_authority_payload (v);
+            });
+        return {std::move (payload), std::nullopt,
+                std::make_shared<const std::pair<authority_snapshot_t, location_owner_token_t>> (
+                  std::move (snapshot), std::move (owner))};
+    }
+
+    bool matches_preserved (const authority_snapshot_t &current) const
+    {
+        if (!preservation)
+            return false;
+        const auto &[before, owner] = *preservation;
+        bool ready = false;
+        if (!current.pending_creation) {
+            if (current.allocation.object_kind == placement_object_kind_t::actor) {
+                const auto actor = runtime::decode_direct_actor_authority_payload (current.payload);
+                ready = actor && actor->state == runtime::actor_authority_state_t::ready
+                        && !actor->has_relocation_state;
+            } else if (current.allocation.object_kind == placement_object_kind_t::user_spot) {
+                ready =
+                  runtime::decode_ready_user_spot_authority_payload (current.payload).has_value ();
+            } else if (current.allocation.object_kind == placement_object_kind_t::instance_spot) {
+                const auto spot = runtime::decode_instance_spot_authority_payload (current.payload);
+                ready = spot && spot->state == runtime::instance_spot_authority_state_t::ready
+                        && !spot->activation_recovery;
+            }
+        }
+        if (!ready)
+            return false;
+        const auto &a = before.allocation;
+        const auto &b = current.allocation;
+        return before.same_incarnation (current) && before.store_version == current.store_version
+               && before.owner.lease_generation == current.owner.lease_generation
+               && before.pending_creation == current.pending_creation
+               && before.payload == current.payload
+               && a.state == placement_allocation_state_t::active && a.state == b.state
+               && a.object_kind == b.object_kind && a.stable_type == b.stable_type
+               && a.capacity_bundle == b.capacity_bundle
+               && a.target.owner.owner_id == b.target.owner.owner_id
+               && a.target.owner.lease_generation == b.target.owner.lease_generation
+               && current.owner.owner_id == owner.owner_id
+               && current.owner.lease_generation != owner.lease_generation
+               && payload == preserve (before, owner).payload;
+    }
 };
 struct authority_reincarnate_t
 {
@@ -591,10 +673,61 @@ class location_repository_t
     release_ended_reservation (authority_key_t key,
                                std::string expected_store_version,
                                std::stop_token cancellation = {},
-                               std::optional<object_reserve_request_t> request = std::nullopt)
+                               std::optional<object_reserve_request_t> request = std::nullopt,
+                               std::optional<authority_snapshot_t> discarded = std::nullopt)
     {
         throw std::logic_error ("Reservation lifecycle recovery is not supported");
         co_return false;
+    }
+    task_t<bool> cleanup_discarded (authority_key_t key,
+                                    authority_snapshot_t discarded,
+                                    location_owner_token_t current_owner,
+                                    std::stop_token cancellation = {})
+    {
+        if (current_owner.owner_id != discarded.owner.owner_id)
+            throw std::invalid_argument ("Discard cleanup requires the same owner identity");
+        const auto read = co_await read_authority_core (key, cancellation);
+        const auto *current = std::get_if<authority_snapshot_t> (&read);
+        if (!current || !discarded.same_incarnation (*current))
+            co_return true;
+        if (current->allocation.state != placement_allocation_state_t::active)
+            co_return false;
+        if (current->allocation.object_kind == placement_object_kind_t::user_spot) {
+            const auto spot = runtime::decode_direct_user_spot_authority_payload (current->payload);
+            if (!spot)
+                co_return false;
+            std::optional<authority_scan_cursor_t> cursor;
+            do {
+                const auto scanned =
+                  co_await list_authorities ("", cursor, location_page_item_limit, cancellation);
+                const auto *page = std::get_if<authority_page_t> (&scanned);
+                if (!page)
+                    co_return false;
+                for (const auto &entry : page->items) {
+                    const auto member =
+                      runtime::decode_direct_actor_authority_payload (entry.snapshot.payload);
+                    if (member
+                        && member->current_spot_kind == runtime::actor_authority_spot_kind_t::user
+                        && member->current_spot_id == spot->spot_id
+                        && member->current_spot_generation == current->object_generation)
+                        co_return false;
+                }
+                cursor = page->next_cursor;
+            } while (cursor);
+        }
+        const auto lease = co_await read_owner_lease (current->owner.owner_id);
+        const auto *found = std::get_if<owner_lease_found_t> (&lease);
+        const bool live = found && found->token.lease_generation == current->owner.lease_generation
+                          && found->lease_expires_at > found->store_now;
+        if (live) {
+            if (current->owner.lease_generation != current_owner.lease_generation)
+                co_return false;
+            const auto deleted = co_await compare_exchange_authority_core (
+              key, current->store_version, authority_delete_t{}, cancellation);
+            co_return std::holds_alternative<authority_deleted_t> (deleted);
+        }
+        co_return co_await release_ended_reservation (key, current->store_version, cancellation,
+                                                      std::nullopt, std::move (discarded));
     }
     task_t<object_reserve_result_t> reserve (object_reserve_request_t request,
                                              std::stop_token cancellation = {})
