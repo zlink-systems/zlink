@@ -42,8 +42,17 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
     }
 
     public ZLinkLocationRuntime.Execution execution(
-            java.util.function.BooleanSupplier steady, Runnable cleanup) {
-        return runtime.execution(steady, cleanup);
+            String actorId,
+            java.util.function.BooleanSupplier steady,
+            java.util.function.Function<ZLinkAuthoritySnapshot, CompletionStage<Void>> apply,
+            java.util.function.Supplier<String> parent,
+            Runnable cleanup) {
+        return runtime.execution(
+                () -> actors.containsKey(actorId) ? ZLinkAuthorityKeyCodec.actor(actorId) : null,
+                steady,
+                apply,
+                parent,
+                cleanup);
     }
 
     public boolean isOwnerAdmissionOpen() {
@@ -339,8 +348,8 @@ public final class ZLinkLocationLifecycle implements AutoCloseable {
                         cancellation)
                 .thenCompose(
                         written -> {
-                            if (written instanceof ZLinkAuthorityStored)
-                                return CompletableFuture.completedFuture(null);
+                            if (written instanceof ZLinkAuthorityStored stored)
+                                return runtime.confirmAuthority(actorKey, stored);
                             String message =
                                     "Actor Spot join authority CAS conflicted: " + actor.actorId();
                             if (written instanceof ZLinkAuthorityConflict conflict) {
