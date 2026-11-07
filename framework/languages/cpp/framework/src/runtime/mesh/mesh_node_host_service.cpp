@@ -113,11 +113,12 @@ dispatch_error_surface_t application_dispatch_surface (host::record_kind_t kind)
 }
 }
 
+template <bool BorrowHeader>
 result_t<std::optional<messaging::envelope_header_t>>
-decode_mesh_record_header (const host::receive_record_t &record,
-                           std::vector<zlink::message_t> &parts,
-                           bool capture_flow,
-                           const dispatch_options_t &dispatch_options)
+decode_mesh_record_header_impl (const host::receive_record_t &record,
+                                std::vector<zlink::message_t> &parts,
+                                bool capture_flow,
+                                const dispatch_options_t &dispatch_options)
 {
     using kind_t = host::record_kind_t;
     using header_result_t = result_t<std::optional<messaging::envelope_header_t>>;
@@ -143,7 +144,9 @@ decode_mesh_record_header (const host::receive_record_t &record,
                                                     ? detail::stream_message_kind_t::send
                                                     : detail::stream_message_kind_t::request,
                                                   capture_flow)
-            : messaging::envelope_codec_t{}.decode_header (encoded, capture_flow, &rejected_header);
+      : BorrowHeader
+        ? messaging::envelope_codec_t{}.decode_header_view (encoded, capture_flow, &rejected_header)
+        : messaging::envelope_codec_t{}.decode_header (encoded, capture_flow, &rejected_header);
     parts = std::move (encoded).take_items ();
     if (decoded)
         return header_result_t::success (std::move (decoded.value ()));
@@ -222,6 +225,24 @@ struct mesh_node_host_service_t::actor_destroy_callback_gate_t
         changed.wait (lock, [this] { return active == 0; });
     }
 };
+
+result_t<std::optional<messaging::envelope_header_t>>
+decode_mesh_record_header (const host::receive_record_t &record,
+                           std::vector<zlink::message_t> &parts,
+                           bool capture_flow,
+                           const dispatch_options_t &dispatch_options)
+{
+    return decode_mesh_record_header_impl<false> (record, parts, capture_flow, dispatch_options);
+}
+
+result_t<std::optional<messaging::envelope_header_t>>
+decode_mesh_record_header_view (const host::receive_record_t &record,
+                                std::vector<zlink::message_t> &parts,
+                                bool capture_flow,
+                                const dispatch_options_t &dispatch_options)
+{
+    return decode_mesh_record_header_impl<true> (record, parts, capture_flow, dispatch_options);
+}
 
 application_dispatch_terminal_owner_t::application_dispatch_terminal_owner_t (
   std::shared_ptr<detail::mesh_node_runtime_t> node,
@@ -360,7 +381,7 @@ decode_actor_creation_intent (const std::vector<std::byte> &stored)
         for (const auto value : stored)
             bytes.push_back (std::to_integer<std::uint8_t> (value));
         const auto application = protocol::decode_application_payload (bytes);
-        if (application.packet_name != framework_creation_packet_name)
+        if (application.packet_name () != framework_creation_packet_name)
             return std::nullopt;
         const auto body = application.payload_bytes ();
         std::vector<std::byte> result;
@@ -473,8 +494,8 @@ actor_terminal_envelope (terminal_codec::request_terminal_result_t terminal_resu
     }
     if (reply) {
         terminal.applicationPayload = terminal_codec::application_payload_envelope_v1_t{
-          terminal_codec::packet_name_t{reply->packet_name},
-          terminal_codec::content_type_t{reply->content_type},
+          terminal_codec::packet_name_t{reply->packet_name ()},
+          terminal_codec::content_type_t{reply->content_type ()},
           terminal_codec::application_payload_bytes_t{reply->payload_bytes ()}};
     }
     const terminal_codec::codec_context_t context{1024 * 1024, 1024 * 1024};
@@ -541,6 +562,37 @@ actor_create_result_t actor_result_from_terminal (const creation_terminal_record
  * authority body for the chosen placement target; only the state differs.
  * The target decodes this slot before it materializes the Actor, so the
  * Application request must never be written here (#549). */
+task_t<object_complete_creation_result_t>
+complete_actor_creation (std::shared_ptr<host::public_host_runtime_t> node,
+                         std::shared_ptr<location_repository_t> store,
+                         object_complete_creation_request_t request,
+                         std::string stable_type)
+{
+    const auto fence = request.fence;
+    const auto key = request.key;
+    std::function<void ()> confirm;
+    if (node && std::holds_alternative<object_creation_completed_t> (request.completion))
+        confirm = co_await node->prepare_store_ready (
+          {stateful::object_kind_t::actor, key.global_id, fence.object_generation,
+           fence.authority_owner_generation, fence.target.mesh_name,
+           std::string (fence.target.node_rid.value ())});
+    auto result = co_await store->complete_creation (std::move (request));
+    bool ready = false;
+    if (const auto *completed = std::get_if<object_creation_completed_result_t> (&result))
+        ready = completed->ready.has_value ();
+    else if (const auto *already =
+               std::get_if<object_creation_already_completed_result_t> (&result)) {
+        const auto terminal =
+          actor_result_from_terminal (already->terminal, fence.target.node_rid, stable_type,
+                                      [] (zlink::message_t) { return message_t{}; });
+        const auto *created = std::get_if<actor_create_created_t> (&terminal);
+        ready = created && created->actor.object_generation () == fence.object_generation;
+    }
+    if (ready && confirm)
+        confirm ();
+    co_return result;
+}
+
 std::vector<std::byte> target_actor_authority_payload (actor_authority_state_t state,
                                                        const std::string &stable_type,
                                                        const actor_id_t &actor_id,
@@ -785,7 +837,7 @@ mesh_node_host_service_t::mesh_node_host_service_t (
     _registrations (std::move (registrations)),
     _serializers (&serializers),
     _filters (&filters),
-    _dispatch_options (std::move (dispatch_options)),
+    _dispatch_options (std::make_shared<const dispatch_options_t> (std::move (dispatch_options))),
     _application_dispatch (std::make_shared<offload_executor_t> (
       _registrations.size () + 1,
       _registrations.size ()
@@ -1346,8 +1398,13 @@ task_t<actor_create_result_t> mesh_node_host_service_t::complete_local_actor_cre
           publication};
     else
         completion = object_creation_rejected_t{publication};
+    std::shared_ptr<host::public_host_runtime_t> owner;
+    for (const auto &local : _nodes)
+        if (target.rid == local->native_node ().status ().routing_id ())
+            owner = local->native_node ().shared_from_this ();
     const auto completed = co_await await_result (
-      _location_store->complete_creation ({reserve_key, fence, std::move (completion)}));
+      complete_actor_creation (std::move (owner), _location_store,
+                               {reserve_key, fence, std::move (completion)}, stable_type));
     if (!completed)
         co_return detail::propagate_failure<actor_create_result_t> (
           completed, "Actor creation completion failed");
@@ -1434,10 +1491,14 @@ task_t<result_t<void>> mesh_node_host_service_t::finalize_local_actor_destroy (a
     }
 
     const auto node = co_await find_local_actor_node_async (actor.node_rid ());
+    const auto cleaned = co_await detail::cleanup_local_actor_resources (
+      {}, _services ? std::optional<service_provider_t>{*_services} : std::nullopt, actor);
+    if (!cleaned)
+        co_return cleaned;
     if (node) {
-        const auto cleaned = co_await node->cleanup_application_actor_stateful (actor);
-        if (!cleaned)
-            co_return cleaned;
+        const auto native_cleaned = co_await node->cleanup_application_actor_stateful (actor);
+        if (!native_cleaned)
+            co_return native_cleaned;
     }
 
     std::optional<authority_snapshot_t> removed_snapshot;
@@ -1494,14 +1555,6 @@ task_t<result_t<void>> mesh_node_host_service_t::finalize_local_actor_destroy (a
         }
     }
 
-    if (_services) {
-        if (auto gateway = _services->get<detail::actor_gateway_runtime_t> ()) {
-            const auto cleaned = co_await gateway->get ().destroy_actor_async (actor);
-            if (!cleaned) {
-                co_return cleaned;
-            }
-        }
-    }
     co_return result_t<void>::success ();
 }
 
@@ -2152,7 +2205,7 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
 
         const auto count =
           std::move (
-            node->dispatch_ready (
+            node->dispatch_hosted_ready (
               [&] (const host::ready_record_t &owner, const host::receive_record_t &record,
                    std::vector<zlink::message_t> parts, application_job_queue_t::permit_t permit) {
                   auto accepted_record = record;
@@ -2209,7 +2262,7 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
                       bool handled = false;
                       try {
                           run_direct ([&] {
-                              const auto header = decode_mesh_record_header (
+                              const auto header = decode_mesh_record_header_view (
                                 record, parts,
                                 detail::message_flow_tracer_t (host._dispatch_options)
                                   .flow_tracing (),
@@ -2258,7 +2311,7 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
                       return;
                   }
                   run_direct ([&] {
-                      auto decoded_header = decode_mesh_record_header (
+                      auto decoded_header = decode_mesh_record_header_view (
                         record, parts,
                         detail::message_flow_tracer_t (host._dispatch_options).flow_tracing (),
                         host._dispatch_options);
@@ -2336,7 +2389,7 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
         // take. Recheck its owner state before waiting for the next rotation.
         if (!local_pending && !ready && !host._stop.load (std::memory_order_acquire)
             && !supply.has_supply ()) {
-            readiness = node->native_node ().wait_for_dispatch_activity (
+            readiness = node->native_node ().wait_for_hosted_dispatch_activity (
               std::chrono::milliseconds (-1), accept_application_receive, next_activity);
         }
         mesh::service_mailbox_t::notify_application_ready (ready);
@@ -2429,7 +2482,7 @@ void execute_actor_create_operation_target (
             return;
         }
         const auto publish =
-          [request, store, target,
+          [request, store, target, node,
            fence] (std::optional<terminal_codec::actor_create_result_t> creation_result,
                    std::optional<actor_ref_t> actor,
                    const std::optional<protocol::application_payload_t> &application_reply,
@@ -2461,9 +2514,11 @@ void execute_actor_create_operation_target (
                   target_completion = object_creation_failed_t{terminal};
               }
               auto published =
-                store->complete_creation ({{placement_object_kind_t::actor, request.actor_id},
-                                           fence,
-                                           std::move (target_completion)});
+                complete_actor_creation (node->native_node ().shared_from_this (), store,
+                                         {{placement_object_kind_t::actor, request.actor_id},
+                                          fence,
+                                          std::move (target_completion)},
+                                         request.stable_type);
               detail::observe_task_completion (
                 published, [done = std::move (done)] (
                              const result_t<object_complete_creation_result_t> &result) {
@@ -2603,6 +2658,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
     try {
         _completion_dispatcher = detail::borrow_completion_dispatcher ();
         _services = &services;
+        for (const auto &registration : _registrations)
+            registration->handlers.bind_codecs (*_serializers);
         const auto actor_gateway = services.get<detail::actor_gateway_runtime_t> ();
         if (actor_gateway) {
             actor_gateway->get ().bind_serializers (*_serializers);
@@ -2899,8 +2956,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                         auto running = std::make_shared<task_t<zlink::message_t>> (
                           detail::spot_node_runtime_t (registration->spot_state)
                             .dispatch_instance_activation (
-                              spot_id_t (request.target.spot_id), application.packet_name,
-                              application.content_type, application.payload_bytes (),
+                              spot_id_t (request.target.spot_id), application.packet_name (),
+                              application.content_type (), application.payload_bytes (),
                               std::move (decoded), request.request,
                               std::to_string (request.operation.high) + ":"
                                 + std::to_string (request.operation.low),
@@ -2928,7 +2985,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                               std::optional<protocol::application_payload_t> response;
                               if (original_command->activation.request) {
                                   response = protocol::application_payload_t{
-                                    original_command->application_payload.packet_name,
+                                    original_command->application_payload.packet_name (),
                                     "application/octet-stream", reply.value ().to_bytes ()};
                                   if (detail::message_flow_tracer_t (_dispatch_options)
                                         .flow_tracing ()) {
@@ -3692,7 +3749,7 @@ void mesh_node_host_service_t::dispatch_application (
   service_provider_t *services,
   serializer_registry_t *serializers,
   const handler_registry_t *filters,
-  const dispatch_options_t &dispatch_options,
+  const detail::retained_dispatch_options_t &dispatch_options,
   serial_execution_queue_t::async_completion_t application_completed,
   offload_executor_t *executor,
   application_job_queue_t::permit_t application_permit)
@@ -3703,7 +3760,6 @@ void mesh_node_host_service_t::dispatch_application (
     application_dispatch_terminal_owner_t terminal (
       node, record.complete_stateful_dispatch, record.release_mailbox_reservation,
       handler_entry_t (record.before_application_handler, std::move (application_permit)));
-    std::shared_ptr<application_dispatch_terminal_owner_t> deferred_terminal;
     try {
         // A draining runtime admits no new application work, whatever the target
         // authority state is (Spot address messaging §9).
@@ -3717,16 +3773,13 @@ void mesh_node_host_service_t::dispatch_application (
                 application_completed ([] {});
             return;
         }
-        deferred_terminal =
-          std::make_shared<application_dispatch_terminal_owner_t> (std::move (terminal));
         detail::spot_node_runtime_t application_spot_runtime (registration->spot_state);
         bool terminal_deferred = false;
-        auto decoded_header = decode_mesh_record_header (
+        auto decoded_header = decode_mesh_record_header_view (
           record, parts, detail::message_flow_tracer_t (dispatch_options).flow_tracing (),
           dispatch_options);
         if (!decoded_header) {
-            if (deferred_terminal)
-                deferred_terminal->settle ();
+            terminal.settle ();
             if (application_completed)
                 application_completed ([] {});
             return;
@@ -3734,11 +3787,10 @@ void mesh_node_host_service_t::dispatch_application (
         handler_entry_t before;
         if (owner.owner_kind == host::owner_kind_t::spot
             || owner.owner_kind == host::owner_kind_t::actor)
-            before = deferred_terminal->take_application_entry ();
+            before = terminal.take_application_entry ();
         const auto handled = application_spot_runtime.dispatch_mesh_record (
-          owner, record, parts, decoded_header.value (), *services, *serializers,
-          [deferred_terminal] { deferred_terminal->settle (); }, &terminal_deferred,
-          std::move (before), application_completed);
+          owner, record, parts, decoded_header.value (), *services, *serializers, {},
+          &terminal_deferred, std::move (before), application_completed, &terminal);
         trace_mesh_application ("framework-dispatch", record, parts.size (),
                                 handled ? "handled" : "not-handled");
         if (!handled && decoded_header.value ()
@@ -3747,12 +3799,11 @@ void mesh_node_host_service_t::dispatch_application (
             // Callers always pass an empty application_completed for node and channel owners.
             // The native claim still owns settlement. Transfer its existing release
             // callback to the bounded pipeline handoff, leaving physical work retained.
-            terminal_callback_guard_t prefix (deferred_terminal->take_mailbox_reservation ());
+            terminal_callback_guard_t prefix (terminal.take_mailbox_reservation ());
             detail::mesh_record_dispatcher_t dispatcher (*services, *serializers,
                                                          registration->handlers, *filters,
                                                          dispatch_options, {}, registration);
-            auto invocation_terminal = std::move (*deferred_terminal);
-            deferred_terminal.reset ();
+            auto invocation_terminal = std::move (terminal);
             terminal_deferred = true;
             auto pending =
               dispatcher.dispatch (record, std::move (parts), std::move (*decoded_header.value ()),
@@ -3761,8 +3812,7 @@ void mesh_node_host_service_t::dispatch_application (
                                     pending.await_ready () ? "ready" : "pending");
         }
         if (!terminal_deferred) {
-            if (deferred_terminal)
-                deferred_terminal->settle ();
+            terminal.settle ();
             if (application_completed)
                 application_completed ([] {});
         }
@@ -3780,8 +3830,7 @@ void mesh_node_host_service_t::dispatch_application (
               .source_rid = record.source_node_rid.to_string (),
               .exception = error};
         });
-        if (deferred_terminal)
-            deferred_terminal->settle ();
+        terminal.settle ();
         if (application_completed)
             application_completed ([] {});
     }
@@ -3795,7 +3844,7 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
   service_provider_t *services,
   serializer_registry_t *serializers,
   const handler_registry_t *filters,
-  dispatch_options_t dispatch_options,
+  detail::retained_dispatch_options_t dispatch_options,
   offload_executor_t *executor)
 {
     offload_executor_t::retained_work_t physical_work;

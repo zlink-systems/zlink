@@ -47,31 +47,56 @@ internal abstract partial class ZLinkSpotActivation
         _stopSource.Cancel();
     }
 
-    public ValueTask DisposeAsync()
+    public ValueTask DisposeAsync() =>
+        StartFinalization(AwaitStateLane(_lane.RunAsync(BeginFinalizationOnLane)), null);
+
+    internal async ValueTask DiscardLocationExecutionAsync(Func<ValueTask> discardMembers)
     {
-        var state = AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                if (_finalization is not null)
-                    return (_finalization, (TaskCompletionSource?)null);
+        FenceLocationExecution();
+        var state = await _lane.RunAsync(BeginFinalizationOnLane).ConfigureAwait(false);
+        await StartFinalization(state, discardMembers).ConfigureAwait(false);
+    }
 
-                Volatile.Write(ref _disposed, 1);
-                if (_serial.IsPreparing)
-                {
-                    _ = _serial.FinishActivationPreparation();
-                }
-                var completion = new TaskCompletionSource(
-                    TaskCreationOptions.RunContinuationsAsynchronously
-                );
-                _finalization = completion.Task;
-                return (_finalization, completion);
-            })
+    private (Task, TaskCompletionSource?) BeginFinalizationOnLane()
+    {
+        if (_finalization is not null)
+            return (_finalization, null);
+
+        Interlocked.CompareExchange(
+            ref _disposed,
+            (int)ZLinkObjectExecutionStatus.Stopped,
+            (int)ZLinkObjectExecutionStatus.Allowed
         );
+        if (_serial.IsPreparing)
+            _ = _serial.FinishActivationPreparation();
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        _finalization = completion.Task;
+        return (_finalization, completion);
+    }
 
+    private ValueTask StartFinalization(
+        (Task, TaskCompletionSource?) state,
+        Func<ValueTask>? discardMembers
+    )
+    {
         if (state.Item2 is not null)
+        {
+            ValueTask? members = null;
+            try
+            {
+                if (discardMembers is not null)
+                    members = discardMembers();
+            }
+            catch (Exception exception)
+            {
+                members = ValueTask.FromException(exception);
+            }
             _ = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
-                Task.Run(() => CompleteFinalizationAsync(state.Item2))
+                Task.Run(() => CompleteFinalizationAsync(state.Item2, members))
             );
+        }
         return new ValueTask(state.Item1);
     }
 
@@ -81,12 +106,11 @@ internal abstract partial class ZLinkSpotActivation
     // its lifecycle item; finalization runs it when no Close did. A release that
     // failed is not complete: finalization retries it and skips the ones
     // already released (spec §7 step 3).
-    internal Task<AggregateException?> ReleaseLocalResourcesAsync() =>
-        AwaitStateLane(
-            _lane.RunAsync(() =>
+    internal async Task<AggregateException?> ReleaseLocalResourcesAsync()
+    {
+        var release = await _lane
+            .RunAsync(() =>
             {
-                // The release runs off the state lane; do not carry the lane
-                // context into it.
                 using (ExecutionContext.SuppressFlow())
                     return _localResourceRelease = _localResourceRelease
                         .ContinueWith(
@@ -97,7 +121,9 @@ internal abstract partial class ZLinkSpotActivation
                         )
                         .Unwrap();
             })
-        );
+            .ConfigureAwait(false);
+        return await release.ConfigureAwait(false);
+    }
 
     // Releases not yet completed; runs serialized by _localResourceRelease.
     internal int PendingLocalResourceReleases =>
@@ -112,7 +138,7 @@ internal abstract partial class ZLinkSpotActivation
         [
             async () =>
             {
-                DisposePendingMessageFollowRoutes();
+                await DisposePendingMessageFollowRoutesAsync().ConfigureAwait(false);
                 await _dispatcher
                     .DiscardSubscriptionsAsync(CancellationToken.None)
                     .ConfigureAwait(false);
@@ -142,11 +168,14 @@ internal abstract partial class ZLinkSpotActivation
         return failures is null ? null : new AggregateException(failures);
     }
 
-    private async Task CompleteFinalizationAsync(TaskCompletionSource completion)
+    private async Task CompleteFinalizationAsync(
+        TaskCompletionSource completion,
+        ValueTask? discardedMembers
+    )
     {
         try
         {
-            await FinalizeAsync().ConfigureAwait(false);
+            await FinalizeAsync(discardedMembers).ConfigureAwait(false);
             completion.TrySetResult();
         }
         catch (Exception exception)
@@ -155,20 +184,22 @@ internal abstract partial class ZLinkSpotActivation
         }
     }
 
-    private async Task FinalizeAsync()
+    private async Task FinalizeAsync(ValueTask? discardedMembers)
     {
         var failures = new List<Exception>();
         Capture(CancelActiveOperations);
         await CaptureAsync(DrainNativeRoutesAsync).ConfigureAwait(false);
         // Closing callbacks have finished with membership intact. Actor terminal
         // barriers still need this parent's gate before its executor can end.
-        await CaptureAsync(() => _runtime.InvalidateSpotActorRuntimeAsync(this))
+        await CaptureAsync(() => discardedMembers ?? _runtime.InvalidateSpotActorRuntimeAsync(this))
             .ConfigureAwait(false);
         Capture(RequestStop);
         await CaptureAsync(_serial.DisposeAsync).ConfigureAwait(false);
         if (await ReleaseLocalResourcesAsync().ConfigureAwait(false) is { } releaseFailure)
             failures.AddRange(releaseFailure.InnerExceptions);
         Capture(_stopSource.Dispose);
+        _spot = null;
+        _handlerInvoker = null;
         ThrowFailures(failures);
 
         async ValueTask CaptureAsync(Func<ValueTask> cleanup)
@@ -1877,6 +1908,7 @@ internal abstract partial class ZLinkSpotActivation
         CancellationToken cancellationToken
     )
     {
+        _runtime.LocationLifecycle?.EnsureRelocationAdmissionOpen();
         IReadOnlyList<ZLinkRelocationLogicalTimer>? boundaryTimers = null;
         ZLinkSpotExecutionRelocationSeal? queueSeal = null;
         // A seal that refuses member Actor claims is the unit seal of those
@@ -2458,9 +2490,11 @@ internal abstract partial class ZLinkSpotActivation
             );
     }
 
-    private void DisposePendingMessageFollowRoutes()
+    private async ValueTask DisposePendingMessageFollowRoutesAsync()
     {
-        var pending = TakePendingMessageFollowRoutes();
+        var pending = await _lane
+            .RunAsync(TakePendingMessageFollowRoutesOnLane)
+            .ConfigureAwait(false);
         foreach (var route in pending)
             route.Received.Dispose();
     }
@@ -2603,16 +2637,16 @@ internal abstract partial class ZLinkSpotActivation
     }
 
     private PendingMessageFollowRoute[] TakePendingMessageFollowRoutes() =>
-        AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                _holdIngressForMessageFollow = false;
-                var pending = _messageFollowPending.ToArray();
-                _messageFollowPending.Clear();
-                _messageFollowPendingBytes = 0;
-                return pending;
-            })
-        );
+        AwaitStateLane(_lane.RunAsync(TakePendingMessageFollowRoutesOnLane));
+
+    private PendingMessageFollowRoute[] TakePendingMessageFollowRoutesOnLane()
+    {
+        _holdIngressForMessageFollow = false;
+        var pending = _messageFollowPending.ToArray();
+        _messageFollowPending.Clear();
+        _messageFollowPendingBytes = 0;
+        return pending;
+    }
 
     internal ValueTask RestoreLogicalTimersAsync(
         IReadOnlyList<ZLinkRelocationLogicalTimer> logicalTimers

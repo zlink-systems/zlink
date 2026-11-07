@@ -50,6 +50,7 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
         fixture.FillSendHwm();
         using (var probe = ZLinkClientServerControlProtocol.EncodeLivenessProbe(17))
             fixture.Router.Send(fixture.Rid).Message(probe).Submit();
+        fixture.WaitForControlFrame();
         var checkpoint = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -62,6 +63,7 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
             // The checkpoint is either the next receive turn or the actual synchronous
             // Task wait. Neither elapsed time nor absence of an event decides the result.
             Assert.True(await checkpoint.Task, "ACK admission blocked the receive thread");
+            Assert.Equal(1L, fixture.Connection.ReceivedLivenessProbeCount);
             Assert.Equal(SubmitResult.Backpressured, fixture.Dealer.LastSubmission.Result);
             Assert.False(fixture.Dealer.LastSubmission.Admitted.IsCompleted);
             Assert.Single(await fixture.Lane.RunAsync(() => fixture.Requests.ToArray()));
@@ -450,6 +452,7 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
         private readonly Zlink.Framework.Runtime.Messaging.ZLinkRequestDeadlineIndex _deadlines;
         private readonly IContext _context = Systems.Zlink.Zlink.CreateContext();
         private readonly IPoller _completions = Systems.Zlink.Zlink.CreatePoller();
+        private readonly IDealerSocket _controlSocket;
         internal readonly IRouterSocket Router;
         internal readonly AckDealer Dealer;
         internal readonly RoutingId Rid = RoutingId.From("ack-client");
@@ -466,6 +469,7 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
             _context.Options.AutoHwmEnabled = false;
             Router = _context.CreateRouterSocket();
             var dealer = _context.CreateDealerSocket();
+            _controlSocket = dealer;
             dealer.Options.SendHighWaterMark = 1;
             Router.Options.ReceiveHighWaterMark = 1;
             dealer.Options.Linger = TimeSpan.Zero;
@@ -512,6 +516,24 @@ public sealed class ClientServerClientAckTests(Xunit.Abstractions.ITestOutputHel
             ReceiveStop = Connection._receiveStop;
             if (OuterRuntime is not null)
                 OuterRuntime._connections.Add(endpoint, Connection);
+        }
+
+        internal void WaitForControlFrame()
+        {
+            _completions.Modify(
+                _controlSocket,
+                PollEventFlags.PollIn | PollEventFlags.PollCompletion
+            );
+            try
+            {
+                var ready = new PollEvent[1];
+                Assert.Equal(1, _completions.Wait(ready, Timeout.InfiniteTimeSpan));
+                Assert.NotEqual(PollEventFlags.None, ready[0].Revents & PollEventFlags.PollIn);
+            }
+            finally
+            {
+                _completions.Modify(_controlSocket, PollEventFlags.PollCompletion);
+            }
         }
 
         internal void DrainCompletion() =>

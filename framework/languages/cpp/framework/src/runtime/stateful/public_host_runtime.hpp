@@ -8,6 +8,7 @@
 #include "runtime/dispatch/receive_batch_budget.hpp"
 #include "runtime/dispatch/blocking_task.hpp"
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/execution/serial_execution_queue.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/stateful/maintenance_runtime.hpp"
@@ -672,6 +673,11 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<bool> send_message_follow (const std::vector<std::uint8_t> &target_routing_id,
                                       const protocol::message_follow_notice_t &notice);
     stateful::stateful_object_runtime_t &objects () noexcept;
+    void configure_location_execution (
+      std::function<std::chrono::steady_clock::time_point ()> clock,
+      std::function<task_t<runtime::serial_execution_queue_t::ready_confirmation_t> (
+        stateful::object_ref_t)> observer);
+    task_t<std::function<void ()>> prepare_store_ready (stateful::object_ref_t object);
     task_t<stateful::stateful_error_t>
     destroy_application_actor_async (std::string actor_id, std::uint64_t object_generation);
     stateful::stream_session_registry_t &sessions () noexcept;
@@ -883,6 +889,22 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                         bool accept_application_receive = true,
                                         std::function<bool ()> next_application_receive = {},
                                         std::optional<zlink::poll_event_flag_t> readiness = {});
+    task_t<std::size_t>
+    dispatch_hosted_ready (mesh::service_mailbox_t::application_dispatch_t dispatch,
+                           bool accept_application_receive = true,
+                           std::function<bool ()> next_application_receive = {},
+                           std::optional<zlink::poll_event_flag_t> readiness = {});
+    task_t<std::size_t>
+    dispatch_ready_impl (mesh::service_mailbox_t::application_dispatch_t dispatch,
+                         bool accept_application_receive,
+                         std::function<bool ()> next_application_receive,
+                         std::optional<zlink::poll_event_flag_t> waited,
+                         bool standalone);
+    std::optional<zlink::poll_event_flag_t> wait_for_dispatch_activity_impl (
+      std::chrono::milliseconds timeout,
+      bool accept_application_receive,
+      std::optional<std::chrono::steady_clock::time_point> next_activity,
+      bool standalone) noexcept;
     using application_owner_result_t = std::variant<bool, task_t<bool>>;
     application_owner_result_t
     dispatch_application_owner (std::string owner,
@@ -890,6 +912,10 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                 std::function<void ()> started,
                                 std::function<void ()> rejected);
     std::optional<zlink::poll_event_flag_t> wait_for_dispatch_activity (
+      std::chrono::milliseconds timeout,
+      bool accept_application_receive,
+      std::optional<std::chrono::steady_clock::time_point> next_activity) noexcept;
+    std::optional<zlink::poll_event_flag_t> wait_for_hosted_dispatch_activity (
       std::chrono::milliseconds timeout,
       bool accept_application_receive,
       std::optional<std::chrono::steady_clock::time_point> next_activity) noexcept;
@@ -1433,6 +1459,10 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     std::unique_ptr<completion_owner_t> _completion_owner;
     bool _started = false;
     bool _closing = false;
+    std::function<std::chrono::steady_clock::time_point ()> _location_execution_clock;
+    std::function<task_t<runtime::serial_execution_queue_t::ready_confirmation_t> (
+      stateful::object_ref_t)>
+      _store_ready_observer;
 };
 
 zlink::submit_result_t reply (const reply_token_t &token,

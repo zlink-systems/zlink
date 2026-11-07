@@ -16,6 +16,8 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
     private int _acceptedWaiters;
     private int _pendingRequests;
 
+    internal Func<ZLinkObjectExecutionStatus>? ExecutionAllowed { get; set; }
+
     public ZLinkActorSerialExecutor(ZLinkExecutionLanePolicy? lanePolicy = null)
     {
         var reporter = MailboxFailureReporter.Instance;
@@ -23,7 +25,8 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
             new ZLinkRuntimeTaskRunner(reporter, CancellationToken.None, this),
             reporter,
             CancellationToken.None,
-            lanePolicy ?? ZLinkExecutionLanePolicy.Default
+            lanePolicy ?? ZLinkExecutionLanePolicy.Default,
+            executionAllowed: () => ExecutionAllowed?.Invoke() ?? ZLinkObjectExecutionStatus.Allowed
         );
     }
 
@@ -132,7 +135,7 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
         return new BarrierReservation(waiter, cancellation);
     }
 
-    public BarrierReservation CloseAdmissionAndReserveLifecycleBarrier()
+    public BarrierReservation CloseAdmissionAndReserveLifecycleBarrier(bool discardPending = false)
     {
         var cancellation = new CancellationTokenSource();
         var waiter = AwaitStateLane(
@@ -149,12 +152,15 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
                 _admissionClosed = true;
                 try
                 {
-                    // Terminal cleanup must remain behind every ordinary turn that
-                    // was accepted before admission closed.
+                    // A normal terminal drains accepted turns. Discard cleanup uses
+                    // the lifecycle lane after those turns have lost execution rights.
                     return PostWaiterOnLane(
-                        ZLinkSerialWorkLane.Application,
+                        discardPending
+                            ? ZLinkSerialWorkLane.Lifecycle
+                            : ZLinkSerialWorkLane.Application,
                         cancellation.Token,
-                        countAsPendingRequest: false
+                        countAsPendingRequest: false,
+                        terminal: true
                     );
                 }
                 catch
@@ -207,28 +213,39 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
     private Waiter PostWaiterOnLane(
         ZLinkSerialWorkLane lane,
         CancellationToken cancellationToken,
-        bool countAsPendingRequest
+        bool countAsPendingRequest,
+        bool terminal = false
     )
     {
         var waiter = new Waiter(this, cancellationToken, countAsPendingRequest);
         if (countAsPendingRequest)
             _pendingRequests++;
-        // Queue draining is a long-running task. It starts after this method returns, so
-        // SuppressFlow is sufficient: TryPost only admits and schedules a cold task; it does
-        // not synchronously invoke waiter.RunAsync.
+        // Bind waiter ownership before a shared consumer can observe the record.
+        void Initialize(ZLinkSerialWorkItem published)
+        {
+            if (terminal)
+                published.ExecutionAllowed = null;
+            waiter.MarkAccepted();
+            _acceptedWaiters++;
+            published.AddTerminalRelease(() =>
+            {
+                if (published.Completion.IsFaulted)
+                    waiter.FailPreparation(published.Completion.Exception!.InnerException!);
+                else if (published.Completion.IsCanceled)
+                    waiter.FailPreparation(new TaskCanceledException(published.Completion));
+                OnWaiterFinished(waiter);
+            });
+            waiter.BindItem(published);
+        }
         ZLinkSerialPostAdmission admission;
         ZLinkSerialWorkItem item;
         using (ExecutionContext.SuppressFlow())
             admission =
                 lane == ZLinkSerialWorkLane.Lifecycle
-                    ? _queue.TryPostNextWithAdmission(waiter.RunAsync, out item)
-                    : _queue.TryPostApplicationWithAdmission(waiter.RunAsync, out item);
+                    ? _queue.TryPostNextWithAdmission(waiter.RunAsync, out item, Initialize)
+                    : _queue.TryPostApplicationWithAdmission(waiter.RunAsync, out item, Initialize);
         if (admission == ZLinkSerialPostAdmission.Accepted)
         {
-            waiter.MarkAccepted();
-            _acceptedWaiters++;
-            item.AddTerminalRelease(() => OnWaiterFinished(waiter));
-            waiter.BindItem(item);
             if (item.Preparation is not null)
             {
                 _ = item.Completion.ContinueWith(

@@ -345,7 +345,9 @@ internal sealed partial class ZLinkFrameworkRuntime
             null
     )
     {
-        using var operation = (await AdmitOperationAsync().ConfigureAwait(false)).Enter();
+        using var operation = (
+            await AdmitOperationAsync(boundExecution: true).ConfigureAwait(false)
+        ).Enter();
         var handedOff = false;
         try
         {
@@ -400,7 +402,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         ReadOnlyMemory<byte> metadata = default
     )
     {
-        using var operation = EnterOperation();
+        using var operation = EnterOperation(boundExecution: true);
         EnsureKnownRouteMeshPeer(routerChannelId, targetNodeRid, SpotRouteTarget, targetSpotId);
         return _spotRouteRouter.TrySendOnce(
             routerChannelId,
@@ -435,7 +437,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         try
         {
             using var operation = (
-                await AdmitOperationAsync(countAsRequest: true).ConfigureAwait(false)
+                await AdmitOperationAsync(countAsRequest: true, boundExecution: true)
+                    .ConfigureAwait(false)
             ).Enter();
             var metric = ZLinkRuntimeMetrics.StartRequest(routerChannelId, "spot");
             var outcome = ZLinkRuntimeMetrics.RequestCompleted;

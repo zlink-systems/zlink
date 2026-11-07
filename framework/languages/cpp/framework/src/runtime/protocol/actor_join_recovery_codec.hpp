@@ -402,8 +402,8 @@ decode_actor_join_recovery_saved_work (const frozen_record_t &record)
     }
     if (candidate->kind != frozen_record_kind_t::node_send
         || candidate->source_kind != frozen_source_kind_t::node || !candidate->application
-        || candidate->application->packet_name != actor_join_recovery_packet_name
-        || candidate->application->content_type != actor_join_recovery_content_type)
+        || candidate->application->packet_name () != actor_join_recovery_packet_name
+        || candidate->application->content_type () != actor_join_recovery_content_type)
         return std::nullopt;
     service_wire_pilot_zljr_record_v1 generated;
     try {

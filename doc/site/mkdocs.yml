@@ -7,6 +7,12 @@ site_description: ZLink is a real-time messaging framework for game servers. Ins
 repo_url: https://github.com/zlink-systems/zlink
 repo_name: zlink-systems/zlink
 
+# 헤더의 제품 사이트 링크(overrides/partials/header.html). 로케일마다 같은 언어의 홈으로 보낸다.
+extra:
+  product_site:
+    en: https://zlink.systems/
+    ko: https://zlink.systems/ko
+
 # docs/는 정본 트리를 심링크로 모은 자리다(복사본이 아니다).
 # framework · core · bindings 문서가 한 사이트에 함께 실린다.
 docs_dir: docs

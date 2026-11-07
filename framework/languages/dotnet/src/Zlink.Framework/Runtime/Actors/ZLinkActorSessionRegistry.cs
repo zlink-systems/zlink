@@ -28,6 +28,7 @@ internal sealed class ZLinkActorSessionRegistry(
                 sessionBindingTombstoneRetention: sessionBindingTombstoneRetention,
                 services: services
             );
+            created._dispatchMailbox.ExecutionAllowed = () => created.ExecutionStatus;
             _states.Add(actorId, created);
             return created;
         });
@@ -89,7 +90,7 @@ internal sealed class ZLinkActorSessionRegistry(
             {
                 var snapshot = _states.Values.ToArray();
                 foreach (var state in snapshot)
-                    state.FenceRuntimeGeneration();
+                    state.FenceRuntimeGeneration(ZLinkObjectExecutionStatus.Stopped);
                 _states.Clear();
                 return snapshot;
             })

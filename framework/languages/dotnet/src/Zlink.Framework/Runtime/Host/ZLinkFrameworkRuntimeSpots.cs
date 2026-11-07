@@ -322,18 +322,21 @@ internal sealed partial class ZLinkFrameworkRuntime
         RoutingId? sourceSessionRid
     )
     {
-        return ExecuteOperationAsync(() =>
-        {
-            var state = GetOrStartState();
-            return _spots.EntrySpotActors.TryAsync(
-                state,
-                actor,
-                header,
-                payload,
-                cancellationToken,
-                sourceSessionRid
-            );
-        });
+        return ExecuteOperationAsync(
+            () =>
+            {
+                var state = GetOrStartState();
+                return _spots.EntrySpotActors.TryAsync(
+                    state,
+                    actor,
+                    header,
+                    payload,
+                    cancellationToken,
+                    sourceSessionRid
+                );
+            },
+            boundExecution: true
+        );
     }
 
     internal ValueTask<EntrySpotActorReplyDispatchResult> TrySubmitEntrySpotActorForReplyAsync(
@@ -347,21 +350,24 @@ internal sealed partial class ZLinkFrameworkRuntime
         RoutingId? sourceSessionRid
     )
     {
-        return ExecuteOperationAsync(() =>
-        {
-            var state = GetOrStartState();
-            return _spots.EntrySpotActors.TrySubmitForReplyAsync(
-                state,
-                actor,
-                runtimeState,
-                header,
-                payload,
-                callerOwnsDispatchTurn,
-                relocationReplay,
-                cancellationToken,
-                sourceSessionRid
-            );
-        });
+        return ExecuteOperationAsync(
+            () =>
+            {
+                var state = GetOrStartState();
+                return _spots.EntrySpotActors.TrySubmitForReplyAsync(
+                    state,
+                    actor,
+                    runtimeState,
+                    header,
+                    payload,
+                    callerOwnsDispatchTurn,
+                    relocationReplay,
+                    cancellationToken,
+                    sourceSessionRid
+                );
+            },
+            boundExecution: true
+        );
     }
 
     internal async ValueTask<ZLinkActorCreateResponse> NotifyEntrySpotActorCreatedAsync(

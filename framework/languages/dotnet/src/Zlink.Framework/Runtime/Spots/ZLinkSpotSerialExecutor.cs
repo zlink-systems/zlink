@@ -81,7 +81,9 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             policy,
             IsApplicationStartAllowed,
             sharedGate: _executionMode == ZLinkUserSpotExecutionMode.SpotWide,
-            sharedOwner: sharedOwner
+            sharedOwner: sharedOwner,
+            executionAllowed: () =>
+                _activation?.ExecutionStatus ?? ZLinkObjectExecutionStatus.Allowed
         );
         queue.GateOperation = _executionGateObserved;
         return queue;
@@ -298,7 +300,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             cancellationToken,
             payloadBytes,
             metadataBytes,
-            transferred
+            transferred,
+            executionState: state
         );
     }
 
@@ -1818,7 +1821,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         long payloadBytes = 0,
         long metadataBytes = 0,
         bool transferred = false,
-        Func<bool>? ready = null
+        Func<bool>? ready = null,
+        object? executionState = null
     )
     {
         try
@@ -1843,7 +1847,9 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                     metadataBytes,
                     transferred,
                     cancellationToken,
-                    ready
+                    ready,
+                    executionState,
+                    claim
                 );
             }
             catch
@@ -2153,6 +2159,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     }
 
     private sealed class ZLinkExecutionClaim(ZLinkSpotSerialExecutor owner, bool actorLane)
+        : IZLinkSerialTerminalRelease
     {
         private int _released;
 

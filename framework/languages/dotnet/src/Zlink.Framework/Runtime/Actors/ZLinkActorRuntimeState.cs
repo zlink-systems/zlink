@@ -236,7 +236,8 @@ internal sealed class ZLinkActorRuntimeState(
         InvalidateRuntimeGenerationAfterDispatchesAsync(expectedActivation: null);
 
     internal ValueTask InvalidateRuntimeGenerationAfterDispatchesAsync(
-        ZLinkSpotActivation? expectedActivation
+        ZLinkSpotActivation? expectedActivation,
+        Func<ValueTask>? cleanup = null
     )
     {
         var completion = RunState(() =>
@@ -248,17 +249,22 @@ internal sealed class ZLinkActorRuntimeState(
             if (expectedActivation is not null && !ReferenceEquals(Activation, expectedActivation))
                 return Task.CompletedTask;
 
-            FenceRuntimeGeneration();
+            FenceRuntimeGeneration(ZLinkObjectExecutionStatus.Stopped);
             CloseHandlerActivationCore();
             var previousTerminal = _terminalLifecycleCompletion;
             var barrier = previousTerminal is null
-                ? _dispatchMailbox.CloseAdmissionAndReserveLifecycleBarrier()
+                ? _dispatchMailbox.CloseAdmissionAndReserveLifecycleBarrier(discardPending: true)
                 : null;
             var mailboxDisposal = _dispatchMailbox.DisposeAsync().AsTask();
             Task terminal;
             using (ExecutionContext.SuppressFlow())
                 terminal = Task.Run(() =>
-                    CompleteRuntimeInvalidationAsync(previousTerminal, barrier, mailboxDisposal)
+                    CompleteRuntimeInvalidationAsync(
+                        previousTerminal,
+                        barrier,
+                        mailboxDisposal,
+                        cleanup
+                    )
                 );
             _terminalLifecycleCompletion = terminal;
             return terminal;
@@ -269,7 +275,8 @@ internal sealed class ZLinkActorRuntimeState(
     private async Task CompleteRuntimeInvalidationAsync(
         Task? previousTerminal,
         ZLinkActorSerialExecutor.BarrierReservation? barrier,
-        Task mailboxDisposal
+        Task mailboxDisposal,
+        Func<ValueTask>? cleanup
     )
     {
         var failures = new ZLinkFailureCollector();
@@ -293,6 +300,8 @@ internal sealed class ZLinkActorRuntimeState(
             .ConfigureAwait(false);
         // Returning the barrier turn precedes joining the already closed mailbox.
         await failures.CaptureAsync(() => new ValueTask(mailboxDisposal)).ConfigureAwait(false);
+        if (cleanup is not null)
+            await failures.CaptureAsync(cleanup).ConfigureAwait(false);
         failures.ThrowIfAny();
     }
 
@@ -303,9 +312,41 @@ internal sealed class ZLinkActorRuntimeState(
 
     public bool IsConfigured { get; private set; }
 
-    public bool ContextInvalidated => Volatile.Read(ref _contextInvalidated) != 0;
+    private readonly ZLinkLocationRuntime? _locationRuntime =
+        services?.GetService<ZLinkLocationRuntime>();
 
-    internal void FenceRuntimeGeneration() => Interlocked.Exchange(ref _contextInvalidated, 1);
+    internal bool IsLocationExecutionAllowed =>
+        ExecutionStatus == ZLinkObjectExecutionStatus.Allowed;
+
+    internal ZLinkObjectExecutionStatus ExecutionStatus
+    {
+        get
+        {
+            var status = (ZLinkObjectExecutionStatus)Volatile.Read(ref _contextInvalidated);
+            if (status == ZLinkObjectExecutionStatus.OwnershipLost)
+                return status;
+            if (_locationRuntime?.IsExecutionAllowed(this) == false)
+                return ZLinkObjectExecutionStatus.OwnershipLost;
+            if (Activation is { IsDisposed: true } activation)
+                return activation.ExecutionStatus;
+            return status == ZLinkObjectExecutionStatus.Stopped || _dispatchMailbox.IsDisposed
+                ? ZLinkObjectExecutionStatus.Stopped
+                : ZLinkObjectExecutionStatus.Allowed;
+        }
+    }
+
+    public bool ContextInvalidated =>
+        Volatile.Read(ref _contextInvalidated) != 0 || Activation?.IsDisposed == true;
+
+    internal void FenceRuntimeGeneration(
+        ZLinkObjectExecutionStatus status = ZLinkObjectExecutionStatus.OwnershipLost
+    )
+    {
+        if (status == ZLinkObjectExecutionStatus.OwnershipLost)
+            Interlocked.Exchange(ref _contextInvalidated, (int)status);
+        else
+            Interlocked.CompareExchange(ref _contextInvalidated, (int)status, 0);
+    }
 
     private volatile ZLinkActorDestroyPhase _destroyPhase;
     private volatile bool _reservedCreationPending;
@@ -1311,7 +1352,7 @@ internal sealed class ZLinkActorRuntimeState(
         ClearActorMetric();
         ActorType = null;
         IsConfigured = false;
-        FenceRuntimeGeneration();
+        FenceRuntimeGeneration(ZLinkObjectExecutionStatus.Stopped);
         _actorCreationTask = null;
 
         switch (transition)
@@ -1437,7 +1478,7 @@ internal sealed class ZLinkActorRuntimeState(
             return new ZLinkActorTeardownOperation(existing.Task, false, false);
 
         CloseHandlerActivationCore();
-        FenceRuntimeGeneration();
+        FenceRuntimeGeneration(ZLinkObjectExecutionStatus.Stopped);
         var nativeAlreadyDestroyed = false;
         switch (_destroyPhase)
         {
@@ -1522,7 +1563,7 @@ internal sealed class ZLinkActorRuntimeState(
 
     public void InvalidateContext()
     {
-        FenceRuntimeGeneration();
+        FenceRuntimeGeneration(ZLinkObjectExecutionStatus.Stopped);
         Activation = null;
     }
 
@@ -1706,6 +1747,7 @@ internal sealed class ZLinkActorRuntimeState(
 
     public async ValueTask<int> BeginHandoffCaptureAsync(CancellationToken cancellationToken)
     {
+        _locationRuntime?.EnsureRelocationAdmissionOpen();
         if (
             AmbientDispatch.Value is { IsActive: true } ownership
             && ReferenceEquals(ownership.State, this)
@@ -1747,6 +1789,7 @@ internal sealed class ZLinkActorRuntimeState(
         CancellationToken cancellationToken
     )
     {
+        EnsureReusable();
         using var turn = await _dispatchMailbox.EnterAsync(cancellationToken).ConfigureAwait(false);
         EnsureDispatchAvailable();
         using var dispatch = EnterDispatch();
@@ -1761,6 +1804,7 @@ internal sealed class ZLinkActorRuntimeState(
         ZLinkSpotRelocationActorQueueReservation? replayReservation = null
     )
     {
+        EnsureReusable();
         if (replayReservation is not null)
         {
             T result = default!;
@@ -1822,7 +1866,11 @@ internal sealed class ZLinkActorRuntimeState(
 
     private void EnsureDispatchAvailable(bool allowRelocationReplay = false)
     {
-        if (!IsDispatchBlocked && (allowRelocationReplay || !Handoff.BlocksLocalDispatch))
+        if (
+            IsLocationExecutionAllowed
+            && !IsDispatchBlocked
+            && (allowRelocationReplay || !Handoff.BlocksLocalDispatch)
+        )
             return;
 
         throw new ZLinkFrameworkException(
@@ -1900,7 +1948,7 @@ internal sealed class ZLinkActorRuntimeState(
         Activation = null;
         NativeActorRef = null;
         IsConfigured = false;
-        FenceRuntimeGeneration();
+        FenceRuntimeGeneration(ZLinkObjectExecutionStatus.Stopped);
     }
 
     public readonly struct DispatchScope : IDisposable

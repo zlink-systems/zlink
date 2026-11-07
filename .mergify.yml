@@ -15,6 +15,10 @@ queue_rules:
   - name: default
     batch_size: 8
     merge_method: squash
+    # The C++ check runs on GitHub-hosted runners by default (ops/ci); a batch
+    # that rebuilds the C++ runtime takes 55-80 min there. The automatic timeout
+    # Mergify derives from recent runs (1h14m on 2026-11-07) dequeued such batches.
+    checks_timeout: 2 hours
     queue_conditions:
       - base=main
       - label=merge-queue

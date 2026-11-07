@@ -15,11 +15,11 @@ class channel_reply_writer_t
   public:
     runtime::messaging::envelope_header_t
     create_reply_header (runtime::messaging::message_kind_t kind,
-                         std::string channel_name,
+                         std::string_view channel_name,
                          const runtime::messaging::envelope_header_t &request) const;
 
     runtime::messaging::envelope_header_t
-    create_error_header (std::string channel_name,
+    create_error_header (std::string_view channel_name,
                          const runtime::messaging::envelope_header_t &request,
                          const framework_exception_t &error) const;
 

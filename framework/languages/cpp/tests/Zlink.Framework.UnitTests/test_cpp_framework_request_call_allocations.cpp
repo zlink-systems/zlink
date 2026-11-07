@@ -18,6 +18,7 @@
 #include <array>
 #include <cstdio>
 #include <functional>
+#include <future>
 #include <memory>
 #include <latch>
 #include <optional>
@@ -1489,3 +1490,121 @@ TEST (RequestCallAllocations, AppClassifiedNodeFailureAddsNoTransportReplyState)
     EXPECT_EQ (actual.total, baseline.total + target_bytes.total);
 }
 } // namespace
+
+TEST (RequestCallAllocations, CsitesRequestCompletionKeepsStorageUntilEveryTerminalTurn)
+{
+    namespace foundation = fw::runtime::foundation;
+    using terminal_t = foundation::operation_terminal_t;
+    for (int mode = 0; mode != 5; ++mode) {
+        fw::completion_owner_t owner;
+        std::atomic_int deliveries{0};
+        std::weak_ptr<int> lifetime;
+        std::optional<fw::request_task_t<int>> pending;
+        std::stop_source cancel;
+        std::promise<void> capture_released;
+        auto capture_release = capture_released.get_future ();
+        {
+            foundation::operation_registry_t registry;
+            auto marker = std::shared_ptr<int> (new int (42), [&] (int *value) {
+                delete value;
+                capture_released.set_value ();
+            });
+            lifetime = marker;
+            auto wire = fw::runtime::protocol::encode_application_payload_message (
+              fw::runtime::protocol::application_payload_t::from_parts (
+                std::vector<zlink::message_t>{zlink::message_t::from ("header"),
+                                              zlink::message_t::from (std::string (1024, 'x'))}));
+            pending.emplace (
+              fw::detail::request_task_access_t::receive_public<int> ([&] (auto receiver) {
+                  auto callback =
+                    receiver.complete.template capture<terminal_t, fw::result_t<zlink::message_t>> (
+                      [complete = receiver.complete.borrow (), marker, wire, &deliveries,
+                       mode] (terminal_t terminal, auto) {
+                          EXPECT_EQ (*marker, 42);
+                          EXPECT_EQ (terminal, mode == 1   ? terminal_t::timed_out
+                                               : mode == 2 ? terminal_t::cancelled
+                                               : mode == 3 ? terminal_t::shutdown
+                                                           : terminal_t::completed);
+                          auto descriptors = fw::runtime::protocol::decode_application_part_views (
+                            fw::runtime::protocol::message_bytes (wire), false,
+                            complete.resource ());
+                          EXPECT_EQ (descriptors.size (), 2u);
+                          EXPECT_EQ (descriptors.at (1).size (), 1024u);
+                          ++deliveries;
+                          complete (fw::result_t<int>::success (42));
+                          if (mode == 4)
+                              throw std::runtime_error ("completion consumer failure");
+                      });
+                  ASSERT_TRUE (callback.completion_storage ());
+                  if (mode == 0 || mode == 4)
+                      receiver.admitted->complete (fw::result_t<void>::success ());
+                  ASSERT_TRUE (registry.register_operation (
+                    {3867, 1}, std::chrono::steady_clock::now () + std::chrono::seconds (30),
+                    std::move (foundation::completion_sink_t (std::move (callback)))
+                      .with_admission (receiver.admitted),
+                    {}, {}, {}, cancel.get_token ()));
+              }));
+            marker.reset ();
+            EXPECT_FALSE (lifetime.expired ());
+            EXPECT_EQ (deliveries.load (), 0);
+            if (mode == 1)
+                registry.expire (std::chrono::steady_clock::now () + std::chrono::seconds (31))
+                  .result ()
+                  .value ();
+            else if (mode == 2)
+                cancel.request_stop ();
+            else if (mode == 3)
+                EXPECT_EQ (registry.shutdown (), 1u);
+            else
+                EXPECT_TRUE (registry.complete ({3867, 1}, zlink::message_t::from ("reply")));
+            EXPECT_FALSE (registry.complete ({3867, 1}, zlink::message_t::from ("late reply")));
+            EXPECT_FALSE (registry.cancel ({3867, 1}));
+            ASSERT_EQ (capture_release.wait_for (std::chrono::seconds (1)),
+                       std::future_status::ready);
+            EXPECT_TRUE (lifetime.expired ());
+            EXPECT_EQ (deliveries.load (), 1);
+            if (mode == 0 || mode == 2 || mode == 4)
+                EXPECT_GT (registry.index_size (), 0u);
+        }
+        cancel.request_stop ();
+        EXPECT_EQ (deliveries.load (), 1);
+        ASSERT_TRUE (pending->await_ready ());
+        EXPECT_EQ (static_cast<bool> (pending->result ()), mode == 0 || mode == 4);
+        auto physical = fw::detail::request_task_access_t::physical_reply (*pending);
+        EXPECT_EQ (physical.result ().value (), 42);
+        EXPECT_TRUE (lifetime.expired ());
+    }
+}
+
+TEST (RequestCallAllocations, CsitesReplyDescriptorsUseRequestStorageUntilProjectionReturns)
+{
+    namespace protocol = fw::runtime::protocol;
+    std::vector<zlink::message_t> parts;
+    parts.push_back (zlink::message_t::from ("header"));
+    parts.push_back (zlink::message_t::from (std::string (1024, 'x')));
+    auto encoded = protocol::encode_application_payload_message (
+      protocol::application_payload_t::from_parts (std::move (parts)));
+    auto pending = fw::detail::request_task_access_t::receive_public<int> ([&] (auto receiver) {
+        const auto before = sample_allocations ([&] {
+            auto descriptors = protocol::decode_application_part_views (
+              protocol::message_bytes (encoded), false, receiver.complete.resource ());
+            ASSERT_EQ (descriptors.size (), 2u);
+            EXPECT_EQ (descriptors[1].size (), 1024u);
+            EXPECT_EQ (static_cast<char> (descriptors[1].front ()), 'x');
+            auto projected = receiver.template project<int> ([&] (const auto &value) {
+                EXPECT_EQ (descriptors[1].size (), 1024u);
+                return value;
+            });
+            projected.complete (fw::result_t<int>::success (7));
+        });
+        EXPECT_EQ (before.total, 0u) << before.diagnostics;
+        const auto ordinary = fw::tests::count_allocations ([&] {
+            auto descriptors =
+              protocol::decode_application_part_views (protocol::message_bytes (encoded), false);
+            EXPECT_EQ (descriptors.size (), 2u);
+        });
+        EXPECT_EQ (ordinary, 1u);
+        std::printf ("csites descriptors request=%zu ordinary=%zu\n", before.total, ordinary);
+    });
+    EXPECT_EQ (pending.result ().value (), 7);
+}

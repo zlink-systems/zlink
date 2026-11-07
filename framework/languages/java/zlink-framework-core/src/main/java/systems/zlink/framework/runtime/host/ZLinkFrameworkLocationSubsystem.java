@@ -103,6 +103,7 @@ final class ZLinkFrameworkLocationSubsystem {
         ZLinkLocationLifecycle locationLifecycle = new ZLinkLocationLifecycle(locationRuntime);
         ZLinkStoreLocationResolvers storeLocationResolvers =
                 new ZLinkStoreLocationResolvers(locationStores, liveLocationRows);
+        storeLocationResolvers.routeReadAdmission(locationRuntime::ensureOwnerAdmissionOpen);
         ZLinkClientServerRuntimeConfiguration clientServerConfiguration =
                 new ZLinkClientServerRuntimeConfiguration(
                         locationStores.clientServerStore(), registration.locations().options());

@@ -250,6 +250,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken
     )
     {
+        _locationRuntime?.EnsureRelocationAdmissionOpen();
         if (HasUnsupportedManualTopology(Registration))
             return ZLinkFrameworkRelocationReason.ManualTopologyUnsupported;
 
@@ -514,6 +515,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken = default
     )
     {
+        _locationRuntime?.EnsureRelocationAdmissionOpen();
         var authorityStore = Registration.Locations.ResolveStore();
         var target =
             ResolveActorHandoffTarget(spotId)
@@ -1695,7 +1697,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                     actorState.ActorId,
                     actorType,
                     nativeActor.ToNative(meshName),
-                    _ => DeactivateActorOnOwnershipLossAsync(actorState.ActorId),
+                    _ => DeactivateActorOnOwnershipLossAsync(actorState),
                     cancellationToken
                 )
                 .ConfigureAwait(false);
@@ -2014,7 +2016,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 relocationRoot,
                 targetAttemptGeneration,
                 targetAuthorityOwnerGeneration,
-                _ => DeactivateActorOnOwnershipLossAsync(actorState.ActorId),
+                _ => DeactivateActorOnOwnershipLossAsync(actorState),
                 cancellationToken
             )
             .ConfigureAwait(false);
@@ -2842,7 +2844,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 actorState.RuntimeActorId,
                 actorType,
                 actorRef.ToNative(transferredActor.Context.MeshName),
-                _ => DeactivateActorOnOwnershipLossAsync(actorState.ActorId),
+                _ => DeactivateActorOnOwnershipLossAsync(actorState),
                 cancellationToken
             )
             .ConfigureAwait(false);
@@ -3753,6 +3755,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkAuthoritySnapshot? committedAuthority = null
     )
     {
+        _locationRuntime?.EnsureOwnerAdmissionOpen();
         var state = GetOrCreateActorState(actorId);
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
             $"actor_state_commit_check actor={actorId} committed_generation={committedActor.ObjectGeneration} committed_node={committedActor.NodeRid} actor_present={state.Actor is not null} native_generation={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(state.NativeActorRef?.Generation)} native_node={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(state.NativeActorRef?.NodeRid)} retired_generation={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(state.RetiredLocalActorRef?.Generation)} blocked={state.IsDispatchBlocked}"
@@ -3777,7 +3780,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                         actorType,
                         committedActor,
                         snapshot,
-                        _ => DeactivateActorOnOwnershipLossAsync(actorId)
+                        _ => DeactivateActorOnOwnershipLossAsync(state)
                     )
                     .ConfigureAwait(false);
             else
@@ -3786,7 +3789,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                         actorId,
                         actorType,
                         committedActor,
-                        _ => DeactivateActorOnOwnershipLossAsync(actorId),
+                        _ => DeactivateActorOnOwnershipLossAsync(state),
                         cancellationToken
                     )
                     .ConfigureAwait(false);
@@ -3960,13 +3963,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         return _actorSessionManager.TryGetState(actorId, out state!);
     }
 
-    internal ValueTask DeactivateActorOnOwnershipLossAsync(
-        string actorId,
-        CancellationToken cancellationToken = default
-    )
-    {
-        return _actorSessionManager.DeactivateActorOnOwnershipLossAsync(actorId, cancellationToken);
-    }
+    internal ValueTask DeactivateActorOnOwnershipLossAsync(ZLinkActorRuntimeState state) =>
+        _actorSessionManager.DeactivateActorOnOwnershipLossAsync(state);
 
     internal ZLinkLocationLifecycle? LocationLifecycle => _locationLifecycle;
 

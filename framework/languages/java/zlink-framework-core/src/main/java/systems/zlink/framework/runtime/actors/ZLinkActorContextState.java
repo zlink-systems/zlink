@@ -20,7 +20,7 @@ final class ZLinkActorContextState {
     private ZLinkActor actor;
     private final String actorId;
     private final String meshName;
-    private ZLinkBackendActorRef actorRef;
+    private volatile ZLinkBackendActorRef actorRef;
     private ZLinkBoundSession boundSession;
     // The local token identifies this context attachment for cleanup. The SpotNode record
     // owns the Session-issued binding fence, including across relocation.
@@ -31,8 +31,8 @@ final class ZLinkActorContextState {
     private String spotId;
     private ZLinkSpot<?> spot;
     private boolean joined;
-    private boolean destroying;
-    private boolean moving;
+    private volatile boolean destroying;
+    private volatile boolean moving;
     private final AtomicReference<Object> deferredJoinClaim = new AtomicReference<>();
     private CompletableFuture<Void> moveCompletion = CompletableFuture.completedFuture(null);
 
@@ -111,6 +111,10 @@ final class ZLinkActorContextState {
 
     boolean joined() {
         return joined;
+    }
+
+    boolean steady() {
+        return actorRef != null && !moving && !destroying;
     }
 
     boolean moving() {
@@ -301,6 +305,7 @@ final class ZLinkActorContextState {
     }
 
     void clearAfterDestroy() {
+        actor = null;
         actorRef = null;
         boundSession = null;
         entrySpotNodeRid = null;
