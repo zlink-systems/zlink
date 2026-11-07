@@ -46,6 +46,11 @@ final class ZLinkActorLocationCoordinator {
         return lifecycle != null && intent != null;
     }
 
+    systems.zlink.framework.runtime.locations.ZLinkLocationRuntime.Execution execution(
+            java.util.function.BooleanSupplier steady, Runnable cleanup) {
+        return lifecycle == null ? null : lifecycle.execution(steady, cleanup);
+    }
+
     void ensureOwnerAdmissionOpen() {
         if (lifecycle != null) {
             lifecycle.ensureOwnerAdmissionOpen();
@@ -87,6 +92,7 @@ final class ZLinkActorLocationCoordinator {
     }
 
     CompletionStage<Optional<ActorRef>> findStoredActorRef(String actorId) {
+        ensureOwnerAdmissionOpen();
         if (resolvers == null) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
@@ -99,6 +105,7 @@ final class ZLinkActorLocationCoordinator {
     //  already carries the current Spot id, so this reads the same row `find`
     //  uses instead of taking a second lookup path.
     CompletionStage<Optional<SpotRef>> findStoredSpotRef(String actorId) {
+        ensureOwnerAdmissionOpen();
         if (resolvers == null) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
@@ -126,6 +133,7 @@ final class ZLinkActorLocationCoordinator {
     }
 
     CompletionStage<Optional<ActorRef>> findStoredActorRefExact(String actorId) {
+        ensureOwnerAdmissionOpen();
         if (resolvers == null) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
