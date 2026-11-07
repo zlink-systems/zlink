@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/mesh/application_dispatch_terminal_owner.hpp"
@@ -37,6 +38,12 @@ decode_mesh_record_header (const host::receive_record_t &record,
                            std::vector<zlink::message_t> &parts,
                            bool capture_flow,
                            const dispatch_options_t &dispatch_options = {});
+
+result_t<std::optional<messaging::envelope_header_t>>
+decode_mesh_record_header_view (const host::receive_record_t &record,
+                                std::vector<zlink::message_t> &parts,
+                                bool capture_flow,
+                                const dispatch_options_t &dispatch_options = {});
 
 
 class mesh_node_host_service_t final : public hosted_service_t, public hosted_service_lifecycle_t
@@ -143,7 +150,7 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
                           service_provider_t *services,
                           serializer_registry_t *serializers,
                           const handler_registry_t *filters,
-                          const dispatch_options_t &dispatch_options,
+                          const detail::retained_dispatch_options_t &dispatch_options,
                           serial_execution_queue_t::async_completion_t application_completed = {},
                           offload_executor_t *executor = nullptr,
                           application_job_queue_t::permit_t application_permit = {});
@@ -155,13 +162,13 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
                              service_provider_t *services,
                              serializer_registry_t *serializers,
                              const handler_registry_t *filters,
-                             dispatch_options_t dispatch_options,
+                             detail::retained_dispatch_options_t dispatch_options,
                              offload_executor_t *executor);
 
     std::vector<std::shared_ptr<detail::mesh_node_builder_state_t>> _registrations;
     serializer_registry_t *_serializers;
     handler_registry_t *_filters;
-    dispatch_options_t _dispatch_options;
+    detail::retained_dispatch_options_t _dispatch_options;
     service_provider_t *_services = nullptr;
     std::shared_ptr<location_repository_t> _location_store;
     location_runtime_t *_location_runtime = nullptr;

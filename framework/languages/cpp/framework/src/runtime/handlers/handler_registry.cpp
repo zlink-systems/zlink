@@ -170,6 +170,7 @@ struct handler_entry_t
 {
     handler_descriptor_t descriptor;
     handler_registry_t::invoker_t invoker;
+    std::function<void (serializer_registry_t &)> bind_codecs;
 };
 
 struct handler_key_t
@@ -536,8 +537,17 @@ handler_registry_t::invoke_on_handler_executor (std::string channel_name,
     co_return result;
 }
 
-handler_registry_t &handler_registry_t::add_handler (handler_descriptor_t descriptor,
-                                                     invoker_t invoker)
+void handler_registry_t::bind_codecs (serializer_registry_t &serializers)
+{
+    for (auto &[_, entry] : _state->handlers)
+        if (entry.bind_codecs)
+            entry.bind_codecs (serializers);
+}
+
+handler_registry_t &
+handler_registry_t::add_handler (handler_descriptor_t descriptor,
+                                 invoker_t invoker,
+                                 std::function<void (serializer_registry_t &)> bind_codecs)
 {
     const auto duplicate_packet =
       std::any_of (_state->handlers.begin (), _state->handlers.end (), [&] (const auto &entry) {
@@ -556,7 +566,8 @@ handler_registry_t &handler_registry_t::add_handler (handler_descriptor_t descri
     const auto key = detail::make_handler_key (descriptor.channel_name, descriptor.topic,
                                                descriptor.packet_name, descriptor.kind);
     const auto [_, inserted] = _state->handlers.emplace (
-      key, detail::handler_entry_t{std::move (descriptor), std::move (invoker)});
+      key, detail::handler_entry_t{std::move (descriptor), std::move (invoker),
+                                   std::move (bind_codecs)});
     if (!inserted) {
         throw framework_exception_t (framework_error_kind_t::protocol_error,
                                      "duplicate handler registration");

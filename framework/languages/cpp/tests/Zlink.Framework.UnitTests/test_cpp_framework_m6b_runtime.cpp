@@ -8077,7 +8077,7 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
             assert (metadata
                     == std::optional<std::vector<std::uint8_t>> (
                       {{1, 1, 5, 't', 'r', 'a', 'c', 'e', 0, 3, 'a', 'b', 'c'}}));
-            assert (application.packet_name == "quest.start");
+            assert (application.packet_name () == "quest.start");
             if (activation.target.spot_id == "instance-recover" && fail_recovery_dispatch_once) {
                 fail_recovery_dispatch_once = false;
                 throw std::runtime_error ("simulated process failure after Ready publication");
@@ -8165,7 +8165,7 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
     assert (instance_reply_header);
     assert (instance_reply_header->terminal_result == 0);
     assert (instance_reply_payload);
-    assert (instance_reply_payload->packet_name == "quest.reply");
+    assert (instance_reply_payload->packet_name () == "quest.reply");
     assert (instance_prepare_count == 1);
     assert (instance_activation_count == 1);
 
@@ -8478,7 +8478,7 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
         std::this_thread::sleep_for (1ms);
     }
     assert (instance_reply_header && instance_reply_header->terminal_result == 0);
-    assert (instance_reply_payload && instance_reply_payload->packet_name == "quest.reply");
+    assert (instance_reply_payload && instance_reply_payload->packet_name () == "quest.reply");
     assert (instance_prepare_count == 2);
     assert (instance_activation_count == 2);
 
@@ -8504,7 +8504,7 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
         std::this_thread::sleep_for (1ms);
     }
     assert (instance_reply_header && instance_reply_header->terminal_result == 0);
-    assert (instance_reply_payload && instance_reply_payload->packet_name == "quest.reply");
+    assert (instance_reply_payload && instance_reply_payload->packet_name () == "quest.reply");
     assert (instance_prepare_count == 3);
     assert (instance_activation_count == 3);
 
@@ -8616,7 +8616,7 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
         std::this_thread::sleep_for (1ms);
     }
     assert (instance_reply_header && instance_reply_header->terminal_result == 0);
-    assert (instance_reply_payload && instance_reply_payload->packet_name == "quest.reply");
+    assert (instance_reply_payload && instance_reply_payload->packet_name () == "quest.reply");
     assert (instance_prepare_count == 7);
     assert (instance_activation_count == 7);
 
@@ -8665,7 +8665,7 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
         std::this_thread::sleep_for (1ms);
     }
     assert (instance_reply_header && instance_reply_header->terminal_result == 0);
-    assert (instance_reply_payload && instance_reply_payload->packet_name == "quest.reply");
+    assert (instance_reply_payload && instance_reply_payload->packet_name () == "quest.reply");
     assert (std::holds_alternative<authority_missing_t> (
       store->read_authority (zlink::framework::runtime::spot_authority_key ("instance-1"))
         .result ()
