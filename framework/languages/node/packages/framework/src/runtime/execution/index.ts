@@ -85,6 +85,11 @@ export class ZLinkSpotSerialTurn {
     this.executionClaim?.start?.();
   }
 
+  executionAllowed(): boolean | undefined {
+    const claim = this.executionClaim;
+    return claim?.executionAllowed?.(claim.executionOwner);
+  }
+
   releaseBoundExecutionClaim(): void {
     this.executionClaim?.release();
     this.executionClaim = undefined;
@@ -298,12 +303,11 @@ export interface ZLinkExecutionBarrierClaim {
   suspend(): void;
   resume(): boolean;
   start?(): void;
+  readonly executionAllowed?: (owner: object | undefined) => boolean | undefined;
+  readonly executionOwner?: object;
 }
 
-function requireClaimExecution(this: {
-  executionAllowed?: (owner: object | undefined) => boolean | undefined;
-  executionOwner?: object;
-}): void {
+function requireClaimExecution(this: ZLinkExecutionBarrierClaim): void {
   if (this.executionAllowed?.(this.executionOwner) === false)
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.RequestRejected,
@@ -482,10 +486,7 @@ export class ZLinkExecutionBarrier {
       state = 'released';
       this.notifyQuiescence();
     };
-    const claim: ZLinkExecutionBarrierClaim & {
-      executionAllowed?: (owner: object | undefined) => boolean | undefined;
-      executionOwner?: object;
-    } = {
+    const claim: ZLinkExecutionBarrierClaim = {
       release,
       executionAllowed: allowed,
       executionOwner,
@@ -503,13 +504,18 @@ export class ZLinkExecutionBarrier {
       },
       resume: () => {
         if (state !== 'suspended') return state === 'active';
-        if (
-          this.committedSeal !== undefined ||
-          allowed?.(executionOwner) === false ||
-          (this.currentSeal !== undefined && this.currentSeal.kind !== 'close')
-        ) {
+        try {
+          if (
+            allowed?.(executionOwner) === false ||
+            this.committedSeal !== undefined ||
+            (this.currentSeal !== undefined && this.currentSeal.kind !== 'close')
+          ) {
+            release();
+            return false;
+          }
+        } catch (error) {
           release();
-          return false;
+          throw error;
         }
         state = 'active';
         this.suspendedClaims--;

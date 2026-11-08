@@ -486,15 +486,10 @@ export class DefaultZLinkSpotManager {
         lifecycle?.bindSpotExecution(activation.meshName, activation.spotId, activation.spot);
         const steadyReady = () =>
           !activation.executionBarrier.isSealed && !activation.serialExecutor.isPreparing;
-        lifecycle?.trackExecution(activation.spot, steadyReady, () => {
+        lifecycle?.trackExecution(activation.spot, steadyReady, (error) => {
           if (!steadyReady()) return;
           activation.executionBarrier.discard();
-          activation.serialExecutor.discardPendingApplication(
-            createInternalFrameworkException(
-              ZLinkFrameworkInternalErrorKind.RequestRejected,
-              'Object execution authority was discarded.'
-            )
-          );
+          activation.serialExecutor.discardPendingApplication(error);
           activation.discardLocalMembers((actor) => lifecycle.discardSteadyExecution(actor));
           this.activations.finishClose(activation.meshName, activation.spotId);
           this.options.detachedTaskRunner.runDetached('Discard Spot execution', () =>
@@ -1725,18 +1720,12 @@ export class DefaultZLinkSpotManager {
   }
 
   /** Runs an owner-side lifecycle decision in the Actor's existing execution gate. */
-  discardActorActivation(actor: ZLinkActor): void {
+  discardActorActivation(actor: ZLinkActor, error: unknown): void {
     const spotId = actor.context.spotId;
     if (spotId === undefined) return;
     const activation = this.activations.activationForClose(actor.context.meshName, spotId);
     if (activation?.resolveJoinedActor(actor.context.actorId) !== actor) return;
-    activation.serialExecutor.discardActor(
-      actor.context.actorId,
-      createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RequestRejected,
-        'Actor execution authority was discarded.'
-      )
-    );
+    activation.serialExecutor.discardActor(actor.context.actorId, error);
     activation.commitActorDeparture(actor.context.actorId);
   }
 
