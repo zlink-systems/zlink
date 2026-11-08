@@ -79,7 +79,11 @@ export class ZLinkLocationLifecycle {
     this.spotClaims.bindExecution(meshName, spotId, owner);
   }
 
-  trackExecution(owner: object, steadyReady: () => boolean, discard: () => void): void {
+  trackExecution(
+    owner: object,
+    steadyReady: () => boolean,
+    discard: (error: unknown) => void
+  ): void {
     this.runtime.trackExecution?.(owner, steadyReady, discard, (reference) =>
       this.captureRecovery(reference)
     );

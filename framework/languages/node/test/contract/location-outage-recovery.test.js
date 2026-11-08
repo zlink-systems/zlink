@@ -25,7 +25,7 @@ function deferred() {
   });
   return { promise, resolve, reject };
 }
-async function fixture(t, provider, kind = 'actor', capacity = 10) {
+async function fixture(t, provider, kind = 'actor', capacity = 10, onDiscard) {
   let now = 100,
     utc = 0;
   const timers = new Set();
@@ -195,8 +195,9 @@ async function fixture(t, provider, kind = 'actor', capacity = 10) {
   lifecycle.trackExecution(
     execution,
     () => true,
-    () => {
+    (error) => {
       discarded++;
+      onDiscard?.(error);
     }
   );
   const writes = [];
@@ -367,7 +368,11 @@ for (const provider of [false, true]) {
       s.setNow(1250 + offset);
       await s.lifecycle.reclaimOwnerRows();
       assert.equal(s.writes.length, offset ? 0 : 1);
-      assert.equal(s.runtime.executionAllowed(s.execution), !offset);
+      if (offset)
+        assert.throws(() => s.runtime.executionAllowed(s.execution), {
+          kind: internal.ZLinkFrameworkErrorKind.NotFound
+        });
+      else assert.equal(s.runtime.executionAllowed(s.execution), true);
       assert.equal(s.discarded(), offset);
     });
   }
@@ -397,7 +402,9 @@ for (const provider of [false, true]) {
       assert.equal(s.writes.length, 0);
       assert.deepEqual(s.legacyWrites, []);
       assert.equal(s.discarded(), 1);
-      assert.equal(s.runtime.executionAllowed(s.execution), false);
+      assert.throws(() => s.runtime.executionAllowed(s.execution), {
+        kind: internal.ZLinkFrameworkErrorKind.NotFound
+      });
       assert.equal((await read(s.key)).storeVersion.value, s.authority.storeVersion.value);
     });
   }
@@ -421,7 +428,9 @@ for (const provider of [false, true]) {
     s.setNow(1300);
     reply.resolve();
     await operation;
-    assert.equal(s.runtime.executionAllowed(s.execution), false);
+    assert.throws(() => s.runtime.executionAllowed(s.execution), {
+      kind: internal.ZLinkFrameworkErrorKind.NotFound
+    });
     assert.equal(s.discarded(), 1);
     assert.equal(s.writes.length, 1);
   });
@@ -465,7 +474,9 @@ for (const provider of [false, true]) {
     assert.equal(claims, 0);
     assert.equal(s.runtime.ownerLeaseUsable, false);
     assert.equal(s.discarded(), 1);
-    assert.equal(s.runtime.executionAllowed(s.execution), false);
+    assert.throws(() => s.runtime.executionAllowed(s.execution), {
+      kind: internal.ZLinkFrameworkErrorKind.NotFound
+    });
   });
   test(`Preserve definite descriptor rejection discards the object (${provider})`, async (t) => {
     const s = await fixture(t, provider);
@@ -482,7 +493,9 @@ for (const provider of [false, true]) {
       /descriptor rejected/
     );
     assert.equal(s.discarded(), 1);
-    assert.equal(s.runtime.executionAllowed(s.execution), false);
+    assert.throws(() => s.runtime.executionAllowed(s.execution), {
+      kind: internal.ZLinkFrameworkErrorKind.NotFound
+    });
   });
   test(`Preserve heartbeat reuses a confirmed CAS after an unconfirmed publication (${provider})`, async (t) => {
     const s = await fixture(t, provider);
@@ -560,7 +573,9 @@ for (const provider of [false, true]) {
     s.setNow(1300);
     publication.resolve();
     await operation;
-    assert.equal(s.runtime.executionAllowed(s.execution), false);
+    assert.throws(() => s.runtime.executionAllowed(s.execution), {
+      kind: internal.ZLinkFrameworkErrorKind.NotFound
+    });
     assert.equal(s.discarded(), 1);
   });
 }
@@ -653,7 +668,9 @@ for (const provider of [false, true]) {
     assert.notEqual(s.runtime.currentOwnerToken.leaseGeneration, owner.leaseGeneration);
     reply.resolve();
     await operation;
-    assert.equal(s.runtime.executionAllowed(s.execution), false);
+    assert.throws(() => s.runtime.executionAllowed(s.execution), {
+      kind: internal.ZLinkFrameworkErrorKind.NotFound
+    });
     assert.equal(s.discarded(), 1);
     assert.equal(s.writes.length, 1);
   });
@@ -713,7 +730,9 @@ for (const provider of [false, true]) {
     s.setNow(1200);
     assert.equal(await s.runtime.renewOwnerLeaseOnce(), true);
     s.tick(1300);
-    assert.equal(s.runtime.executionAllowed(s.execution), false);
+    assert.throws(() => s.runtime.executionAllowed(s.execution), {
+      kind: internal.ZLinkFrameworkErrorKind.NotFound
+    });
     assert.equal(s.runtime.executionAllowed(other.execution), true);
     assert.equal(s.discarded(), 1);
     assert.equal(other.discarded(), 0);
@@ -721,7 +740,9 @@ for (const provider of [false, true]) {
     await operation;
     assert.equal(s.writes.length, 2);
     assert.deepEqual(s.legacyWrites, []);
-    assert.equal(s.runtime.executionAllowed(s.execution), false);
+    assert.throws(() => s.runtime.executionAllowed(s.execution), {
+      kind: internal.ZLinkFrameworkErrorKind.NotFound
+    });
     assert.equal(s.runtime.executionAllowed(other.execution), true);
   });
 }
@@ -815,7 +836,9 @@ for (const provider of [false, true]) {
     const proof = factory(new WeakRef(replacement.execution));
     assert.equal(proof.incarnation.objectGeneration, current.objectGeneration);
     assert.equal(proof.incarnation.authorityOwnerGeneration, current.authorityOwnerGeneration);
-    assert.equal(s.runtime.executionAllowed(s.execution), false);
+    assert.throws(() => s.runtime.executionAllowed(s.execution), {
+      kind: internal.ZLinkFrameworkErrorKind.NotFound
+    });
     assert.equal(s.runtime.executionAllowed(replacement.execution), true);
     assert.deepEqual(s.legacyWrites, []);
   });
@@ -1018,7 +1041,9 @@ for (const kind of ['actor', 'user_spot', 'instance_spot']) {
     await s.outage();
     assert.equal(await s.renew(), true);
     await s.lifecycle.reclaimOwnerRows(s.publish());
-    assert.equal(s.runtime.executionAllowed(oldExecution), false);
+    assert.throws(() => s.runtime.executionAllowed(oldExecution), {
+      kind: internal.ZLinkFrameworkErrorKind.NotFound
+    });
     assert.equal(s.runtime.executionAllowed(replacement), true);
     assert.equal(discarded, false);
   });
@@ -1030,7 +1055,9 @@ for (const kind of ['actor', 'user_spot', 'instance_spot']) {
     await s.outage();
     assert.equal(await s.renew(), true);
     await s.lifecycle.reclaimOwnerRows(s.publish());
-    assert.equal(s.runtime.executionAllowed(s.execution), false);
+    assert.throws(() => s.runtime.executionAllowed(s.execution), {
+      kind: internal.ZLinkFrameworkErrorKind.NotFound
+    });
     assert.equal(s.discarded(), 1);
   });
 }
@@ -1063,3 +1090,72 @@ test('reclaim exclusion indexes every retained incarnation sharing an authority 
   assert.equal(excluded(key, { objectGeneration: 11n, authorityOwnerGeneration: 20n }), false);
   assert.equal(excluded(key), false);
 });
+
+for (const provider of [false, true]) {
+  for (const loss of ['replaced-token', 'preserve-rejected']) {
+    test(`queued ownership loss is NotFound (${provider}/${loss}) repeated 100 times`, async (t) => {
+      for (let iteration = 0; iteration < 100; iteration++) {
+        await t.test(String(iteration), async (t) => {
+          const s = await fixture(t, provider, 'actor', 10, (error) =>
+            serial.discardPendingApplication(error)
+          );
+          const serial = new internal.ZLinkSerialExecutionQueue(async (record) => {
+            try {
+              record.resolve(await record.operation());
+            } catch (error) {
+              record.reject(error);
+            } finally {
+              record.release();
+            }
+          });
+          serial.setExecutionPolicy(() => () => s.runtime.executionAllowed(s.execution));
+          let finish, signalStarted;
+          const started = new Promise((resolve) => {
+            signalStarted = resolve;
+          });
+          const running = serial.submit(
+            () =>
+              new Promise((resolve) => {
+                finish = resolve;
+                signalStarted();
+              })
+          );
+          await started;
+          const work = serial.submit(() => assert.fail('application must not run'));
+          const continuation = serial.submitContinuation(() =>
+            assert.fail('continuation must not run')
+          );
+          const request = serial.submit(() => assert.fail('request must not run'));
+          const outcomes = Promise.allSettled([work, continuation, request]);
+          try {
+            await s.outage();
+            if (loss === 'replaced-token') {
+              s.expire();
+              assert.equal(
+                (await s.store.claimOwnerLease(s.originalOwner.ownerId, 1000)).kind,
+                'claimed'
+              );
+              assert.equal(await s.renew(), false);
+            } else {
+              await s.renew(true);
+              await s.publish();
+              s.store.compareExchangeAuthority = async () => ({
+                kind: 'conflict',
+                storeNow: new Date(0)
+              });
+              await s.lifecycle.reclaimOwnerRows();
+            }
+          } finally {
+            finish();
+          }
+          await running;
+          for (const result of await outcomes) {
+            assert.equal(result.status, 'rejected');
+            assert.equal(result.reason?.kind, internal.ZLinkFrameworkErrorKind.NotFound);
+          }
+          assert.equal(s.discarded(), 1);
+        });
+      }
+    });
+  }
+}
