@@ -3610,7 +3610,7 @@ task_t<bool> mesh_node_host_service_t::republish_after_store_recovery (
             co_return _published_mesh_descriptors.empty ();
         descriptors = _published_mesh_descriptors;
     }
-    bool published = true;
+    std::vector<task_t<bool>> publications;
     for (const auto &original : descriptors) {
         if (cancellation.stop_requested ())
             co_return false;
@@ -3630,7 +3630,8 @@ task_t<bool> mesh_node_host_service_t::republish_after_store_recovery (
         if (!first_publication && descriptor.owner_id == owner->owner_id
             && descriptor.lease_generation == owner->lease_generation)
             continue;
-        if (intent == location_write_intent_t::renew)
+        // First publication retries still require a newly observed lease renewal.
+        if (first_publication && intent == location_write_intent_t::renew)
             co_return false;
         descriptor.owner_id = owner->owner_id;
         descriptor.lease_generation = owner->lease_generation;
@@ -3639,37 +3640,55 @@ task_t<bool> mesh_node_host_service_t::republish_after_store_recovery (
             co_return false;
         if (!first_publication)
             ++descriptor.descriptor_revision;
-        const auto written = co_await _location_runtime->descriptor_write_confirmed (
-          [store = _location_store, descriptor,
+        auto publication = _location_runtime->descriptor_write_confirmed (
+          [store = _location_store, descriptor, first_publication,
            write_intent = first_publication ? mesh_new_claim_intent (_registrations, descriptor)
                                             : location_write_intent_t::renew] {
-              return store->update_mesh_node (descriptor, write_intent);
+              return continue_task<location_write_result_t> (
+                store->update_mesh_node (descriptor, write_intent),
+                [first_publication] (location_write_result_t result) {
+                    if (!first_publication
+                        && result.status == location_write_status_t::ignored_stale)
+                        result.status = location_write_status_t::rejected_conflict;
+                    return task_t<location_write_result_t> (
+                      result_t<location_write_result_t>::success (std::move (result)));
+                });
           },
-          std::chrono::steady_clock::now, cancellation, deadline);
-        if (cancellation.stop_requested ())
-            co_return false;
-        if (!written) {
-            published = false;
-            continue;
-        }
-        std::lock_guard lock (_descriptor_publish_mutex);
-        const auto current =
-          std::find_if (_published_mesh_descriptors.begin (), _published_mesh_descriptors.end (),
-                        [&key] (const auto &value) {
-                            return value.mesh_name == key.mesh_name && value.rid == key.rid;
-                        });
-        // A concurrent state/weight publication owns its newer descriptor. Never
-        // overwrite it with the copy captured before external confirmation.
-        if (current == _published_mesh_descriptors.end ()
-            || current->descriptor_revision != original.descriptor_revision
-            || current->owner_id != original.owner_id
-            || current->lease_generation != original.lease_generation)
-            co_return false;
-        *current = std::move (descriptor);
-        if (first_publication)
-            _published_mesh_nodes.push_back (key);
+          _location_runtime->execution_clock (), cancellation, deadline);
+        publications.push_back (continue_task<bool> (
+          std::move (publication), [this, original, descriptor = std::move (descriptor), key,
+                                    first_publication, cancellation] (bool written) mutable {
+              if (!written || cancellation.stop_requested ())
+                  return task_t<bool> (result_t<bool>::success (false));
+              std::lock_guard lock (_descriptor_publish_mutex);
+              const auto current =
+                std::find_if (_published_mesh_descriptors.begin (),
+                              _published_mesh_descriptors.end (), [&key] (const auto &value) {
+                                  return value.mesh_name == key.mesh_name && value.rid == key.rid;
+                              });
+              // A concurrent state/weight publication owns its newer descriptor.
+              if (current == _published_mesh_descriptors.end ()
+                  || current->descriptor_revision != original.descriptor_revision
+                  || current->owner_id != original.owner_id
+                  || current->lease_generation != original.lease_generation)
+                  return task_t<bool> (result_t<bool>::success (false));
+              *current = std::move (descriptor);
+              if (first_publication)
+                  _published_mesh_nodes.push_back (key);
+              return task_t<bool> (result_t<bool>::success (true));
+          }));
     }
-    if (!published || cancellation.stop_requested ())
+    auto published = result_t<bool>::success (true);
+    for (auto &publication : publications) {
+        const auto result = co_await await_result (std::move (publication));
+        if (!result)
+            published =
+              detail::propagate_failure<bool> (result, "Mesh descriptor publication failed");
+        else if (published)
+            published = result_t<bool>::success (published.value () && result.value ());
+    }
+    // The callback owns every descriptor continuation, including after a rejection.
+    if (!published.value () || cancellation.stop_requested ())
         co_return false;
     _accept_application_dispatch.store (true, std::memory_order_release);
     _dispatch_gate_changed.notify_all ();
