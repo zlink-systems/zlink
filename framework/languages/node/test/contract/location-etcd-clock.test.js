@@ -51,19 +51,26 @@ class ClockModel {
     this.observations.push({ at: this.scheduler.now, value: this.value });
   }
 
-  process({ responseDelay = () => 0, suspendFirstSleep = 0, wall = () => 9000000000000n } = {}, Engine = ClockEngine) {
+  process({ responseDelay = () => 0, suspendFirstSleep = 0, wall = () => 9000000000000n, operationTimeoutMs } = {}, Engine = ClockEngine) {
     let reads = 0;
     let sleeps = 0;
+    // With an operation timeout, every call fails once virtual time passes its operation's deadline.
+    const expired = (operation) => {
+      if (operation !== undefined && this.scheduler.now > operation.deadline) throw new Error('DEADLINE_EXCEEDED');
+    };
     const store = {
-      readClock: async () => {
+      ...(operationTimeoutMs === undefined ? {} : { operation: () => ({ deadline: this.scheduler.now + BigInt(operationTimeoutMs) }) }),
+      readClock: async (operation) => {
+        expired(operation);
         this.observe();
         const snapshot = { value: this.value, revision: this.revision.toString() };
         await this.scheduler.sleep(responseDelay(++reads));
         this.observe();
         return snapshot;
       },
-      compareClock: async (revision, value) => {
+      compareClock: async (revision, value, operation) => {
         await this.scheduler.sleep(0);
+        expired(operation);
         this.observe();
         if (revision !== this.revision.toString()) {
           this.conflicts++;
@@ -168,6 +175,16 @@ test('etcd clock: catch-up does not advance beyond a wall clock less than 10ms a
   const initial = model.value;
   await model.steps([model.process({ wall: () => initial + 1005n })], 1);
   assert.equal(model.value - initial, 1005n);
+  model.checkBounds();
+});
+
+test('etcd clock: an operation timeout shorter than the one-second check still advances the clock', async () => {
+  const model = new ClockModel();
+  const engine = model.process({ operationTimeoutMs: 900 });
+  await model.scheduler.run(async () => {
+    for (let i = 0; i < 4; i++) await engine.step();
+  });
+  assert.ok(model.writes.length >= 1, 'the confirming read and the write must not share the first read deadline');
   model.checkBounds();
 });
 

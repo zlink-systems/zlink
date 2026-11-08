@@ -39,16 +39,17 @@ export class ClockEngine {
 
   async step(signal?: AbortSignal): Promise<void> {
     if (stopped(signal)) return;
-    const operation = this.store.operation?.(signal);
     try {
       if (this.sample === undefined) {
-        const clock = await this.store.readClock(operation);
+        const clock = await this.store.readClock(this.store.operation?.(signal));
         this.sample = { clock, at: this.time.monotonicMs() };
       }
       const previous = this.sample;
       if (stopped(signal)) return;
       await this.time.sleep(CLOCK_CHECK_INTERVAL_MS, signal);
       if (stopped(signal)) return;
+      // The one-second wait is not part of any operation: the confirming read and the write get their own deadline.
+      const operation = this.store.operation?.(signal);
       const next = await this.store.readClock(operation);
       const receivedAt = this.time.monotonicMs();
       if (next.revision !== previous.clock.revision) {
