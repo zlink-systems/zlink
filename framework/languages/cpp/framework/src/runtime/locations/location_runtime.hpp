@@ -60,18 +60,49 @@ class owner_lease_claim_rejected_error_t final : public std::runtime_error
 class location_runtime_t
 {
     friend struct location_runtime_test_access_t;
+    struct heartbeat_attempt_t;
+
+    struct heartbeat_owner_t
+    {
+        std::atomic_bool stop = false;
+        std::mutex gate;
+        std::condition_variable wake;
+        bool pending_peer_reconcile = false;
+        std::shared_ptr<heartbeat_attempt_t> current;
+        task_completion_source_t<void> discovery_changed;
+
+        void notify (bool reconcile = false)
+        {
+            task_completion_source_t<void> changed;
+            {
+                std::lock_guard lock (gate);
+                pending_peer_reconcile = pending_peer_reconcile || reconcile;
+                changed = std::exchange (discovery_changed, task_completion_source_t<void>{});
+                wake.notify_all ();
+            }
+            // A continuation may register the next observation immediately.
+            changed.complete (result_t<void>::success ());
+        }
+    };
+
     struct store_outage_t : std::enable_shared_from_this<store_outage_t>
     {
         store_outage_t (std::chrono::steady_clock::time_point observed_at,
                         std::chrono::steady_clock::time_point cutoff,
-                        location_owner_token_t token) :
-            observed_at (observed_at), cutoff (cutoff), token (std::move (token))
+                        location_owner_token_t token,
+                        std::shared_ptr<heartbeat_owner_t> owner) :
+            observed_at (observed_at),
+            cutoff (cutoff),
+            token (std::move (token)),
+            owner (std::move (owner))
         {
         }
 
         const std::chrono::steady_clock::time_point observed_at;
         const std::chrono::steady_clock::time_point cutoff;
         const location_owner_token_t token;
+        // Retain the heartbeat lifecycle, including after runtime teardown.
+        const std::shared_ptr<heartbeat_owner_t> owner;
         std::atomic_bool discarded = false;
         std::vector<std::function<void (serial_execution_queue_t::execution_admission_t)>>
           discard_requests;
@@ -80,12 +111,18 @@ class location_runtime_t
 
         bool latch (std::chrono::steady_clock::time_point now)
         {
+            if (owner->stop.load (std::memory_order_acquire))
+                return discarded.load (std::memory_order_acquire);
             if (now >= cutoff && !discarded.exchange (true, std::memory_order_acq_rel)) {
                 // The deadline owns the latch; each owner only posts its local cleanup.
                 for (const auto &request : discard_requests)
                     request (
                       [episode = shared_from_this ()] (const serial_execution_queue_t &queue) {
-                          return execution_admission (episode, queue.execution_ready_at (), {});
+                          // A request already delivered to an owner must not start
+                          // object cleanup after stop transfers cleanup to the Host.
+                          return episode->owner->stop.load (std::memory_order_acquire)
+                                   ? serial_execution_queue_t::execution_status_t::allowed
+                                   : execution_admission (episode, queue.execution_ready_at (), {});
                       });
             }
             return discarded.load (std::memory_order_acquire);
@@ -114,36 +151,11 @@ class location_runtime_t
         std::function<void (serial_execution_queue_t::execution_admission_t)> discard;
         std::function<void (authority_key_t, authority_snapshot_t)> observe;
     };
-    struct heartbeat_attempt_t;
-
     struct lease_renew_outcome_t
     {
         owner_lease_renew_result_t result{owner_lease_stale_t{}};
         std::optional<owner_lease_claim_rejection_t> rejection;
         std::string message;
-    };
-
-    struct heartbeat_owner_t
-    {
-        std::atomic_bool stop = false;
-        std::mutex gate;
-        std::condition_variable wake;
-        bool pending_peer_reconcile = false;
-        std::shared_ptr<heartbeat_attempt_t> current;
-        task_completion_source_t<void> discovery_changed;
-
-        void notify (bool reconcile = false)
-        {
-            task_completion_source_t<void> changed;
-            {
-                std::lock_guard lock (gate);
-                pending_peer_reconcile = pending_peer_reconcile || reconcile;
-                changed = std::exchange (discovery_changed, task_completion_source_t<void>{});
-                wake.notify_all ();
-            }
-            // A continuation may register the next observation immediately.
-            changed.complete (result_t<void>::success ());
-        }
     };
 
     struct heartbeat_attempt_t
@@ -419,6 +431,8 @@ class location_runtime_t
             return;
         }
         static_cast<void> (node_rid);
+        auto heartbeat = std::make_shared<heartbeat_owner_t> ();
+        std::atomic_store_explicit (&_heartbeat_state, heartbeat, std::memory_order_release);
         const auto operation_started_at = std::chrono::steady_clock::now ();
         try {
             if (cancellation.stop_requested ())
@@ -436,8 +450,6 @@ class location_runtime_t
             _started.store (false, std::memory_order_release);
             throw;
         }
-        auto heartbeat = std::make_shared<heartbeat_owner_t> ();
-        std::atomic_store_explicit (&_heartbeat_state, heartbeat, std::memory_order_release);
         _heartbeat = std::thread ([this, heartbeat = std::move (heartbeat), operation_started_at] {
 #ifndef NDEBUG
             runtime::infrastructure_wait_guard::infrastructure_scope_t scope (this);
@@ -449,8 +461,7 @@ class location_runtime_t
     void stop () noexcept
     {
         const bool started = _started.exchange (false);
-        if (started)
-            stop_heartbeat ();
+        stop_heartbeat (started);
         infrastructure_result ([this] { return drain_descriptor_publications (); }).value ();
         if (started)
             static_cast<void> (cleanup_owner ());
@@ -465,9 +476,8 @@ class location_runtime_t
     {
         const auto deadline_at = requested_deadline_at.value_or (
           std::chrono::steady_clock::now () + _options.owner_lease_renew_timeout);
-        if (_started.exchange (false)) {
-            stop_heartbeat ();
-        }
+        const bool started = _started.exchange (false);
+        stop_heartbeat (started);
         try {
             const auto token = current_owner_token_unchecked ();
             if (token) {
@@ -674,9 +684,12 @@ class location_runtime_t
     {
         if (!retention_eligible (episode, ready_at))
             return serial_execution_queue_t::execution_status_t::allowed;
-        return !episode->discarded.load (std::memory_order_acquire) && now () < episode->cutoff
-                 ? serial_execution_queue_t::execution_status_t::allowed
-                 : serial_execution_queue_t::execution_status_t::ownership_lost;
+        using status_t = serial_execution_queue_t::execution_status_t;
+        if (episode->discarded.load (std::memory_order_acquire))
+            return status_t::ownership_lost;
+        if (episode->owner->stop.load (std::memory_order_acquire))
+            return status_t::stopped;
+        return now () < episode->cutoff ? status_t::allowed : status_t::ownership_lost;
     }
 
     static bool owner_lease_usable (const owner_lease_snapshot_t &lease,
@@ -721,7 +734,10 @@ class location_runtime_t
     void observe_store_outage_on_lane (std::chrono::steady_clock::time_point observed_at)
     {
         update_owner_lease_on_lane ([&] (auto &lease) {
-            if (lease.outage || !lease.last_successful_lease)
+            const auto owner =
+              std::atomic_load_explicit (&_heartbeat_state, std::memory_order_acquire);
+            if (owner->stop.load (std::memory_order_acquire) || lease.outage
+                || !lease.last_successful_lease)
                 return;
             auto cutoff = lease.last_successful_lease->admission_deadline;
             if (_options.store_outage_retention) {
@@ -736,8 +752,8 @@ class location_runtime_t
                                                   : cutoff + duration;
                 }
             }
-            auto episode = std::make_shared<store_outage_t> (observed_at, cutoff,
-                                                             lease.last_successful_lease->token);
+            auto episode = std::make_shared<store_outage_t> (
+              observed_at, cutoff, lease.last_successful_lease->token, owner);
             for (const auto &request : *_execution_discard_requests)
                 episode->discard_requests.push_back (request.discard);
             lease.outage = episode;
@@ -759,7 +775,8 @@ class location_runtime_t
     {
         const auto &episode = lease.outage;
         if (episode) {
-            if (episode->latch ((*_lease_now) ()) || !renewal || episode != requested_outage
+            if (episode->owner->stop.load (std::memory_order_acquire)
+                || episode->latch ((*_lease_now) ()) || !renewal || episode != requested_outage
                 || started_at < episode->observed_at || !lease.token
                 || lease.token->owner_id != token.owner_id
                 || lease.token->lease_generation != token.lease_generation
@@ -1258,7 +1275,7 @@ class location_runtime_t
                + std::to_string (counter.fetch_add (1));
     }
 
-    void stop_heartbeat () noexcept
+    void stop_heartbeat (bool started) noexcept
     {
         auto heartbeat = std::atomic_load_explicit (&_heartbeat_state, std::memory_order_acquire);
         if (!heartbeat)
@@ -1267,7 +1284,18 @@ class location_runtime_t
             std::lock_guard lock (heartbeat->gate);
             heartbeat->stop.store (true, std::memory_order_release);
         }
+        infrastructure_result ([this] {
+            return _lane->run_task ([this] {
+                const auto lease =
+                  std::atomic_load_explicit (_owner_lease.get (), std::memory_order_acquire);
+                if (lease->outage)
+                    lease->outage->deadline->cancelled.store (true, std::memory_order_release);
+            });
+        }).value ();
+        detail::deadline_scheduler_t::instance ().wake ();
         heartbeat->notify ();
+        if (!started)
+            return;
         if (_heartbeat.joinable ())
             runtime::infrastructure_wait_guard::join (_heartbeat, "location/heartbeat");
         std::shared_ptr<heartbeat_attempt_t> attempt;
@@ -1284,8 +1312,6 @@ class location_runtime_t
             if (attempt->task)
                 static_cast<void> (detail::task_result_access_t::read (*attempt->task));
         }
-        std::atomic_store_explicit (&_heartbeat_state, std::shared_ptr<heartbeat_owner_t>{},
-                                    std::memory_order_release);
     }
 
     void heartbeat_loop (std::shared_ptr<heartbeat_owner_t> heartbeat,
@@ -1402,7 +1428,7 @@ class location_runtime_t
     std::shared_ptr<framework::detail::monitoring_runtime_state_t> _monitoring;
     std::atomic_bool _started = false;
     std::thread _heartbeat;
-    std::shared_ptr<heartbeat_owner_t> _heartbeat_state;
+    std::shared_ptr<heartbeat_owner_t> _heartbeat_state = std::make_shared<heartbeat_owner_t> ();
     // Lane teardown finishes accepted turns before their state is destroyed.
     mutable std::shared_ptr<std::shared_ptr<const owner_lease_snapshot_t>> _owner_lease{
       std::make_shared<std::shared_ptr<const owner_lease_snapshot_t>> (
