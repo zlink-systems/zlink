@@ -9,6 +9,7 @@ using Systems.Zlink;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Codecs;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
 
@@ -1342,6 +1343,101 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         {
             await serverRuntime.StopAsync(CancellationToken.None);
             await clientRuntime.StopAsync(CancellationToken.None);
+        }
+    }
+
+#if DEBUG
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task ClientSendReadySelectionResumesAfterShutdown(int selection)
+    {
+        await using var client = CreateClient("tcp://127.0.0.1:0");
+        var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+        await runtime.StartAsync(CancellationToken.None);
+        var transport = runtime.GetClientServerClientRuntime("work");
+        var selecting = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var send = Task.Run(async () =>
+        {
+            var entries = 0;
+            ZLinkStateLane.WorkObserver.Value = (stage, lane) =>
+            {
+                if (
+                    stage == "lane-entry"
+                    && ReferenceEquals(lane, transport._lane)
+                    && ++entries == selection
+                )
+                {
+                    selecting.TrySetResult();
+                    resume.Task.GetAwaiter().GetResult();
+                }
+            };
+            try
+            {
+                await client
+                    .GetRequiredService<IZLinkRouteClient>()
+                    .SendToChannel("work", new EchoSend("paused-shutdown"))
+                    .Async();
+            }
+            finally
+            {
+                ZLinkStateLane.WorkObserver.Value = null;
+            }
+        });
+        try
+        {
+            await selecting.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await runtime
+                .StopAsync(CancellationToken.None)
+                .AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(send.IsCompleted);
+            resume.TrySetResult();
+            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                send.WaitAsync(TimeSpan.FromSeconds(5))
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, failure.Kind);
+        }
+        finally
+        {
+            resume.TrySetResult();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+#endif
+
+    [Fact]
+    public async Task ClientSendWaitingForReadyEndsOnClientDisposal()
+    {
+        await using var client = CreateClient("tcp://127.0.0.1:0");
+        var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var transport = runtime.GetClientServerClientRuntime("work");
+            var connection = await transport._lane.RunAsync(() =>
+                Assert.Single(transport._connections).Value
+            );
+            var send = client
+                .GetRequiredService<IZLinkRouteClient>()
+                .SendToChannel("work", new EchoSend("client-disposal"))
+                .Async()
+                .AsTask();
+            Assert.False(send.IsCompleted);
+            await transport.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(connection.Snapshot().Ready);
+            Assert.Empty(transport.SnapshotConnections());
+            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                send.WaitAsync(TimeSpan.FromSeconds(5))
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, failure.Kind);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
         }
     }
 
