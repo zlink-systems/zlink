@@ -17,6 +17,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationStoreFail
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectServerDescriptorPublisher;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectServerDescriptorPublisher.UnconfirmedPublicationException;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimed;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseFound;
@@ -2032,9 +2033,24 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                                     : laneFailure;
                                                     if (terminalFailure == null)
                                                         completion.complete(null);
-                                                    else
-                                                        completion.completeExceptionally(
-                                                                unwrap(terminalFailure));
+                                                    else {
+                                                        Throwable cause = unwrap(terminalFailure);
+                                                        if (!(cause
+                                                                instanceof
+                                                                UnconfirmedPublicationException)) {
+                                                            Supplier<Instant> cleanup =
+                                                                    inStateLane(
+                                                                            () ->
+                                                                                    started
+                                                                                                    && ownsStartupCore(
+                                                                                                            lifecycle)
+                                                                                            ? startupLifecycle
+                                                                                                    .cleanupDeadline()
+                                                                                            : null);
+                                                            if (cleanup != null) cleanup.get();
+                                                        }
+                                                        completion.completeExceptionally(cause);
+                                                    }
                                                 });
                                 return completion;
                             };
