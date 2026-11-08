@@ -334,12 +334,12 @@ final class ZLinkJavaRawServicePortContractTest {
             assertNull(lastClose.get(2, TimeUnit.SECONDS));
             assertEquals(
                     ZLinkJavaRawServicePort.CLOSE_BUSY_MAX_ATTEMPTS + 1, fixture.attempts().get());
-            assertEquals(1, reentrantCalls.get());
+            assertEquals(2, reentrantCalls.get());
             lastClose = closeOnDaemon(fixture.mesh());
             assertNull(lastClose.get(2, TimeUnit.SECONDS));
             assertEquals(
                     ZLinkJavaRawServicePort.CLOSE_BUSY_MAX_ATTEMPTS + 1, fixture.attempts().get());
-            assertEquals(1, reentrantCalls.get());
+            assertEquals(2, reentrantCalls.get());
         } finally {
             // A timed-out daemon is still inside close; avoid joining its in-flight port attempt.
             if (lastClose.isDone()) fixture.port().close();
@@ -449,8 +449,16 @@ final class ZLinkJavaRawServicePortContractTest {
                                             case "setRoutingId" -> null;
                                             case "close" -> {
                                                 int attempt = attempts.incrementAndGet();
+                                                // Re-enter once per port close() call: a failing
+                                                // close spends every BUSY retry before returning.
+                                                boolean firstOfCall =
+                                                        !failFirst
+                                                                || (attempt - 1)
+                                                                                % ZLinkJavaRawServicePort
+                                                                                        .CLOSE_BUSY_MAX_ATTEMPTS
+                                                                        == 0;
                                                 var callback =
-                                                        attempt == 1 ? onSocketClose.get() : null;
+                                                        firstOfCall ? onSocketClose.get() : null;
                                                 if (callback != null) callback.run();
                                                 if (failFirst
                                                         && attempt
