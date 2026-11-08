@@ -1,6 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -16,9 +15,32 @@ const require = createRequire(import.meta.url);
 const { cases, inventory } = require("./conformance-cases.cjs");
 const {
   replaceExactly,
-  buildNodeProvider,
+  packageProviderDist,
 } = require("./build-node-provider.cjs");
 const { AdapterProcess } = require("./provider-process.cjs");
+
+test("missing package dist fails before cluster startup without transpile fallback", () => {
+  const runner = fileURLToPath(
+    new URL("./conformance-runner.mjs", import.meta.url),
+  );
+  const result = spawnSync(process.execPath, [runner], {
+    encoding: "utf8",
+    windowsHide: true,
+    env: {
+      ...process.env,
+      ZLINK_ETCD_PROVIDER_DIST: path.join(
+        path.dirname(runner),
+        ".absent-package-dist",
+      ),
+    },
+  });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /Node baseline package dist is missing/);
+  assert.match(result.stderr, /npm run build/);
+  console.log(
+    "missing baseline: exit=1; package build required; no transpile fallback",
+  );
+});
 
 test("unexpected Store failure is not converted into a mutation assertion", async () => {
   const failure = Object.assign(new Error("unexpected read failure"), {
@@ -45,12 +67,9 @@ test("unexpected Store failure is not converted into a mutation assertion", asyn
 });
 
 test("Node JSONL adapter distinguishes invalid public retention from conversion failure", async () => {
-  const directory = fs.mkdtempSync(
-    fileURLToPath(new URL("./.adapter-test-", import.meta.url)),
-  );
   let client, store;
   try {
-    const dist = buildNodeProvider(path.join(directory, "dist"));
+    const dist = packageProviderDist();
     const errors = [];
     client = new AdapterProcess(
       {
@@ -121,7 +140,6 @@ test("Node JSONL adapter distinguishes invalid public retention from conversion 
       if (store) await store.dispose();
     } finally {
       if (client) await client.close();
-      fs.rmSync(directory, { recursive: true, force: true });
     }
   }
 });

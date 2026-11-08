@@ -1,12 +1,27 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const dependencies = require("./node-dependencies.cjs");
-const ts = dependencies("typescript");
 const root = path.resolve(__dirname, "../..");
 const source = path.join(
   root,
   "framework/languages/node/packages/framework-locations-etcd/src",
 );
+function packageProviderDist() {
+  const dist = path.resolve(
+    process.env.ZLINK_ETCD_PROVIDER_DIST ||
+      path.join(
+        root,
+        "framework/languages/node/packages/framework-locations-etcd/dist",
+      ),
+  );
+  for (const file of ["index.js", "admin.js"]) {
+    if (!fs.existsSync(path.join(dist, file)))
+      throw new Error(
+        `Node baseline package dist is missing: ${path.join(dist, file)}. Run npm run build in framework/languages/node/packages/framework-locations-etcd (or set ZLINK_ETCD_PROVIDER_DIST to its isolated package build output).`,
+      );
+  }
+  return dist;
+}
 const apply = `const applied = await this.client.rpc<TxnResponse>(
           'KV',
           'txn',
@@ -55,8 +70,9 @@ const mutations = {
       "        '0'\n",
     ),
 };
-// Emit an isolated deployment tree. The repository provider source is always read-only.
-function buildNodeProvider(directory, mutation) {
+// The unmodified control and mutants use exactly the same transformation pipeline.
+function buildMutationProvider(directory, mutation) {
+  const ts = dependencies("typescript");
   if (mutation && !mutations[mutation])
     throw new Error(`not-built: unknown mutation ${mutation}`);
   function emit(current, relative = "") {
@@ -101,4 +117,9 @@ function buildNodeProvider(directory, mutation) {
   );
   return directory;
 }
-module.exports = { buildNodeProvider, mutations, replaceExactly };
+module.exports = {
+  packageProviderDist,
+  buildMutationProvider,
+  mutations,
+  replaceExactly,
+};

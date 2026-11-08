@@ -11,7 +11,10 @@ import {
 } from "./check-conformance-coverage.mjs";
 import { args, main } from "./common.mjs";
 const require = createRequire(import.meta.url);
-const { buildNodeProvider } = require("./build-node-provider.cjs");
+const {
+  packageProviderDist,
+  buildMutationProvider,
+} = require("./build-node-provider.cjs");
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const mutationCases = {
   "split-record-transaction": "spi.exact-read-observation",
@@ -22,6 +25,7 @@ const mutationCases = {
   "serializable-read": "etcd.minority-isolation",
   "scan-latest-revision": "etcd.snapshot-stability",
 };
+const mutationCaseIds = [...new Set(Object.values(mutationCases))];
 export async function runConformance({
   adapters,
   allowUnverified = false,
@@ -40,12 +44,12 @@ export async function runConformance({
   );
   let h;
   const reports = [],
-    mutationResults = [];
+    mutationResults = [],
+    controlResults = [];
   let firstFailure;
   try {
-    const baseline = buildNodeProvider(
-      path.join(buildDirectory, "baseline/dist"),
-    );
+    const baseline = packageProviderDist();
+    console.log(`baseline package dist: ${baseline}`);
     const adapterFile = path.join(
       root,
       "framework/languages/node/test/contract/location-etcd-fixtures/provider-adapter.cjs",
@@ -80,6 +84,10 @@ export async function runConformance({
       fs.writeFileSync(
         path.join(logRoot, "mutation-results.json"),
         JSON.stringify(mutationResults, null, 2),
+      );
+      fs.writeFileSync(
+        path.join(logRoot, "mutation-control-results.json"),
+        JSON.stringify(controlResults, null, 2),
       );
     };
     reports.push(...languages.map((language) => ({ language, cases: [] })));
@@ -164,11 +172,41 @@ export async function runConformance({
       save();
       if (firstFailure) break;
     }
+    if (mutations && !firstFailure && adapters.node) {
+      const dist = buildMutationProvider(
+        path.join(buildDirectory, "control/dist"),
+      );
+      const original = h.adapters.node;
+      h.adapters.node = {
+        ...nodeConfig,
+        env: { ...nodeConfig.env, ZLINK_ETCD_PROVIDER_DIST: dist },
+      };
+      try {
+        for (const caseId of mutationCaseIds) {
+          const { error, ...outcome } = await execute(caseId, "node");
+          controlResults.push(outcome);
+          console.log(
+            `mutation control ${caseId}: ${outcome.status}${outcome.reason ? `: ${outcome.reason}` : ""}`,
+          );
+          save();
+          if (outcome.status !== "passed") break;
+        }
+      } finally {
+        h.adapters.node = original;
+      }
+      if (
+        controlResults.length !== mutationCaseIds.length ||
+        controlResults.some((r) => r.status !== "passed")
+      )
+        firstFailure ??= new Error(
+          "mutation transformation control did not pass every target case",
+        );
+    }
     if (mutations && !firstFailure && adapters.node)
       for (const [id, caseId] of Object.entries(mutationCases)) {
         let r;
         try {
-          const dist = buildNodeProvider(
+          const dist = buildMutationProvider(
             path.join(buildDirectory, id, "dist"),
             id,
           );
@@ -223,6 +261,9 @@ export async function runConformance({
       `coverage: ${coverage.length ? "FAIL" : "PASS"}; unverified=${unverified.length}`,
     );
     console.log(
+      `mutation control summary: ${controlResults.filter((r) => r.status === "passed").length}/${mutations && adapters.node ? mutationCaseIds.length : 0} passed`,
+    );
+    console.log(
       `conformance summary: ${reports.reduce((n, r) => n + r.cases.filter((c) => c.status === "passed").length, 0)}/${inventory.cases.length * languages.length} passed; mutations ${mutationResults.filter((r) => r.status === "detected").length}/${mutations && adapters.node ? 6 : 0} detected`,
     );
     if (coverage.length || failedMutations.length || firstFailure)
@@ -235,7 +276,7 @@ export async function runConformance({
           .filter(Boolean)
           .join("\n"),
       );
-    return { reports, mutationResults, unverified };
+    return { reports, mutationResults, controlResults, unverified };
   } finally {
     try {
       if (h) await h.close();

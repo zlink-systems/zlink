@@ -130,7 +130,8 @@ manifest와 cleanup 결과를 log directory에 남긴다. `--runs 4 --isolation-
 
 ## 공통 적합성 실행기
 
-Node workspace의 의존성을 설치하고 TypeScript build를 완료한 뒤 실행한다.
+Node workspace의 의존성을 설치하고 `packages/framework-locations-etcd`에서 `npm run build`를
+완료한 뒤 실행한다.
 
 ```sh
 node scripts/etcd/conformance-runner.mjs
@@ -146,9 +147,15 @@ node --test scripts/etcd/conformance-self-test.mjs
 
 Node 의존성은 `framework/languages/node/node_modules`에서 읽는다. 다른 설치 경로를 사용할 때는
 `ZLINK_ETCD_NODE_MODULES`를 해당 node_modules 경로로 설정한다. 실행기는 Node 자식 process의
-`NODE_PATH`에 이 경로를 전달한다. Node provider는 source에서 격리 dist로 emit하며 canonical proto를
-함께 복사한다. 정상 배포와 mutation은 별도 디렉터리와 별도 process를 사용한다.
-대상 구문이 없으면 mutation은 `not-built`다.
+`NODE_PATH`에 이 경로를 전달한다. 기준 provider는 package build가 만든
+`framework/languages/node/packages/framework-locations-etcd/dist`를 사용한다.
+`ZLINK_ETCD_PROVIDER_DIST`로 격리 복사본의 package build 산출물을 지정할 수 있다.
+`index.js` 또는 `admin.js`가 없으면 build 명령을 안내하고 cluster 시작 전에 실패한다.
+
+Mutation 산출물은 source를 `ts.transpileModule`로 변환하고 canonical proto를 복사한다.
+같은 변환에서 구문을 바꾸지 않은 대조군으로 mutation 대상 6개 case를 먼저 실행한다.
+대조군이 모두 통과해야 mutation을 실행하며, 결과는 `mutation-control-results.json`에 남긴다.
+기준 dist·대조군·mutation은 별도 process를 사용한다. 대상 구문이 없으면 mutation은 `not-built`다.
 
 `--adapter-config PATH`는 언어 ID를 key로 하는 JSON 객체를 받는다. 값은 `command`, `args`와
 선택적인 `cwd`, `env`다. 등록된 언어로 모든 writer×reader pair를 생성한다. 이번 단계의 기본
@@ -173,6 +180,11 @@ Host clock VM이 없으면 해당 3개 항목은 이유와 함께 `unverified`�
 `--allow-unverified`로만 허용한다. 미검증은 통과 수에 포함하지 않는다. Node test 진입점은
 `ZLINK_ETCD_CONFORMANCE=1`일 때 실행되며, 미검증 허용은 `ZLINK_ETCD_ALLOW_UNVERIFIED=1`로 지정한다.
 Snapshot 유효기간 검사는 같은 instance에서 실제 5분을 기다린다.
+
+Node 전용 `location-etcd-host-clock.test.js`는 `ZLINK_ETCD_INTEGRATION=1`일 때 provider와
+관리 CLI process에만 `Date.now` preloader를 적용한다. 일 단위 시계 변경의 live·expired read,
+조건 write, snapshot page와 관리 시각 증가 상한을 검사한다. 이 보조 시험은 3단계 VM 검사가
+제공되면 제거하며 공통 실행기의 미검증 판정을 통과로 바꾸지 않는다.
 
 `ZLINK_ETCD_TEST_LOG_DIR`는 결과·명령 출력·manager log·proxy 관찰·member log의 저장 위치다.
 기본값은 `scripts/etcd/.conformance-logs/`다. `unverified.json`은 미검증 목록이며

@@ -134,3 +134,7 @@ coverage는 계속 요구한다. Node test wrapper의 같은 옵션은 `ZLINK_ET
 Mutation은 같은 case 함수를 격리 provider 산출물에 실행한다. 정확한 대상 구문이 없거나 산출물
 생성에 실패하면 `not-built`다. Case assertion 실패만 `detected`로 세며, adapter 오류·crash·예상하지
 않은 Store failure는 `not-detected`다. 실행하도록 설정한 mutation은 모두 `detected`여야 성공한다.
+
+기준 Node provider는 `npm run build`로 만든 package dist를 사용한다. Mutation 변환의 대조군은
+변경 없이 같은 `ts.transpileModule` 경로로 만들며, mutation 대상 6개 case를 모두 통과해야 한다.
+이 대조군은 mutation 전에 한 번 실행하고 기준 provider 판정을 대신하지 않는다.
