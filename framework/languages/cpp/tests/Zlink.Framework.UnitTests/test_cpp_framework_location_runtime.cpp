@@ -27,6 +27,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdio>
 #include <future>
@@ -4027,6 +4028,151 @@ TEST_P (StoreOutageRetention, ObjectCloseKeepsShuttingDownResultInBothExecutionM
     }
 }
 
+TEST_P (StoreOutageRetention, RuntimeStopCancelsRetentionDeadlineAndKeepsShuttingDown)
+{
+    using status_t = serial_execution_queue_t::execution_status_t;
+    for (bool retained : {false, true})
+        for (bool shared : {false, true}) {
+            options.store_outage_retention = retained;
+            location_runtime_t runtime (store (), options, "stop-retention-owner");
+            lease_access::clock (runtime, [&] { return clock_now.load (); });
+            claim (runtime);
+            test::manual_internal_scheduler_t scheduler;
+            auto spot = std::make_shared<serial_execution_queue_t> (
+              scheduler, serial_execution_queue_options_t{},
+              serial_execution_queue_t::error_handler_t{},
+              shared ? serial_lane_policy_t::spot_wide ()
+                     : serial_lane_policy_t::per_actor_spot ());
+            auto actor = std::make_shared<serial_execution_queue_t> (scheduler);
+            actor->attach_spot_gate (spot);
+            for (const auto &gate : {spot, actor}) {
+                gate->set_execution_policy (runtime.execution_policy ());
+                gate->confirm_execution_ready (clock_now.load ());
+            }
+            scheduler.run_all ();
+            unsigned discards = 0;
+            runtime.on_execution_discard ([&] (auto) { ++discards; }).result ().value ();
+            advance (5s);
+            lease_access::communication_failure (runtime);
+            const auto episode = lease_access::snapshot (runtime)->outage;
+            ASSERT_TRUE (episode);
+            unsigned handlers = 0;
+            std::array<std::optional<result_t<void>>, 2> outcomes;
+            std::vector<task_t<void>> cancellations;
+            serial_work_options_t pending;
+            std::size_t index = 0;
+            for (const auto &gate : {spot, actor}) {
+                pending.completion = [&, current = index++] (result_t<void> result) {
+                    outcomes[current] = std::move (result);
+                };
+                ASSERT_TRUE (gate->try_post ("stop-retained", [&] { ++handlers; }, pending));
+            }
+            runtime.stop ();
+            // A heartbeat continuation accepted after stop cannot reopen this episode.
+            const auto lease = lease_access::snapshot (runtime);
+            lease_access::accept (runtime, *lease->token, *lease->renewed_at + 30s,
+                                  *lease->renewed_at, clock_now.load (), true, episode);
+            move_to (episode->cutoff);
+            detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+            for (const auto &gate : {actor, spot}) {
+                EXPECT_EQ (status_t::stopped, gate->execution_status ());
+                cancellations.push_back (gate->cancel_pending_async ());
+            }
+            for (auto &cancelled : cancellations) {
+                scheduler.run_until (cancelled);
+                cancelled.result ().value ();
+            }
+            scheduler.run_all ();
+            EXPECT_EQ (0u, discards);
+            EXPECT_EQ (0u, handlers);
+            for (const auto &outcome : outcomes) {
+                ASSERT_TRUE (outcome);
+                EXPECT_FALSE (*outcome);
+                if (!*outcome)
+                    EXPECT_EQ (framework_error_kind_t::shutting_down, outcome->error_kind ());
+            }
+            store ().release_owner_lease (*lease->token).result ().value ();
+        }
+}
+
+TEST_P (StoreOutageRetention, RuntimeStopSuppressesAlreadyDeliveredDiscardAndKeepsNotFound)
+{
+    using status_t = serial_execution_queue_t::execution_status_t;
+    options.store_outage_retention = true;
+    location_runtime_t runtime (store (), options, "queued-discard-owner");
+    lease_access::clock (runtime, [&] { return clock_now.load (); });
+    claim (runtime);
+    test::manual_internal_scheduler_t scheduler;
+    auto gate = std::make_shared<serial_execution_queue_t> (scheduler);
+    gate->set_execution_policy (runtime.execution_policy ());
+    gate->confirm_execution_ready (clock_now.load ());
+    scheduler.run_all ();
+    serial_execution_queue_t::execution_admission_t delivered;
+    unsigned requests = 0;
+    runtime
+      .on_execution_discard ([&] (auto policy) {
+          ++requests;
+          delivered = std::move (policy);
+      })
+      .result ()
+      .value ();
+    advance (5s);
+    lease_access::communication_failure (runtime);
+    const auto episode = lease_access::snapshot (runtime)->outage;
+    ASSERT_TRUE (episode);
+    move_to (episode->cutoff);
+    detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+    ASSERT_EQ (1u, requests);
+    ASSERT_TRUE (delivered);
+    ASSERT_EQ (status_t::ownership_lost, delivered (*gate));
+    runtime.stop ();
+    // The owner has received the request, but has not submitted object cleanup yet.
+    EXPECT_EQ (status_t::allowed, delivered (*gate));
+    EXPECT_EQ (status_t::ownership_lost, gate->execution_status ());
+    std::optional<result_t<void>> outcome;
+    serial_work_options_t pending;
+    pending.completion = [&] (result_t<void> result) { outcome = std::move (result); };
+    ASSERT_TRUE (gate->try_post ("discarded-before-stop", [] {}, pending));
+    auto cancelled = gate->cancel_pending_async ();
+    scheduler.run_until (cancelled);
+    cancelled.result ().value ();
+    scheduler.run_all ();
+    ASSERT_TRUE (outcome);
+    EXPECT_FALSE (*outcome);
+    if (!*outcome)
+        EXPECT_EQ (framework_error_kind_t::not_found, outcome->error_kind ());
+    EXPECT_EQ (1u, requests);
+    gate->cancel_pending ();
+}
+
+TEST_P (StoreOutageRetention, RuntimeStopDrainsLatePublicationWithoutRetentionDiscard)
+{
+    options.store_outage_retention = true;
+    location_runtime_t runtime (store (), options, "stop-publication-owner");
+    lease_access::clock (runtime, [&] { return clock_now.load (); });
+    claim (runtime);
+    unsigned requests = 0;
+    runtime.on_execution_discard ([&] (auto) { ++requests; }).result ().value ();
+    advance (5s);
+    lease_access::communication_failure (runtime);
+    const auto episode = lease_access::snapshot (runtime)->outage;
+    ASSERT_TRUE (episode);
+    task_completion_source_t<location_write_result_t> provider_completion;
+    auto publication = runtime.descriptor_write_confirmed (
+      [&] { return provider_completion.task (); }, [&] { return clock_now.load (); });
+    ASSERT_FALSE (publication.await_ready ());
+    auto stopped = std::async (std::launch::async, [&] { runtime.stop (); });
+    // Observation completes on cancellation; physical publication is still pending.
+    const auto observed = publication.result ();
+    provider_completion.complete (
+      result_t<location_write_result_t>::success ({location_write_status_t::stored, 1, {}}));
+    stopped.get ();
+    EXPECT_FALSE (observed);
+    move_to (episode->cutoff);
+    detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+    EXPECT_EQ (0u, requests);
+}
+
 TEST_P (StoreOutageRetention, OutagePolicyReportsOwnershipLostAtCutoff)
 {
     using status_t = serial_execution_queue_t::execution_status_t;
@@ -4526,6 +4672,52 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
     };
     commit (placement_object_kind_t::user_spot, "registered-spot", "room");
     commit (placement_object_kind_t::actor, "early", "player");
+    if (loss == -3) {
+        auto executor = context->ensure_spot_serial_executor ();
+        auto gate = executor->actor_executor ("player:early")->queue ();
+        context->actor_count = 1;
+        node->actor_instances["player:early"] = std::make_shared<int> (1);
+        runtime
+          .on_execution_discard ([weak = std::weak_ptr (node)] (auto policy) {
+              if (auto state = weak.lock ())
+                  detail::spot_node_runtime_t (state).request_location_execution_discard (
+                    std::move (policy));
+          })
+          .result ()
+          .value ();
+        scheduler->run_all ();
+        ASSERT_TRUE (gate->execution_ready_at ());
+        advance (5s);
+        lease_access::communication_failure (runtime);
+        const auto episode = lease_access::snapshot (runtime)->outage;
+        ASSERT_TRUE (episode);
+        std::latch entered (1), release (1);
+        auto blocked = std::async (std::launch::async, [&] {
+            node->lane.run_sync ([&] {
+                entered.count_down ();
+                release.wait ();
+            });
+        });
+        entered.wait ();
+        move_to (episode->cutoff);
+        detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+        runtime.stop ();
+        release.count_down ();
+        blocked.get ();
+        // Fence the owner's queued discard decision before observing its worker submissions.
+        node->lane.run_sync ([] {});
+        EXPECT_EQ (0u, scheduler->pending_work ());
+        EXPECT_FALSE (context->closed);
+        EXPECT_EQ (1u, context->actor_count);
+        EXPECT_TRUE (node->actor_instances.contains ("player:early"));
+        gate->cancel_pending ();
+        executor->close ();
+        scheduler->run_all ();
+        context->node.reset ();
+        node->spot_contexts_by_id.clear ();
+        node->native_node.reset ();
+        return;
+    }
     if (loss == -1) {
         auto executor = context->ensure_spot_serial_executor ();
         scheduler->run_all ();
@@ -4831,6 +5023,15 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
     node->spot_contexts_by_id.clear ();
     node->native_node.reset ();
     context->node.reset ();
+}
+
+TEST_P (StoreOutageRetention, RuntimeStopPreventsQueuedOwnerCleanupPerActor)
+{
+    registered_owner (false, true, -3);
+}
+TEST_P (StoreOutageRetention, RuntimeStopPreventsQueuedOwnerCleanupSpotWide)
+{
+    registered_owner (true, true, -3);
 }
 
 TEST_P (StoreOutageRetention, RegisteredObjectOwnerPerActorRetention)
