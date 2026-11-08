@@ -158,11 +158,26 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# The public release URLs can answer 5xx for an hour; the authenticated API
+# (gh) stays up, so use it first when a token is available and fall back to
+# the public URL with a long backoff.
+curl_retry_args=(--retry 6 --retry-delay "${ZLINK_CORE_DOWNLOAD_RETRY_DELAY:-10}" --retry-max-time 300)
+if curl --help all 2>/dev/null | grep -q -- --retry-all-errors; then
+  curl_retry_args+=(--retry-all-errors)
+fi
+
 download() {
   local url="$1"
   local output="$2"
+  if [[ -n "${GH_TOKEN:-}" ]] && command -v gh >/dev/null 2>&1; then
+    echo "Downloading ${url##*/} with gh from ${release_tag}" >&2
+    if gh release download "$release_tag" -R zlink-systems/zlink -p "${url##*/}" -O "$output" --clobber >&2; then
+      return 0
+    fi
+    echo "gh release download failed; falling back to ${url}" >&2
+  fi
   echo "Downloading ${url}" >&2
-  curl -fsSL --retry 3 --retry-delay 1 "$url" -o "$output"
+  curl -fsSL "${curl_retry_args[@]}" "$url" -o "$output"
 }
 
 binary_archive="$work/$binary_archive_name"

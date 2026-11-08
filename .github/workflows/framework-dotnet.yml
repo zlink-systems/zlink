@@ -113,6 +113,8 @@ jobs:
       - name: Pack the public .NET binding contract
         id: versions
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           binding_version=$(sed -n 's/^ZLINK_BINDING_VERSION=//p' bindings/dotnet/VERSION)
           core_version=$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)
@@ -224,6 +226,8 @@ jobs:
 
       - name: Prepare the Core release runtime for this platform
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           # The released binding package carries the linux-x64 runtime only; the
           # other RIDs run the tests against the verified Core release archive.
