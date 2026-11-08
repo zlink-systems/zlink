@@ -271,7 +271,7 @@ async function fixture(t, provider, kind = 'actor', capacity = 10, onDiscard) {
       };
       assert.equal(await runtime.renewOwnerLeaseOnce(), false);
     },
-    async renew(expired = false, at = 300) {
+    async renew(expired = false, at = expired ? 1200 : 300) {
       now = at;
       if (expired) utc = 1001;
       lease.renewOwnerLease = (...args) => store.renewOwnerLease(...args);
@@ -663,6 +663,7 @@ for (const provider of [false, true]) {
     const operation = s.lifecycle.reclaimOwnerRows();
     await submitted.promise;
     const owner = s.runtime.currentOwnerToken;
+    s.setNow(2300);
     s.expire();
     assert.equal(await s.runtime.renewOwnerLeaseOnce(), true);
     assert.notEqual(s.runtime.currentOwnerToken.leaseGeneration, owner.leaseGeneration);
@@ -750,11 +751,11 @@ for (const provider of [false, true]) {
 for (const provider of [false, true]) {
   test(`Preserve checks lifecycle and the current lease while a descriptor for an intermediate lease is visible (${provider})`, async (t) => {
     const s = await fixture(t, provider);
-    await s.outage();
-    await s.renew(true);
+    await s.renew(true, 300);
     await s.publish();
+    await s.outage(400);
     s.expire();
-    assert.equal(await s.runtime.renewOwnerLeaseOnce(), true);
+    assert.equal(await s.renew(false, 1400), true);
     const owner = s.runtime.currentOwnerToken;
     const descriptorReply = deferred(),
       submitted = deferred();
@@ -990,7 +991,7 @@ for (const provider of [false, true]) {
     assert.equal(s.runtime.ownerLeaseRecoveryRequired, true);
 
     // A new lease forces captureRecovery's post-CAS currentTracked lookup as well.
-    assert.equal(await s.renew(true, 1100), true);
+    assert.equal(await s.renew(true, 1200), true);
     counts.claims = 0;
     const excluded = await s.runtime.reclaimOwnerAuthorities(s.publish());
     await t.test(

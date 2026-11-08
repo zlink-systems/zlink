@@ -170,15 +170,16 @@ for (const provider of [false, true]) {
     s.setNow(200);
     s.fail();
     await s.runtime.renewOwnerLeaseOnce();
-    s.setNow(300);
+    s.setNow(1200);
     s.lease.renewOwnerLease = async () => ({ kind: 'missing', storeNow: new Date(0) });
+    s.lease.readOwnerLease = async () => ({ kind: 'missing' });
     s.lease.claimOwnerLease = async () => ({
       kind: 'claimed',
       token: { ownerId: 'owner', leaseGeneration: 2n },
       storeNow: new Date(0),
       leaseExpiresAt: new Date(1000)
     });
-    await s.runtime.renewOwnerLeaseOnce();
+    assert.equal(await s.runtime.renewOwnerLeaseOnce(), true);
     assert.equal(s.snapshot().storeOutage.cutoffMs, 1300);
     s.setNow(1300);
     await complete();
