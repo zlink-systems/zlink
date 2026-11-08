@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { startOutsideStateLane } from './state-lane';
 import { isAbortError } from '../abort';
+import { RuntimeDisposal } from '../disposal';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -588,6 +589,7 @@ export class ZLinkRuntimeTaskRunner {
 }
 
 export class ZLinkFrameworkExecutionState {
+  private readonly disposal = new RuntimeDisposal();
   readonly abortController = new AbortController();
   readonly errorSink = new ZLinkRuntimeTaskErrorSink();
   readonly taskRunner = new ZLinkRuntimeTaskRunner(this.errorSink, this.abortController.signal);
@@ -595,10 +597,12 @@ export class ZLinkFrameworkExecutionState {
 
   constructor(readonly context: { dispose(): Promise<void> }) {}
 
-  async dispose(): Promise<void> {
-    this.abortController.abort();
-    await this.waitForListenerTasks();
-    await this.context.dispose();
+  dispose(): Promise<void> {
+    return this.disposal.run(async () => {
+      this.abortController.abort();
+      await this.waitForListenerTasks();
+      await this.context.dispose();
+    });
   }
 
   private async waitForListenerTasks(): Promise<void> {

@@ -1196,8 +1196,8 @@ for (const storage of ['provider', 'in-memory']) {
         assert.equal(calls.filter(call => call === 'context:dispose').length, 1);
         assert.equal(
           storeDisposes,
-          scenario.provider ? (fails ? 2 : 1) : 0
-        ); // #3923: shutdown retries teardown and disposes the owned store again
+          scenario.provider ? 1 : 0
+        ); // #3923: teardown retries preserve successful owned-store disposal
         assert.equal(host.executionState, undefined);
         if (fails) {
           await host.start();
@@ -1296,7 +1296,7 @@ for (const storage of ['provider', 'in-memory']) {
       });
       assert.deepEqual(host.status.terminationResult, first);
       assert.equal(contextDisposes, 2);
-      assert.equal(storeDisposes, scenario.provider ? 2 : 0); // #3923: both teardown attempts dispose the owned store
+      assert.equal(storeDisposes, scenario.provider ? 1 : 0); // #3923: a failed context retry preserves successful owned-store disposal
       assert.notEqual(host.executionState, undefined);
       await assert.rejects(() => host.start(), /cleanup must complete/u);
 
@@ -1305,7 +1305,7 @@ for (const storage of ['provider', 'in-memory']) {
         reason: framework.ZLinkFrameworkTerminationReason.None
       });
       assert.equal(contextDisposes, 3);
-      assert.equal(storeDisposes, scenario.provider ? 3 : 0); // #3923: explicit retry disposes the owned store again
+      assert.equal(storeDisposes, scenario.provider ? 1 : 0); // #3923: explicit retry skips the successfully disposed owned store
       assert.equal(host.executionState, undefined);
       await host.start();
       assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Preparing);
@@ -1674,7 +1674,7 @@ test('P1 shutdown disposes an owned store when context disposal fails', async t 
       2,
       `context dispose attempts=${contextDisposes}; executionState=${host.executionState === undefined ? 'released' : 'retained'}`
     );
-    assert.equal(storeDisposes, 2); // #3923: same shutdown retries owned-store disposal
+    assert.equal(storeDisposes, 1); // #3923: shutdown retries only the failed context disposal
     assert.equal(host.executionState, undefined);
   } finally {
     await host.stop();
@@ -1685,6 +1685,65 @@ async function renewFixedRidRegressionHost(host) {
   const recovery = waitForNextHostOwnerRecovery(host);
   assert.equal(await host.locationOwner.currentRuntime.renewOwnerLeaseOnce(), true);
   await recovery;
+}
+
+for (const firstOperation of ['stop', 'shutdown']) {
+  test(`#3923 ${firstOperation} then stop retries only the failed resource and permits restart`, async (t) => {
+    const scenario = await fixedRidRegressionScenario(t, 'provider');
+    const disposes = { context: 0, location: 0, relocation: 0 };
+    const failure = new Error('relocation store dispose failed once');
+    scenario.provider.dispose = async () => {
+      disposes.location++;
+    };
+    const relocationStore = {
+      async dispose() {
+        if (++disposes.relocation === 1) throw failure;
+      }
+    };
+    const { host } = scenario.makeHost([], undefined, relocationStore);
+    try {
+      await host.start();
+      scenario.advance(15);
+      await renewFixedRidRegressionHost(host);
+      assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
+      const state = host.executionState;
+      const disposeContext = host.context.dispose.bind(host.context);
+      host.context.dispose = async () => {
+        disposes.context++;
+        await disposeContext();
+      };
+
+      if (firstOperation === 'stop') {
+        await assert.rejects(
+          () => host.stop(),
+          (error) => error === failure
+        );
+        assert.deepEqual(disposes, { context: 1, location: 1, relocation: 1 });
+        assert.equal(host.executionState, state);
+        await assert.rejects(() => host.start(), /cleanup must complete/u);
+      } else {
+        assert.deepEqual(await host.shutdown(), {
+          outcome: framework.ZLinkFrameworkTerminationOutcome.ForceStopped,
+          reason: framework.ZLinkFrameworkTerminationReason.TeardownFailed
+        });
+        assert.deepEqual(disposes, { context: 1, location: 1, relocation: 2 });
+      }
+
+      await host.stop();
+      assert.deepEqual(disposes, { context: 1, location: 1, relocation: 2 });
+      assert.equal(host.executionState, undefined);
+      await host.start();
+      assert.notEqual(host.executionState, state);
+      scenario.advance(15);
+      await renewFixedRidRegressionHost(host);
+      assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
+      await host.stop();
+      assert.equal(host.executionState, undefined);
+      assert.deepEqual(disposes, { context: 1, location: 1, relocation: 2 });
+    } finally {
+      await host.stop();
+    }
+  });
 }
 
 async function fixedRidRegressionScenario(t, storage) {
@@ -1724,7 +1783,8 @@ async function fixedRidRegressionScenario(t, storage) {
       calls = [],
       spotNodes = {
         play: { router: { bind: 'tcp://fixed', routingId: 'fixed-p1-node' } }
-      }
+      },
+      relocationStoreInstance
     ) {
       const backendAdapterFactory = fakeBackendAdapterFactory(calls, rid('automatic-p1-node'));
       const createMeshAdapter = backendAdapterFactory.createMeshAdapter;
@@ -1746,6 +1806,7 @@ async function fixedRidRegressionScenario(t, storage) {
         {
           registration: framework.createFrameworkRegistration({
             locations: {
+              relocationStoreInstance,
               ...(provider === undefined
                 ? { useInMemoryStores: true }
                 : { storeInstance: provider }),

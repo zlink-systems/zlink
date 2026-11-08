@@ -302,6 +302,7 @@ export class ZLinkFrameworkRuntimeHost
   private relocationOperationStartedAt?: number;
   private shutdownOperation?: Promise<ZLinkFrameworkTerminationResult>;
   private teardown = new RuntimeDisposal();
+  private readonly ownedStores: ReturnType<typeof registeredRuntimeStores>;
   private shutdownOperationStartedAt?: number;
   private relocationTargetApplicationVersion?: bigint;
   private readonly runtimeObservers = new Set<RuntimeEventQueue<ZLinkFrameworkRuntimeStatus>>();
@@ -381,6 +382,7 @@ export class ZLinkFrameworkRuntimeHost
     readonly options: ZLinkFrameworkRuntimeHostOptions,
     internalOptions?: unknown
   ) {
+    this.ownedStores = registeredRuntimeStores(options.registration);
     const factories = internalOptions as
       | {
           readonly spotNodeRuntime?: ZLinkSpotNodeRuntimeManager;
@@ -1656,13 +1658,13 @@ export class ZLinkFrameworkRuntimeHost
       try {
         await this.runWithShutdownDeadline(DEFAULT_HOST_CONTROL_TIMEOUT_MS, async () =>
           rollbackRuntimeStart({
-            context,
+            context: this.executionState ?? context,
             startedLocationRuntime: startedLocationRuntime ?? this.locationOwner.currentRuntime,
             shutdownSignal: this.shutdownDeadline!.signal,
             streamRuntime,
             spotNodeRuntime,
             channelRuntime,
-            ownedStores: registeredRuntimeStores(this.options.registration)
+            ownedStores: this.ownedStores
           })
         );
       } catch (cleanupError) {
@@ -1782,7 +1784,7 @@ export class ZLinkFrameworkRuntimeHost
       spotNodeRuntime,
       channelRuntime,
       serviceRelocation: this.serviceRelocation,
-      ownedStores: registeredRuntimeStores(this.options.registration)
+      ownedStores: this.ownedStores
     });
     this.executionState = undefined;
     this.channelRuntime = undefined;
@@ -4195,10 +4197,14 @@ function waitForRuntimeOperation<T>(operation: Promise<T>, signal?: AbortSignal)
 
 function registeredRuntimeStores(
   registration: ZLinkFrameworkRegistration
-): readonly { dispose?(): void | Promise<void> }[] {
+): ReadonlyMap<{ dispose?(): void | Promise<void> }, RuntimeDisposal> {
   const stores = [
     registration.locations.storeInstance,
     registration.locations.relocationStoreInstance
   ];
-  return stores.filter((store): store is NonNullable<typeof store> => store !== undefined);
+  return new Map(
+    stores
+      .filter((store): store is NonNullable<typeof store> => store !== undefined)
+      .map((store) => [store, new RuntimeDisposal()])
+  );
 }
