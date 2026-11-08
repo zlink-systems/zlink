@@ -78,8 +78,6 @@ std::vector<message_t> request_submit_operation_t::submit () &&
     if (!detail::has_send_parts (operation))
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
     const auto runtime = detail::share_runtime_state (operation.raw);
-    if (!runtime)
-        throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
 
     auto entry = std::make_shared<detail::completion_entry_t> (nullptr);
     runtime->completion->register_blocking_entry (entry);
@@ -105,8 +103,6 @@ request_submission_t request_submit_operation_t::async () &&
     if (!detail::has_send_parts (operation))
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
     const auto runtime = detail::share_runtime_state (operation.raw);
-    if (!runtime)
-        throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
 
     operation.flags = send_flags_t::dontwait;
     auto operation_state = release_state_ptr ();

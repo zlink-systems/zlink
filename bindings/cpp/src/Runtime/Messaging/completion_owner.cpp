@@ -280,8 +280,12 @@ bool completion_entry_t::submit_request_attempt (bool initial_, bool *admitted_o
 {
     {
         std::lock_guard<std::mutex> lock (_mutex);
-        if (_settled)
+        if (_settled) {
+            // Close can settle a registered entry before its first attempt.
+            // That initial submit must report TERMINATED, not BACKPRESSURED.
+            require_submit_open (!initial_);
             return true;
+        }
         _published = false;
         _completion_id = 0;
     }
@@ -559,8 +563,8 @@ bool completion_entry_t::settled () noexcept
     return _settled;
 }
 
-completion_owner_t::completion_owner_t (void *socket_) :
-    _socket (socket_), _entries (&_entry_map_pool), _early_send_completions (&_entry_map_pool)
+completion_owner_t::completion_owner_t (std::shared_ptr<socket_handle_t> socket_) :
+    _socket (std::move (socket_)), _entries (&_entry_map_pool), _early_send_completions (&_entry_map_pool)
 {
 }
 
@@ -586,8 +590,7 @@ bool completion_owner_t::start_async_request (const std::shared_ptr<completion_e
 {
     {
         std::lock_guard<std::mutex> lock (_mutex);
-        if (_shutdown)
-            throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
+        require_submit_open (!_shutdown);
         if (!_public_owner)
             throw submit_error_t (submit_result_t::invalid_state, EBUSY);
         insert_entry_locked (entry_);
@@ -598,8 +601,7 @@ bool completion_owner_t::start_async_request (const std::shared_ptr<completion_e
 void completion_owner_t::register_blocking_entry (const std::shared_ptr<completion_entry_t> &entry_)
 {
     std::lock_guard<std::mutex> lock (_mutex);
-    if (_shutdown)
-        throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
+    require_submit_open (!_shutdown);
     insert_entry_locked (entry_);
 }
 
@@ -609,8 +611,7 @@ void completion_owner_t::register_send_entry (const std::shared_ptr<completion_e
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
 
     std::unique_lock<std::mutex> lock (_mutex);
-    if (_shutdown)
-        throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
+    require_submit_open (!_shutdown);
     if (!_public_owner)
         throw submit_error_t (submit_result_t::invalid_state, EBUSY);
     insert_entry_locked (entry_);
@@ -669,24 +670,28 @@ size_t completion_owner_t::drain_impl (completion_entry_t *inline_target_)
 {
     size_t processed = 0;
     std::vector<std::shared_ptr<completion_entry_t>> retries;
-    {
-        std::lock_guard<std::mutex> lock (_mutex);
-        if (_shutdown)
-            return processed;
-    }
     bool blocking_receive = inline_target_ != nullptr;
     for (;;) {
+        std::optional<socket_call_t> call;
         {
             std::lock_guard<std::mutex> lock (_mutex);
             if (_shutdown)
                 return processed;
+            try {
+                call.emplace (*_socket);
+            }
+            catch (const submit_error_t &) {
+                return processed;
+            }
         }
         zlink_completion_t completion{};
         completion.struct_size = sizeof (completion);
         const zlink_recv_result_t rc = zlink_completion_recv (
-          _socket, &completion,
+          call->handle (), &completion,
           static_cast<zlink_recv_flags_t> (blocking_receive ? ZLINK_RECV_FLAGS_NONE
                                                             : ZLINK_RECV_FLAGS_DONTWAIT));
+        const int receive_errno = zlink_errno ();
+        call.reset ();
         blocking_receive = false;
         if (rc == ZLINK_RECV_NO_DATA) {
             for (const auto &entry : retries) {
@@ -706,7 +711,7 @@ size_t completion_owner_t::drain_impl (completion_entry_t *inline_target_)
             break;
         }
         if (rc != ZLINK_RECV_OK) {
-            const int error = zlink_errno ();
+            const int error = receive_errno;
             for (const auto &entry : retries) {
                 entry->terminate (error);
                 unregister_entry (entry->context ());
@@ -786,6 +791,25 @@ void completion_owner_t::release_public (const void *poller_owner_) noexcept
     catch (...) {
         shutdown (EIO);
     }
+}
+
+int completion_owner_t::close_native_socket () noexcept
+{
+    // Native cleanup may reenter close on its owning thread. Do not try to
+    // acquire a non-recursive mutex already owned by that thread.
+    if (_socket->close_in_progress ()) {
+        errno = EBUSY;
+        return ZLINK_CLOSE_BUSY;
+    }
+    // Completion admission shares this existing lock so a rejected Core close
+    // cannot expose a transient closing state to a receiver. A concurrent
+    // close stays fail-fast while that owner is in use.
+    std::unique_lock<std::mutex> lock (_mutex, std::try_to_lock);
+    if (!lock.owns_lock ()) {
+        errno = EBUSY;
+        return ZLINK_CLOSE_BUSY;
+    }
+    return _socket->close ();
 }
 
 void completion_owner_t::shutdown (int terminal_errno_) noexcept

@@ -91,30 +91,22 @@ struct received_access_t
     }
 
     static void set_socket_rid_send_context (
-      received_t &received_, void *handle_,
+      received_t &received_,
       const std::shared_ptr<socket_runtime_state_t> &runtime_)
     {
-        received_._send_context_handle = reinterpret_cast<std::uintptr_t> (handle_);
         received_._send_context_kind = received_t::send_context_kind_t::socket_rid;
         received_._send_context_runtime = runtime_;
     }
 
     static bool has_send_context (const received_t &received_) noexcept
     {
-        return received_._send_context_handle != 0
-               && received_._send_context_kind == received_t::send_context_kind_t::socket_rid
-               && received_._routing_id.has_value ()
-               && !received_._send_context_runtime.expired ();
+        return received_._send_context_kind == received_t::send_context_kind_t::socket_rid
+               && received_._routing_id.has_value ();
     }
 
     static bool has_reply_context (const received_t &received_) noexcept
     {
         return has_send_context (received_) && received_._reply_token.has_value ();
-    }
-
-    static void *send_handle (const received_t &received_) noexcept
-    {
-        return reinterpret_cast<void *> (received_._send_context_handle);
     }
 
     static std::shared_ptr<socket_runtime_state_t> runtime (const received_t &received_)
@@ -125,7 +117,6 @@ struct received_access_t
   private:
     static void clear_context (received_t &received_) noexcept
     {
-        received_._send_context_handle = 0;
         received_._send_context_kind = received_t::send_context_kind_t::none;
         received_._send_context_runtime.reset ();
     }

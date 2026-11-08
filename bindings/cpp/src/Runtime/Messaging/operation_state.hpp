@@ -80,15 +80,13 @@ struct operation_state_t
 
     struct raw_command_t
     {
-        void *socket = nullptr;
-        std::weak_ptr<socket_runtime_state_t> runtime;
+        std::shared_ptr<socket_handle_t> socket;
         std::string topic;
         routing_target_t target;
 
         void reset () noexcept
         {
-            socket = nullptr;
-            runtime.reset ();
+            socket.reset ();
             topic.clear ();
             target.reset ();
         }
@@ -109,23 +107,22 @@ struct operation_state_t
     std::chrono::milliseconds timeout{};
 };
 
-// Lifetime ownership of the callback state belongs to socket_t. An operation
-// state only needs to be able to tell whether that owner is still alive, so it
-// carries one weak token plus the raw view. The token is bound once per
-// (pooled state, socket) pair instead of once per call.
+// A builder keeps the handle alive without retaining the completion registry.
+// This replaces the former per-builder weak runtime reference at the same cost.
 inline void bind_runtime_state (operation_state_t::raw_command_t &raw_,
                                 const std::shared_ptr<socket_runtime_state_t> &state_)
 {
-    raw_.runtime = state_;
+    raw_.socket = state_ ? state_->completion->socket_handle () : nullptr;
 }
 
-// Synchronous terminals: the submitting statement cannot outlive the socket_t
-// that owns the callback state, so no strong reference is taken. Returns
-// nullptr when the owning socket is already gone.
+// Completion setup locks the handle's immutable weak runtime link once. Native
+// admission alone decides whether a live handle has already closed.
 inline std::shared_ptr<socket_runtime_state_t> share_runtime_state (
   const operation_state_t::raw_command_t &raw_)
 {
-    return raw_.runtime.lock ();
+    auto runtime = submit_handle (raw_.socket).runtime.lock ();
+    require_submit_open (static_cast<bool> (runtime));
+    return runtime;
 }
 
 inline void cache_first_rid_native (operation_state_t::routing_target_t &target_,
