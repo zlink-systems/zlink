@@ -372,6 +372,14 @@ void write_type_fragments (header_writer_t &prefix,
     middle.append (",\"metadata\":");
 }
 
+// header_plan_t::matches compares every envelope_header_t field by hand. The
+// size check catches a new field on the reference toolchain (libstdc++ x86-64).
+#if defined(__GLIBCXX__) && defined(__x86_64__) && !defined(_GLIBCXX_DEBUG)
+static_assert (sizeof (envelope_header_t) == 576,
+               "new envelope_header_t field: add it to header_plan_t::matches and to "
+               "EnvelopeEncoding.ChangedValuesAndInvalidHeadersCannotReusePreviousBytes");
+#endif
+
 struct header_plan_t
 {
     std::optional<envelope_header_t> header;
