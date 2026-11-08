@@ -15227,6 +15227,8 @@ void spot_node_runtime_t::request_location_execution_discard (
                 }
             }
         }
+        if (spots->empty () && actors.empty ())
+            return;
         // Existing Close uses its infrastructure executor outside the owner turn.
         const auto submitted = state->worker_executor->try_submit_internal (
           [state, spots = std::move (spots), actors = std::move (actors)] () mutable {
