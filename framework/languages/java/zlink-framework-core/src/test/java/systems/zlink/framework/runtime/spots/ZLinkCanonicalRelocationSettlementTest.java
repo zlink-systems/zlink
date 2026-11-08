@@ -123,17 +123,17 @@ final class ZLinkCanonicalRelocationSettlementTest {
                                 Instant.now().plusSeconds(30))
                         .toCompletableFuture();
         if (replaceAt == 2) fixture.routeGeneration.set(2);
-        if (!settlement.isDone()) fixture.nextManagementTurn();
+        if (!settlement.isDone()) fixture.nextManagementTurn(settlement);
         if (!readyAtObservation) {
             assertFalse(settlement.isDone(), "a selected but unready route cannot carry replay");
             fixture.connected.set(true);
-            fixture.nextManagementTurn();
+            fixture.nextManagementTurn(settlement);
         }
         fixture.endpoint.publishedEvent.get(3, TimeUnit.SECONDS);
         assertEquals(1, fixture.commits.get(), "the replay must deliver the verified boundary");
         // Resubmission and the source's later Store confirmation are distinct observations
-        // (relocation §4.4). Advance that authority observation explicitly as well.
-        if (!settlement.isDone()) fixture.nextManagementTurn();
+        // (relocation §4.4). Await another authority turn or that confirmation.
+        if (!settlement.isDone()) fixture.nextManagementTurn(settlement);
         // The turn submits the Store read; its completion may arrive on another thread.
         settlement.get(3, TimeUnit.SECONDS);
         assertTrue(settlement.isDone(), "the source must observe the target's committed authority");
@@ -147,6 +147,28 @@ final class ZLinkCanonicalRelocationSettlementTest {
         assertEquals(
                 fixture.authority().authorityOwnerGeneration(), target.authorityOwnerGeneration());
         assertEquals(emptyBatch ? 0 : 2, fixture.endpoint.relayed().size());
+        assertEquals(1, fixture.commits.get());
+    }
+
+    @Test
+    void completedSettlementWakesManagementObservationWithoutAnotherTurn() throws Exception {
+        Fixture fixture = new Fixture(true);
+        fixture.stage();
+        fixture.publish();
+        fixture.endpoint.publishedEvent.get(3, TimeUnit.SECONDS);
+        var settlement =
+                fixture.source
+                        .settleAuthority(
+                                fixture.targetRid,
+                                fixture.request.fence(),
+                                Instant.now().plusSeconds(30))
+                        .toCompletableFuture();
+        assertEquals(
+                ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED,
+                settlement.get(3, TimeUnit.SECONDS).outcome());
+        assertTrue(fixture.management.isEmpty(), "Store confirmation must not need another turn");
+        fixture.nextManagementTurn(settlement);
+        assertTrue(fixture.management.isEmpty(), "the settlement wakeup must be consumed");
         assertEquals(1, fixture.commits.get());
     }
 
@@ -856,7 +878,9 @@ final class ZLinkCanonicalRelocationSettlementTest {
             targetRef.set(target);
         }
 
-        void nextManagementTurn() throws Exception {
+        void nextManagementTurn(CompletableFuture<?> settlement) throws Exception {
+            // Store confirmation can finish settlement without scheduling another turn.
+            settlement.whenComplete((ignored, failure) -> management.add(() -> {}));
             var turn = management.poll(3, TimeUnit.SECONDS);
             assertNotNull(turn, "source must schedule its authority observation");
             turn.run();
