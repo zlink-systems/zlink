@@ -562,11 +562,11 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     this.options.locationLifecycle?.trackExecution(
       actor,
       () => state.isSteadyReady && !this.relocationStaged.has(state.actorId),
-      () => {
+      (error) => {
         if (!state.isSteadyReady) return;
         const failures: unknown[] = [];
         for (const cleanup of [
-          () => this.options.discardActorActivation?.(actor),
+          () => this.options.discardActorActivation?.(actor, error),
           () => this.options.actorDestroyedCleanup?.(state.actorId),
           () => this.discardNativeRelocationSource(state.nativeActorRef)
         ]) {

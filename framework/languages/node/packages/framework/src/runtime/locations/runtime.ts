@@ -1,3 +1,7 @@
+import {
+  createInternalFrameworkException,
+  ZLinkFrameworkInternalErrorKind
+} from '../framework-errors-internal';
 import { inspectRuntime } from '../internal-observation';
 import {
   ZLinkDescriptorPublicationUnconfirmedError,
@@ -206,7 +210,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     object,
     {
       readonly steadyReady: () => boolean;
-      readonly discard: () => void;
+      readonly discard: (error: unknown) => void;
       readonly captureRecovery?: (reference: WeakRef<object>) => ZLinkExecutionRecovery | undefined;
     }
   >();
@@ -215,7 +219,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   trackExecution(
     owner: object,
     steadyReady: () => boolean,
-    discard: () => void,
+    discard: (error: unknown) => void,
     captureRecovery?: (reference: WeakRef<object>) => ZLinkExecutionRecovery | undefined
   ): void {
     if (!this.discardedExecutions.has(owner) && !this.executions.has(owner))
@@ -227,10 +231,11 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   }
 
   discardExecution(owner: object): void {
+    if (!this.started) return;
     const execution = this.executions.get(owner);
     this.discardedExecutions.add(owner);
     this.forgetExecution(owner);
-    execution?.discard();
+    execution?.discard(this.executionFailure());
   }
 
   discardSteadyExecution(owner: object): boolean {
@@ -248,15 +253,25 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       : undefined;
   }
 
+  private executionFailure() {
+    return createInternalFrameworkException(
+      this.started
+        ? ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
+        : ZLinkFrameworkInternalErrorKind.RuntimeShutdown,
+      this.started ? 'Object execution authority was discarded.' : 'Location runtime is stopped.'
+    );
+  }
+
   executionAllowed(owner: object | undefined): boolean {
+    if (!this.started) throw this.executionFailure();
     const admissionOpen =
-      this.started &&
-      this.ownerToken !== undefined &&
-      this.ownerLeaseHealthy &&
-      this.storeOutage === undefined;
-    if (admissionOpen) return owner === undefined || !this.discardedExecutions.has(owner);
+      this.ownerToken !== undefined && this.ownerLeaseHealthy && this.storeOutage === undefined;
+    if (admissionOpen) {
+      if (owner !== undefined && this.discardedExecutions.has(owner)) throw this.executionFailure();
+      return true;
+    }
     const retained = this.retainedExecutions();
-    if (owner !== undefined && this.discardedExecutions.has(owner)) return false;
+    if (owner !== undefined && this.discardedExecutions.has(owner)) throw this.executionFailure();
     const record = owner === undefined ? undefined : this.storeOutage?.retainedByOwner.get(owner);
     if (record !== undefined && record.phase !== 'retained' && record.phase !== 'recovered')
       return false;

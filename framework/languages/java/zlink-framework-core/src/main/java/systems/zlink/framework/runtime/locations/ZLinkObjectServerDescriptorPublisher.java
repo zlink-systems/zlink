@@ -85,25 +85,37 @@ public final class ZLinkObjectServerDescriptorPublisher {
                             .thenCompose(
                                     ignored ->
                                             runtime.writeDescriptor(
-                                                    () -> store.updateMeshNode(descriptor, intent)))
-                            .thenAccept(
-                                    result -> {
-                                        if (result.status() != ZLinkLocationWriteStatus.STORED) {
-                                            throw new ZLinkLocationStoreFailureException(
-                                                    ZLinkFrameworkErrorKind.NOT_CONFIGURED,
-                                                    "MeshNode descriptor publication failed"
-                                                            + " [mesh="
-                                                            + descriptor.meshName()
-                                                            + ", status="
-                                                            + result.status()
-                                                            + "]",
-                                                    null);
-                                        }
-                                        claims.replace(
-                                                meshName,
-                                                attempt,
-                                                new Claim(leaseGeneration, null, true));
-                                    }));
+                                                    new ZLinkMeshNodeDescriptorKey(
+                                                            descriptor.meshName(),
+                                                            descriptor.rid()),
+                                                    () ->
+                                                            store.updateMeshNode(descriptor, intent)
+                                                                    .thenAccept(
+                                                                            result -> {
+                                                                                if (result.status()
+                                                                                        != ZLinkLocationWriteStatus
+                                                                                                .STORED) {
+                                                                                    throw new ZLinkLocationStoreFailureException(
+                                                                                            ZLinkFrameworkErrorKind
+                                                                                                    .NOT_CONFIGURED,
+                                                                                            "MeshNode descriptor publication failed"
+                                                                                                    + " [mesh="
+                                                                                                    + descriptor
+                                                                                                            .meshName()
+                                                                                                    + ", status="
+                                                                                                    + result
+                                                                                                            .status()
+                                                                                                    + "]",
+                                                                                            null);
+                                                                                }
+                                                                                claims.replace(
+                                                                                        meshName,
+                                                                                        attempt,
+                                                                                        new Claim(
+                                                                                                leaseGeneration,
+                                                                                                null,
+                                                                                                true));
+                                                                            }))));
         }
         return requirePublicationResults(writes);
     }
