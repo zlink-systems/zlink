@@ -44,16 +44,17 @@ struct external_lifecycle_turn_t
 
 // Bounds the observation, not opaque provider I/O. Losing completions retain no
 // runtime or coroutine owner and cannot resume the observer a second time.
-template <typename T>
+template <typename T, typename Now = decltype (&std::chrono::steady_clock::now)>
 task_t<result_t<T>> observe_until (task_t<T> pending,
                                    std::chrono::steady_clock::time_point deadline_at,
-                                   std::stop_token cancellation = {})
+                                   std::stop_token cancellation = {},
+                                   Now now = std::chrono::steady_clock::now)
 {
-    const auto observed = [deadline_at, cancellation] (result_t<T> result) {
+    const auto observed = [deadline_at, cancellation, now = std::move (now)] (result_t<T> result) {
         if (cancellation.stop_requested ())
             return result_t<T>::failure (framework_error_kind_t::shutting_down,
                                          "Location coordinator stopped");
-        if (std::chrono::steady_clock::now () >= deadline_at)
+        if (now () >= deadline_at)
             return result_t<T>::failure (framework_error_kind_t::deadline_exceeded,
                                          "Location coordinator wait timed out");
         return result;
