@@ -106,6 +106,7 @@ class location_runtime_t
         std::atomic_bool discarded = false;
         task_completion_source_t<serial_execution_queue_t::execution_operation_t> terminal;
         std::shared_ptr<task_t<void>> recovery;
+        std::shared_ptr<task_t<bool>> publication;
         std::vector<std::function<void (serial_execution_queue_t::execution_admission_t)>>
           discard_requests;
         std::shared_ptr<detail::deadline_state_t> deadline =
@@ -153,8 +154,8 @@ class location_runtime_t
 
   public:
     using execution_recovery_t =
-      std::function<task_t<serial_execution_queue_t::execution_operation_t> (authority_key_t,
-                                                                             authority_snapshot_t)>;
+      std::function<task_t<serial_execution_queue_t::execution_operation_t> (
+        authority_key_t, authority_snapshot_t, std::function<task_t<void> (authority_snapshot_t)>)>;
 
   private:
     struct execution_observer_t
@@ -212,6 +213,7 @@ class location_runtime_t
         std::function<std::chrono::steady_clock::time_point ()> now;
         const std::chrono::steady_clock::time_point deadline_at;
         task_completion_source_t<location_write_result_t> observation;
+        task_completion_source_t<void> submitted;
         task_completion_source_t<void> drained;
         std::shared_ptr<detail::deadline_state_t> deadline =
           std::make_shared<detail::deadline_state_t> ();
@@ -330,6 +332,101 @@ class location_runtime_t
             _execution_discard_requests->push_back (
               {std::move (request), std::move (observe), std::move (recover)});
         });
+    }
+
+    using descriptor_publisher_t = std::function<task_t<bool> (
+      location_write_intent_t, std::stop_token, std::chrono::steady_clock::time_point)>;
+
+    task_t<void> set_descriptor_publisher (descriptor_publisher_t publish,
+                                           std::stop_token owner_cancellation = {})
+    {
+        if (!publish)
+            return task_t<void> (result_t<void>::success ());
+        return _lane->run_task (
+          [this, publish = std::move (publish), owner_cancellation] () mutable {
+              _descriptor_publisher = [publish = std::move (publish), owner_cancellation] (
+                                        auto intent, auto cancellation, auto deadline) {
+                  if (owner_cancellation.stop_requested ())
+                      return task_t<bool> (result_t<bool>::success (false));
+                  return publish (intent, cancellation, deadline);
+              };
+          });
+    }
+
+    task_t<bool>
+    republish_descriptors (location_write_intent_t intent,
+                           std::stop_token cancellation,
+                           std::chrono::steady_clock::time_point deadline,
+                           std::shared_ptr<task_completion_source_t<void>> submitted = {})
+    {
+        const auto heartbeat = std::atomic_load (&_heartbeat_state);
+        if (heartbeat && heartbeat->stop.load (std::memory_order_acquire)) {
+            if (submitted)
+                submitted->complete (result_t<void>::success ());
+            co_return false;
+        }
+        if (!submitted) {
+            const auto episode = co_await _lane->run_task ([this] {
+                const auto lease =
+                  std::atomic_load_explicit (_owner_lease.get (), std::memory_order_acquire);
+                return lease->outage && lease->token
+                           && lease->token->lease_generation
+                                != lease->outage->token.lease_generation
+                         ? lease->outage
+                         : std::shared_ptr<store_outage_t>{};
+            });
+            if (episode) {
+                auto publication =
+                  co_await _lane->run_task ([episode] { return episode->publication; });
+                if (!publication)
+                    co_return false;
+                co_return co_await detail::project_task_terminal<bool> (
+                  *publication, [] (const result_t<bool> &result) { return result; });
+            }
+        }
+        // The lane owns registration; this copy retains only the current invocation.
+        auto publish = co_await _lane->run_task ([this] { return _descriptor_publisher; });
+        if (!publish) {
+            if (submitted)
+                submitted->complete (result_t<void>::success ());
+            co_return true;
+        }
+        auto pending = publish (intent, cancellation, deadline);
+        // Startup and Fixed RID waiting retain the publisher's existing observation.
+        if (!submitted)
+            co_return co_await pending;
+        // The existing publication owner also drains the Host callback, including
+        // continuations that still borrow Host state after physical Store completion.
+        auto confirmation = descriptor_write_confirmed (
+          [pending = std::move (pending)] () mutable {
+              return detail::project_task_terminal<location_write_result_t> (
+                pending, [] (const result_t<bool> &result) {
+                    if (!result && result.error ()
+                        && result.error_kind () == framework_error_kind_t::not_configured)
+                        return result_t<location_write_result_t>::success (
+                          {location_write_status_t::rejected_conflict, 0, {}});
+                    if (!result)
+                        return detail::propagate_failure<location_write_result_t> (
+                          result, "Location descriptor callback failed");
+                    if (!result.value ())
+                        return result_t<location_write_result_t>::failure (
+                          framework_error_kind_t::unavailable, "Location descriptor unconfirmed");
+                    return result_t<location_write_result_t>::success (
+                      {location_write_status_t::stored, 0, {}});
+                });
+          },
+          *_lease_now, cancellation, deadline);
+        auto submissions = co_await _lane->run_task ([this] {
+            auto tasks = std::make_shared<std::vector<task_t<void>>> ();
+            for (const auto &pending : _descriptor_publications)
+                tasks->push_back (pending->submitted.task ());
+            return tasks;
+        });
+        for (auto &submission : *submissions)
+            co_await submission;
+        if (submitted)
+            submitted->complete (result_t<void>::success ());
+        co_return co_await confirmation;
     }
 
     const std::string &owner_id () const noexcept { return _owner_id; }
@@ -602,6 +699,7 @@ class location_runtime_t
         } else {
             operation->finish ();
         }
+        operation->submitted.complete (result_t<void>::success ());
         const auto result = co_await await_result (operation->observation.task ());
         if (!result) {
             if (result.error () == nullptr)
@@ -628,6 +726,14 @@ class location_runtime_t
     {
         return std::atomic_load_explicit (_owner_lease.get (), std::memory_order_acquire)
           ->admission_deadline;
+    }
+
+    auto descriptor_publication_observation (
+      std::optional<std::chrono::steady_clock::time_point> observed) const
+    {
+        const auto current = owner_lease_observation ();
+        return std::pair{current, current != observed ? location_write_intent_t::new_claim
+                                                      : location_write_intent_t::renew};
     }
 
     auto peer_reconcile_requester () const
@@ -801,12 +907,12 @@ class location_runtime_t
         const auto &episode = lease.outage;
         if (episode) {
             if (episode->owner->stop.load (std::memory_order_acquire)
-                || episode->latch ((*_lease_now) ()) || !renewal || episode != requested_outage
+                || episode->latch ((*_lease_now) ()) || episode != requested_outage
                 || started_at < episode->observed_at || !lease.token
                 || lease.token->owner_id != token.owner_id
-                || lease.token->lease_generation != token.lease_generation
+                || (renewal && lease.token->lease_generation != token.lease_generation)
                 || episode->token.owner_id != token.owner_id
-                || episode->token.lease_generation != token.lease_generation)
+                || (!renewal && episode->token.lease_generation == token.lease_generation))
                 return false;
         }
         if (!lease.last_successful_lease || started_at >= lease.last_successful_lease->started_at)
@@ -919,12 +1025,37 @@ class location_runtime_t
         co_return result;
     }
 
+    static task_t<authority_read_result_t> confirm_preservation (
+      task_t<authority_compare_exchange_result_t> pending,
+      std::shared_ptr<store_outage_t> episode,
+      std::shared_ptr<std::function<std::chrono::steady_clock::time_point ()>> now,
+      std::function<task_t<void> (authority_snapshot_t)> apply,
+      std::chrono::steady_clock::time_point deadline)
+    {
+        const auto result =
+          co_await observe_until (std::move (pending), deadline, {}, [now] { return (*now) (); });
+        if (!result)
+            co_return detail::propagate_failure<authority_read_result_t> (
+              result, "Location Preserve CAS failed");
+        if (const auto *stored = std::get_if<authority_stored_t> (&result.value ())) {
+            if (!episode->owner->stop.load (std::memory_order_acquire)
+                && !episode->latch ((*now) ()))
+                co_await apply (stored->snapshot);
+            co_return authority_read_result_t{stored->snapshot};
+        }
+        co_return authority_read_result_t{authority_missing_t{}};
+    }
+
     static task_t<serial_execution_queue_t::execution_operation_t>
     recover_execution (location_repository_t *store,
                        std::shared_ptr<store_outage_t> episode,
                        std::shared_ptr<std::function<std::chrono::steady_clock::time_point ()>> now,
                        authority_key_t key,
-                       authority_snapshot_t fence)
+                       authority_snapshot_t fence,
+                       std::function<task_t<void> (authority_snapshot_t)> apply,
+                       location_owner_token_t token,
+                       std::shared_ptr<task_t<bool>> publication,
+                       std::chrono::milliseconds timeout)
     {
         using status_t = serial_execution_queue_t::execution_status_t;
         using operation_t = serial_execution_queue_t::execution_operation_t;
@@ -936,44 +1067,97 @@ class location_runtime_t
             if (auto active = weak.lock ())
                 active->complete (result);
         });
-        auto read = store->read_authority_core (std::move (key));
-        detail::observe_task_terminal (
-          read,
-          [weak = std::weak_ptr{completion}, episode = std::move (episode), now = std::move (now),
-           fence = std::move (fence)] (const result_t<authority_read_result_t> &read) {
-              auto active = weak.lock ();
-              if (!active)
-                  return;
-              const auto observed_at = (*now) ();
-              if (episode->owner->stop.load (std::memory_order_acquire)) {
-                  active->complete (
-                    result_t<operation_t>::success ({status_t::stopped, observed_at}));
-                  return;
-              }
-              if (episode->latch (observed_at)) {
-                  active->complete (
-                    result_t<operation_t>::success ({status_t::ownership_lost, observed_at}));
-                  return;
-              }
-              if (!read) {
-                  active->complete (detail::propagate_failure<operation_t> (
-                    read, "Location recovery exact read failed"));
-                  return;
-              }
-              const auto *current = std::get_if<authority_snapshot_t> (&read.value ());
-              active->complete (result_t<operation_t>::success (
-                {current && current->same_incarnation (fence)
-                     && current->store_version == fence.store_version
-                     && current->allocation.state == placement_allocation_state_t::active
-                     && current->owner.lease_generation == fence.owner.lease_generation
-                     && current->owner.owner_id == episode->token.owner_id
-                     && current->owner.lease_generation == episode->token.lease_generation
-                     && current->allocation.target.node_lifecycle_generation
-                          == fence.allocation.target.node_lifecycle_generation
-                   ? status_t::allowed
-                   : status_t::ownership_lost,
-                 observed_at}));
-          });
+        const auto started = (*now) ();
+        if (episode->owner->stop.load (std::memory_order_acquire))
+            co_return operation_t{status_t::stopped, started};
+        if (episode->latch (started))
+            co_return operation_t{status_t::ownership_lost, started};
+        const bool preserve = token.lease_generation != fence.owner.lease_generation;
+        // §5.1 D19: equality is admissible; only the original episode owns T.
+        if (preserve && started + timeout > episode->cutoff)
+            co_return co_await terminal;
+        auto read = std::make_shared<task_t<authority_read_result_t>> (
+          preserve ? confirm_preservation (store->compare_exchange_authority_core (
+                                             key, fence.store_version,
+                                             [&] {
+                                                 auto mutation =
+                                                   authority_put_t::preserve (fence, token);
+                                                 mutation.operation_deadline = started + timeout;
+                                                 return mutation;
+                                             }()),
+                                           episode, now, std::move (apply), started + timeout)
+                   : store->read_authority_core (std::move (key)));
+        const auto confirm = [weak = std::weak_ptr{completion}, episode = std::weak_ptr{episode},
+                              now, read = std::weak_ptr{read},
+                              publication = std::weak_ptr{publication}, fence = std::move (fence),
+                              token, preserve] {
+            auto active = weak.lock ();
+            const auto current_episode = episode.lock ();
+            const auto current_read = read.lock ();
+            const auto current_publication = publication.lock ();
+            if (!active || !current_episode || !current_read || active->task ().await_ready ())
+                return;
+            const auto observed_at = (*now) ();
+            if (current_episode->owner->stop.load (std::memory_order_acquire)) {
+                active->complete (
+                  result_t<operation_t>::success ({status_t::stopped, observed_at}));
+                return;
+            }
+            if (current_episode->latch (observed_at)) {
+                active->complete (
+                  result_t<operation_t>::success ({status_t::ownership_lost, observed_at}));
+                return;
+            }
+            std::optional<result_t<bool>> published;
+            if (current_publication && current_publication->await_ready ()) {
+                published = detail::task_result_access_t::read (*current_publication);
+                if (!*published && published->error ()
+                    && published->error_kind () == framework_error_kind_t::not_configured) {
+                    active->complete (
+                      result_t<operation_t>::success ({status_t::ownership_lost, observed_at}));
+                    return;
+                }
+            }
+            if (!current_read->await_ready ())
+                return;
+            const auto result = detail::task_result_access_t::read (*current_read);
+            if (!result) {
+                active->complete (detail::propagate_failure<operation_t> (
+                  result, "Location recovery authority confirmation failed"));
+                return;
+            }
+            const auto *current = std::get_if<authority_snapshot_t> (&result.value ());
+            const bool matches =
+              current && current->same_incarnation (fence)
+              && (preserve || current->store_version == fence.store_version)
+              && current->allocation.state == placement_allocation_state_t::active
+              && current->owner.owner_id == token.owner_id
+              && current->owner.lease_generation == token.lease_generation
+              && current->allocation.target.node_lifecycle_generation
+                   == fence.allocation.target.node_lifecycle_generation;
+            if (!matches) {
+                active->complete (
+                  result_t<operation_t>::success ({status_t::ownership_lost, observed_at}));
+                return;
+            }
+            if (current_publication && !published)
+                return;
+            if (published && !*published) {
+                active->complete (detail::propagate_failure<operation_t> (
+                  *published, "Location descriptor publication failed"));
+                return;
+            }
+            if (published && !published->value ()) {
+                active->complete (
+                  result_t<operation_t>::failure (framework_error_kind_t::unavailable,
+                                                  "Location descriptor publication unconfirmed"));
+                return;
+            }
+            active->complete (result_t<operation_t>::success ({status_t::allowed, observed_at}));
+        };
+        detail::observe_task_terminal (*read, [confirm] (const auto &) { confirm (); });
+        if (publication)
+            detail::observe_task_terminal (*publication, [confirm] (const auto &) { confirm (); });
         co_return co_await terminal;
     }
 
@@ -1001,6 +1185,7 @@ class location_runtime_t
       std::shared_ptr<std::shared_ptr<const owner_lease_snapshot_t>> owner_lease,
       std::shared_ptr<std::atomic_bool> episode_open,
       std::shared_ptr<store_outage_t> episode,
+      location_owner_token_t token,
       std::shared_ptr<std::function<std::chrono::steady_clock::time_point ()>> now)
     {
         const auto result = co_await await_result (detail::project_task_terminal<void> (
@@ -1010,15 +1195,15 @@ class location_runtime_t
             co_await episode->terminal.task ();
         auto completed = std::make_shared<task_completion_source_t<void>> ();
         auto posted = lane->try_post (
-          [owner_lease, episode_open, episode, now, recovery, completed] {
+          [owner_lease, episode_open, episode, token, now, recovery, completed] {
               if (!episode->owner->stop.load (std::memory_order_acquire)
                   && episode->recovery == recovery) {
                   const auto at = (*now) ();
                   episode->latch (at);
                   update_owner_lease_on_lane (owner_lease, episode_open, [&] (auto &lease) {
                       if (lease.outage != episode || !lease.token
-                          || lease.token->owner_id != episode->token.owner_id
-                          || lease.token->lease_generation != episode->token.lease_generation)
+                          || lease.token->owner_id != token.owner_id
+                          || lease.token->lease_generation != token.lease_generation)
                           return;
                       episode->deadline->cancelled.store (true, std::memory_order_release);
                       detail::deadline_scheduler_t::instance ().wake ();
@@ -1047,9 +1232,9 @@ class location_runtime_t
                                           bool renewal = false)
     {
         auto *runtime = attempt->runtime;
-        auto recovery = co_await lease_lane (
-          attempt, [runtime, token = std::move (token), expires_at, store_now, started_at, renewal,
-                    requested_outage = attempt->requested_outage] () mutable {
+        const auto recovering =
+          co_await lease_lane (attempt, [runtime, token, expires_at, store_now, started_at, renewal,
+                                         requested_outage = attempt->requested_outage] {
               const auto admission_lifetime =
                 expires_at > store_now + runtime->_options.owner_lease_fencing_margin
                   ? expires_at - store_now - runtime->_options.owner_lease_fencing_margin
@@ -1058,38 +1243,66 @@ class location_runtime_t
                 started_at
                 + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
                   admission_lifetime);
-              auto recoveries = std::make_shared<std::vector<task_t<void>>> ();
-              std::shared_ptr<task_t<void>> recovery;
+              bool recovering = false;
               runtime->update_owner_lease_on_lane ([&] (auto &lease) {
-                  if (runtime->observe_successful_lease_on_lane (
-                        lease, token, started_at, admission_deadline, renewal, requested_outage)) {
-                      for (const auto &observer : *runtime->_execution_discard_requests)
-                          if (observer.recover)
-                              recoveries->push_back (observer.recover (
-                                [store = runtime->_store, episode = lease.outage,
-                                 now = runtime->_lease_now] (authority_key_t key,
-                                                             authority_snapshot_t fence) {
-                                    return recover_execution (store, episode, now, std::move (key),
-                                                              std::move (fence));
-                                },
-                                lease.outage->observed_at));
-                      recovery = std::make_shared<task_t<void>> (
-                        join_execution_recovery (std::move (recoveries), lease.outage->recovery));
-                      lease.outage->recovery = recovery;
-                  }
-                  lease.token = std::move (token);
+                  recovering = runtime->observe_successful_lease_on_lane (
+                    lease, token, started_at, admission_deadline, renewal, requested_outage);
+                  lease.token = token;
                   lease.healthy = true;
                   lease.renewed_at = store_now;
                   lease.admission_deadline = admission_deadline;
               });
               runtime->_last_error.reset ();
-              return recovery;
+              return recovering;
           });
-        if (recovery) {
+        if (recovering) {
+            const auto episode = attempt->requested_outage;
+            std::shared_ptr<task_t<bool>> publication;
+            if (episode->token.lease_generation != token.lease_generation) {
+                publication =
+                  co_await lease_lane (attempt, [episode] { return episode->publication; });
+                if (!publication || (publication->await_ready () && [&] {
+                        const auto result = detail::task_result_access_t::read (*publication);
+                        return !result || !result.value ();
+                    }())) {
+                    auto submitted = std::make_shared<task_completion_source_t<void>> ();
+                    publication = std::make_shared<task_t<bool>> (runtime->republish_descriptors (
+                      location_write_intent_t::renew, attempt->cancellation, attempt->deadline_at,
+                      submitted));
+                    detail::observe_task_terminal (*publication, [submitted] (const auto &) {
+                        submitted->complete (result_t<void>::success ());
+                    });
+                    co_await submitted->task ();
+                    co_await lease_lane (
+                      attempt, [episode, publication] { episode->publication = publication; });
+                }
+            }
+            auto recovery = co_await lease_lane (attempt, [runtime, episode, token, publication] {
+                auto recoveries = std::make_shared<std::vector<task_t<void>>> ();
+                for (const auto &observer : *runtime->_execution_discard_requests)
+                    if (observer.recover)
+                        recoveries->push_back (observer.recover (
+                          [store = runtime->_store, episode, now = runtime->_lease_now, token,
+                           publication, timeout = runtime->_options.owner_lease_renew_timeout] (
+                            authority_key_t key, authority_snapshot_t fence,
+                            std::function<task_t<void> (authority_snapshot_t)> apply) {
+                              return recover_execution (store, episode, now, std::move (key),
+                                                        std::move (fence), std::move (apply), token,
+                                                        publication, timeout);
+                          },
+                          episode->observed_at));
+                    else if (publication)
+                        recoveries->push_back (task_t<void> (result_t<void>::failure (
+                          framework_error_kind_t::unavailable,
+                          "Location execution owner has no recovery operation")));
+                auto recovery = std::make_shared<task_t<void>> (
+                  join_execution_recovery (std::move (recoveries), episode->recovery));
+                episode->recovery = recovery;
+                return recovery;
+            });
             auto finishing = finish_execution_recovery (
-              recovery, runtime->_lane, runtime->_owner_lease, runtime->_episode_open,
-              attempt->requested_outage, runtime->_lease_now);
-            // Only the lane publication may still be pending; no Store validation is awaited here.
+              recovery, runtime->_lane, runtime->_owner_lease, runtime->_episode_open, episode,
+              token, runtime->_lease_now);
             if (recovery->await_ready () && detail::task_result_access_t::read (*recovery))
                 co_await finishing;
         }
@@ -1610,6 +1823,7 @@ class location_runtime_t
     mutable std::vector<std::shared_ptr<descriptor_publication_t>> _descriptor_publications;
 
     // Owner subscriptions contain no retained object inventory or Ready evidence.
+    descriptor_publisher_t _descriptor_publisher;
     std::shared_ptr<std::vector<execution_observer_t>> _execution_discard_requests =
       std::make_shared<std::vector<execution_observer_t>> ();
     mutable std::shared_ptr<state_lane_t> _lane = std::make_shared<state_lane_t> ();

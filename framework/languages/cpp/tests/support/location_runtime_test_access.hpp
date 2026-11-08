@@ -45,6 +45,13 @@ struct location_runtime_test_access_t
           .value ();
     }
 
+    template <class Runtime, class Publisher>
+    static void publisher (Runtime &runtime, Publisher publish)
+    {
+        if constexpr (requires { runtime._descriptor_publisher = std::move (publish); })
+            runtime._descriptor_publisher = std::move (publish);
+    }
+
     static void heartbeat (location_runtime_t &runtime,
                            time_point started_at,
                            std::function<void ()> submitted = {})
