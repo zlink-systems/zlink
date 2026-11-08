@@ -1253,8 +1253,7 @@ final class ZLinkJavaRawServicePortContractTest {
                         result == null
                                 || (result instanceof IllegalStateException
                                         && ("service port is closed".equals(result.getMessage())
-                                                || "socket is closed"
-                                                        .equals(result.getMessage())))
+                                                || "socket is closed".equals(result.getMessage())))
                                 || (result instanceof ZlinkSubmitException submitFailure
                                         && submitFailure.getResult()
                                                 == systems.zlink.contracts.sockets.SubmitResult
