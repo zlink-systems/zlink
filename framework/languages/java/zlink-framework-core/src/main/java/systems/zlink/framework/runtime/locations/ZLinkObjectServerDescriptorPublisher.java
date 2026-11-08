@@ -108,6 +108,20 @@ public final class ZLinkObjectServerDescriptorPublisher {
                                                                                                     + "]",
                                                                                             null);
                                                                                 }
+                                                                                nodes.get(
+                                                                                                descriptor
+                                                                                                        .meshName())
+                                                                                        .confirmLocalOwnerFence(
+                                                                                                new ZLinkInternalMeshNode
+                                                                                                        .PeerAuthorityFence(
+                                                                                                        descriptor
+                                                                                                                .rid(),
+                                                                                                        descriptor
+                                                                                                                .lifecycleGeneration(),
+                                                                                                        descriptor
+                                                                                                                .ownerId(),
+                                                                                                        descriptor
+                                                                                                                .leaseGeneration()));
                                                                                 claims.replace(
                                                                                         meshName,
                                                                                         attempt,

@@ -10,6 +10,8 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
 import systems.zlink.framework.runtime.internal.binding.spot.PeerChannels;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeer;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
@@ -64,6 +66,18 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
      */
     default Optional<PeerAuthorityFence> localSessionOwner() {
         return Optional.empty();
+    }
+
+    default CompletionStage<Void> refreshSessionFences(
+            java.util.List<ZLinkAutoConnectPeer> descriptors, ZLinkLocationRepository repository) {
+        return java.util.concurrent.CompletableFuture.completedFuture(null);
+    }
+
+    default boolean matchesLocalSessionOwner(
+            RoutingId rid, long lifecycle, String ownerId, long leaseGeneration) {
+        return localSessionOwner()
+                .filter(owner -> owner.identifies(rid, lifecycle, ownerId, leaseGeneration))
+                .isPresent();
     }
 
     void setBind(String endpoint);
@@ -369,6 +383,8 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         // Alternate backends may not accept stateful service operations.
     }
 
+    default void confirmLocalOwnerFence(PeerAuthorityFence confirmed) {}
+
     default CompletionStage<Void> refreshLocalAuthorityFence() {
         return CompletableFuture.completedFuture(null);
     }
@@ -480,6 +496,20 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
 
     default void setSessionRelocationRouteHandler(SessionRelocationRouteHandler handler) {
         // Alternate backends may not support command 44 dispatch.
+    }
+
+    default void setSessionActorFenceHandler(SessionActorFenceHandler handler) {}
+
+    @FunctionalInterface
+    interface SessionActorFenceHandler {
+        CompletionStage<java.util.OptionalLong> refresh(
+                RoutingId ownerNodeRid,
+                ZLinkBackendStreamSocket stream,
+                RoutingId sessionRid,
+                ZLinkBackendActorRef actor,
+                long bindingGeneration,
+                long leaseGeneration,
+                java.util.function.BooleanSupplier publishBinding);
     }
 
     default void setSessionRelocationSealHandler(SessionRelocationSealHandler handler) {
@@ -732,6 +762,12 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     interface PeerAuthorityResolver {
         CompletionStage<Optional<PeerAuthorityFence>> resolve(
                 String meshName, RoutingId sourceNodeRid, long sourceNodeGeneration);
+
+        default boolean acceptsSessionOwnerLease(
+                PeerAuthorityFence current, String ownerId, long generation) {
+            return current.ownerId().equals(ownerId)
+                    && current.ownerLeaseGeneration() == generation;
+        }
     }
 
     record PeerAuthorityFence(

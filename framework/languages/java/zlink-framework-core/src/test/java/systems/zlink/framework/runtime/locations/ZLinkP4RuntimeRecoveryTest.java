@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicLong;
 final class ZLinkP4RuntimeRecoveryTest {
     private static final Duration MARGIN = Duration.ofNanos(10);
 
-    private static final class MutableClock extends Clock {
+    static final class MutableClock extends Clock {
         Instant now = Instant.parse("2026-01-01T00:00:00Z");
         volatile Runnable beforeRead;
 
@@ -86,7 +86,7 @@ final class ZLinkP4RuntimeRecoveryTest {
         }
     }
 
-    private static final class Fixture {
+    static final class Fixture {
         final MutableClock clock = new MutableClock();
         final AtomicLong nanos = new AtomicLong();
         final ZLinkInMemoryProviderLocationStore raw =
@@ -98,6 +98,11 @@ final class ZLinkP4RuntimeRecoveryTest {
                 new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node"));
 
         Fixture(boolean provider) {
+            this(provider, RoutingId.from("node"));
+        }
+
+        Fixture(boolean provider, RoutingId rid) {
+            node = new ZLinkMeshNodeDescriptorKey("game", rid);
             repository =
                     provider
                             ? new ZLinkProviderLocationRepository(probe, nanos::get, MARGIN)
