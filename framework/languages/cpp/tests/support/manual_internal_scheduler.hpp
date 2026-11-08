@@ -12,6 +12,7 @@
 
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <queue>
 
 namespace zlink::framework::test
@@ -76,21 +77,29 @@ class manual_internal_scheduler_t final : public runtime::offload_executor_t
     }
 
     // The predicate observes a transition made by work submitted to this scheduler.
-    void run_until (const std::function<bool ()> &completed)
+    bool run_until (const std::function<bool ()> &completed,
+                    std::optional<std::chrono::milliseconds> timeout = {})
     {
+        const auto deadline = timeout ? std::chrono::steady_clock::now () + *timeout
+                                      : std::chrono::steady_clock::time_point::max ();
         for (;;) {
             {
                 std::unique_lock lock (_wake->mutex);
-                _wake->ready_changed.wait (lock, [&] { return completed () || !_ready.empty (); });
+                if (!completed () && std::chrono::steady_clock::now () >= deadline)
+                    return false;
+                if (!_wake->ready_changed.wait_until (
+                      lock, deadline, [&] { return completed () || !_ready.empty (); }))
+                    return false;
                 if (completed ())
-                    return;
+                    return true;
             }
             run_one ();
         }
     }
 
     // External completion executors can publish more work after run_all returns.
-    template <typename T> void run_until (task_t<T> &terminal)
+    template <typename T>
+    bool run_until (task_t<T> &terminal, std::optional<std::chrono::milliseconds> timeout = {})
     {
         auto completed = std::make_shared<bool> (false);
         detail::observe_task_terminal (terminal, [wake = _wake, completed] (const result_t<T> &) {
@@ -98,7 +107,7 @@ class manual_internal_scheduler_t final : public runtime::offload_executor_t
             *completed = true;
             wake->ready_changed.notify_all ();
         });
-        run_until ([completed] { return *completed; });
+        return run_until ([completed] { return *completed; }, timeout);
     }
 
     void retire ()

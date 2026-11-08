@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/locations/location_runtime.hpp"
+#include <thread>
 
 namespace zlink::framework::runtime
 {
@@ -45,6 +46,13 @@ struct location_runtime_test_access_t
           .value ();
     }
 
+    template <class Runtime, class Publisher>
+    static void publisher (Runtime &runtime, Publisher publish)
+    {
+        if constexpr (requires { runtime._descriptor_publisher = std::move (publish); })
+            runtime._descriptor_publisher = std::move (publish);
+    }
+
     static void heartbeat (location_runtime_t &runtime,
                            time_point started_at,
                            std::function<void ()> submitted = {})
@@ -66,17 +74,41 @@ struct location_runtime_test_access_t
         co_await location_runtime_t::heartbeat_renew_once_async (attempt);
     }
 
-    template <class Episode>
-    static void recovery_terminal (location_runtime_t &runtime,
-                                   const std::shared_ptr<Episode> &episode)
+    template <class Predicate>
+    static bool wait_on_lane (location_runtime_t &runtime, Predicate observed, time_point deadline)
     {
-        if constexpr (requires { episode->recovery; }) {
-            const auto pending =
-              runtime._lane->run_checked ([&] { return episode->recovery; }).get ();
-            if (pending)
-                (void) detail::task_result_access_t::read (*pending);
+        for (;;) {
+            if (runtime._lane->run_sync (observed))
+                return true;
+            if (std::chrono::steady_clock::now () >= deadline)
+                return false;
+            std::this_thread::yield ();
         }
-        runtime._lane->run_checked ([] {}).get ();
+    }
+
+    template <class Episode>
+    static bool recovery_terminal (location_runtime_t &runtime,
+                                   const std::shared_ptr<Episode> &episode,
+                                   std::chrono::milliseconds timeout)
+    {
+        const auto deadline = std::chrono::steady_clock::now () + timeout;
+        const auto pending = runtime._lane->run_checked ([&] { return episode->recovery; }).get ();
+        if (!pending)
+            return true;
+        const auto result = pending->result_for (timeout);
+        if (!result)
+            return false;
+        // Failed passes retain the episode for the next renew or its original T.
+        if (!*result && !episode->discarded.load (std::memory_order_acquire))
+            return true;
+        // Aggregate completion precedes finish_execution_recovery's lane post.
+        return wait_on_lane (
+          runtime,
+          [&] {
+              return snapshot (runtime)->outage != episode
+                     || episode->owner->stop.load (std::memory_order_acquire);
+          },
+          deadline);
     }
 
     static void confirm (location_runtime_t &runtime,
@@ -107,6 +139,17 @@ struct location_runtime_test_access_t
                                 });
         return delay;
     }
+    static std::size_t pending_store_operations (location_runtime_t &runtime)
+    {
+        return runtime._lane
+          ->run_checked ([&] {
+              return std::count_if (
+                runtime._descriptor_publications.begin (), runtime._descriptor_publications.end (),
+                [] (const auto &pending) { return !pending->drained.task ().await_ready (); });
+          })
+          .get ();
+    }
+
     static state_lane_t &lane (location_runtime_t &runtime) { return *runtime._lane; }
     static auto snapshot (const location_runtime_t &runtime)
     {
