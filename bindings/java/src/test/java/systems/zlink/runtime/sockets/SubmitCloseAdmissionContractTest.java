@@ -103,12 +103,13 @@ class SubmitCloseAdmissionContractTest {
         TestSupport.assumeNative();
         try (Context context = Zlink.createContext();
              DealerSocket dealer = context.createDealerSocket()) {
-            CompletionOwner owner = ((NativeSocketBase) dealer).runtime()
-                .completionOwner();
+            NativeSocketRuntime runtime = ((NativeSocketBase) dealer).runtime();
+            CompletionOwner owner = runtime.completionOwner();
+            SocketCore core = runtime.socketCore();
             RuntimeException failure = new RuntimeException(
                 "native preparation failed");
             assertSame(failure, assertThrows(RuntimeException.class,
-                () -> owner.withNativeCall(() -> {
+                () -> core.withNativeCall(() -> {
                     throw failure;
                 })));
             assertSame(failure, assertThrows(RuntimeException.class,
@@ -116,7 +117,7 @@ class SubmitCloseAdmissionContractTest {
                     throw failure;
                 })));
             dealer.close();
-            assertTerminated(() -> owner.withNativeCall(() -> {
+            assertTerminated(() -> core.withNativeCall(() -> {
                 fail("released handle must never be used");
                 return null;
             }));
@@ -167,12 +168,12 @@ class SubmitCloseAdmissionContractTest {
         TestSupport.assumeNative();
         try (Context context = Zlink.createContext();
              DealerSocket dealer = context.createDealerSocket()) {
-            CompletionOwner owner = ((NativeSocketBase) dealer).runtime()
-                .completionOwner();
+            SocketCore core = ((NativeSocketBase) dealer).runtime()
+                .socketCore();
             CountDownLatch entered = new CountDownLatch(1);
             CountDownLatch release = new CountDownLatch(1);
             FutureTask<Void> submit = new FutureTask<>(() ->
-                owner.withNativeCall(() -> {
+                core.withNativeCall(() -> {
                     entered.countDown();
                     try {
                         assertTrue(release.await(TestSupport.DEFAULT_TIMEOUT_MS,
@@ -198,7 +199,7 @@ class SubmitCloseAdmissionContractTest {
             submit.get(TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
             dealer.close();
             ZlinkSubmitException terminated = assertThrows(
-                ZlinkSubmitException.class, () -> owner.withNativeCall(() -> {
+                ZlinkSubmitException.class, () -> core.withNativeCall(() -> {
                     fail("closed socket must not enter the native action");
                     return null;
                 }));

@@ -296,6 +296,10 @@ final class NativeSocketRuntime implements AutoCloseable {
         socketCore.completionOwner().submitReply(target, token, parts);
     }
 
+    SocketCore socketCore() {
+        return socketCore;
+    }
+
     CompletionOwner completionOwner() {
         return socketCore.completionOwner();
     }
