@@ -439,7 +439,38 @@ lease 갱신이 renew timeout(기본 3초) 안에 끝나는지 §12의 시험으
 | Scan 중 compaction, snapshot 유효 시간 초과, 다른 cluster의 cursor | `Expired` |
 
 이 오류들을 `Missing`, `Conflict`나 빈 page로 반환하지 않는다. etcd 오류 code와 endpoint 정보는
-application 공개 API에 노출하지 않는다.
+application 공개 API에 노출하지 않는다. etcd 오류를 위 상황 중 무엇으로 분류하는지와 인증 오류로 거절된
+요청의 처리는 [§10.1](#101-etcd-호출-규칙)이 정한다.
+
+### 10.1 etcd 호출 규칙
+
+**공식 provider와 Store 관리 도구는 etcd v3.6.16의 공식 gRPC 정의(proto)로 etcd를 직접 호출한다.** 언어별
+etcd client library를 사용하지 않는다. 기존 client들은 결과를 받지 못한 요청을 다시 보내는 정책이나 응답의
+cluster ID·오류 설명을 버리는 변환을 각자 가지고 있어, 네 언어가 같은 결과를 내도록 맞추기 어렵기 때문이다.
+네 언어는 저장소에 한 벌 보관한 같은 proto 사본을 사용한다.
+
+- **gRPC 수준의 재시도(retry)와 hedging을 끈다.** 요청을 다시 보내는 경우는 아래 두 가지뿐이다.
+  - [§6](#6-conditional-atomic-batch)이 정한 경우(적용 비교가 거짓, 판정용 payload 읽기의 compaction)에는
+    §6의 절차를 1단계부터 다시 수행한다.
+  - 인증 오류(아래 표)로 거절된 RPC는 재인증한 뒤 같은 RPC를 한 번 다시 보낸다. etcd는 인증을 검사한 뒤에만
+    요청을 처리하므로 이 RPC는 적용되지 않았음이 확정이다.
+- **그 밖에 결과를 받지 못한 쓰기는 다시 보내지 않는다.** 연결이 다른 endpoint로 바뀌었거나 재인증에
+  성공했다는 사실은 이전 쓰기가 적용되지 않았다는 근거가 아니다. 그 operation은
+  [§10](#10-결과-유실과-오류)대로 commit 여부 불명으로 끝난다.
+- **오류는 gRPC status code와 status 설명을 함께 보고 분류한다.** etcd는 서로 다른 오류에 같은 code를
+  쓰기 때문이다. 이 표가 오류 분류를 소유하며 §6·§7·§10은 분류 결과를 사용한다.
+
+| gRPC status | 설명에 포함된 문구 | 분류 |
+|---|---|---|
+| `OUT_OF_RANGE` | `required revision has been compacted` | Compaction(처리: [§6](#6-conditional-atomic-batch), [§7](#7-snapshot-scan)) |
+| `RESOURCE_EXHAUSTED` | `database space exceeded` | `NOSPACE`(처리: [§10](#10-결과-유실과-오류)) |
+| `UNAUTHENTICATED` | `invalid auth token` | 인증 오류 |
+| `INVALID_ARGUMENT` | `revision of auth store is old` | 인증 오류 |
+| 그 밖의 모든 오류 | — | Store failure(처리: [§10](#10-결과-유실과-오류)) |
+
+- 한 operation 안의 모든 RPC(재인증 포함)는 그 operation의 남은 시간을 deadline으로 사용한다. RPC마다
+  시간을 새로 주지 않는다.
+- Revision, cluster ID와 시각 값은 64-bit 정수 또는 그 10진 문자열로 다루며 부동소수점으로 바꾸지 않는다.
 
 ## 11. 공개 option
 

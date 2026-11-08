@@ -505,7 +505,43 @@ batch is processed.
 | Compaction during a scan, snapshot validity exceeded, cursor from another cluster | `Expired` |
 
 These errors aren't returned as `Missing`, `Conflict`, or an empty page. etcd error codes and
-endpoint information aren't exposed in the application public API.
+endpoint information aren't exposed in the application public API. Which of the situations above an
+etcd error falls under, and how a request rejected with an auth error is handled, are defined by
+[§10.1](#101-etcd-call-rules).
+
+### 10.1 etcd Call Rules
+
+**The official provider and the Store maintenance tool call etcd directly with etcd v3.6.16's official
+gRPC definitions (proto).** They don't use per-language etcd client libraries. Existing clients each
+have their own policy of resending requests whose result wasn't received, or conversions that drop the
+cluster ID and error description from responses, which makes it hard to get the same results across
+the four languages. The four languages use the same proto copy kept once in the repository.
+
+- **gRPC-level retry and hedging are turned off.** A request is sent again in only these two cases.
+  - In the cases [§6](#6-conditional-atomic-batch) defines (the apply comparison was false, or the
+    decision payload read hit compaction), the §6 procedure is performed again from step 1.
+  - An RPC rejected with an auth error (table below) is sent once more after re-authentication.
+    etcd processes a request only after checking authentication, so this RPC certainly wasn't
+    applied.
+- **Any other write whose result wasn't received isn't sent again.** That the connection moved to
+  another endpoint or that re-authentication succeeded isn't evidence that the earlier write wasn't
+  applied. That operation ends with commit status unknown, as in [§10](#10-result-loss-and-errors).
+- **Errors are classified by the gRPC status code together with the status description,** because
+  etcd uses the same code for different errors. This table owns the error classification, and §6, §7,
+  and §10 use its results.
+
+| gRPC status | Text in the description | Classification |
+|---|---|---|
+| `OUT_OF_RANGE` | `required revision has been compacted` | Compaction (handled in [§6](#6-conditional-atomic-batch), [§7](#7-snapshot-scan)) |
+| `RESOURCE_EXHAUSTED` | `database space exceeded` | `NOSPACE` (handled in [§10](#10-result-loss-and-errors)) |
+| `UNAUTHENTICATED` | `invalid auth token` | Auth error |
+| `INVALID_ARGUMENT` | `revision of auth store is old` | Auth error |
+| Any other error | — | Store failure (handled in [§10](#10-result-loss-and-errors)) |
+
+- Every RPC in one operation (including re-authentication) uses the operation's remaining time as its
+  deadline. Each RPC doesn't get a fresh time budget.
+- Revisions, cluster IDs, and time values are handled as 64-bit integers or their decimal strings and
+  aren't converted to floating point.
 
 ## 11. Public Options
 
