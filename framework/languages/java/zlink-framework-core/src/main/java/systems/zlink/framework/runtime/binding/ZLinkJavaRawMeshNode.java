@@ -57,6 +57,8 @@ import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobCont
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeer;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkMeshMessageMetrics;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkActorJoinRecoveryCodec;
@@ -161,7 +163,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             selectionFailureObserver = this::recordChannelSelectionFailure;
     final ZLinkJavaRawServicePort port;
     private final LongSupplier currentTimeMillis;
-    private final LongSupplier nanoTime;
+    final LongSupplier nanoTime;
     private final Supplier<Runnable> pumpManagement;
     private final Map<String, Integer> channelWeights = new ConcurrentHashMap<>();
     private final Map<Long, PeerIntent> peerIntents = new ConcurrentHashMap<>();
@@ -338,6 +340,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             new ConcurrentHashMap<>();
     private volatile ZLinkInternalMeshNode.SessionRelocationRouteHandler
             sessionRelocationRouteHandler;
+    private volatile ZLinkInternalMeshNode.SessionActorFenceHandler sessionActorFenceHandler;
     private volatile ZLinkInternalMeshNode.SessionRelocationSealHandler
             sessionRelocationSealHandler;
     private volatile ZLinkInternalMeshNode.BoundSessionSendHandler boundSessionSendHandler;
@@ -683,6 +686,20 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     @Override
+    public void confirmLocalOwnerFence(ZLinkInternalMeshNode.PeerAuthorityFence confirmed) {
+        var descriptor = localDescriptor;
+        var current = localAuthorityFence;
+        if (descriptor != null
+                && descriptor.nodeRoutingId().equals(confirmed.sourceNodeRid())
+                && descriptor.lifecycleGeneration() == confirmed.sourceNodeGeneration()
+                && (current == null
+                        || current.ownerId().equals(confirmed.ownerId())
+                                && current.ownerLeaseGeneration()
+                                        <= confirmed.ownerLeaseGeneration()))
+            localAuthorityFence = confirmed;
+    }
+
+    @Override
     public CompletionStage<Void> refreshLocalAuthorityFence() {
         ZLinkInternalMeshNode.PeerAuthorityResolver resolver = peerAuthorityResolver;
         ZLinkServiceNodeDescriptor descriptor = localDescriptor;
@@ -693,12 +710,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         return resolver.resolve(meshName, routingId, descriptor.lifecycleGeneration())
                 .thenAccept(
                         resolved ->
-                                localAuthorityFence =
+                                confirmLocalOwnerFence(
                                         resolved.orElseThrow(
                                                 () ->
                                                         new IllegalStateException(
                                                                 "local MeshNode authority"
-                                                                        + " descriptor is not live")));
+                                                                        + " descriptor is not live"))));
     }
 
     ZLinkInternalMeshNode.PeerAuthorityFence localAuthorityFence() {
@@ -1498,6 +1515,51 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     @Override
+    public CompletionStage<Void> refreshSessionFences(
+            List<ZLinkAutoConnectPeer> descriptors, ZLinkLocationRepository repository) {
+        return runDescriptorTurn(
+                        () -> {
+                            for (var row : descriptors) {
+                                if (row.nodeRid().equals(routingId())) continue;
+                                peerAdmissionExpectations.computeIfPresent(
+                                        row.nodeRid(),
+                                        (rid, old) ->
+                                                new PeerAdmissionExpectation(
+                                                        old.endpoint(),
+                                                        row.generation(),
+                                                        old.securityIdentity(),
+                                                        old.objectRole(),
+                                                        row.ownerId(),
+                                                        row.ownerLeaseGeneration()));
+                            }
+                        })
+                .thenCompose(
+                        ignored ->
+                                ((ZLinkJavaRawSpotNode) spotNode())
+                                        .refreshSessionFences(descriptors, repository));
+    }
+
+    private static <T> CompletionStage<T> unconfirmedSessionFence() {
+        return CompletableFuture.failedFuture(
+                new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        "Session fence awaits Location polling confirmation"));
+    }
+
+    boolean sessionFenceCurrent(RoutingId rid, long lifecycle, String ownerId, long generation) {
+        if (rid.equals(routingId())) {
+            var local = localAuthorityFence;
+            return local == null || local.identifies(rid, lifecycle, ownerId, generation);
+        }
+        var observed = peerAdmissionExpectations.get(rid);
+        return observed == null
+                || observed.ownerId() == null
+                || observed.lifecycleGeneration() == lifecycle
+                        && observed.ownerId().equals(ownerId)
+                        && observed.leaseGeneration() == generation;
+    }
+
+    @Override
     public CompletionStage<Void> forgetPeerAdmissionExpectation(RoutingId peerRid) {
         return runDescriptorTurn(
                 () -> {
@@ -2179,6 +2241,20 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     @Override
     public Optional<ZLinkInternalMeshNode.PeerAuthorityFence> localSessionOwner() {
         return Optional.ofNullable(localAuthorityFence);
+    }
+
+    @Override
+    public boolean matchesLocalSessionOwner(
+            RoutingId rid, long lifecycle, String ownerId, long generation) {
+        var current = localAuthorityFence;
+        var resolver = peerAuthorityResolver;
+        return current != null
+                && current.sourceNodeRid().equals(rid)
+                && current.sourceNodeGeneration() == lifecycle
+                && current.ownerId().equals(ownerId)
+                && (resolver == null
+                        ? current.ownerLeaseGeneration() == generation
+                        : resolver.acceptsSessionOwnerLease(current, ownerId, generation));
     }
 
     long bindingGenerationSeed() {
@@ -3818,6 +3894,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     if (peer.isEmpty() || ownerLeaseGeneration <= 0) {
                         return null;
                     }
+                    var observed = peerAdmissionExpectations.get(actor.nodeRid());
+                    if (observed != null
+                            && observed.ownerId() != null
+                            && !sessionFenceCurrent(
+                                    actor.nodeRid(),
+                                    peer.orElseThrow().descriptor().lifecycleGeneration(),
+                                    observed.ownerId(),
+                                    ownerLeaseGeneration)) return null;
                     return List.of(
                             statefulWire.encodeBoundSessionBindHeader(
                                     new ZLinkServiceM6BWireCodec.BoundSessionBind(
@@ -4118,6 +4202,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     @Override
     public CompletionStage<Void> requestBoundSessionClose(
             ZLinkServiceM6BWireCodec.BoundSessionClose request, Duration timeout) {
+        var session = request.session();
+        if (!sessionFenceCurrent(
+                session.sessionOwnerNodeRid(),
+                session.sessionOwnerNodeGeneration(),
+                session.sessionOwnerId(),
+                session.sessionOwnerLeaseGeneration())) return unconfirmedSessionFence();
         byte[] encoded = statefulWire.encodeBoundSessionClose(request);
         if (request.session().sessionOwnerNodeRid().equals(routingId))
             return acceptBoundSessionClose(statefulWire.decodeBoundSessionClose(encoded))
@@ -4235,6 +4325,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             RoutingId sessionOwnerNodeRid,
             ZLinkServiceM6BWireCodec.BoundSessionReplaced replacement) {
         Objects.requireNonNull(sessionOwnerNodeRid, "sessionOwnerNodeRid");
+        var session = Objects.requireNonNull(replacement, "replacement").retiredSession();
+        if (!sessionFenceCurrent(
+                session.sessionOwnerNodeRid(),
+                session.sessionOwnerNodeGeneration(),
+                session.sessionOwnerId(),
+                session.sessionOwnerLeaseGeneration())) return unconfirmedSessionFence();
         byte[] record =
                 statefulWire.encodeBoundSessionReplaced(
                         Objects.requireNonNull(replacement, "replacement"));
@@ -4357,6 +4453,39 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     @Override
+    public void setSessionActorFenceHandler(
+            ZLinkInternalMeshNode.SessionActorFenceHandler handler) {
+        sessionActorFenceHandler = Objects.requireNonNull(handler, "handler");
+    }
+
+    CompletionStage<java.util.OptionalLong> refreshSessionActorFence(
+            systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket stream,
+            RoutingId sessionRid,
+            ZLinkBackendActorRef actor,
+            long bindingGeneration,
+            long leaseGeneration,
+            java.util.function.BooleanSupplier publishBinding) {
+        var handler = sessionActorFenceHandler;
+        return handler == null
+                ? ((ZLinkJavaRawSpotNode) spotNode())
+                        .stateLane.runNowOrQueue(
+                                () -> {
+                                    publishBinding.getAsBoolean();
+                                    return java.util.OptionalLong.of(
+                                            ((ZLinkJavaRawSpotNode) spotNode())
+                                                    .actorAuthorityOwnerLeaseGeneration(actor));
+                                })
+                : handler.refresh(
+                        routingId(),
+                        stream,
+                        sessionRid,
+                        actor,
+                        bindingGeneration,
+                        leaseGeneration,
+                        publishBinding);
+    }
+
+    @Override
     public void setSessionRelocationSealHandler(
             ZLinkInternalMeshNode.SessionRelocationSealHandler handler) {
         sessionRelocationSealHandler = Objects.requireNonNull(handler, "handler");
@@ -4373,7 +4502,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         Objects.requireNonNull(sessionOwnerNodeRid, "sessionOwnerNodeRid");
         byte[] record = Objects.requireNonNull(command42, "command42").clone();
         Objects.requireNonNull(timeout, "timeout");
-        statefulWire.decodeSessionRelocationSeal(record);
+        var session = statefulWire.decodeSessionRelocationSeal(record).session();
+        if (!sessionFenceCurrent(
+                session.nodeRid(),
+                session.nodeGeneration(),
+                session.ownerId(),
+                session.ownerLeaseGeneration())) return unconfirmedSessionFence();
         if (sessionOwnerNodeRid.equals(routingId)) {
             var handler = sessionRelocationSealHandler;
             if (handler == null) {
@@ -9352,7 +9486,17 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             String endpoint,
             long lifecycleGeneration,
             String securityIdentity,
-            ZLinkMeshNodeObjectRole objectRole) {
+            ZLinkMeshNodeObjectRole objectRole,
+            String ownerId,
+            long leaseGeneration) {
+        PeerAdmissionExpectation(
+                String endpoint,
+                long lifecycleGeneration,
+                String securityIdentity,
+                ZLinkMeshNodeObjectRole objectRole) {
+            this(endpoint, lifecycleGeneration, securityIdentity, objectRole, null, 0);
+        }
+
         private PeerAdmissionExpectation {
             Objects.requireNonNull(objectRole, "objectRole");
             //  lifecycleGeneration is an opaque equality token: only zero

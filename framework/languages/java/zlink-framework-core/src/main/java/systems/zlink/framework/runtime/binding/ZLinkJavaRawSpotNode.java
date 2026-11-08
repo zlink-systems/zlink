@@ -30,11 +30,17 @@ import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
 import systems.zlink.framework.runtime.internal.completion.ZLinkTerminalWinner;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeer;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseFound;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReadResult;
 import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.internal.streams.ZLinkStreamErrorPayload;
+import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
@@ -576,6 +582,18 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             current.actor().equals(actor)
                                     ? current.withAuthority(authority)
                                     : current);
+            actorBindings.computeIfPresent(
+                    actor.actorId(),
+                    (id, entry) -> {
+                        var binding = entry.binding();
+                        return binding.actor().equals(actor)
+                                        && binding.authorityOwnerGeneration()
+                                                == authorityOwnerGeneration
+                                ? new BindingEntry(
+                                        binding.withActorLease(ownerLeaseGeneration),
+                                        entry.lastSequence())
+                                : entry;
+                    });
         } else {
             observeActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
         }
@@ -1443,6 +1461,235 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         return stateLane.runAsync(change);
     }
 
+    CompletionStage<Void> refreshSessionFences(
+            List<ZLinkAutoConnectPeer> descriptors, ZLinkLocationRepository repository) {
+        var updates = new ArrayList<CompletableFuture<Void>>();
+        var start = CompletableFuture.<Void>completedFuture(null);
+        for (var route : List.copyOf(streamBindings.values())) {
+            if (!routingId().equals(route.actor().nodeRid()))
+                updates.add(
+                        start.thenCompose(
+                                ignored -> refreshActorLease(route, descriptors, repository)));
+        }
+        for (var entry : List.copyOf(actorBindings.values()))
+            updates.add(
+                    start.thenCompose(
+                            ignored -> refreshSessionLease(entry, descriptors, repository)));
+        return CompletableFuture.allOf(updates.toArray(CompletableFuture[]::new));
+    }
+
+    private CompletionStage<Void> refreshActorLease(
+            StreamBinding route,
+            List<ZLinkAutoConnectPeer> descriptors,
+            ZLinkLocationRepository repository) {
+        var descriptor =
+                descriptors.stream()
+                        .filter(row -> row.nodeRid().equals(route.actor().nodeRid()))
+                        .findFirst()
+                        .orElse(null);
+        var current = actorAuthorities.get(route.actor());
+        if (descriptor == null || descriptor.generation() != route.targetNodeGeneration()) {
+            return inSessionOwnerTurn(() -> streamBindings.remove(route.actor().actorId(), route));
+        }
+        if (current == null) return CompletableFuture.completedFuture(null);
+        if (current.ownerLeaseGeneration() == descriptor.ownerLeaseGeneration()) {
+            return owner.refreshSessionActorFence(
+                            route.stream(),
+                            route.sessionRid(),
+                            route.actor(),
+                            route.bindingGeneration(),
+                            descriptor.ownerLeaseGeneration(),
+                            () -> false)
+                    .thenCompose(
+                            observed ->
+                                    observed.isEmpty()
+                                                    || observed.getAsLong()
+                                                            == descriptor.ownerLeaseGeneration()
+                                            ? CompletableFuture.completedFuture(null)
+                                            : verifyActorLease(
+                                                    route, descriptor, current, repository));
+        }
+        return verifyActorLease(route, descriptor, current, repository);
+    }
+
+    private CompletionStage<Void> verifyActorLease(
+            StreamBinding route,
+            ZLinkAutoConnectPeer descriptor,
+            AuthorityFence current,
+            ZLinkLocationRepository repository) {
+        return repository
+                .read(ZLinkAuthorityKeyCodec.actor(route.actor().actorId()), () -> false)
+                .thenCompose(
+                        result -> {
+                            if (!(result instanceof ZLinkAuthoritySnapshot snapshot))
+                                return inSessionOwnerTurn(
+                                        () ->
+                                                streamBindings.remove(
+                                                        route.actor().actorId(), route));
+                            if (snapshot.objectGeneration() != route.actor().generation()
+                                    || snapshot.authorityOwnerGeneration()
+                                            != route.authorityOwnerGeneration()
+                                    || !snapshot.ownerId().equals(descriptor.ownerId())
+                                    || !snapshot.allocation()
+                                            .descriptor()
+                                            .rid()
+                                            .equals(route.actor().nodeRid())
+                                    || !snapshot.allocation()
+                                            .descriptor()
+                                            .meshName()
+                                            .equals(descriptor.meshName())
+                                    || snapshot.allocation().descriptorLifecycleGeneration()
+                                            != route.targetNodeGeneration()
+                                    || !snapshot.steadyReady()) {
+                                return inSessionOwnerTurn(
+                                        () ->
+                                                streamBindings.remove(
+                                                        route.actor().actorId(), route));
+                            }
+                            // Descriptor publication may precede Actor Preserve; retain both copies
+                            // until the next polling.
+                            if (snapshot.ownerLeaseGeneration()
+                                    != descriptor.ownerLeaseGeneration())
+                                return CompletableFuture.completedFuture(null);
+                            long leaseReadStarted = owner.nanoTime.getAsLong();
+                            return repository
+                                    .readOwnerLease(descriptor.ownerId())
+                                    .thenCompose(
+                                            lease ->
+                                                    owner.refreshSessionActorFence(
+                                                                    route.stream(),
+                                                                    route.sessionRid(),
+                                                                    route.actor(),
+                                                                    route.bindingGeneration(),
+                                                                    descriptor
+                                                                            .ownerLeaseGeneration(),
+                                                                    () -> {
+                                                                        if (streamBindings.get(
+                                                                                                route.actor()
+                                                                                                        .actorId())
+                                                                                        != route
+                                                                                || actorAuthorities
+                                                                                                .get(
+                                                                                                        route
+                                                                                                                .actor())
+                                                                                        != current
+                                                                                || !owner
+                                                                                        .sessionFenceCurrent(
+                                                                                                descriptor
+                                                                                                        .nodeRid(),
+                                                                                                descriptor
+                                                                                                        .generation(),
+                                                                                                descriptor
+                                                                                                        .ownerId(),
+                                                                                                descriptor
+                                                                                                        .ownerLeaseGeneration())
+                                                                                || !validLease(
+                                                                                        lease,
+                                                                                        descriptor,
+                                                                                        leaseReadStarted))
+                                                                            return false;
+                                                                        return actorAuthorities
+                                                                                .replace(
+                                                                                        route
+                                                                                                .actor(),
+                                                                                        current,
+                                                                                        new AuthorityFence(
+                                                                                                current
+                                                                                                        .authorityOwnerGeneration(),
+                                                                                                descriptor
+                                                                                                        .ownerLeaseGeneration()));
+                                                                    })
+                                                            .thenApply(ignored -> (Void) null));
+                        });
+    }
+
+    private CompletionStage<Void> refreshSessionLease(
+            BindingEntry entry,
+            List<ZLinkAutoConnectPeer> descriptors,
+            ZLinkLocationRepository repository) {
+        var binding = entry.binding();
+        var descriptor =
+                descriptors.stream()
+                        .filter(row -> row.nodeRid().equals(binding.sessionOwnerNodeRid()))
+                        .findFirst()
+                        .orElse(null);
+        if (descriptor == null
+                || descriptor.generation() != binding.sessionOwnerNodeGeneration()
+                || !descriptor.ownerId().equals(binding.sessionOwnerId())) {
+            return remoteSessionBindingOwner
+                    .apply(
+                            this,
+                            binding.actor(),
+                            applied -> {
+                                var current = actorBindings.get(binding.actor().actorId());
+                                if (current != null
+                                        && current.binding().matchesSessionLeaseCopy(binding)) {
+                                    applied.retire(current.binding().route());
+                                    removeActorBinding(binding.actor().actorId(), current);
+                                }
+                                return CompletableFuture.completedFuture(true);
+                            })
+                    .thenApply(ignored -> null);
+        }
+        if (binding.sessionOwnerLeaseGeneration() == descriptor.ownerLeaseGeneration())
+            return CompletableFuture.completedFuture(null);
+        long leaseReadStarted = owner.nanoTime.getAsLong();
+        return repository
+                .readOwnerLease(descriptor.ownerId())
+                .thenCompose(
+                        lease ->
+                                remoteSessionBindingOwner
+                                        .apply(
+                                                this,
+                                                binding.actor(),
+                                                applied -> {
+                                                    if (validLease(
+                                                                    lease,
+                                                                    descriptor,
+                                                                    leaseReadStarted)
+                                                            && owner.sessionFenceCurrent(
+                                                                    descriptor.nodeRid(),
+                                                                    descriptor.generation(),
+                                                                    descriptor.ownerId(),
+                                                                    descriptor
+                                                                            .ownerLeaseGeneration())) {
+                                                        var current =
+                                                                actorBindings.get(
+                                                                        binding.actor().actorId());
+                                                        if (current != null
+                                                                && current.binding()
+                                                                        .matchesSessionLeaseCopy(
+                                                                                binding)) {
+                                                            actorBindings.replace(
+                                                                    binding.actor().actorId(),
+                                                                    current,
+                                                                    new BindingEntry(
+                                                                            current.binding()
+                                                                                    .withSessionLease(
+                                                                                            descriptor
+                                                                                                    .ownerLeaseGeneration()),
+                                                                            current
+                                                                                    .lastSequence()));
+                                                        }
+                                                    }
+                                                    return CompletableFuture.completedFuture(true);
+                                                })
+                                        .thenApply(ignored -> null));
+    }
+
+    private boolean validLease(
+            ZLinkOwnerLeaseReadResult lease,
+            ZLinkAutoConnectPeer descriptor,
+            long leaseReadStarted) {
+        return lease instanceof ZLinkOwnerLeaseFound found
+                && found.token().ownerId().equals(descriptor.ownerId())
+                && found.token().leaseGeneration() == descriptor.ownerLeaseGeneration()
+                && Duration.ofNanos(owner.nanoTime.getAsLong() - leaseReadStarted)
+                                .compareTo(
+                                        Duration.between(found.storeNow(), found.leaseExpiresAt()))
+                        < 0;
+    }
+
     @Override
     public void close() {
         spots.values().forEach(ZLinkJavaRawSpot::close);
@@ -2301,6 +2548,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         actor,
                         bindingGeneration,
                         authorityOwnerGeneration,
+                        owner.nodeLifecycleGeneration(actor.nodeRid()),
                         actorSlot,
                         stream);
         inStateLane(
@@ -2785,14 +3033,19 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         != route.authorityOwnerGeneration()) {
             return false;
         }
-        if (current != null && current.sameSessionOwnerEpoch(candidate)) {
-            if (samePhysicalSession(current, candidate)
-                    && current.bindingGeneration() == candidate.bindingGeneration()) {
-                return true;
-            }
-            return candidate.bindingGeneration() > current.bindingGeneration();
-        }
-        return true;
+        if (current != null
+                && current.sameSessionOwnerEpoch(candidate)
+                && samePhysicalSession(current, candidate)
+                && current.bindingGeneration() == candidate.bindingGeneration()) return true;
+        if (current != null
+                && !owner.sessionFenceCurrent(
+                        current.sessionOwnerNodeRid(),
+                        current.sessionOwnerNodeGeneration(),
+                        current.sessionOwnerId(),
+                        current.sessionOwnerLeaseGeneration())) return false;
+        return current == null
+                || !current.sameSessionOwnerEpoch(candidate)
+                || candidate.bindingGeneration() > current.bindingGeneration();
     }
 
     private ZLinkServiceM6BWireCodec.RetiredSessionRouteFence sessionOwnerFence(
@@ -3586,6 +3839,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             ZLinkBackendActorRef actor,
             long bindingGeneration,
             long authorityOwnerGeneration,
+            long targetNodeGeneration,
             int actorSlot,
             ZLinkJavaStreamSocket stream) {}
 
@@ -3614,6 +3868,46 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     && this.sessionOwnerNodeRid.equals(sessionOwnerNodeRid)
                     && this.sessionRid.equals(sessionRid)
                     && this.bindingGeneration == bindingGeneration;
+        }
+
+        boolean matchesSessionLeaseCopy(ActorSessionBinding other) {
+            return sameSessionOwnerEpoch(other)
+                    && sessionOwnerId.equals(other.sessionOwnerId)
+                    && identifies(
+                            other.actor,
+                            other.sessionOwnerNodeRid,
+                            other.sessionRid,
+                            other.bindingGeneration);
+        }
+
+        ActorSessionBinding withActorLease(long lease) {
+            return new ActorSessionBinding(
+                    sessionOwnerNodeRid,
+                    sessionOwnerNodeGeneration,
+                    sessionOwnerId,
+                    sessionOwnerLeaseGeneration,
+                    sessionRid,
+                    actor,
+                    targetNodeGeneration,
+                    bindingGeneration,
+                    authorityOwnerGeneration,
+                    lease,
+                    remote);
+        }
+
+        ActorSessionBinding withSessionLease(long lease) {
+            return new ActorSessionBinding(
+                    sessionOwnerNodeRid,
+                    sessionOwnerNodeGeneration,
+                    sessionOwnerId,
+                    lease,
+                    sessionRid,
+                    actor,
+                    targetNodeGeneration,
+                    bindingGeneration,
+                    authorityOwnerGeneration,
+                    actorOwnerLeaseGeneration,
+                    remote);
         }
 
         BoundSessionRoute route() {
