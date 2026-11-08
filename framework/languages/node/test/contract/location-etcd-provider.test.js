@@ -11,10 +11,7 @@ const {
   encodeMetadata,
   MAX_TIME_MS
 } = require('../../packages/framework-locations-etcd/dist/internal/encoding');
-const {
-  ScanCursor,
-  monotonicMs
-} = require('../../packages/framework-locations-etcd/dist/internal/cursor');
+const { ScanCursor } = require('../../packages/framework-locations-etcd/dist/internal/cursor');
 
 async function fixture(handler) {
   const server = new grpc.Server();
@@ -260,12 +257,14 @@ test('etcd cancellation cancels a pending RPC; dispose drains and rejects new op
 });
 
 test('etcd cursors enforce monotonic validity, instance and prefix with maximum UTF-8 fields', () => {
-  const cursors = new ScanCursor('n'.repeat(64));
+  // A fixed clock keeps the expiry check independent of host uptime.
+  let now = 1_000_000n;
+  const cursors = new ScanCursor('n'.repeat(64), () => now);
   const snapshot = {
     cluster: '18446744073709551615',
     revision: '9223372036854775807',
     clock: MAX_TIME_MS,
-    started: monotonicMs(),
+    started: now,
     last: Buffer.from('가'.repeat(341) + 'x')
   };
   const prefix = '가'.repeat(341);
@@ -274,11 +273,10 @@ test('etcd cursors enforce monotonic validity, instance and prefix with maximum 
   assert.deepEqual(cursors.decode(encoded, prefix), snapshot);
   assert.equal(new ScanCursor('other').decode(encoded, prefix), undefined);
   assert.equal(cursors.decode(encoded, 'different'), undefined);
-  assert.equal(
-    cursors.decode(
-      cursors.encode({ ...snapshot, started: monotonicMs() - 300001n }, prefix),
-      prefix
-    ),
-    undefined
-  );
+  now += 299_999n;
+  assert.deepEqual(cursors.decode(encoded, prefix), snapshot);
+  now += 1n;
+  assert.equal(cursors.decode(encoded, prefix), undefined);
+  now = snapshot.started - 1n;
+  assert.equal(cursors.decode(encoded, prefix), undefined);
 });
