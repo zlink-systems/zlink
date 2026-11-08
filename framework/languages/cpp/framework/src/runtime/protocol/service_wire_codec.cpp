@@ -59,33 +59,34 @@ bool valid_flow_origin (std::uint8_t value) noexcept
 class native_wire_writer_t
 {
   public:
-    explicit native_wire_writer_t (std::size_t size) :
-        _message (zlink::message_t::allocate (size)),
-        _data (reinterpret_cast<std::uint8_t *> (_message.data ()))
+    explicit native_wire_writer_t (std::size_t size) : _message (zlink::message_t::allocate (size))
     {
         if (!_message.valid ())
             throw std::bad_alloc ();
+        _remaining = {reinterpret_cast<std::uint8_t *> (_message.data ()), size};
     }
     native_wire_writer_t (native_wire_writer_t &&other) noexcept :
         _message (std::move (other._message)),
-        _data (reinterpret_cast<std::uint8_t *> (_message.data ())),
-        _size (other._size)
+        _remaining (reinterpret_cast<std::uint8_t *> (_message.data ())
+                      + (_message.size () - other._remaining.size ()),
+                    other._remaining.size ())
     {
     }
     void push_back (std::uint8_t value)
     {
-        if (_size >= _message.size ())
+        if (_remaining.empty ())
             throw service_wire_error_t ("native wire writer exceeded allocated size");
-        _data[_size++] = value;
+        _remaining.front () = value;
+        _remaining = _remaining.subspan (1);
     }
-    std::uint8_t *end () { return _data + _size; }
+    std::uint8_t *end () { return _remaining.data (); }
     template <typename Iterator> void insert (std::uint8_t *, Iterator first, Iterator last)
     {
         const auto count = static_cast<std::size_t> (std::distance (first, last));
-        if (count > _message.size () - _size)
+        if (count > _remaining.size ())
             throw service_wire_error_t ("native wire writer exceeded allocated size");
         std::copy (first, last, end ());
-        _size += count;
+        _remaining = _remaining.subspan (count);
     }
     void insert (std::uint8_t *position, std::initializer_list<std::uint8_t> bytes)
     {
@@ -93,22 +94,21 @@ class native_wire_writer_t
     }
     void generate (std::size_t size, const std::function<void (std::span<std::byte>)> &write)
     {
-        if (size > _message.size () - _size)
+        if (size > _remaining.size ())
             throw service_wire_error_t ("native wire writer exceeded allocated size");
         write ({reinterpret_cast<std::byte *> (end ()), size});
-        _size += size;
+        _remaining = _remaining.subspan (size);
     }
     zlink::message_t take () &&
     {
-        if (_size != _message.size ())
+        if (!_remaining.empty ())
             throw service_wire_error_t ("native wire writer size mismatch");
         return std::move (_message);
     }
 
   private:
     zlink::message_t _message;
-    std::uint8_t *_data = nullptr;
-    std::size_t _size = 0;
+    std::span<std::uint8_t> _remaining;
 };
 
 template <typename Buffer> Buffer allocate_wire_buffer (std::size_t size)

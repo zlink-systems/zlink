@@ -374,44 +374,50 @@ void write_type_fragments (header_writer_t &prefix,
 
 struct header_plan_t
 {
-    std::optional<message_kind_t> kind;
-    std::string channel_name;
-    std::string message_name;
-    std::string content_type;
+    std::optional<envelope_header_t> header;
     std::string prefix;
     std::string middle;
+    std::string encoded;
 
-    bool matches (const envelope_header_t &header,
-                  std::string_view selected_content_type) const noexcept
+    bool matches_type (const envelope_header_t &value, std::string_view content_type) const noexcept
     {
-        return kind && *kind == header.kind
-               && std::string_view (channel_name) == std::string_view (header.channel_name)
-               && std::string_view (message_name) == std::string_view (header.message_name)
-               && std::string_view (content_type) == selected_content_type;
+        return header && header->kind == value.kind && header->channel_name == value.channel_name
+               && header->message_name == value.message_name
+               && header->content_type == content_type;
     }
 
-    void rebuild (const envelope_header_t &header, std::string_view selected_content_type)
+    bool matches (const envelope_header_t &value,
+                  const std::string *flow_id,
+                  std::optional<flow_origin_t> flow_origin) const noexcept
     {
-        // Keep the one-entry backing storage on this thread.  `kind` is the
-        // validity marker and is published only after every escaped segment
-        // and key has been rebuilt successfully.
-        kind.reset ();
-        channel_name.clear ();
-        message_name.clear ();
-        content_type.clear ();
-        prefix.clear ();
-        middle.clear ();
+        return header->correlation_id == value.correlation_id && header->deadline == value.deadline
+               && header->topic == value.topic && header->error_code == value.error_code
+               && header->error_message == value.error_message && header->source == value.source
+               && header->metadata == value.metadata
+               && header->flow_id.has_value () == (flow_id != nullptr)
+               && (!flow_id || *header->flow_id == *flow_id) && header->flow_origin == flow_origin;
+    }
 
-        channel_name.assign (header.channel_name.data (), header.channel_name.size ());
-        message_name.assign (header.message_name.data (), header.message_name.size ());
-        content_type = selected_content_type;
-
-        header_writer_t prefix_writer (prefix);
-        header_writer_t middle_writer (middle);
-        write_channel_fragment (prefix_writer, channel_name);
-        write_type_fragments (prefix_writer, middle_writer, message_name, content_type,
-                              header.kind);
-        kind = header.kind;
+    void replace (const envelope_header_t &value,
+                  std::string_view selected_content_type,
+                  const std::string *flow_id,
+                  std::optional<flow_origin_t> flow_origin,
+                  const zlink::message_t &message,
+                  std::string next_prefix,
+                  std::string next_middle)
+    {
+        // The key owns any text borrowed by a decoded header. Publish it only
+        // after encoding and every key allocation have succeeded.
+        auto key = value;
+        key.content_type.assign (selected_content_type);
+        key.flow_id = flow_id ? std::optional<std::string> (*flow_id) : std::nullopt;
+        key.flow_origin = flow_origin;
+        std::string bytes (reinterpret_cast<const char *> (message.data ()), message.size ());
+        header.reset ();
+        prefix = std::move (next_prefix);
+        middle = std::move (next_middle);
+        encoded = std::move (bytes);
+        header = std::move (key);
     }
 };
 
@@ -460,6 +466,23 @@ void write_header (header_writer_t &writer,
     writer.append ("}");
 }
 
+zlink::message_t encode_header_bytes (const envelope_header_t &header,
+                                      const std::string *flow_id,
+                                      std::optional<flow_origin_t> flow_origin,
+                                      std::string_view prefix,
+                                      std::string_view middle,
+                                      std::string_view content = {})
+{
+    header_writer_t measure;
+    write_header (measure, header, flow_id, flow_origin, prefix, middle, content);
+    auto message = zlink::message_t::allocate (measure.size ());
+    if (!message.valid ())
+        throw std::bad_alloc ();
+    header_writer_t writer (reinterpret_cast<char *> (message.data ()));
+    write_header (writer, header, flow_id, flow_origin, prefix, middle, content);
+    return message;
+}
+
 std::pair<const std::string *, std::optional<flow_origin_t>>
 validate_outgoing_header (const envelope_header_t &header)
 {
@@ -498,15 +521,27 @@ zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &heade
 {
     const auto [flow_id, flow_origin] = validate_outgoing_header (header);
     auto &plan = header_plan ();
-    if (!plan.matches (header, content_type))
-        plan.rebuild (header, content_type);
-    header_writer_t measure;
-    write_header (measure, header, flow_id, flow_origin, plan.prefix, plan.middle);
-    auto message = zlink::message_t::allocate (measure.size ());
-    if (!message.valid ())
-        throw std::bad_alloc ();
-    header_writer_t writer (reinterpret_cast<char *> (message.data ()));
-    write_header (writer, header, flow_id, flow_origin, plan.prefix, plan.middle);
+    if (plan.matches_type (header, content_type)) {
+        if (plan.matches (header, flow_id, flow_origin)) {
+            auto message = zlink::message_t::from (plan.encoded);
+            if (!message.valid ())
+                throw std::bad_alloc ();
+            return message;
+        }
+        // Changing correlation, metadata or flow still reuses the type fragments;
+        // it does not copy a new cache key on every request or reply.
+        return encode_header_bytes (header, flow_id, flow_origin, plan.prefix, plan.middle);
+    }
+    std::string prefix;
+    std::string middle;
+    header_writer_t prefix_writer (prefix);
+    header_writer_t middle_writer (middle);
+    write_channel_fragment (prefix_writer, header.channel_name);
+    write_type_fragments (prefix_writer, middle_writer, header.message_name, content_type,
+                          header.kind);
+    auto message = encode_header_bytes (header, flow_id, flow_origin, prefix, middle);
+    plan.replace (header, content_type, flow_id, flow_origin, message, std::move (prefix),
+                  std::move (middle));
     return message;
 }
 
@@ -516,14 +551,7 @@ envelope_codec_t::encode_header (const envelope_header_t &header,
                                  const detail::prepared_header_fragment_t &channel) const
 {
     const auto [flow_id, origin] = validate_request_header (header, type, channel);
-    header_writer_t measure;
-    write_header (measure, header, flow_id, origin, channel.bytes, type.middle, type.prefix);
-    auto message = zlink::message_t::allocate (measure.size ());
-    if (!message.valid ())
-        throw std::bad_alloc ();
-    header_writer_t writer (reinterpret_cast<char *> (message.data ()));
-    write_header (writer, header, flow_id, origin, channel.bytes, type.middle, type.prefix);
-    return message;
+    return encode_header_bytes (header, flow_id, origin, channel.bytes, type.middle, type.prefix);
 }
 
 protocol::application_envelope_encoder_t envelope_codec_t::prepare_service_payload (
