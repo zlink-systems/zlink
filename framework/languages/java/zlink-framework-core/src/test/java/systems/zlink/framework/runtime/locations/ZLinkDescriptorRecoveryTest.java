@@ -210,6 +210,134 @@ final class ZLinkDescriptorRecoveryTest {
         }
     }
 
+    @ParameterizedTest(name = "{displayName}, provider={0}, repetition={1}")
+    @MethodSource("backends")
+    void confirmedRecoveryRejectionStopsHostBeforeCompetingRowDisappears(
+            boolean provider, int repetition) throws Exception {
+        var backend = new Backend(provider);
+        try (var first = backend.start(backend.publisherRepository)) {
+            backend.serve(first);
+            backend.clock.advance(Duration.ofHours(1));
+            try (var second = backend.start(backend.repository)) {
+                backend.serve(second);
+                var competing = backend.descriptor();
+                assertFalse(await(ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(first)));
+                assertFalse(first.isReady());
+                var state = ZLinkFrameworkRuntimeTestAccess.state(first);
+                assertTrue(
+                        state == ZLinkFrameworkRuntimeState.DRAINING
+                                || state == ZLinkFrameworkRuntimeState.STOPPED);
+                // Shutdown returns the completion of the cleanup already requested by recovery.
+                await(first.shutdown());
+                assertEquals(
+                        ZLinkFrameworkRuntimeState.STOPPED,
+                        ZLinkFrameworkRuntimeTestAccess.state(first));
+                assertEquals(competing, backend.descriptor());
+                await(second.shutdown());
+                assertTrue(
+                        await(
+                                        backend.repository.listMeshNodes(
+                                                "game", ZLinkPageRequest.firstPage()))
+                                .items()
+                                .isEmpty());
+                assertFalse(await(ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(first)));
+                assertTrue(
+                        await(
+                                        backend.repository.listMeshNodes(
+                                                "game", ZLinkPageRequest.firstPage()))
+                                .items()
+                                .isEmpty());
+            }
+        }
+    }
+
+    @ParameterizedTest(name = "{displayName}, provider={0}, repetition={1}")
+    @MethodSource("backends")
+    void shutdownObservesDrainingPublicationBeforeDeletingDescriptor(
+            boolean provider, int repetition) throws Exception {
+        var backend = new Backend(provider);
+        try (var runtime = backend.start(backend.publisherRepository)) {
+            backend.serve(runtime);
+            var deleted = new CompletableFuture<Void>();
+            var finished = new CompletableFuture<Void>();
+            var drainingPublications = new java.util.concurrent.atomic.AtomicInteger();
+            backend.afterRemove = () -> deleted.complete(null);
+            backend.publication =
+                    (descriptor, intent) -> {
+                        if (descriptor.state() != ZLinkFrameworkRuntimeState.DRAINING
+                                || drainingPublications.incrementAndGet() == 1) return null;
+                        // Hold a later Draining publication until this shutdown has deleted its
+                        // row.
+                        return deleted.thenCompose(
+                                        v -> backend.repository.updateMeshNode(descriptor, intent))
+                                .whenComplete(
+                                        (result, failure) -> {
+                                            if (failure == null) finished.complete(null);
+                                            else finished.completeExceptionally(failure);
+                                        });
+                    };
+            await(runtime.shutdown());
+            if (drainingPublications.get() > 1) await(finished);
+            assertTrue(
+                    await(backend.repository.listMeshNodes("game", ZLinkPageRequest.firstPage()))
+                            .items()
+                            .isEmpty());
+        }
+    }
+
+    @ParameterizedTest(name = "{displayName}, provider={0}, repetition={1}")
+    @MethodSource("backends")
+    void partialPreparingPublicationKeepsFirstClaimDecisionPerMeshAcrossLeaseChange(
+            boolean provider, int repetition) throws Exception {
+        var backend = new Backend(provider);
+        var unavailable = new AtomicBoolean(true);
+        var gameIntents = new CopyOnWriteArrayList<ZLinkDescriptorWriteIntent>();
+        var otherIntents = new CopyOnWriteArrayList<ZLinkDescriptorWriteIntent>();
+        backend.publication =
+                (descriptor, intent) -> {
+                    (descriptor.meshName().equals("game") ? gameIntents : otherIntents).add(intent);
+                    return descriptor.meshName().equals("other") && unavailable.get()
+                            ? CompletableFuture.failedFuture(
+                                    new ZLinkFrameworkException(
+                                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                            "other publication unavailable",
+                                            null))
+                            : null;
+                };
+        try (var runtime = backend.start(backend.publisherRepository, true)) {
+            backend.monotonicNanos.addAndGet(RELEASE_WAIT);
+            assertTrue(await(ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)));
+            assertEquals(
+                    ZLinkFrameworkRuntimeState.PREPARING,
+                    ZLinkFrameworkRuntimeTestAccess.state(runtime));
+            var original = backend.descriptor();
+            assertTrue(
+                    await(backend.repository.listMeshNodes("other", ZLinkPageRequest.firstPage()))
+                            .items()
+                            .isEmpty());
+            backend.clock.advance(Duration.ofHours(1));
+            gameIntents.clear();
+            otherIntents.clear();
+            unavailable.set(false);
+            assertTrue(await(ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)));
+            assertEquals(List.of(ZLinkLocationWriteIntent.RENEW), gameIntents);
+            assertEquals(List.of(FIXED_RID_NEW_CLAIM), otherIntents);
+            var recovered = backend.descriptor();
+            assertEquals(original.ownerId(), recovered.ownerId());
+            assertTrue(recovered.leaseGeneration() > original.leaseGeneration());
+            backend.monotonicNanos.addAndGet(RELEASE_WAIT);
+            assertTrue(await(ZLinkFrameworkRuntimeTestAccess.renewOwnerLeaseOnce(runtime)));
+            assertEquals(
+                    ZLinkFrameworkRuntimeState.SERVING,
+                    ZLinkFrameworkRuntimeTestAccess.state(runtime));
+            assertEquals(
+                    1,
+                    await(backend.repository.listMeshNodes("other", ZLinkPageRequest.firstPage()))
+                            .items()
+                            .size());
+        }
+    }
+
     private static Stream<Arguments> backends() {
         return IntStream.rangeClosed(1, 100)
                 .boxed()
@@ -275,6 +403,15 @@ final class ZLinkDescriptorRecoveryTest {
         final ZLinkLocationRepository repository;
         final ZLinkLocationRepository publisherRepository;
 
+        java.util.function.BiFunction<
+                        ZLinkMeshNodeDescriptor,
+                        ZLinkDescriptorWriteIntent,
+                        CompletionStage<
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkLocationWriteResult>>
+                publication;
+        Runnable afterRemove;
+
         Backend(boolean provider) {
             if (provider) {
                 var inner = new ZLinkInMemoryProviderLocationStore(clock);
@@ -330,6 +467,15 @@ final class ZLinkDescriptorRecoveryTest {
                                     new Class<?>[] {ZLinkLocationRepository.class},
                                     (proxy, method, arguments) -> {
                                         if (method.getName().equals("updateMeshNode")) {
+                                            if (publication != null) {
+                                                var overridden =
+                                                        publication.apply(
+                                                                (ZLinkMeshNodeDescriptor)
+                                                                        arguments[0],
+                                                                (ZLinkDescriptorWriteIntent)
+                                                                        arguments[1]);
+                                                if (overridden != null) return overridden;
+                                            }
                                             intents.add((ZLinkDescriptorWriteIntent) arguments[1]);
                                             // The in-memory read and mutation share one lane turn.
                                             // Pause before
@@ -347,7 +493,14 @@ final class ZLinkDescriptorRecoveryTest {
                                             }
                                         }
                                         try {
-                                            return method.invoke(repository, arguments);
+                                            var result = method.invoke(repository, arguments);
+                                            if (method.getName().equals("removeMeshNode")
+                                                    && afterRemove != null) {
+                                                return ((CompletionStage<?>) result)
+                                                        .whenComplete(
+                                                                (v, failure) -> afterRemove.run());
+                                            }
+                                            return result;
                                         } catch (InvocationTargetException failure) {
                                             throw failure.getCause();
                                         }
@@ -355,6 +508,11 @@ final class ZLinkDescriptorRecoveryTest {
         }
 
         ZLinkFrameworkRuntime start(ZLinkLocationRepository target) throws Exception {
+            return start(target, false);
+        }
+
+        ZLinkFrameworkRuntime start(ZLinkLocationRepository target, boolean otherMesh)
+                throws Exception {
             var options = new DefaultZLinkFrameworkOptions();
             options.addLocationStore(store);
             options.configureLocations().setOwnerLeaseTtl(Duration.ofHours(1));
@@ -365,6 +523,10 @@ final class ZLinkDescriptorRecoveryTest {
             options.addRouteMesh("game")
                     .listen("inproc://recovery-" + UUID.randomUUID())
                     .setRoutingId(RoutingId.from("recovery"));
+            if (otherMesh)
+                options.addRouteMesh("other")
+                        .listen("inproc://other-" + UUID.randomUUID())
+                        .setRoutingId(RoutingId.from("other"));
             var runtime =
                     ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
                             options,

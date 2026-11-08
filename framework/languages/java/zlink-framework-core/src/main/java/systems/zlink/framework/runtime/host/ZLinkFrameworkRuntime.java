@@ -258,7 +258,9 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         runtimeHandlers,
                         eventDispatcher,
                         () -> {
-                            if (!closeGate.closing()) {
+                            if (!closeGate.closing()
+                                    && runtimeState.get() != ZLinkFrameworkRuntimeState.ERROR) {
+                                publishRuntimeState(ZLinkFrameworkRuntimeState.ERROR);
                                 shutdown();
                             }
                             return terminationDeadline.get();
@@ -650,6 +652,11 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             Supplier<CompletionStage<Void>> preparing) {
         return admissionWasOpen -> {
             ZLinkFrameworkRuntimeState state = runtimeState.get();
+            if (state == ZLinkFrameworkRuntimeState.ERROR
+                    || state == ZLinkFrameworkRuntimeState.DRAINING
+                    || state == ZLinkFrameworkRuntimeState.STOPPED) {
+                return CompletableFuture.completedFuture(null);
+            }
             if (admissionWasOpen && state != ZLinkFrameworkRuntimeState.PREPARING) {
                 return CompletableFuture.completedFuture(null);
             }
@@ -2185,8 +2192,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         ZLinkRuntimeMetrics.publishHostState();
         if (objectDescriptors != null
                 && (state == ZLinkFrameworkRuntimeState.RELOCATING
-                        || state == ZLinkFrameworkRuntimeState.RELOCATED
-                        || state == ZLinkFrameworkRuntimeState.DRAINING)) {
+                        || state == ZLinkFrameworkRuntimeState.RELOCATED)) {
             objectDescriptors
                     .publish(state)
                     .exceptionally(
@@ -2351,6 +2357,21 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 shutdown.deferStage(
                         "descriptor_remove",
                         () -> objectDescriptors.remove(terminationDeadline.get()));
+                shutdown.deferStage(
+                        "draining_publication",
+                        () ->
+                                objectDescriptors
+                                        .publish(ZLinkFrameworkRuntimeState.DRAINING)
+                                        .exceptionally(
+                                                failure -> {
+                                                    Logger.getLogger(
+                                                                    ZLinkFrameworkRuntime.class
+                                                                            .getName())
+                                                            .warning(
+                                                                    "Object Server descriptor state publication failed: "
+                                                                            + failure.getMessage());
+                                                    return null;
+                                                }));
             }
         }
         if (spots != null) {
