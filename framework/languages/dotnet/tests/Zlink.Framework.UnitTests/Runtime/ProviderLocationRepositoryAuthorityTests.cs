@@ -402,7 +402,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             : scenario == 2
                 ? episode.Lifetime - options.OwnerLeaseRenewTimeout + TimeSpan.FromTicks(1)
             : scenario is 3 or 4 ? episode.Lifetime - options.OwnerLeaseRenewTimeout
-            : options.OwnerLeaseTtl + TimeSpan.FromSeconds(1);
+            : options.OwnerLeaseTtl + options.OwnerLeaseFencingMargin;
         time.Advance(recoveryAt - TimeSpan.FromSeconds(1));
         observed.Fail = false;
         observed.HoldRecoveryDescriptor = scenario is 1 or 4 or 5 or 19 or 20 or 21;
@@ -506,7 +506,9 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             Assert.False(runtime.IsExecutionAllowed(actor));
             Assert.Equal(1, observed.ReplacementWrites);
             time.Advance(
-                scenario == 16 ? options.OwnerLeaseRenewInterval : episode.Lifetime - recoveryAt
+                scenario == 16
+                    ? episode.Lifetime - recoveryAt - options.OwnerLeaseRenewTimeout
+                    : episode.Lifetime - recoveryAt
             );
             await runtime.RenewOwnerLeaseOnceAsync();
         }
