@@ -1,7 +1,3 @@
-import {
-  createInternalFrameworkException,
-  ZLinkFrameworkInternalErrorKind
-} from '../framework-errors-internal';
 import { dispatchActorPacketInMailbox } from './spot-actor-admission-coordinator';
 import { currentApplicationJobOrigin } from '../application-jobs/application-job-queue-scope';
 import type {
@@ -399,14 +395,8 @@ export class ZLinkEntrySpotActivation {
     return this.spotSerialExecutor.executeActor(actorId, operation);
   }
 
-  discardActor(actorId: string): void {
-    this.spotSerialExecutor.discardActor(
-      actorId,
-      createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RequestRejected,
-        'Actor execution authority was discarded.'
-      )
-    );
+  discardActor(actorId: string, error: unknown): void {
+    this.spotSerialExecutor.discardActor(actorId, error);
   }
 
   terminateActor(actorId: string, terminal: () => Promise<void>): Promise<void> {

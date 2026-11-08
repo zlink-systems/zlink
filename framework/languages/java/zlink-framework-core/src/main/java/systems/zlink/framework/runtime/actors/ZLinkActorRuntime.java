@@ -1455,6 +1455,10 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                 1L,
                                 publish.authorityOwnerGeneration(),
                                 spotNode.localAuthorityLeaseGeneration());
+                        locations.setActorRef(
+                                prepared.actorType,
+                                prepared.actorId,
+                                publicRefFor(publish.actor()));
                     }
                     return publish.actor();
                 });
@@ -5072,7 +5076,34 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             this.handlerInstances =
                     new systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner(
                             handlerFactory);
-            this.execution = locations.execution(state::steady, () -> discardExecution(this));
+            this.execution =
+                    locations.execution(
+                            actorRef.actorId(),
+                            state::steady,
+                            snapshot ->
+                                    dispatches
+                                            .relocationLaneAsync(state.actorId())
+                                            .thenCompose(
+                                                    lane ->
+                                                            lane.enqueueLifecycleBarrier(
+                                                                    () -> {
+                                                                        spotNode
+                                                                                .rememberActorAuthority(
+                                                                                        state
+                                                                                                .actorRef(),
+                                                                                        snapshot
+                                                                                                .authorityOwnerGeneration(),
+                                                                                        snapshot
+                                                                                                .ownerLeaseGeneration());
+                                                                        return CompletableFuture
+                                                                                .completedFuture(
+                                                                                        null);
+                                                                    })),
+                            () ->
+                                    state.spot() == null
+                                            ? null
+                                            : ZLinkAuthorityKeyCodec.spot(state.spotId()),
+                            () -> discardExecution(this));
         }
 
         ZLinkActor actor() {

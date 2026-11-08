@@ -2901,9 +2901,9 @@ export class ZLinkFrameworkRuntimeHost
   private actorRuntimeOptionsFactory(): ZLinkActorRuntimeOptionsFactory {
     return new ZLinkActorRuntimeOptionsFactory({
       requests: this.requests,
-      discardActorActivation: (actor) => {
-        this.spotNodeRuntime?.discardActorActivation(actor);
-        this.spotManager?.discardActorActivation(actor);
+      discardActorActivation: (actor, error) => {
+        this.spotNodeRuntime?.discardActorActivation(actor, error);
+        this.spotManager?.discardActorActivation(actor, error);
       },
       terminateActorActivation: (actor, terminal) =>
         this.spotNodeRuntime?.terminateActorActivation(actor, terminal) ?? terminal(),

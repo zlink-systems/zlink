@@ -1056,12 +1056,6 @@ export class ZLinkSpotActivationLifecycle {
     state.locationReleased = true;
     this.cleanupStates.set(activation, state);
     activation.serial.closeAdmission();
-    activation.serialExecutor.discardPendingApplication(
-      createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RequestRejected,
-        'Object execution authority was discarded.'
-      )
-    );
     await this.cleanupActivation(activation, activation.meshName, false);
   }
 

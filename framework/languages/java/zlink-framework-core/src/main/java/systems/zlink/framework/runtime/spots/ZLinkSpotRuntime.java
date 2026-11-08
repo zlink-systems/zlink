@@ -5978,7 +5978,16 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             DefaultSpotContext context) {
         if (userSpotLocationRuntime == null) return null;
         return userSpotLocationRuntime.execution(
+                systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
+                        context.spotId()),
                 context::steady,
+                snapshot ->
+                        context.serials.spotQueue.enqueueLifecycleBarrier(
+                                () -> {
+                                    rememberRecoveredSpot(snapshot, context.spotId());
+                                    return CompletableFuture.completedFuture(null);
+                                }),
+                () -> null,
                 () -> {
                     actorAdmissions.discardLocalMembers(context.spot());
                     context.serials.discardApplications();
@@ -5991,7 +6000,17 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             DefaultInstanceSpotContext context) {
         if (userSpotLocationRuntime == null) return null;
         return userSpotLocationRuntime.execution(
+                systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
+                        context.spotId()),
                 context.ownerQueue()::steady,
+                snapshot ->
+                        context.ownerQueue()
+                                .enqueueLifecycleBarrier(
+                                        () -> {
+                                            rememberRecoveredSpot(snapshot, context.spotId());
+                                            return CompletableFuture.completedFuture(null);
+                                        }),
+                () -> null,
                 () -> {
                     context.ownerQueue().discardApplications();
                     ZLinkInstanceSpotActivation activation =
@@ -6000,6 +6019,25 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         discardInstanceSpotActivation(activation);
                     else context.closeResourcesAsync();
                 });
+    }
+
+    private void rememberRecoveredSpot(
+            systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot snapshot,
+            String spotId) {
+        var allocation = snapshot.allocation();
+        ZLinkInternalMeshNode node = routeMeshNodesByName.get(allocation.descriptor().meshName());
+        if (node != null)
+            node.rememberSpotAuthority(
+                    new ZLinkInternalMeshNode.SpotAuthorityRoute(
+                            spotId,
+                            snapshot.objectGeneration(),
+                            allocation.descriptor().rid(),
+                            allocation.descriptorLifecycleGeneration(),
+                            snapshot.authorityOwnerGeneration(),
+                            snapshot.ownerLeaseGeneration(),
+                            snapshot.ownerId(),
+                            allocation.descriptor().meshName(),
+                            snapshot.storeVersion()));
     }
 
     @Override

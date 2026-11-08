@@ -49,7 +49,7 @@ export interface IZLinkLocationLifecycleRuntime {
   trackExecution?(
     owner: object,
     steadyReady: () => boolean,
-    discard: () => void,
+    discard: (error: unknown) => void,
     captureRecovery?: (reference: WeakRef<object>) => ZLinkExecutionRecovery | undefined
   ): void;
   forgetExecution?(owner: object): void;

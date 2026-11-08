@@ -922,8 +922,10 @@ class location_runtime_t
         });
     }
 
-    static task_t<std::optional<owner_lease_found_t>>
-    heartbeat_confirm (std::shared_ptr<heartbeat_attempt_t> attempt, std::string &failure)
+    static task_t<std::optional<owner_lease_read_result_t>>
+    heartbeat_confirm (std::shared_ptr<heartbeat_attempt_t> attempt,
+                       std::string &failure,
+                       std::optional<location_owner_token_t> expected_token = std::nullopt)
     {
         auto *runtime = attempt->runtime;
         bool failed = false;
@@ -947,9 +949,26 @@ class location_runtime_t
 
                 failed = true;
             } else {
-                const auto read = response->value ();
-                if (const auto *found = std::get_if<owner_lease_found_t> (&read))
-                    co_return *found;
+                auto read = response->value ();
+                const bool ownership_lost =
+                  co_await lease_lane (attempt, [runtime, expected_token, &read] {
+                      const auto lease = std::atomic_load_explicit (runtime->_owner_lease.get (),
+                                                                    std::memory_order_acquire);
+                      const auto *found = std::get_if<owner_lease_found_t> (&read);
+                      if (!expected_token || !lease->outage || !lease->token
+                          || lease->token->owner_id != expected_token->owner_id
+                          || lease->token->lease_generation != expected_token->lease_generation
+                          || !found
+                          || (found->token.owner_id == expected_token->owner_id
+                              && found->token.lease_generation == expected_token->lease_generation))
+                          return false;
+                      // An exact different token is ownership loss, even if expired.
+                      lease->outage->latch (lease->outage->cutoff);
+                      runtime->record_failure_on_lane ("owner lease changed during recovery");
+                      return true;
+                  });
+                if (!ownership_lost)
+                    co_return read;
             }
         }
         catch (const std::exception &error) {
@@ -1033,15 +1052,53 @@ class location_runtime_t
                         outcome.result = *renewed;
                         co_return outcome;
                     }
-                    co_await lease_lane (attempt, [runtime] {
-                        runtime->clear_owner_lease_on_lane ();
-                        return true;
+                    const bool recovering = co_await lease_lane (attempt, [runtime, attempt] {
+                        attempt->requested_outage =
+                          std::atomic_load_explicit (runtime->_owner_lease.get (),
+                                                     std::memory_order_acquire)
+                            ->outage;
+                        if (!attempt->requested_outage)
+                            runtime->clear_owner_lease_on_lane ();
+                        return static_cast<bool> (attempt->requested_outage);
                     });
+                    if (recovering) {
+                        auto exact = co_await heartbeat_confirm (attempt, failure, owner_token);
+                        const bool expired = co_await lease_lane (attempt, [runtime, attempt,
+                                                                            owner_token, &exact] {
+                            const auto lease = std::atomic_load_explicit (
+                              runtime->_owner_lease.get (), std::memory_order_acquire);
+                            if (!exact || lease->outage != attempt->requested_outage
+                                || !lease->token || lease->token->owner_id != owner_token->owner_id
+                                || lease->token->lease_generation != owner_token->lease_generation
+                                || !lease->admission_deadline)
+                                return false;
+                            // Admission is lifetime minus margin. A new claim needs
+                            // lifetime plus margin, rechecked after the exact read.
+                            auto reclaim_after = *lease->admission_deadline;
+                            for (int margin = 0; margin != 2; ++margin) {
+                                const auto available =
+                                  std::chrono::duration_cast<std::chrono::milliseconds> (
+                                    std::chrono::steady_clock::time_point::max () - reclaim_after);
+                                reclaim_after =
+                                  runtime->_options.owner_lease_fencing_margin > available
+                                    ? std::chrono::steady_clock::time_point::max ()
+                                    : reclaim_after + runtime->_options.owner_lease_fencing_margin;
+                            }
+                            const auto *found = std::get_if<owner_lease_found_t> (&*exact);
+                            return (*runtime->_lease_now) () >= reclaim_after
+                                   && (!found || found->lease_expires_at <= found->store_now);
+                        });
+                        if (!expired)
+                            co_return outcome;
+                    }
                 } else {
                     co_await heartbeat_communication_failure (attempt);
-                    auto confirmed = co_await heartbeat_confirm (attempt, failure);
+                    auto exact = co_await heartbeat_confirm (attempt, failure, owner_token);
+                    const auto *confirmed =
+                      exact ? std::get_if<owner_lease_found_t> (&*exact) : nullptr;
                     if (confirmed && confirmed->token.owner_id == owner_token->owner_id
-                        && confirmed->token.lease_generation == owner_token->lease_generation) {
+                        && confirmed->token.lease_generation == owner_token->lease_generation
+                        && confirmed->lease_expires_at > confirmed->store_now) {
                         co_await heartbeat_accept (attempt, confirmed->token,
                                                    confirmed->lease_expires_at,
                                                    confirmed->store_now, started_at);
@@ -1082,7 +1139,9 @@ class location_runtime_t
             }
             if (!claim) {
                 if (!attempt->cancellation.stop_requested ()) {
-                    auto confirmed = co_await heartbeat_confirm (attempt, failure);
+                    auto exact = co_await heartbeat_confirm (attempt, failure);
+                    const auto *confirmed =
+                      exact ? std::get_if<owner_lease_found_t> (&*exact) : nullptr;
                     if (confirmed) {
                         co_await heartbeat_accept (attempt, confirmed->token,
                                                    confirmed->lease_expires_at,
@@ -1119,7 +1178,9 @@ class location_runtime_t
                 scheduled_heartbeat = heartbeat->current == attempt;
             }
             if (scheduled_heartbeat) {
-                auto confirmed = co_await heartbeat_confirm (attempt, failure);
+                auto exact = co_await heartbeat_confirm (attempt, failure, owner_token);
+                const auto *confirmed =
+                  exact ? std::get_if<owner_lease_found_t> (&*exact) : nullptr;
                 if (confirmed && confirmed->token.owner_id == runtime->_owner_id) {
                     co_await heartbeat_accept (attempt, confirmed->token,
                                                confirmed->lease_expires_at, confirmed->store_now,

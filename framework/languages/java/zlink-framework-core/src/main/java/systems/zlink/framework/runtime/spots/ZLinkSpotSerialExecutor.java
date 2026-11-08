@@ -506,6 +506,11 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
         return spotQueue.discardActivationPreparation();
     }
 
+    void resumeExecution() {
+        spotQueue.resumePending();
+        resumeTimerQueues();
+    }
+
     private CompletionStage<Void> resumeTimerQueues() {
         return stateLane
                 .runNowOrQueue(() -> List.copyOf(timerQueues.values()))
