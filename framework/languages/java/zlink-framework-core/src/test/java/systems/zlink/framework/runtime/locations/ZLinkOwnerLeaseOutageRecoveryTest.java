@@ -23,7 +23,7 @@ final class ZLinkOwnerLeaseOutageRecoveryTest {
     private static final Duration MARGIN = Duration.ofSeconds(5);
     private static final long RECLAIM_AFTER = TTL.plus(MARGIN).toNanos();
 
-    private static final class MutableClock extends Clock {
+    static final class MutableClock extends Clock {
         Instant now = Instant.EPOCH;
 
         public ZoneId getZone() {
@@ -39,7 +39,7 @@ final class ZLinkOwnerLeaseOutageRecoveryTest {
         }
     }
 
-    private static final class LeaseStore extends ZLinkLocationStoreTestAdapter {
+    static final class LeaseStore extends ZLinkLocationStoreTestAdapter {
         final ZLinkLocationRepository backing;
         CompletionStage<ZLinkOwnerLeaseRenewResult> renew;
         CompletionStage<ZLinkOwnerLeaseReadResult> exact;
@@ -79,7 +79,7 @@ final class ZLinkOwnerLeaseOutageRecoveryTest {
         }
     }
 
-    private static final class Fixture implements AutoCloseable {
+    static final class Fixture implements AutoCloseable {
         final MutableClock clock = new MutableClock();
         final AtomicLong now = new AtomicLong();
         final AtomicLong clockReads = new AtomicLong();

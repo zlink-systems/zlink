@@ -6,18 +6,19 @@ import type { ZLinkSpotNodeRuntimeManager } from '../spots';
 import type { ZLinkStreamRuntimeManager } from '../streams';
 import type { ZLinkLocationRuntimeStopSnapshot } from './location-runtime-owner';
 import { awaitWithAbort, isAbortError } from '../abort';
+import type { RuntimeDisposal } from '../disposal';
 
 interface ZLinkRuntimeOwnedStore {
   dispose?(): void | Promise<void>;
 }
 
 export interface ZLinkRuntimeStartRollbackParts {
-  readonly context: ZLinkBackendContext;
+  readonly context: Pick<ZLinkBackendContext, 'dispose'>;
   readonly startedLocationRuntime?: ZLinkLocationRuntime;
   readonly streamRuntime?: ZLinkStreamRuntimeManager;
   readonly spotNodeRuntime?: ZLinkSpotNodeRuntimeManager;
   readonly channelRuntime?: ZLinkChannelRuntimeManager;
-  readonly ownedStores?: readonly ZLinkRuntimeOwnedStore[];
+  readonly ownedStores?: ReadonlyMap<ZLinkRuntimeOwnedStore, RuntimeDisposal>;
   readonly shutdownSignal?: AbortSignal;
 }
 
@@ -33,7 +34,7 @@ export interface ZLinkRuntimeStopParts {
     drainActorJoinSources?(): Promise<void>;
     dispose(): Promise<void>;
   };
-  readonly ownedStores?: readonly ZLinkRuntimeOwnedStore[];
+  readonly ownedStores?: ReadonlyMap<ZLinkRuntimeOwnedStore, RuntimeDisposal>;
 }
 
 export async function rollbackRuntimeStart(parts: ZLinkRuntimeStartRollbackParts): Promise<void> {
@@ -81,14 +82,11 @@ export async function stopRuntimeParts(parts: ZLinkRuntimeStopParts): Promise<vo
 }
 
 async function disposeOwnedStores(
-  stores: readonly ZLinkRuntimeOwnedStore[] | undefined,
+  stores: ReadonlyMap<ZLinkRuntimeOwnedStore, RuntimeDisposal> | undefined,
   errors: unknown[]
 ): Promise<void> {
-  const disposed = new Set<ZLinkRuntimeOwnedStore>();
-  for (const store of stores ?? []) {
-    if (disposed.has(store)) continue;
-    disposed.add(store);
-    await runShutdownStep(errors, () => store.dispose?.());
+  for (const [store, disposal] of stores ?? []) {
+    await runShutdownStep(errors, () => disposal.run(async () => store.dispose?.()));
   }
 }
 

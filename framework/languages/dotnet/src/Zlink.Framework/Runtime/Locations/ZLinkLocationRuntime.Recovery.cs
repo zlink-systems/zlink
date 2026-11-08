@@ -28,10 +28,13 @@ internal sealed partial class ZLinkLocationRuntime
         if (GetHealthSnapshot().StoreOutage is not { } episode)
             return false;
         var deadline = Volatile.Read(ref _ownerAdmissionDeadline);
+        // Admission excludes margin; reclaim requires lease lifetime plus margin.
         if (
             deadline is null
             || _time.GetElapsedTime(deadline.LeaseOperationStartedAt)
-                < deadline.Lifetime + _options.OwnerLeaseFencingMargin
+                < deadline.Lifetime
+                    + _options.OwnerLeaseFencingMargin
+                    + _options.OwnerLeaseFencingMargin
         )
             return false;
         var exact = await _store

@@ -1,5 +1,7 @@
 package systems.zlink.framework.runtime.locations;
 
+import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeer;
+
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -7,6 +9,11 @@ interface ZLinkAutoConnectExecutor {
     boolean connect(ZLinkAutoConnectPlanner.Target target);
 
     boolean disconnect(ZLinkAutoConnectPlanner.Target target);
+
+    default CompletionStage<Void> refreshSessionFences(
+            java.util.List<ZLinkAutoConnectPeer> descriptors) {
+        return CompletableFuture.completedFuture(null);
+    }
 
     default boolean isManual(ZLinkAutoConnectPlanner.Target target) {
         return false;
