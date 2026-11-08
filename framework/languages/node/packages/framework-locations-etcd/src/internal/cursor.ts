@@ -13,7 +13,10 @@ export interface Snapshot {
 /** Binary fields keep the longest UTF-8 prefix/key cursor below the SPI bound. */
 export class ScanCursor {
   private readonly instance = randomBytes(16);
-  constructor(private readonly namespace: string) {}
+  constructor(
+    private readonly namespace: string,
+    private readonly now: () => bigint = monotonicMs
+  ) {}
 
   encode(snapshot: Snapshot, prefix: string): string {
     const fields = [Buffer.from(this.namespace), Buffer.from(prefix), snapshot.last];
@@ -68,7 +71,7 @@ export class ScanCursor {
   }
 
   valid(snapshot: Snapshot): boolean {
-    const elapsed = monotonicMs() - snapshot.started;
+    const elapsed = this.now() - snapshot.started;
     return elapsed >= 0n && elapsed < 300_000n;
   }
 }
