@@ -272,18 +272,15 @@ final class NativeSocketRuntime implements AutoCloseable {
     }
 
     SendSubmission submitSend(RoutingId target, List<Message> parts) {
-        ensureOpen();
         return socketCore.completionOwner().submitSend(target, parts);
     }
 
     void submitSendBlocking(RoutingId target, List<Message> parts) {
-        ensureOpen();
         socketCore.completionOwner().submitSendBlocking(target, parts);
     }
 
     RequestSubmission submitRequest(RoutingId target, List<Message> parts,
                                     Duration timeout) {
-        ensureOpen();
         return socketCore.completionOwner().submitRequest(target, parts,
             timeout);
     }
@@ -291,14 +288,16 @@ final class NativeSocketRuntime implements AutoCloseable {
     List<Message> submitRequestBlocking(RoutingId target,
                                         List<Message> parts,
                                         Duration timeout) {
-        ensureOpen();
         return socketCore.completionOwner().submitRequestBlocking(target,
             parts, timeout);
     }
 
     void submitReply(RoutingId target, long token, List<Message> parts) {
-        ensureOpen();
         socketCore.completionOwner().submitReply(target, token, parts);
+    }
+
+    SocketCore socketCore() {
+        return socketCore;
     }
 
     CompletionOwner completionOwner() {
