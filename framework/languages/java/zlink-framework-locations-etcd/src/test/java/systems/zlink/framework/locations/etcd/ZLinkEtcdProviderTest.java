@@ -280,7 +280,8 @@ class ZLinkEtcdProviderTest {
                     (request, out) -> {
                         if (backend.txnCalls.get() == 1) {
                             try {
-                                Thread.sleep(80);
+                                // A fresh per-RPC deadline would shift by this delay.
+                                Thread.sleep(500);
                             } catch (InterruptedException error) {
                                 Thread.currentThread().interrupt();
                             }
@@ -297,7 +298,7 @@ class ZLinkEtcdProviderTest {
             long earliest = Collections.min(backend.deadlines);
             long latest = Collections.max(backend.deadlines);
             assertTrue(
-                    latest - earliest < TimeUnit.MILLISECONDS.toNanos(50),
+                    latest - earliest < TimeUnit.MILLISECONDS.toNanos(250),
                     "RPCs must retain the operation deadline");
         }
     }

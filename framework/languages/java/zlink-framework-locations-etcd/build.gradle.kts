@@ -20,7 +20,7 @@ dependencies {
     implementation("io.grpc:grpc-netty-shaded:1.70.0")
     implementation("io.grpc:grpc-protobuf:1.70.0")
     implementation("io.grpc:grpc-stub:1.70.0")
-    implementation("com.google.protobuf:protobuf-java:3.25.5")
+    implementation("com.google.protobuf:protobuf-java:4.30.2")
     compileOnly("javax.annotation:javax.annotation-api:1.3.2")
     testImplementation("com.fasterxml.jackson.core:jackson-databind:2.17.2")
 }
@@ -45,7 +45,7 @@ val prepareEtcdProto by tasks.registering {
 
 sourceSets.main { proto.srcDir(prepareEtcdProto) }
 protobuf {
-    protoc { artifact = "com.google.protobuf:protoc:3.25.5" }
+    protoc { artifact = "com.google.protobuf:protoc:4.30.2" }
     plugins { create("grpc") { artifact = "io.grpc:protoc-gen-grpc-java:1.70.0" } }
     generateProtoTasks {
         all().configureEach {
