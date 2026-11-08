@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/locations/location_repository.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
 #include "runtime/stateful/object_ref.hpp"
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
@@ -343,6 +344,15 @@ class stateful_object_runtime_t
                                                relocation_state_abort_t abort);
     void configure_relocation_cut (relocation_source_cut_t cut);
 
+    task_t<void>
+    confirm_location_ready (object_ref_t object,
+                            std::optional<authority_snapshot_t> snapshot,
+                            runtime::serial_execution_queue_t::ready_confirmation_t writer,
+                            std::chrono::steady_clock::time_point at);
+    task_t<void> recover_location_execution (
+      std::function<task_t<runtime::serial_execution_queue_t::execution_operation_t> (
+        authority_key_t, authority_snapshot_t)> recover,
+      std::chrono::steady_clock::time_point observed_at);
     task_t<std::shared_ptr<runtime::serial_execution_queue_t>>
     execution_gate (object_ref_t object) const;
     task_t<bool> fence_location_authority (object_ref_t observed, bool owner_matches);
@@ -566,6 +576,7 @@ class stateful_object_runtime_t
         std::string stable_type;
         object_state_t state = object_state_t::creating;
         std::weak_ptr<runtime::serial_execution_queue_t> execution_gate;
+        std::optional<authority_snapshot_t> location_fence;
         std::uint64_t attempt = 0;
         std::string membership;
         std::optional<relocation_restore_identity_t> restore_identity;

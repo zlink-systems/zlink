@@ -810,6 +810,13 @@ task_t<void> mesh_node_runtime_t::start (
               if (auto state = weak.lock ())
                   spot_node_runtime_t (state).observe_location_authority (
                     std::move (key), std::move (snapshot), owner);
+          },
+          [weak = std::weak_ptr (node)] (
+            runtime::location_runtime_t::execution_recovery_t recover,
+            std::chrono::steady_clock::time_point observed_at) -> task_t<void> {
+              if (auto host = weak.lock ())
+                  co_await host->objects ().recover_location_execution (std::move (recover),
+                                                                        observed_at);
           });
         node->configure_location_execution (
           spot_state->location_lifecycle->execution_runtime ().execution_clock (),

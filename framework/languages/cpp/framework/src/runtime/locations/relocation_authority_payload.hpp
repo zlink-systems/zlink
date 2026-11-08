@@ -22,6 +22,8 @@ struct authority_relocation_reference_t
     inventory_digest_t inventory_digest{};
     location_owner_token_t target_owner;
     std::vector<std::byte> application_payload;
+    // Store result evidence; excluded from the relocation payload encoding.
+    std::optional<authority_snapshot_t> ready;
 };
 
 class authority_relocation_payload_codec_t
@@ -165,7 +167,8 @@ class authority_relocation_payload_codec_t
             if (source.authority_owner_generation != 0)
                 --source.authority_owner_generation;
             return authority_relocation_reference_t{
-              std::move (source), std::move (target), {}, 0, {}, snapshot.owner, snapshot.payload};
+              std::move (source), std::move (target), {},      0, {},
+              snapshot.owner,     snapshot.payload,   snapshot};
         }
         reader_t reader (snapshot.payload);
         if (!reader.consume_version ())
@@ -218,7 +221,8 @@ class authority_relocation_payload_codec_t
                                                 *checksum,
                                                 digest,
                                                 snapshot.owner,
-                                                std::move (application_payload)};
+                                                std::move (application_payload),
+                                                snapshot};
     }
 
     // Remove relocation metadata before projecting the current Spot authority.

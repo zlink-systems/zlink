@@ -1236,16 +1236,20 @@ void public_host_runtime_t::configure_location_execution (
     });
 }
 
-task_t<std::function<void ()>>
+task_t<std::function<task_t<void> (std::optional<authority_snapshot_t>)>>
 public_host_runtime_t::prepare_store_ready (stateful::object_ref_t object)
 {
+    using confirmation_t = std::function<task_t<void> (std::optional<authority_snapshot_t>)>;
     if (!_store_ready_observer)
-        co_return std::function<void ()>{};
-    auto writer = co_await _store_ready_observer (std::move (object));
+        co_return confirmation_t{};
+    auto writer = co_await _store_ready_observer (object);
     if (!writer)
-        co_return std::function<void ()>{};
-    co_return
-      [writer = std::move (writer), clock = _location_execution_clock] { writer (clock ()); };
+        co_return confirmation_t{};
+    co_return [host = shared_from_this (), object = std::move (object), writer = std::move (writer),
+               clock = _location_execution_clock] (std::optional<authority_snapshot_t> snapshot) {
+        return host->_objects.confirm_location_ready (object, std::move (snapshot), writer,
+                                                      clock ());
+    };
 }
 
 void public_host_runtime_t::configure_stateful_dispatch (
@@ -2830,7 +2834,7 @@ task_t<std::size_t> public_host_runtime_t::recover_instance_spot_activations ()
                 continue;
             }
             if (confirm)
-                confirm ();
+                co_await confirm (std::get<authority_stored_t> (cleared).snapshot);
             relocations->remove (recovery_pointer.reference);
             co_await activation_terminal.finish ();
             ++recovered;
@@ -3048,7 +3052,8 @@ spot_handle_t public_host_runtime_t::bind_relocation_spot (stateful::object_ref_
 }
 
 task_t<stateful::stateful_error_t>
-public_host_runtime_t::advance_local_actor_authority (stateful::object_ref_t committed)
+public_host_runtime_t::advance_local_actor_authority (stateful::object_ref_t committed,
+                                                      std::optional<authority_snapshot_t> ready)
 {
     auto confirm = co_await prepare_store_ready (committed);
     const auto host = shared_from_this ();
@@ -3078,7 +3083,7 @@ public_host_runtime_t::advance_local_actor_authority (stateful::object_ref_t com
         return stateful::stateful_error_t::none;
     });
     if (published == stateful::stateful_error_t::none && confirm)
-        confirm ();
+        co_await confirm (std::move (ready));
     co_return published;
 }
 
@@ -3965,7 +3970,9 @@ bool public_host_runtime_t::submit_relocation_target_authority (
                     return false;
                 }
             }
+            attempt.ready.clear ();
             for (std::size_t index = 0; index != current.size (); ++index) {
+                attempt.ready.push_back (current[index].ready);
                 attempt.sources[index] = current[index].source;
                 attempt.targets[index] = current[index].target;
             }
@@ -4021,6 +4028,7 @@ bool public_host_runtime_t::submit_relocation_target_authority (
                                                                     attempt.restore_identity)
                      != stateful::stateful_error_t::none)
                 return false;
+            attempt.ready = {published.current->ready};
             attempt.sources.front () = published.current->source;
             attempt.targets.front () = committed;
             return true;
@@ -4052,6 +4060,7 @@ bool public_host_runtime_t::submit_relocation_target_authority (
         const auto committed = _aggregate_relocation_authority->commit (*attempt.authority_fence);
         if (committed.status != stateful::aggregate_publish_status_t::committed)
             return false;
+        attempt.ready.clear ();
         std::vector<stateful::object_ref_t> adopted;
         adopted.reserve (attempt.targets.size ());
         for (std::size_t index = 0; index != attempt.targets.size (); ++index) {
@@ -4075,6 +4084,7 @@ bool public_host_runtime_t::submit_relocation_target_authority (
                      != stateful::stateful_error_t::none)
                 return false;
             adopted.push_back (placement->target);
+            attempt.ready.push_back (placement->ready);
         }
         attempt.targets = std::move (adopted);
         return true;
@@ -4217,10 +4227,12 @@ task_t<bool> public_host_runtime_t::try_finalize_relocation_target (relocation_a
                                 ? _actor_join_relocation_prepare_validator (attempt.prepare)
                                 : std::optional<bool>{};
     const auto canonical_user_spot_join = join_prepare && *join_prepare;
-    for (const auto &target : attempt.targets) {
+    for (std::size_t index = 0; index != attempt.targets.size (); ++index) {
+        const auto &target = attempt.targets[index];
         if (target.kind != stateful::object_kind_t::actor)
             continue;
-        const auto advanced = co_await advance_local_actor_authority (target);
+        const auto advanced = co_await advance_local_actor_authority (
+          target, index < attempt.ready.size () ? attempt.ready[index] : std::nullopt);
         if (advanced != stateful::stateful_error_t::none
             || (canonical_user_spot_join
                 && (!_actor_join_committed_authority_adopter
@@ -6142,7 +6154,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
               });
             if (std::holds_alternative<authority_stored_t> (cleared)) {
                 if (confirm)
-                    confirm ();
+                    co_await confirm (std::get<authority_stored_t> (cleared).snapshot);
                 instance_relocations->remove (recovery_root.reference);
             } else {
                 fail_preparation ();
@@ -7194,7 +7206,7 @@ public_host_runtime_t::dispatch_user_spot_batch (
                     continue;
                 }
                 if (confirm)
-                    confirm ();
+                    co_await confirm (ready ? ready->ready : already->ready);
                 auto local_commit = co_await _objects.commit_create_async (local.attempt);
                 if (local_commit != stateful::stateful_error_t::none) {
                     std::vector<std::uint8_t> creation_bytes;

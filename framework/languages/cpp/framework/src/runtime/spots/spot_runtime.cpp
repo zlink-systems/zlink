@@ -6292,6 +6292,13 @@ spot_node_runtime_t::commit_accepted_actor_join (
                 member->current_spot_id = std::string (target_state.spot_id);
                 member->current_spot_generation = generation;
                 member->current_spot_kind = kind;
+                std::function<task_t<void> (std::optional<authority_snapshot_t>)> confirm;
+                if (plan.native_node)
+                    confirm = co_await plan.native_node->prepare_store_ready (
+                      {runtime::stateful::object_kind_t::actor,
+                       std::string (committed.actor_id ().value ()), snapshot->object_generation,
+                       snapshot->authority_owner_generation, snapshot->allocation.target.mesh_name,
+                       std::string (snapshot->allocation.target.node_rid.value ())});
                 const auto stored = co_await repository.compare_exchange_authority (
                   authority_key, snapshot->store_version,
                   authority_put_t{runtime::encode_actor_authority_payload (*member), deadline});
@@ -6304,6 +6311,8 @@ spot_node_runtime_t::commit_accepted_actor_join (
                       conflict->membership_failure.value_or (framework_error_kind_t::unavailable);
                     continue;
                 }
+                if (const auto *ready = std::get_if<authority_stored_t> (&stored); ready && confirm)
+                    co_await confirm (ready->snapshot);
             }
             break;
         }
@@ -11400,7 +11409,7 @@ task_t<result_t<void>> spot_node_runtime_t::commit_remote_actor_authority (
       current->target.authority_owner_generation,
       current->target.mesh_name,
       current->target.node_id};
-    (void) co_await native->advance_local_actor_authority (committed_target);
+    (void) co_await native->advance_local_actor_authority (committed_target, current->ready);
     const auto local_node_routing_id = native->status ().routing_id ().to_bytes ();
     _state->lane
       .run ([&] {
