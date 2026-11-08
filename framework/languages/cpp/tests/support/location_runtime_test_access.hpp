@@ -114,6 +114,17 @@ struct location_runtime_test_access_t
                                 });
         return delay;
     }
+    static std::size_t pending_store_operations (location_runtime_t &runtime)
+    {
+        return runtime._lane
+          ->run_checked ([&] {
+              return std::count_if (
+                runtime._descriptor_publications.begin (), runtime._descriptor_publications.end (),
+                [] (const auto &pending) { return !pending->drained.task ().await_ready (); });
+          })
+          .get ();
+    }
+
     static state_lane_t &lane (location_runtime_t &runtime) { return *runtime._lane; }
     static auto snapshot (const location_runtime_t &runtime)
     {

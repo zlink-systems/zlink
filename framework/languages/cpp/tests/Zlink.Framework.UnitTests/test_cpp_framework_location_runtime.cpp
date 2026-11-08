@@ -4883,6 +4883,100 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
     };
     commit (placement_object_kind_t::user_spot, "registered-spot", "room");
     commit (placement_object_kind_t::actor, "early", "player");
+    if (loss == -55 || loss == -56 || loss == -57) {
+        runtime
+          .on_execution_discard (
+            [] (auto) {}, {},
+            [native] (location_runtime_t::execution_recovery_t recover, monotonic_time observed) {
+                return native->objects ().recover_location_execution (std::move (recover),
+                                                                      observed);
+            })
+          .result ()
+          .value ();
+        auto executor = context->ensure_spot_serial_executor ();
+        auto gate = executor->actor_executor ("player:early")->queue ();
+        scheduler->run_all ();
+        advance (5s);
+        lease_access::communication_failure (runtime);
+        const auto episode = lease_access::snapshot (runtime)->outage;
+        if (loss == -55) {
+            store ().release_owner_lease (token).result ().value ();
+            move_to (episode->cutoff - options.owner_lease_renew_timeout);
+            provider.hold_cas = memory.hold_cas = true;
+        } else {
+            advance (1s);
+            memory.held_authority = actor_authority_key ("early").value;
+            provider.held_authority = std::string ("authority\0actor\0early", 21);
+        }
+        auto renewal = lease_access::heartbeat_async (runtime, clock_now.load ());
+        if (loss != -55)
+            (GetParam () ? provider.authority_entered.task () : memory.authority_entered.task ())
+              .result ()
+              .value ();
+        renewal.result ().value ();
+        // The object lane has submitted every recovery before this fence returns.
+        native->objects ()
+          .execution_gate (*native->objects ().find (stateful::object_kind_t::actor, "early"))
+          .result ()
+          .value ();
+        lease_access::lane (runtime).run_sync ([] {});
+        EXPECT_GT (lease_access::pending_store_operations (runtime), 0u);
+        if (loss == -55)
+            EXPECT_GT (
+              GetParam () ? provider.preserve_writes.load () : memory.preserve_writes.load (), 0u);
+        int calls = 0;
+        task_completion_source_t<void> terminal;
+        serial_work_options_t work;
+        work.completion = [&] (result_t<void> result) { terminal.complete (result); };
+        EXPECT_TRUE (gate->try_post ("stop-held-recovery", [&] { ++calls; }, work));
+        scheduler->run_all ();
+        if (loss == -57) {
+            move_to (episode->cutoff);
+            detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+            lease_access::recovery_terminal (runtime, episode);
+            auto completed = terminal.task ();
+            scheduler->run_until (completed);
+            EXPECT_FALSE (completed.result ());
+            EXPECT_EQ (framework_error_kind_t::not_found, completed.result ().error_kind ());
+            // Recovery terminal precedes the separate finish continuation on the runtime lane.
+            // Observe its outage release before stop transfers cleanup to the Host.
+            const auto release_deadline = std::chrono::steady_clock::now () + auto_connect_wait;
+            while (lease_access::snapshot (runtime)->outage
+                   && std::chrono::steady_clock::now () < release_deadline)
+                lease_access::lane (runtime).run_sync ([] {});
+            EXPECT_FALSE (lease_access::snapshot (runtime)->outage);
+        }
+        task_completion_source_t<void> stopped;
+        const auto stop_complete = stopped.task ();
+        std::latch stop_entered (1);
+        std::thread stopper ([&] {
+            stop_entered.count_down ();
+            runtime.stop ();
+            stopped.complete (result_t<void>::success ());
+        });
+        stop_entered.wait ();
+        // Exchange of the existing drain list proves stop reached physical drain.
+        const auto drain_deadline = std::chrono::steady_clock::now () + auto_connect_wait;
+        while (lease_access::pending_store_operations (runtime) != 0
+               && !stop_complete.await_ready ()
+               && std::chrono::steady_clock::now () < drain_deadline)
+            std::this_thread::yield ();
+        EXPECT_EQ (0u, lease_access::pending_store_operations (runtime));
+        EXPECT_FALSE (stop_complete.await_ready ());
+        provider.cas_release.complete (result_t<void>::success ());
+        memory.cas_release.complete (result_t<void>::success ());
+        provider.authority_release.complete (result_t<void>::success ());
+        memory.authority_release.complete (result_t<void>::success ());
+        stop_complete.result ().value ();
+        stopper.join ();
+        lease_access::recovery_terminal (runtime, episode);
+        EXPECT_EQ (0, calls);
+        executor->close ();
+        scheduler->run_all ();
+        context->node.reset ();
+        node->spot_contexts_by_id.clear ();
+        return;
+    }
     if (loss == -24 || loss == -25) {
         commit (placement_object_kind_t::actor, "late", "player");
         commit (placement_object_kind_t::user_spot, "next-spot", "room");
@@ -5119,6 +5213,13 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
             lease_access::recovery_terminal (runtime, episode);
             scheduler->run_all ();
             cutoff_terminal = terminal.task ().await_ready ();
+            // Read on the lane so a late finish post has also completed its turn; the
+            // bound turns a missing release into a failed expectation, not a hang.
+            const auto release_deadline = std::chrono::steady_clock::now () + auto_connect_wait;
+            while (lease_access::lane (runtime).run_sync ([&] {
+                return bool (lease_access::snapshot (runtime)->outage);
+            }) && std::chrono::steady_clock::now () < release_deadline)
+                std::this_thread::yield ();
             cutoff_released = !lease_access::snapshot (runtime)->outage;
         }
         provider.authority_release.complete (result_t<void>::success ());
@@ -5570,6 +5671,7 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
           .execution_gate (*native->objects ().find (stateful::object_kind_t::actor, "late"))
           .result ()
           .value ();
+        lease_access::lane (runtime).run_sync ([] {});
         int early_calls = 0, late_calls = 0, spot_calls = 0, fresh_calls = 0;
         task_completion_source_t<void> early_terminal;
         serial_work_options_t early_work;
@@ -6308,6 +6410,19 @@ TEST_P (StoreOutageRetention, ReviewHeartbeatDoesNotWaitOrRestartExactRead)
 {
     registered_owner (false, true, -14);
 }
+TEST_P (StoreOutageRetention, RuntimeStopDrainsRecoveryPreserveCas)
+{
+    registered_owner (false, true, -55);
+}
+TEST_P (StoreOutageRetention, RuntimeStopDrainsRecoveryExactRead)
+{
+    registered_owner (false, true, -56);
+}
+TEST_P (StoreOutageRetention, RuntimeStopDrainsRecoveryReadAfterCutoff)
+{
+    registered_owner (false, true, -57);
+}
+
 TEST_P (StoreOutageRetention, ReviewCutoffTerminatesReadBeforeEpisodeRelease)
 {
     registered_owner (false, true, -15);

@@ -792,7 +792,7 @@ int main ()
     const auto recovery_submitted =
       location_runtime.find ("co_await submitted->task ();", recovery_intent);
     const auto recovery_objects =
-      location_runtime.find ("return recover_execution (store, episode", recovery_submitted);
+      location_runtime.find ("return recover_execution (", recovery_submitted);
     const auto recovery_invalidation = location_auto_connect.find (
       "invalidate_all_routes_after_store_recovery_async ();", recovery_republish);
     const auto recovery_diff =

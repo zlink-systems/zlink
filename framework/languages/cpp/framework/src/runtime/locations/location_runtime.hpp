@@ -197,7 +197,15 @@ class location_runtime_t
         std::shared_ptr<store_outage_t> requested_outage;
     };
 
-    struct descriptor_publication_t
+    struct repository_operation_t
+    {
+        virtual ~repository_operation_t () = default;
+        virtual void stop_observation () {}
+        task_completion_source_t<void> submitted;
+        task_completion_source_t<void> drained;
+    };
+
+    struct descriptor_publication_t : repository_operation_t
     {
         explicit descriptor_publication_t (
           std::chrono::milliseconds timeout,
@@ -213,8 +221,6 @@ class location_runtime_t
         std::function<std::chrono::steady_clock::time_point ()> now;
         const std::chrono::steady_clock::time_point deadline_at;
         task_completion_source_t<location_write_result_t> observation;
-        task_completion_source_t<void> submitted;
-        task_completion_source_t<void> drained;
         std::shared_ptr<detail::deadline_state_t> deadline =
           std::make_shared<detail::deadline_state_t> ();
         std::optional<task_t<location_write_result_t>> pending;
@@ -236,6 +242,12 @@ class location_runtime_t
                 observation.complete (*result);
             }
             return !observation.task ().await_ready ();
+        }
+
+        void stop_observation () override
+        {
+            observe (detail::result_access_t::failure<location_write_result_t> (
+              detail::make_cancellation_exception ("Location descriptor publication stopped")));
         }
 
         void finish (std::optional<result_t<location_write_result_t>> result = std::nullopt)
@@ -657,12 +669,8 @@ class location_runtime_t
         std::stop_callback stopped (cancellation, cancel);
         std::stop_callback owner_stopped (owner_cancellation, cancel);
         try {
-            co_await _lane->run_task ([this, operation] {
-                std::erase_if (_descriptor_publications, [] (const auto &pending) {
-                    return pending->drained.task ().await_ready ();
-                });
-                _descriptor_publications.push_back (operation);
-            });
+            co_await _lane->run_task (
+              [this, operation] { register_repository_operation (operation); });
         }
         catch (...) {
             operation->finish (detail::current_exception_result<location_write_result_t> ());
@@ -1025,6 +1033,48 @@ class location_runtime_t
         co_return result;
     }
 
+    void register_repository_operation (std::shared_ptr<repository_operation_t> operation) const
+    {
+        std::erase_if (_descriptor_publications, [] (const auto &pending) {
+            return pending->drained.task ().await_ready ();
+        });
+        _descriptor_publications.push_back (std::move (operation));
+    }
+
+    template <typename T, typename Start>
+    static task_t<T> retain_repository_operation (location_runtime_t *runtime,
+                                                  std::shared_ptr<state_lane_t> lane,
+                                                  std::shared_ptr<store_outage_t> episode,
+                                                  Start start)
+    {
+        // Only physical submission enters the drain lane; logical recovery keeps
+        // its caller's continuation context and the episode's original terminal.
+        auto completion = std::make_shared<task_completion_source_t<T>> ();
+        auto submitted =
+          lane->run_task ([runtime, episode, start = std::move (start), completion] () mutable {
+              if (episode->owner->stop.load (std::memory_order_acquire)) {
+                  completion->complete (result_t<T>::failure (framework_error_kind_t::shutting_down,
+                                                              "Location recovery stopped"));
+                  return;
+              }
+              auto operation = std::make_shared<repository_operation_t> ();
+              auto retained = std::make_shared<task_t<T>> (start ());
+              runtime->register_repository_operation (operation);
+              detail::observe_task_terminal (
+                *retained, [operation, retained, completion] (const result_t<T> &result) {
+                    completion->complete (result);
+                    operation->drained.complete (result_t<void>::success ());
+                });
+              operation->submitted.complete (result_t<void>::success ());
+          });
+        detail::observe_task_terminal (submitted, [completion] (const result_t<void> &result) {
+            if (!result)
+                completion->complete (
+                  detail::propagate_failure<T> (result, "Location recovery submission failed"));
+        });
+        return completion->task ();
+    }
+
     static task_t<authority_read_result_t> confirm_preservation (
       task_t<authority_compare_exchange_result_t> pending,
       std::shared_ptr<store_outage_t> episode,
@@ -1047,7 +1097,8 @@ class location_runtime_t
     }
 
     static task_t<serial_execution_queue_t::execution_operation_t>
-    recover_execution (location_repository_t *store,
+    recover_execution (location_runtime_t *runtime,
+                       std::shared_ptr<state_lane_t> lane,
                        std::shared_ptr<store_outage_t> episode,
                        std::shared_ptr<std::function<std::chrono::steady_clock::time_point ()>> now,
                        authority_key_t key,
@@ -1062,31 +1113,35 @@ class location_runtime_t
         auto completion = std::make_shared<task_completion_source_t<operation_t>> ();
         auto terminal = completion->task ();
         auto episode_terminal = episode->terminal.task ();
-        detail::observe_task_terminal (episode_terminal, [weak = std::weak_ptr{completion}] (
-                                                           const result_t<operation_t> &result) {
-            if (auto active = weak.lock ())
-                active->complete (result);
-        });
+        detail::observe_task_terminal (
+          episode_terminal,
+          [completion] (const result_t<operation_t> &result) { completion->complete (result); });
         const auto started = (*now) ();
         if (episode->owner->stop.load (std::memory_order_acquire))
-            co_return operation_t{status_t::stopped, started};
+            return task_t<operation_t> (
+              result_t<operation_t>::success ({status_t::stopped, started}));
         if (episode->latch (started))
-            co_return operation_t{status_t::ownership_lost, started};
+            return task_t<operation_t> (
+              result_t<operation_t>::success ({status_t::ownership_lost, started}));
         const bool preserve = token.lease_generation != fence.owner.lease_generation;
         // §5.1 D19: equality is admissible; only the original episode owns T.
         if (preserve && started + timeout > episode->cutoff)
-            co_return co_await terminal;
+            return terminal;
         auto read = std::make_shared<task_t<authority_read_result_t>> (
-          preserve ? confirm_preservation (store->compare_exchange_authority_core (
-                                             key, fence.store_version,
-                                             [&] {
-                                                 auto mutation =
-                                                   authority_put_t::preserve (fence, token);
-                                                 mutation.operation_deadline = started + timeout;
-                                                 return mutation;
-                                             }()),
-                                           episode, now, std::move (apply), started + timeout)
-                   : store->read_authority_core (std::move (key)));
+          preserve ? confirm_preservation (
+                       retain_repository_operation<authority_compare_exchange_result_t> (
+                         runtime, lane, episode,
+                         [runtime, key, fence, token, started, timeout] {
+                             auto mutation = authority_put_t::preserve (fence, token);
+                             mutation.operation_deadline = started + timeout;
+                             return runtime->_store->compare_exchange_authority_core (
+                               key, fence.store_version, std::move (mutation));
+                         }),
+                       episode, now, std::move (apply), started + timeout)
+                   : retain_repository_operation<authority_read_result_t> (
+                       runtime, lane, episode, [runtime, key = std::move (key)] () mutable {
+                           return runtime->_store->read_authority_core (std::move (key));
+                       }));
         const auto confirm = [weak = std::weak_ptr{completion}, episode = std::weak_ptr{episode},
                               now, read = std::weak_ptr{read},
                               publication = std::weak_ptr{publication}, fence = std::move (fence),
@@ -1158,7 +1213,10 @@ class location_runtime_t
         detail::observe_task_terminal (*read, [confirm] (const auto &) { confirm (); });
         if (publication)
             detail::observe_task_terminal (*publication, [confirm] (const auto &) { confirm (); });
-        co_return co_await terminal;
+        // The logical terminal releases these observations even when opaque I/O
+        // remains retained by the independent stop drain.
+        detail::observe_task_terminal (terminal, [read, publication] (const auto &) {});
+        return terminal;
     }
 
     static task_t<void>
@@ -1282,13 +1340,14 @@ class location_runtime_t
                 for (const auto &observer : *runtime->_execution_discard_requests)
                     if (observer.recover)
                         recoveries->push_back (observer.recover (
-                          [store = runtime->_store, episode, now = runtime->_lease_now, token,
-                           publication, timeout = runtime->_options.owner_lease_renew_timeout] (
+                          [runtime, lane = runtime->_lane, episode, now = runtime->_lease_now,
+                           token, publication,
+                           timeout = runtime->_options.owner_lease_renew_timeout] (
                             authority_key_t key, authority_snapshot_t fence,
                             std::function<task_t<void> (authority_snapshot_t)> apply) {
-                              return recover_execution (store, episode, now, std::move (key),
-                                                        std::move (fence), std::move (apply), token,
-                                                        publication, timeout);
+                              return recover_execution (
+                                runtime, lane, episode, now, std::move (key), std::move (fence),
+                                std::move (apply), token, publication, timeout);
                           },
                           episode->observed_at));
                     else if (publication)
@@ -1782,8 +1841,7 @@ class location_runtime_t
         auto operations = co_await _lane->run_task (
           [this] { return std::exchange (_descriptor_publications, {}); });
         for (const auto &operation : operations)
-            operation->observe (detail::result_access_t::failure<location_write_result_t> (
-              detail::make_cancellation_exception ("Location descriptor publication stopped")));
+            operation->stop_observation ();
         // The caller's deadline cannot end opaque I/O. Preserve every repository
         // coroutine and its input until its actual terminal, before provider teardown.
         for (const auto &operation : operations)
@@ -1820,7 +1878,7 @@ class location_runtime_t
     // One shared episode indicator outlives the runtime with its execution policies.
     std::shared_ptr<std::atomic_bool> _episode_open = std::make_shared<std::atomic_bool> (false);
     mutable std::optional<std::string> _last_error;
-    mutable std::vector<std::shared_ptr<descriptor_publication_t>> _descriptor_publications;
+    mutable std::vector<std::shared_ptr<repository_operation_t>> _descriptor_publications;
 
     // Owner subscriptions contain no retained object inventory or Ready evidence.
     descriptor_publisher_t _descriptor_publisher;
