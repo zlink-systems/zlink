@@ -3278,7 +3278,8 @@ class provider_location_repository_t final : public location_repository_t
             if (intent == location_write_intent_t::takeover && previous_owner_live)
                 co_return location_write_result_t{location_write_status_t::ignored_stale, 0, {}};
             if (intent == location_write_intent_t::renew) {
-                if (stored_owner != owner_id || stored_lease != lease_generation
+                if (stored_owner != owner_id
+                    || (mesh ? stored_lease > lease_generation : stored_lease != lease_generation)
                     || record_lifecycle_generation (stored) != lifecycle_generation
                     || descriptor_revision <= record_descriptor_revision (stored)
                     || !immutable_fields_equal (stored))
