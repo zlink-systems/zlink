@@ -570,7 +570,7 @@ complete_actor_creation (std::shared_ptr<host::public_host_runtime_t> node,
 {
     const auto fence = request.fence;
     const auto key = request.key;
-    std::function<void ()> confirm;
+    std::function<task_t<void> (std::optional<authority_snapshot_t>)> confirm;
     if (node && std::holds_alternative<object_creation_completed_t> (request.completion))
         confirm = co_await node->prepare_store_ready (
           {stateful::object_kind_t::actor, key.global_id, fence.object_generation,
@@ -586,10 +586,13 @@ complete_actor_creation (std::shared_ptr<host::public_host_runtime_t> node,
           actor_result_from_terminal (already->terminal, fence.target.node_rid, stable_type,
                                       [] (zlink::message_t) { return message_t{}; });
         const auto *created = std::get_if<actor_create_created_t> (&terminal);
-        ready = created && created->actor.object_generation () == fence.object_generation;
+        ready = created && created->actor.object_generation () == fence.object_generation
+                && already->ready.has_value ();
     }
     if (ready && confirm)
-        confirm ();
+        co_await confirm (std::get_if<object_creation_completed_result_t> (&result)
+                            ? std::get<object_creation_completed_result_t> (result).ready
+                            : std::get<object_creation_already_completed_result_t> (result).ready);
     co_return result;
 }
 

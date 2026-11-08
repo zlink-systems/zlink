@@ -679,7 +679,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         stateful::object_ref_t)> observer,
       std::function<std::optional<location_owner_token_t> (
         const runtime::serial_execution_queue_t &)> bound_owner = {});
-    task_t<std::function<void ()>> prepare_store_ready (stateful::object_ref_t object);
+    task_t<std::function<task_t<void> (std::optional<authority_snapshot_t>)>>
+    prepare_store_ready (stateful::object_ref_t object);
     task_t<stateful::stateful_error_t>
     destroy_application_actor_async (std::string actor_id, std::uint64_t object_generation);
     stateful::stream_session_registry_t &sessions () noexcept;
@@ -1002,7 +1003,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
 
     spot_handle_t bind_relocation_spot (stateful::object_ref_t object);
     task_t<stateful::stateful_error_t>
-    advance_local_actor_authority (stateful::object_ref_t committed);
+    advance_local_actor_authority (stateful::object_ref_t committed,
+                                   std::optional<authority_snapshot_t> ready = std::nullopt);
 
     protocol::application_payload_t
     encode_application (const std::vector<zlink::message_t> &parts,
@@ -1252,6 +1254,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         stateful::relocation_restore_identity_t restore_identity;
         std::vector<stateful::object_ref_t> sources;
         std::vector<stateful::object_ref_t> targets;
+        std::vector<std::optional<authority_snapshot_t>> ready;
         std::vector<protocol::relocation_object_t> wire_objects;
         std::optional<stateful::aggregate_relocation_fence_t> authority_fence;
         std::vector<session_route_state_t> session_routes;

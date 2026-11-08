@@ -400,7 +400,28 @@ struct object_creation_completed_result_t
 struct object_creation_already_completed_result_t
 {
     creation_terminal_record_t terminal;
+    std::optional<authority_snapshot_t> ready;
 };
+inline std::optional<authority_snapshot_t>
+creation_replay_ready (const object_complete_creation_request_t &request,
+                       const authority_read_result_t &read)
+{
+    const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
+    const auto &fence = request.fence;
+    if (!std::holds_alternative<object_creation_completed_t> (request.completion) || !snapshot
+        || snapshot->allocation.state != placement_allocation_state_t::active
+        || snapshot->object_generation != fence.object_generation
+        || snapshot->authority_owner_generation != fence.authority_owner_generation
+        || snapshot->owner.owner_id != fence.target.owner.owner_id
+        || snapshot->owner.lease_generation != fence.target.owner.lease_generation
+        || snapshot->allocation.target.mesh_name != fence.target.mesh_name
+        || snapshot->allocation.target.node_rid.value () != fence.target.node_rid.value ()
+        || snapshot->allocation.target.node_lifecycle_generation
+             != fence.target.node_lifecycle_generation)
+        return std::nullopt;
+    return *snapshot;
+}
+
 struct object_creation_completion_stale_t
 {
 };

@@ -2,11 +2,14 @@
 
 #include "runtime/stateful/stateful_object_runtime.hpp"
 #include "runtime/execution/serial_application_record.hpp"
+#include "runtime/execution/task_result.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
 
 #include <zlink/framework/contracts/placement.hpp>
 
 #include <algorithm>
 #include <cassert>
+#include <cstdlib>
 #include <service_wire_constants.hpp>
 #include <limits>
 #include <stdexcept>
@@ -399,6 +402,82 @@ task_t<stateful_error_t> stateful_object_runtime_t::commit_create_async (std::ui
         _attempts.erase (attempt_entry);
         return stateful_error_t::none;
     });
+}
+
+task_t<void> stateful_object_runtime_t::confirm_location_ready (
+  object_ref_t object,
+  std::optional<authority_snapshot_t> snapshot,
+  runtime::serial_execution_queue_t::ready_confirmation_t writer,
+  std::chrono::steady_clock::time_point at)
+{
+    return _lane.run_task ([this, object = std::move (object), snapshot = std::move (snapshot),
+                            writer = std::move (writer), at] () mutable {
+        const auto found = _objects.find (key_for (object));
+        if (found == _objects.end () || found->second.reference != object)
+            return;
+        if (snapshot)
+            found->second.location_fence = std::move (*snapshot);
+        writer (at);
+    });
+}
+
+task_t<void> stateful_object_runtime_t::recover_location_execution (
+  std::function<task_t<runtime::serial_execution_queue_t::execution_operation_t> (
+    authority_key_t, authority_snapshot_t)> recover,
+  std::chrono::steady_clock::time_point observed_at)
+{
+    using operation_t = runtime::serial_execution_queue_t::execution_operation_t;
+    auto operations = co_await _lane.run_task ([this, recover = std::move (recover), observed_at] {
+        std::vector<
+          std::pair<object_record_t *, std::shared_ptr<task_completion_source_t<operation_t>>>>
+          pending;
+        auto operations = std::make_shared<std::vector<task_t<operation_t>>> ();
+        for (auto &[_, object] : _objects) {
+            const auto gate = object.execution_gate.lock ();
+            if (!gate || gate->closed ())
+                continue;
+            const auto ready_at = gate->execution_ready_at ();
+            if (!ready_at || *ready_at >= observed_at
+                || state_on_lane (object) != object_state_t::ready)
+                continue;
+            if (auto existing = gate->pending_execution_operation ()) {
+                operations->push_back (std::move (*existing));
+                continue;
+            }
+            if (!object.location_fence) {
+                assert (object.location_fence && "Ready object has no confirmed Location fence");
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+                std::abort ();
+#endif
+                gate->set_execution_operation (task_t<operation_t> (result_t<operation_t>::success (
+                  {runtime::serial_execution_queue_t::execution_status_t::ownership_lost,
+                   observed_at})));
+                continue;
+            }
+            auto completion = std::make_shared<task_completion_source_t<operation_t>> ();
+            gate->set_execution_operation (completion->task ());
+            operations->push_back (completion->task ());
+            pending.emplace_back (&object, std::move (completion));
+        }
+        for (auto &[object, completion] : pending) {
+            auto operation = recover ((object->reference.kind == object_kind_t::actor
+                                         ? actor_authority_key (object->reference.key)
+                                         : spot_authority_key (object->reference.key)),
+                                      *object->location_fence);
+            detail::observe_task_terminal (
+              operation, [completion] (const result_t<operation_t> &result) mutable {
+                  completion->complete (result);
+              });
+        }
+        return operations;
+    });
+    result_t<void> terminal = result_t<void>::success ();
+    for (auto &operation : *operations) {
+        const auto completed = co_await runtime::await_result (std::move (operation));
+        if (!completed)
+            terminal = detail::propagate_failure<void> (completed, "Location recovery failed");
+    }
+    terminal.value ();
 }
 
 task_t<std::shared_ptr<runtime::serial_execution_queue_t>>
