@@ -126,6 +126,13 @@ offset 10  u32 BE  payloadLength // Byte length of the payload key (0..1,048,576
 `expiresAtMs` is the Store time of the commit that wrote the record plus the retention, rounded up
 to milliseconds. If `payloadLength` differs from the actual payload length, it is a Store failure.
 
+**Stored times are at most 9,223,372,036,854 (2262-04-11T23:47:16.854Z).** This is the largest
+millisecond time of C++ `std::chrono::system_clock::time_point`, the narrowest public time type of the
+four languages, when it is represented as signed 64-bit nanoseconds. If a
+`Put`'s `expiresAtMs` would exceed this value, the provider rejects the batch as a caller input error
+and writes nothing. If a read `expiresAtMs` or Store time exceeds this value, it is treated as a
+damaged storage format and a Store failure is returned.
+
 ### 3.3 Store Time Key Format
 
 The value of the Store time key holds the time in milliseconds as an **8-byte big-endian unsigned
@@ -254,13 +261,74 @@ generations. The Framework and SPI commits decide execution rights.
 The operator creates the Store time key only once, with the Store maintenance process's
 initialization command, when a new namespace is first used. The initialization command creates the
 Store time key with the host wall clock value only if the namespace has no keys at all; if even one
-key exists, it writes nothing and fails.
+key exists, it writes nothing and fails. §4.4 defines the command form.
 
 The update procedure (§4.2) doesn't create the Store time key. If the Store time key is missing in a
 namespace in operation, the Store maintenance process writes nothing and reports an error, and the
 provider returns a Store failure for every operation. Recreating Store time would start it from a
 smaller value than before and could change the meaning of expiry times already recorded, so the
 same namespace isn't initialized again.
+
+### 4.4 Store Maintenance Tool Commands
+
+The Store maintenance tool is a single command, `zlink-location-etcd-admin`, provided by the Node.js
+etcd extension package. All three subcommands take the same configuration file with
+`--config <file>`.
+
+```text
+zlink-location-etcd-admin init    --config <file>  // Performs the §4.3 initialization once and exits
+zlink-location-etcd-admin run     --config <file>  // Performs §4.2 updates and §8 cleanup until stopped
+zlink-location-etcd-admin cleanup --config <file>  // Performs §8 cleanup once and exits
+```
+
+The configuration file is UTF-8 JSON and holds the same values as the provider options (§11), under
+the same conditions. Certificates and passwords are taken as file paths, so secret values aren't
+written into the configuration file.
+
+```json
+{
+  "endpoints": ["https://10.0.0.1:2379"],
+  "namespace": "zlink-game",
+  "tls": {
+    "trustedCaPemFile": "ca.pem",
+    "clientIdentity": {
+      "certificatePemFile": "client.pem",
+      "keyPemFile": "client-key.pem"
+    }
+  },
+  "credentials": {
+    "user": "zlink-admin",
+    "passwordFile": "password.txt"
+  },
+  "operationTimeoutMs": 5000
+}
+```
+
+| Field | Corresponding §11 option |
+|---|---|
+| `endpoints`, `namespace` | The option of the same name (required) |
+| `tls.trustedCaPemFile`, `tls.clientIdentity` | `tls`'s `trustedCa` and `clientIdentity`. PEM file paths instead of values |
+| `credentials.user`, `credentials.passwordFile` | `credentials`. The password is a file path |
+| `operationTimeoutMs` | `operationTimeout` (milliseconds) |
+
+- **`init` sends the comparison that the namespace has no keys and the creation of the Store time key
+  in one transaction.** Even if several operators run it at once, only one succeeds. Reading first
+  and writing separately would let another initialization or write slip in between.
+- **`run` reports errors while etcd can't be reached and retries on the next cycle without exiting.**
+  If the Store time key is missing, it writes nothing and exits (§4.3). On `SIGINT` or `SIGTERM` it
+  starts no new requests, waits for the replies to sent requests within the operation timeout, and
+  exits.
+- The interval and procedure of `run`'s expiry cleanup follow §8.
+- Error messages go to standard error and don't contain passwords, certificate contents, or etcd
+  response bodies.
+
+| Exit code | Meaning |
+|---|---|
+| 0 | Success. For `run`, stopped by `SIGINT` or `SIGTERM` |
+| 1 | The configuration file or command arguments are invalid. Decided before connecting to etcd |
+| 2 | `init`: the namespace has keys, so it wasn't initialized |
+| 3 | `run`, `cleanup`: the Store time key is missing |
+| 4 | `init`, `cleanup`: etcd can't be reached, or a request ended in a timeout or error |
 
 ## 5. Exact Read
 
@@ -390,8 +458,9 @@ returns `StoreNow = c0`, and also decides expiry by `c0`
 ## 8. Cleaning Up Expired Records
 
 An expired record is already `Missing` by Store time but remains in etcd. The Store maintenance
-process periodically reads metadata and deletes both the metadata key and the payload key of
-records with `expiresAtMs ≤ Store time`. The deletion is conditioned on the read metadata's
+process cleans up in rounds. One round reads the namespace's metadata to the end in pages of at most
+1,000, and deletes both the metadata key and the payload key of records with
+`expiresAtMs ≤ Store time`. The next round starts 60 seconds after the previous round finishes. The deletion is conditioned on the read metadata's
 `mod_revision` being unchanged; if the lease was written again in the meantime, it isn't deleted.
 Records without an expiry time (counters and durable records) aren't cleaned up.
 
@@ -407,7 +476,8 @@ The provider doesn't lower the limits in [SPI §3~§5](02-location-store-redis.e
 requests, one Framework key appears in a metadata read and comparison, a metadata write, and a
 payload write. For the largest SPI batch, the read transaction for the decision has at most 2,049
 reads (1 Store time, 2,048 metadata), the following payload read has at most 2,048, and the apply
-transaction has at most 2,049 comparisons and 4,096 writes, about 11 MiB encoded. These sizes are
+transaction has at most 2,050 comparisons (2 for the Store time key's existence and value, 2,048
+metadata) and 4,096 writes, about 11 MiB encoded. These sizes are
 calculated and confirmed by the §12 tests.
 
 ### 9.2 Lower Bounds for etcd and Client Settings
@@ -435,7 +505,43 @@ batch is processed.
 | Compaction during a scan, snapshot validity exceeded, cursor from another cluster | `Expired` |
 
 These errors aren't returned as `Missing`, `Conflict`, or an empty page. etcd error codes and
-endpoint information aren't exposed in the application public API.
+endpoint information aren't exposed in the application public API. Which of the situations above an
+etcd error falls under, and how a request rejected with an auth error is handled, are defined by
+[§10.1](#101-etcd-call-rules).
+
+### 10.1 etcd Call Rules
+
+**The official provider and the Store maintenance tool call etcd directly with etcd v3.6.16's official
+gRPC definitions (proto).** They don't use per-language etcd client libraries. Existing clients each
+have their own policy of resending requests whose result wasn't received, or conversions that drop the
+cluster ID and error description from responses, which makes it hard to get the same results across
+the four languages. The four languages use the same proto copy kept once in the repository.
+
+- **gRPC-level retry and hedging are turned off.** A request is sent again in only these two cases.
+  - In the cases [§6](#6-conditional-atomic-batch) defines (the apply comparison was false, or the
+    decision payload read hit compaction), the §6 procedure is performed again from step 1.
+  - An RPC rejected with an auth error (table below) is sent once more after re-authentication.
+    etcd processes a request only after checking authentication, so this RPC certainly wasn't
+    applied.
+- **Any other write whose result wasn't received isn't sent again.** That the connection moved to
+  another endpoint or that re-authentication succeeded isn't evidence that the earlier write wasn't
+  applied. That operation ends with commit status unknown, as in [§10](#10-result-loss-and-errors).
+- **Errors are classified by the gRPC status code together with the status description,** because
+  etcd uses the same code for different errors. This table owns the error classification, and §6, §7,
+  and §10 use its results.
+
+| gRPC status | Text in the description | Classification |
+|---|---|---|
+| `OUT_OF_RANGE` | `required revision has been compacted` | Compaction (handled in [§6](#6-conditional-atomic-batch), [§7](#7-snapshot-scan)) |
+| `RESOURCE_EXHAUSTED` | `database space exceeded` | `NOSPACE` (handled in [§10](#10-result-loss-and-errors)) |
+| `UNAUTHENTICATED` | `invalid auth token` | Auth error |
+| `INVALID_ARGUMENT` | `revision of auth store is old` | Auth error |
+| Any other error | — | Store failure (handled in [§10](#10-result-loss-and-errors)) |
+
+- Every RPC in one operation (including re-authentication) uses the operation's remaining time as its
+  deadline. Each RPC doesn't get a fresh time budget.
+- Revisions, cluster IDs, and time values are handled as 64-bit integers or their decimal strings and
+  aren't converted to floating point.
 
 ## 11. Public Options
 
@@ -443,13 +549,19 @@ The public options of the official etcd extension are limited to the following v
 create an instance. Each language's interface document sets the per-language names.
 
 ```text
-endpoints         // List of etcd client endpoints (required, at least one)
-tls / credentials // Client certificate and authentication (optional)
+endpoints         // List of etcd client endpoint URLs (required, at least one). All http:// or all https://
+tls               // Optional. Used only with https endpoints
+  trustedCa       //   Optional. Trusted CA certificate (PEM). If absent, the operating system trust store
+  clientIdentity  //   Optional. One value holding the client certificate chain and private key (PEM). Both required
+credentials       // Optional. User and password for etcd user authentication. Both required
 namespace         // Namespace from §3.1, UTF-8 1..64 bytes, no 0x00 (required)
-operationTimeout  // Upper bound on the total time of one operation, including retries (optional)
+operationTimeout  // Upper bound on the total time of one operation, including retries (optional, default 5 s, greater than 0)
 ```
 
-The Store time update interval and catch-up rate, and the snapshot validity, aren't options.
+The provider checks these conditions when it is created and rejects violations with the language's
+argument error before connecting to etcd. This includes a list that mixes http and https endpoints,
+`tls` given with http endpoints, and an empty certificate, key, user, or password. The Store time update interval and catch-up rate, and the snapshot validity,
+aren't options.
 
 ## 12. Verification Requirements
 

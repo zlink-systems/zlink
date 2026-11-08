@@ -1,0 +1,25 @@
+{
+  "name": "@zlink-systems/framework-locations-etcd",
+  "version": "0.32.0",
+  "engines": { "node": "^22.15.0 || >=23.10.0" },
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zlink-systems/zlink.git",
+    "directory": "framework/languages/node/packages/framework-locations-etcd"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {".": {"types": "./dist/index.d.ts", "default": "./dist/index.js"}},
+  "bin": {"zlink-location-etcd-admin": "dist/admin.js"},
+  "files": ["dist", "LICENSE", "README.ko.md"],
+  "scripts": {
+    "build": "node ../../node_modules/typescript/bin/tsc -b && node copy-proto.cjs",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@zlink-systems/framework": "0.32.0",
+    "@grpc/grpc-js": "1.14.7",
+    "@grpc/proto-loader": "0.8.1"
+  }
+}

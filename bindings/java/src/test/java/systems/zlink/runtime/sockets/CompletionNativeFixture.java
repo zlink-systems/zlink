@@ -198,8 +198,10 @@ final class CompletionNativeFixture {
     private int closeSocket(MemorySegment socket) throws Throwable {
         if (closeBusyDuringAdmission && admissionEntered.getCount() == 0
                 && releaseAdmission.getCount() != 0) {
+            // Enum initialization must finish before setting the upcall's errno.
+            int result = CloseResult.BUSY.value();
             errno(NativeErrno.EBUSY);
-            return CloseResult.BUSY.value();
+            return result;
         }
         return (int) coreClose.invokeExact(socket);
     }

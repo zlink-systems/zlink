@@ -37,6 +37,37 @@ bindings build and distribute.
   - License text: `core/external/sha1/license.txt`
   - License type: BSD-3-Clause style
 
+## Bundled etcd protocol definitions (shipped)
+
+These unmodified protocol definitions are shared by the official etcd Location
+Store providers and are included in the Node etcd package. File provenance,
+versions and SHA-256 hashes are recorded in
+`framework/runtime/protocol/etcd/README.ko.md`.
+
+- etcd v3.6.16
+  - Location: `framework/runtime/protocol/etcd/v3.6.16/etcd/api/`
+  - Upstream: https://github.com/etcd-io/etcd/tree/v3.6.16/api
+  - License text: `framework/runtime/protocol/etcd/v3.6.16/licenses/etcd-LICENSE`
+  - License type: Apache License 2.0
+
+- gogo/protobuf v1.3.2 (`gogoproto/gogo.proto`)
+  - Location: `framework/runtime/protocol/etcd/v3.6.16/gogoproto/`
+  - Upstream: https://github.com/gogo/protobuf/tree/v1.3.2/gogoproto
+  - License text: `framework/runtime/protocol/etcd/v3.6.16/licenses/gogo-protobuf-LICENSE`
+  - License type: BSD 3-Clause License
+
+- googleapis, commit `0adf469dcd7822bf5bc058a7b0217f5558a75643`
+  - Location: `framework/runtime/protocol/etcd/v3.6.16/google/api/`
+  - Upstream: https://github.com/googleapis/googleapis/tree/0adf469dcd7822bf5bc058a7b0217f5558a75643/google/api
+  - License text: `framework/runtime/protocol/etcd/v3.6.16/licenses/googleapis-LICENSE`
+  - License type: Apache License 2.0
+
+- grpc-gateway v2.29.0 (OpenAPI v2 options)
+  - Location: `framework/runtime/protocol/etcd/v3.6.16/protoc-gen-openapiv2/options/`
+  - Upstream: https://github.com/grpc-ecosystem/grpc-gateway/tree/v2.29.0/protoc-gen-openapiv2/options
+  - License text: `framework/runtime/protocol/etcd/v3.6.16/licenses/grpc-gateway-LICENSE`
+  - License type: Apache License 2.0
+
 ## Vendored source used only for benchmarks (not shipped)
 
 These trees are used to build comparison benchmarks under

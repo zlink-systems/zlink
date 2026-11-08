@@ -43,6 +43,7 @@
     "packages/framework-codec-msgpack",
     "packages/framework-codec-protobuf",
     "packages/framework-locations-redis",
+    "packages/framework-locations-etcd",
     "packages/nestjs",
     "packages/stream-connector",
     "packages/stream-wire"
