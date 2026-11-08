@@ -54,6 +54,7 @@ jobs:
       - name: Prepare source packages with verified Linux Core input
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           CANDIDATE_SHA: ${{ steps.source.outputs.candidate_sha }}
         run: |
           package_root="$RUNNER_TEMP/reply-check/packages"
