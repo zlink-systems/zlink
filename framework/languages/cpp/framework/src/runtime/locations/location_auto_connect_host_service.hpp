@@ -160,6 +160,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             _startup_publication.complete (result_t<bool>::success (true));
             co_return;
         }
+        co_await _runtime->set_descriptor_publisher (
+          std::exchange (_republish_after_store_recovery, {}), _stop_requested.get_token ());
         _store = &services.get_required<location_repository_t> ();
         _live_store = &services.get_required<live_location_reader_t> ();
         if (auto route_cache = services.get<store_location_resolvers_t> ())
@@ -573,9 +575,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                 if (failure)
                     co_await handle_loop_failure (&loop, failure);
             }
-            const auto current = _runtime->owner_lease_observation ();
-            const auto intent = current != observed ? location_write_intent_t::new_claim
-                                                    : location_write_intent_t::renew;
+            const auto [current, intent] = _runtime->descriptor_publication_observation (observed);
             observed = current;
             const bool published = co_await republish_after_store_recovery (intent);
             if (stopped.stop_requested ())
@@ -631,12 +631,11 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             const auto stopped = _stop_requested.get_token ();
             if (stopped.stop_requested () || !_runtime->owner_lease_usable ())
                 co_return false;
+            co_await _runtime->set_descriptor_publisher (
+              std::exchange (_republish_after_store_recovery, {}), stopped);
             const auto deadline =
               std::chrono::steady_clock::now () + _runtime->options ().owner_lease_renew_timeout;
-            bool published = true;
-            if (_republish_after_store_recovery) {
-                published = co_await _republish_after_store_recovery (intent, stopped, deadline);
-            }
+            bool published = co_await _runtime->republish_descriptors (intent, stopped, deadline);
             if (stopped.stop_requested ())
                 co_return false;
             if (_client_server && _client_server_started) {

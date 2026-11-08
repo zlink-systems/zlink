@@ -30,6 +30,7 @@ artifacts=(
     zlink-framework-core
     zlink-framework-spring-boot-starter
     zlink-framework-locations-redis
+    zlink-framework-locations-etcd
     zlink-stream-connector
     zlink-http-client
     zlink-framework-codec-protobuf
@@ -81,6 +82,7 @@ dependencies {
     implementation("systems.zlink:zlink-framework-core:FRAMEWORK_VERSION")
     implementation("systems.zlink:zlink-framework-spring-boot-starter:FRAMEWORK_VERSION")
     implementation("systems.zlink:zlink-framework-locations-redis:FRAMEWORK_VERSION")
+    implementation("systems.zlink:zlink-framework-locations-etcd:FRAMEWORK_VERSION")
     implementation("systems.zlink:zlink-stream-connector:FRAMEWORK_VERSION")
     implementation("systems.zlink:zlink-http-client:HTTP_CLIENT_VERSION")
     implementation("systems.zlink:zlink-framework-codec-protobuf:FRAMEWORK_VERSION")
@@ -135,6 +137,12 @@ public final class PackagedContractConsumer {
             ZLinkHttpClient.class
         };
         if (contract.length != 12) throw new AssertionError("contract manifest");
+        try (var store = new systems.zlink.framework.locations.etcd.ZLinkEtcdLocationStore(
+                new systems.zlink.framework.locations.etcd.ZLinkEtcdLocationOptions()
+                        .setEndpoints(java.util.List.of("http://127.0.0.1:2379"))
+                        .setNamespace("packaged-contract"))) {
+            if (!(store instanceof ZLinkLocationStore)) throw new AssertionError("etcd SPI");
+        }
         System.out.println("java packaged contract consumer passed");
     }
 }
@@ -150,6 +158,7 @@ dependencies {
     implementation("systems.zlink:zlink-framework-kotlin:FRAMEWORK_VERSION")
     implementation("systems.zlink:zlink-framework-spring-boot-starter:FRAMEWORK_VERSION")
     implementation("systems.zlink:zlink-framework-locations-redis:FRAMEWORK_VERSION")
+    implementation("systems.zlink:zlink-framework-locations-etcd:FRAMEWORK_VERSION")
     implementation("systems.zlink:zlink-stream-connector:FRAMEWORK_VERSION")
     implementation("systems.zlink:zlink-http-client-kotlin:HTTP_CLIENT_VERSION")
     implementation("systems.zlink:zlink-framework-codec-protobuf:FRAMEWORK_VERSION")

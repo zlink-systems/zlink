@@ -330,6 +330,53 @@ Redis public surface는 두 Store class의 최소 constructor와 connection, key
 options로 제한한다. Key layout, Lua script, private record encoding, retry와 shared connection reference
 count는 implementation detail이다.
 
+## etcd extension
+
+```java
+public final class ZLinkEtcdLocationStore
+ implements ZLinkLocationStore, AutoCloseable {
+ public ZLinkEtcdLocationStore(ZLinkEtcdLocationOptions options);
+}
+
+public final class ZLinkEtcdLocationOptions {
+ public List<String> endpoints();
+ public ZLinkEtcdLocationOptions setEndpoints(List<String> value);
+ public ZLinkEtcdTlsOptions tls();                // 설정하지 않으면 null
+ public ZLinkEtcdLocationOptions setTls(ZLinkEtcdTlsOptions value);
+ public ZLinkEtcdCredentials credentials();       // 설정하지 않으면 null
+ public ZLinkEtcdLocationOptions setCredentials(ZLinkEtcdCredentials value);
+ public String namespace();
+ public ZLinkEtcdLocationOptions setNamespace(String value);
+ public Duration operationTimeout();              // 기본 5초
+ public ZLinkEtcdLocationOptions setOperationTimeout(Duration value);
+}
+
+public final class ZLinkEtcdTlsOptions {
+ public String trustedCaPem();                    // 설정하지 않으면 null
+ public ZLinkEtcdTlsOptions setTrustedCaPem(String value);
+ public ZLinkEtcdClientIdentity clientIdentity(); // 설정하지 않으면 null
+ public ZLinkEtcdTlsOptions setClientIdentity(ZLinkEtcdClientIdentity value);
+}
+
+public final class ZLinkEtcdClientIdentity {
+ public ZLinkEtcdClientIdentity(String certificatePem, String keyPem);
+ public String certificatePem();
+ public String keyPem();
+}
+
+public final class ZLinkEtcdCredentials {
+ public ZLinkEtcdCredentials(String user, String password);
+ public String user();
+ public String password();
+}
+```
+
+이 class들은 `systems.zlink.framework.locations.etcd` package에 있다. etcd public surface는 Location Store
+class 하나의 최소 constructor와 위 options로 제한하며 Relocation Store는 제공하지 않는다. 각 option의
+뜻과 조건은 [공통 option](../../../05-location-relocation/07-location-store-etcd.ko.md#11-공개-option)이 정하고, constructor는 그 조건에 어긋나면 etcd에 접속하기
+전에 `IllegalArgumentException`을 던진다. Kotlin은 같은 class를 사용한다. 나머지 동작은
+[공식 etcd Location Store provider](../../../05-location-relocation/07-location-store-etcd.ko.md)가 소유한다.
+
 ## 공개하지 않는 계약
 
 다음 항목은 provider나 application이 구현하거나 호출하는 interface가 아니다.

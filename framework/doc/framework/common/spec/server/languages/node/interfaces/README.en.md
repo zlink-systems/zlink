@@ -23,7 +23,7 @@ owned by each package's separate spec.
 | 05 | [Actor And Session Binding](05-actors.en.md) | Actor lifecycle, Actor call, and bound session |
 | 06 | [STREAM, Timer, And Worker](06-stream-worker.en.md) | STREAM session, timer, and worker scheduling |
 | 07 | [NestJS Host Adapter](07-nestjs-host.en.md) | Module, DI token, decorator, and host builder |
-| 08 | [Location/Relocation Provider](08-location-maintenance.en.md) | Opaque atomic Location Store, immutable Relocation Store, and the official Redis provider |
+| 08 | [Location/Relocation Provider](08-location-maintenance.en.md) | Opaque atomic Location Store, immutable Relocation Store, and the official Redis and etcd providers |
 
 The export name set of the deployment package and every file this table
 of contents points to must be the same in both directions. The binding
