@@ -28,12 +28,153 @@ public sealed class LocationRuntimeTests
         time.Advance(TimeSpan.FromSeconds(1));
         observed.Fail = true;
         Assert.False(await runtime.RenewOwnerLeaseOnceAsync());
-        time.Advance(options.OwnerLeaseTtl);
+        time.Advance(
+            options.OwnerLeaseTtl + options.OwnerLeaseFencingMargin - TimeSpan.FromSeconds(1)
+        );
         observed.Fail = false;
         Assert.True(await runtime.RenewOwnerLeaseOnceAsync());
         Assert.Equal(original.OwnerId, runtime.OwnerToken.OwnerId);
         Assert.True(runtime.OwnerToken.LeaseGeneration > original.LeaseGeneration);
         Assert.True(runtime.IsOwnerAdmissionOpen);
+    }
+
+    [Theory]
+    [InlineData(false, false, -1)]
+    [InlineData(false, false, 0)]
+    [InlineData(false, false, 1)]
+    [InlineData(false, true, -1)]
+    [InlineData(false, true, 0)]
+    [InlineData(false, true, 1)]
+    [InlineData(true, false, -1)]
+    [InlineData(true, false, 0)]
+    [InlineData(true, false, 1)]
+    [InlineData(true, true, -1)]
+    [InlineData(true, true, 0)]
+    [InlineData(true, true, 1)]
+    public async Task OwnerRecoveryReclaimRequiresLeaseLifetimePlusMargin(
+        bool provider,
+        bool expiredFound,
+        int boundaryTicks
+    )
+    {
+        for (var iteration = 0; iteration < 100; iteration++)
+        {
+            var time = new ControllableTimeProvider();
+            IZLinkLocationRepository store = provider
+                ? new ZLinkProviderLocationRepository(new ZLinkInMemoryProviderLocationStore(time))
+                : new ZLinkInMemoryLocationStore(time);
+            var observed = new OutageLeaseStore(store);
+            var options = new ZLinkLocationOptions { StoreOutageRetention = true };
+            await using var runtime = new ZLinkLocationRuntime(options, observed, time);
+            Assert.True(await runtime.RenewOwnerLeaseOnceAsync());
+            var original = runtime.OwnerToken;
+            observed.Fail = true;
+            Assert.False(await runtime.RenewOwnerLeaseOnceAsync());
+            Assert.NotNull(runtime.GetHealthSnapshot().StoreOutage);
+            time.Advance(
+                options.OwnerLeaseTtl
+                    + options.OwnerLeaseFencingMargin
+                    + TimeSpan.FromTicks(boundaryTicks)
+            );
+            observed.Fail = false;
+            // Exact-read timestamps belong to the Store, independently of the host UTC clock.
+            var storeNow = time.GetUtcNow().AddYears(1);
+            observed.OwnerLeaseRead = expiredFound
+                ? new ZLinkOwnerLeaseReadResult.Found(original, storeNow, storeNow)
+                : new ZLinkOwnerLeaseReadResult.Missing();
+
+            Assert.Equal(boundaryTicks >= 0, await runtime.RenewOwnerLeaseOnceAsync());
+            Assert.Equal(boundaryTicks >= 0 ? 2 : 1, observed.Claims);
+            Assert.Equal(original.OwnerId, runtime.OwnerToken.OwnerId);
+            if (boundaryTicks >= 0)
+            {
+                Assert.True(runtime.OwnerToken.LeaseGeneration > original.LeaseGeneration);
+                Assert.True(runtime.IsOwnerAdmissionOpen);
+            }
+            else
+            {
+                Assert.Equal(original, runtime.OwnerToken);
+                Assert.False(runtime.IsOwnerAdmissionOpen);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(false, -1)]
+    [InlineData(false, 0)]
+    [InlineData(false, 1)]
+    [InlineData(true, -1)]
+    [InlineData(true, 0)]
+    [InlineData(true, 1)]
+    public async Task OwnerRecoveryDifferentTokenLosesOwnershipWithoutClaim(
+        bool provider,
+        int boundaryTicks
+    )
+    {
+        for (var iteration = 0; iteration < 100; iteration++)
+        {
+            var time = new ControllableTimeProvider();
+            IZLinkLocationRepository store = provider
+                ? new ZLinkProviderLocationRepository(new ZLinkInMemoryProviderLocationStore(time))
+                : new ZLinkInMemoryLocationStore(time);
+            var observed = new OutageLeaseStore(store);
+            var options = new ZLinkLocationOptions { StoreOutageRetention = true };
+            await using var runtime = new ZLinkLocationRuntime(options, observed, time);
+            Assert.True(await runtime.RenewOwnerLeaseOnceAsync());
+            var original = runtime.OwnerToken;
+            observed.Fail = true;
+            Assert.False(await runtime.RenewOwnerLeaseOnceAsync());
+            time.Advance(
+                options.OwnerLeaseTtl
+                    + options.OwnerLeaseFencingMargin
+                    + TimeSpan.FromTicks(boundaryTicks)
+            );
+            var replacement = await store.ClaimLiveOwnerAsync(
+                original.OwnerId,
+                options.OwnerLeaseTtl
+            );
+            Assert.NotEqual(original, replacement);
+            observed.Fail = false;
+
+            Assert.False(await runtime.RenewOwnerLeaseOnceAsync());
+            Assert.Equal(1, observed.Claims);
+            Assert.True(runtime.GetHealthSnapshot().StoreOutage!.Discarded);
+            Assert.False(runtime.IsOwnerAdmissionOpen);
+            Assert.Equal(
+                replacement,
+                Assert
+                    .IsType<ZLinkOwnerLeaseReadResult.Found>(
+                        await store.ReadOwnerLeaseAsync(original.OwnerId)
+                    )
+                    .Token
+            );
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OwnerRecoveryOutsideEpisodeClaimsExpiredLeaseWithoutMargin(bool provider)
+    {
+        for (var iteration = 0; iteration < 100; iteration++)
+        {
+            var time = new ControllableTimeProvider();
+            IZLinkLocationRepository store = provider
+                ? new ZLinkProviderLocationRepository(new ZLinkInMemoryProviderLocationStore(time))
+                : new ZLinkInMemoryLocationStore(time);
+            var observed = new OutageLeaseStore(store);
+            var options = new ZLinkLocationOptions();
+            await using var runtime = new ZLinkLocationRuntime(options, observed, time);
+            var original = await store.ClaimLiveOwnerAsync(runtime.OwnerId, options.OwnerLeaseTtl);
+            time.Advance(options.OwnerLeaseTtl);
+
+            Assert.True(await runtime.RenewOwnerLeaseOnceAsync());
+            Assert.Equal(1, observed.Claims);
+            Assert.Equal(original.OwnerId, runtime.OwnerToken.OwnerId);
+            Assert.True(runtime.OwnerToken.LeaseGeneration > original.LeaseGeneration);
+            Assert.True(runtime.IsOwnerAdmissionOpen);
+            Assert.Null(runtime.GetHealthSnapshot().StoreOutage);
+        }
     }
 
     [Theory]
@@ -1639,6 +1780,8 @@ public sealed class LocationRuntimeTests
         internal bool HoldRead;
         internal bool FailRead;
         internal bool MissingRead;
+        internal ZLinkOwnerLeaseReadResult? OwnerLeaseRead;
+        internal int Claims;
         internal TaskCompletionSource ReadStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource ReleaseRead { get; } =
@@ -1662,6 +1805,8 @@ public sealed class LocationRuntimeTests
                 throw new InvalidOperationException("Provider read failed");
             if (MissingRead)
                 return new ZLinkOwnerLeaseReadResult.Missing();
+            if (OwnerLeaseRead is { } exact)
+                return exact;
             return await inner.ReadOwnerLeaseAsync(ownerId, cancellationToken);
         }
 
@@ -1676,6 +1821,7 @@ public sealed class LocationRuntimeTests
             CancellationToken cancellationToken = default
         )
         {
+            Claims++;
             if (ConflictClaim)
                 return new ZLinkOwnerLeaseClaimResult.Conflict();
             var result = await inner.ClaimOwnerLeaseAsync(ownerId, leaseTtl, cancellationToken);
