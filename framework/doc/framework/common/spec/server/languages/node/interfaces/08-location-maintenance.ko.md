@@ -272,7 +272,46 @@ layout, Lua script, private record encoding, retry와 connection lease는 implem
 Store는 같은 Redis deployment와 client를 공유하거나 물리적으로 분리할 수 있다. 같은 deployment를
 사용해도 서로 다른 `keyPrefix`를 사용하며 cross-store transaction은 요구하지 않는다.
 
-## 5. 공개하지 않는 타입
+## 5. etcd extension
+
+```ts
+export interface ZLinkEtcdClientIdentity {
+ readonly certificatePem: string;
+ readonly keyPem: string;
+}
+
+export interface ZLinkEtcdTlsOptions {
+ readonly trustedCaPem?: string;
+ readonly clientIdentity?: ZLinkEtcdClientIdentity;
+}
+
+export interface ZLinkEtcdCredentials {
+ readonly user: string;
+ readonly password: string;
+}
+
+export interface ZLinkEtcdLocationOptions {
+ readonly endpoints: readonly string[];
+ readonly tls?: ZLinkEtcdTlsOptions;
+ readonly credentials?: ZLinkEtcdCredentials;
+ readonly namespace: string;
+ readonly operationTimeoutMs?: number;    // 기본 5000
+}
+
+export class ZLinkEtcdLocationStore implements ZLinkLocationStore {
+ constructor(options: ZLinkEtcdLocationOptions);
+ dispose(): Promise<void>;
+}
+```
+
+이 선언은 `@zlink-systems/framework-locations-etcd` package root가 내보낸다. 공개하는 provider 표면은
+options와 Location Store 구현 class 하나이며 Relocation Store는 제공하지 않는다. 각 option의 뜻과 조건은
+[공통 option](../../../05-location-relocation/07-location-store-etcd.ko.md#11-공개-option)이 정하고, constructor는 그 조건에 어긋나면 etcd에 접속하기 전에
+`TypeError` 또는 `RangeError`를 던진다. 같은 package가 Store 관리 도구 명령을 제공하며 그 형태는
+[공통 스펙 §4.4](../../../05-location-relocation/07-location-store-etcd.ko.md#44-store-관리-도구-명령)가 정한다. 관리 도구의 갱신 engine은 package
+root에서 내보내지 않는다. 나머지 동작은 [공식 etcd Location Store provider](../../../05-location-relocation/07-location-store-etcd.ko.md)가 소유한다.
+
+## 6. 공개하지 않는 타입
 
 다음 타입과 operation은 Framework private record 또는 Redis implementation detail이다.
 

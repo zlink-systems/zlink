@@ -57,6 +57,8 @@ export function protoDefinition(): loader.PackageDefinition {
 export interface Operation {
   readonly deadline: Date;
   readonly signal?: AbortSignal;
+  /** An abort also cancels the RPC already sent; otherwise it only stops new RPCs (§4.4). */
+  readonly cancelsSent?: boolean;
 }
 export interface KeyValue {
   key: Buffer;
@@ -73,6 +75,9 @@ export interface RangeResponse {
 export interface TxnResponse {
   succeeded: boolean;
   header: { revision: string; cluster_id: string };
+}
+export interface ReadTxnResponse extends TxnResponse {
+  responses: { response_range: RangeResponse }[];
 }
 type Services = Record<'KV' | 'Auth', grpc.ServiceClientConstructor>;
 
@@ -112,12 +117,13 @@ export class EtcdClient {
     }));
   }
 
-  operation(signal?: AbortSignal): Operation {
+  operation(signal?: AbortSignal, cancelsSent = false): Operation {
     return {
       deadline: new Date(
         Date.now() + (this.options.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS)
       ),
-      signal
+      signal,
+      cancelsSent
     };
   }
 
@@ -173,7 +179,8 @@ export class EtcdClient {
     const metadata = new grpc.Metadata();
     if (authenticated && this.token !== undefined) metadata.set('token', this.token);
     return new Promise((accept, reject) => {
-      this.clients[index][service].makeUnaryRequest(
+      const cancel = () => call.cancel();
+      const call = this.clients[index][service].makeUnaryRequest(
         descriptor.path,
         descriptor.requestSerialize,
         descriptor.responseDeserialize,
@@ -181,6 +188,11 @@ export class EtcdClient {
         metadata,
         { deadline: operation.deadline },
         (error: grpc.ServiceError | null, response: T | undefined) => {
+          operation.signal?.removeEventListener('abort', cancel);
+          if (operation.signal?.aborted === true) {
+            reject(new Error('Store operation stopped'));
+            return;
+          }
           if (error !== null) {
             if (
               (error.code === grpc.status.UNAVAILABLE ||
@@ -200,6 +212,10 @@ export class EtcdClient {
           else accept(response);
         }
       );
+      if (operation.cancelsSent === true) {
+        operation.signal?.addEventListener('abort', cancel, { once: true });
+        if (operation.signal?.aborted === true) cancel();
+      }
     });
   }
 

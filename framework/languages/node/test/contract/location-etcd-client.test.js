@@ -175,6 +175,15 @@ for (const stage of ['initial authentication', 'authentication rejection']) {
     async () => {
       let authCalls = 0;
       let writes = 0;
+      let cancelled = false;
+      let held = false;
+      // Count a cancellation only while the call is held; grpc-js also emits it when a finished call closes.
+      const watch = (call) => {
+        held = true;
+        call.on('cancelled', () => {
+          if (held) cancelled = true;
+        });
+      };
       let release;
       let entered;
       const waiting = new Promise((resolve) => {
@@ -182,19 +191,26 @@ for (const stage of ['initial authentication', 'authentication rejection']) {
       });
       const server = new grpc.Server();
       server.addService(definitions.Auth.service, {
-        authenticate(_call, callback) {
+        authenticate(call, callback) {
           authCalls++;
           if (stage === 'initial authentication') {
-            release = () => callback(null, { token: 'token' });
+            watch(call);
+            release = () => {
+              held = false;
+              callback(null, { token: 'token' });
+            };
             entered();
           } else callback(null, { token: 'token' });
         }
       });
       server.addService(definitions.KV.service, {
-        txn(_call, callback) {
+        txn(call, callback) {
           writes++;
-          release = () =>
+          watch(call);
+          release = () => {
+            held = false;
             callback({ code: grpc.status.UNAUTHENTICATED, details: 'invalid auth token' });
+          };
           entered();
         }
       });
@@ -207,10 +223,19 @@ for (const stage of ['initial authentication', 'authentication rejection']) {
       const stop = new AbortController();
       try {
         const response = client.rpc('KV', 'txn', {}, client.operation(stop.signal));
+        let settled = false;
+        response.then(
+          () => (settled = true),
+          () => (settled = true)
+        );
         await waiting;
         stop.abort();
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        assert.equal(settled, false, 'stop waits for the sent response');
+        assert.equal(cancelled, false, 'stop does not cancel the sent RPC');
         release();
         await assert.rejects(response, /Store operation stopped/);
+        assert.equal(cancelled, false);
         assert.equal(authCalls, 1);
         assert.equal(writes, stage === 'initial authentication' ? 0 : 1);
       } finally {
