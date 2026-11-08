@@ -12,14 +12,22 @@ const {
   ZLinkDispatchErrorReporter
 } = require('../../packages/framework/dist/runtime/channels/dispatch-error-reporter');
 const {
-  encodeChannelEnvelopeParts
-} = require('../../packages/framework/dist/runtime/channels/channel-envelope');
-const {
   ZLinkBufferMessage
 } = require('../../packages/framework/dist/runtime/backend/runtime-message');
 const {
   ZLinkSpotActorPacketDrain
 } = require('../../packages/framework/dist/runtime/spots/spot-actor-packet-drain');
+const {
+  encodeChannelEnvelopeParts
+} = require('../../packages/framework/dist/runtime/channels/channel-envelope');
+const serviceWire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
+const {
+  SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
+  SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME
+} = require('../../packages/framework/dist/runtime/foundation/service-wire-constants.generated');
+const { ReadyDomain } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
+const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+const { fixture } = require('./fixtures/raw-mesh-close');
 const {
   ApplicationJobQueue,
   resolveApplicationJobQueueConfiguration
@@ -116,6 +124,93 @@ test('remote channel receipt keeps the injected time while waiting in the dispat
     assert.equal(clockCalls, 1);
   } finally {
     await loop.stop();
+  }
+});
+
+test('mailbox receive time reaches send and request handlers after queued delay', async () => {
+  const f = fixture();
+  try {
+    for (const kind of ['send', 'request']) {
+      const envelopeKind = kind === 'send' ? 3 : 1;
+      const channelParts = encodeChannelEnvelopeParts(
+        envelopeKind,
+        'orders',
+        'Notice',
+        { value: kind },
+        undefined,
+        undefined,
+        undefined,
+        kind === 'request' ? 'a'.repeat(32) : undefined,
+        false
+      );
+      const frame = serviceWire.encodeMultipartApplicationPayload(
+        channelParts.map(part => typeof part === 'string' ? Buffer.from(part) : part),
+        SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
+        SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE
+      );
+      const mailboxRecord = {
+        owner: 'channel:orders',
+        domain: 'application',
+        parts: [
+          kind === 'send'
+            ? serviceWire.encodeChannelSendHeader('orders')
+            : serviceWire.encodeChannelRequestHeader(1n, 'orders'),
+          frame
+        ],
+        sourceRoutingId: 'peer-a',
+        ...(kind === 'request' ? { correlation: 1n } : {})
+      };
+      assert.equal(f.runtime.mailbox.tryEnqueue(mailboxRecord), true);
+      const acceptedAt = mailboxRecord.receivedAt;
+      assert.ok(acceptedAt instanceof Date);
+
+      // Keep the admitted record in the mailbox while the clock advances.
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const laterAt = new Date(acceptedAt.getTime() + 60_000);
+      let dispatcherClockCalls = 0;
+      let handlerReceivedAt;
+      const dispatcher = new ZLinkRoutePacketDispatcher({
+        routerChannelId: 'orders',
+        receivedAtClock() {
+          dispatcherClockCalls += 1;
+          return laterAt;
+        },
+        dispatchErrors: new ZLinkDispatchErrorReporter(),
+        handlers: [{
+          kind,
+          packetName: 'Notice',
+          handler: {
+            async handle(_payload, context) {
+              handlerReceivedAt = context.receivedAt;
+              return {};
+            }
+          }
+        }]
+      });
+
+      const ready = f.backend.createReadyBatch(1);
+      f.backend.drainReady(ReadyDomain.Application, ready);
+      const claim = ready.takeClaim(0);
+      let record;
+      try {
+        record = claim.recvBatch(f.backend.createReceiveBatch(1, 4)).records[0];
+      } finally {
+        claim.release();
+        ready.close();
+      }
+      assert.ok(record);
+      if (kind === 'request') record.reply = () => SubmitResult.Ok;
+      try {
+        await dispatcher.dispatchMesh(record);
+        assert.equal(record.receivedAt.getTime(), acceptedAt.getTime());
+        assert.equal(handlerReceivedAt.getTime(), acceptedAt.getTime());
+        assert.equal(dispatcherClockCalls, 0);
+      } finally {
+        record.parts.forEach(part => part.close());
+      }
+    }
+  } finally {
+    await f.backend.close();
   }
 });
 
