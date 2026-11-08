@@ -1210,6 +1210,79 @@ bool serial_execution_queue_t::fence_execution ()
     return true;
 }
 
+void serial_execution_queue_t::set_execution_operation (task_t<execution_operation_t> operation)
+{
+    auto *policy = _execution_policy.load (std::memory_order_acquire);
+    if (!policy)
+        return;
+    auto pending = std::make_shared<task_t<execution_operation_t>> (std::move (operation));
+    {
+        std::lock_guard lock (policy->ready_mutex);
+        if (policy->ready_at.load (std::memory_order_acquire)
+            == std::chrono::steady_clock::time_point::min ().time_since_epoch ().count ())
+            return;
+        policy->operation = pending;
+        policy->ready_at.store (execution_policy_t::verifying, std::memory_order_release);
+    }
+    detail::observe_task_terminal (
+      *pending, [weak = weak_from_this (), policy, expected = std::weak_ptr{pending}] (
+                  const result_t<execution_operation_t> &result) {
+          if (auto queue = weak.lock ()) {
+              {
+                  std::lock_guard lock (policy->ready_mutex);
+                  const auto pending = expected.lock ();
+                  if (!pending || policy->operation != pending)
+                      return;
+                  const auto at =
+                    result && result.value ().first == execution_status_t::allowed
+                      ? result.value ().second.time_since_epoch ().count ()
+                    : result && result.value ().first == execution_status_t::ownership_lost
+                      ? execution_policy_t::lost
+                      : execution_policy_t::failed;
+                  policy->ready_at.store (at, std::memory_order_release);
+                  policy->operation.reset ();
+              }
+              std::vector<std::weak_ptr<serial_execution_queue_t>> children;
+              {
+                  std::lock_guard lock (queue->_mutex);
+                  children = queue->_execution_children;
+              }
+              queue->execution_operation_changed ();
+              for (const auto &weak_child : children)
+                  if (auto child = weak_child.lock ())
+                      child->execution_operation_changed ();
+          }
+      });
+}
+
+std::optional<task_t<serial_execution_queue_t::execution_operation_t>>
+serial_execution_queue_t::pending_execution_operation () const
+{
+    auto *policy = _execution_policy.load (std::memory_order_acquire);
+    if (!policy)
+        return std::nullopt;
+    std::lock_guard lock (policy->ready_mutex);
+    return policy->operation
+             ? std::make_optional (detail::project_task_terminal<execution_operation_t> (
+                 *policy->operation,
+                 [] (const result_t<execution_operation_t> &result) { return result; }))
+             : std::nullopt;
+}
+
+void serial_execution_queue_t::execution_operation_changed ()
+{
+    if (execution_status () == execution_status_t::ownership_lost) {
+        cancel_pending (execution_status_t::ownership_lost);
+        return;
+    }
+    notify_control ("location-recovery", [this] {
+        std::unique_lock lock (_mutex, std::defer_lock);
+        if (!owns_shared_gate ())
+            lock.lock ();
+        (void) schedule_drain_locked ();
+    });
+}
+
 serial_execution_queue_t::ready_confirmation_t serial_execution_queue_t::ready_confirmation () const
 {
     auto *entry = _execution_policy.load (std::memory_order_acquire);
@@ -1237,12 +1310,13 @@ void serial_execution_queue_t::confirm_execution_ready (std::chrono::steady_cloc
 void serial_execution_queue_t::invalidate_execution_ready ()
 {
     auto *policy = _execution_policy.load (std::memory_order_acquire);
-    if (!policy || !execution_allowed ())
+    if (!policy || policy->admit (*this) != execution_status_t::allowed)
         return;
     // A late confirmation cannot publish Ready into a later incarnation. The
     // writer mutex orders invalidation with confirmation without turn-path RMWs.
     std::lock_guard lock (policy->ready_mutex);
     policy->incarnation = std::make_shared<const unsigned char> (0);
+    policy->operation.reset ();
     policy->ready_at.store (
       std::chrono::steady_clock::time_point::min ().time_since_epoch ().count (),
       std::memory_order_release);
@@ -1266,7 +1340,7 @@ serial_execution_queue_t::execution_status_t serial_execution_queue_t::execution
     if (terminal != execution_status_t::allowed)
         return terminal;
     const auto *policy = _execution_policy.load (std::memory_order_acquire);
-    const auto local = policy ? policy->admit (*this) : execution_status_t::allowed;
+    const auto local = policy ? policy->status (*this) : execution_status_t::allowed;
     if (local == execution_status_t::ownership_lost)
         return local;
     if (_spot_gate) {
@@ -1280,7 +1354,7 @@ serial_execution_queue_t::execution_status_t serial_execution_queue_t::execution
 bool serial_execution_queue_t::execution_allowed () const
 {
     const auto *policy = _execution_policy.load (std::memory_order_acquire);
-    return !policy || policy->admit (*this) == execution_status_t::allowed;
+    return !policy || policy->status (*this) == execution_status_t::allowed;
 }
 
 void serial_execution_queue_t::attach_spot_gate (std::shared_ptr<serial_execution_queue_t> gate)
@@ -1292,6 +1366,12 @@ void serial_execution_queue_t::attach_spot_gate (std::shared_ptr<serial_executio
         throw std::logic_error ("Actor mailbox must be attached before admission");
     if (gate->_lane_policy.allows_turn_yield ())
         _publication_cursor = _publication_tail = new publication_node_t ();
+    {
+        std::lock_guard parent_lock (gate->_mutex);
+        std::erase_if (gate->_execution_children,
+                       [] (const auto &child) { return child.expired (); });
+        gate->_execution_children.push_back (weak_from_this ());
+    }
     _spot_gate = std::move (gate);
 }
 

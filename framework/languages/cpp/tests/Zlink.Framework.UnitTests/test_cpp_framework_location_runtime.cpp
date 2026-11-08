@@ -4,6 +4,7 @@
 
 #include "../support/runtime_metric_contract.hpp"
 #include "../support/manual_deadlines.hpp"
+#include "../support/allocation_counter.hpp"
 #include "../support/manual_internal_scheduler.hpp"
 
 #include "runtime/diagnostics/monitoring_runtime.hpp"
@@ -13,6 +14,7 @@
 #include "runtime/utils/available_processor_count.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/location_runtime.hpp"
+#include "runtime/stateful/public_store_adapters.hpp"
 #include "runtime/locations/location_auto_connect_host_service.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "runtime/spots/spot_runtime.hpp"
@@ -34,6 +36,24 @@
 #include <latch>
 #include <stop_token>
 #include <thread>
+
+namespace zlink::framework::detail
+{
+struct spot_node_runtime_test_access_t
+{
+    static task_t<void> commit_membership (spot_node_runtime_t &owner,
+                                           spot_context_t &context,
+                                           const actor_ref_t &actor)
+    {
+        bool committed = false;
+        spot_actor_admission_callbacks_t callbacks;
+        co_await owner.commit_accepted_actor_join ("player:early", context, actor, typeid (int),
+                                                   nullptr, callbacks, false, {}, {}, committed,
+                                                   {});
+        EXPECT_TRUE (committed);
+    }
+};
+}
 
 namespace zlink::framework::runtime
 {
@@ -60,6 +80,25 @@ struct fanout_location_runtime_test_access_t
     }
 };
 } // namespace fanout
+
+namespace host
+{
+struct public_host_runtime_test_access_t
+{
+    template <class Host, class Publication>
+    static task_t<stateful::stateful_error_t> adopt (Host &host, const Publication &published)
+    {
+        if constexpr (requires {
+                          host.advance_local_actor_authority (published.current->target,
+                                                              published.current->ready);
+                      })
+            return host.advance_local_actor_authority (published.current->target,
+                                                       published.current->ready);
+        else
+            return host.advance_local_actor_authority (published.current->target);
+    }
+};
+}
 
 struct state_lane_test_access_t
 {
@@ -3444,11 +3483,27 @@ class outage_provider_t final : public location_store_t
     bool fail = false;
     std::atomic_int forbidden_calls{0};
     bool forbid_io = false;
+    std::string held_authority;
+    std::string failed_authority;
+    task_completion_source_t<void> authority_entered;
+    task_completion_source_t<void> authority_release;
+    unsigned authority_reads = 0;
     bool fail_next_read = false;
     bool hold_read = false;
     task_completion_source_t<void> resume;
     task_t<store_read_result_t> read (store_key_t key) override
     {
+        if (key.value.starts_with (std::string_view ("authority\0", 10)))
+            ++authority_reads;
+        if (!failed_authority.empty () && key.value == failed_authority)
+            return decltype (read (key)) (result_t<store_read_result_t>::failure (
+              framework_error_kind_t::unavailable, "injected exact read error"));
+        if (!held_authority.empty () && key.value == held_authority) {
+            auto terminal = continue_task<store_read_result_t> (
+              authority_release.task (), [this, key] { return inner.read (key); });
+            authority_entered.complete (result_t<void>::success ());
+            return terminal;
+        }
         if (key.value.starts_with ("owner-lease") && !injected_owner_reads.empty ()) {
             auto read = std::move (injected_owner_reads.front ());
             injected_owner_reads.erase (injected_owner_reads.begin ());
@@ -3492,6 +3547,11 @@ class outage_memory_t final : public in_memory_location_repository_t
     bool fail = false;
     std::atomic_int forbidden_calls{0};
     bool forbid_io = false;
+    std::string held_authority;
+    std::string failed_authority;
+    task_completion_source_t<void> authority_entered;
+    task_completion_source_t<void> authority_release;
+    unsigned authority_reads = 0;
     bool fail_renew = false;
     bool hold_read = false;
     bool hold_renew = false;
@@ -3504,6 +3564,18 @@ class outage_memory_t final : public in_memory_location_repository_t
             ++forbidden_calls;
             return task_t<authority_read_result_t> (result_t<authority_read_result_t>::failure (
               framework_error_kind_t::internal_failure, "injected outage authority read"));
+        }
+        ++authority_reads;
+        if (!failed_authority.empty () && key.value == failed_authority)
+            return task_t<authority_read_result_t> (result_t<authority_read_result_t>::failure (
+              framework_error_kind_t::unavailable, "injected exact read error"));
+        if (!held_authority.empty () && key.value == held_authority) {
+            auto terminal = continue_task<authority_read_result_t> (
+              authority_release.task (), [this, key, cancellation] {
+                  return in_memory_location_repository_t::read_authority_core (key, cancellation);
+              });
+            authority_entered.complete (result_t<void>::success ());
+            return terminal;
         }
         return in_memory_location_repository_t::read_authority_core (std::move (key), cancellation);
     }
@@ -3605,6 +3677,15 @@ class outage_memory_t final : public in_memory_location_repository_t
         return in_memory_location_repository_t::read_owner_lease (std::move (owner));
     }
 };
+
+template <class Result>
+std::optional<authority_snapshot_t> completion_ready_snapshot (const Result &result)
+{
+    if constexpr (requires { result.ready; })
+        return result.ready;
+    else
+        return std::nullopt;
+}
 
 class StoreOutageRetention : public ::testing::TestWithParam<bool>
 {
@@ -4604,6 +4685,7 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
           return owner.prepare_store_ready (std::move (object));
       },
       runtime.bound_execution_owner ());
+    std::map<std::string, authority_snapshot_t> ready_snapshots;
     const auto commit = [&] (placement_object_kind_t kind, std::string id, std::string type) {
         object_reserve_request_t request;
         request.key = {kind, id};
@@ -4663,15 +4745,465 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
                                             descriptor.mesh_name,
                                             descriptor.rid.to_string ()};
         auto confirm = native->prepare_store_ready (object).result ().value ();
+        if ((loss == -22 || loss == -23) && id == "early") {
+            const auto lease = std::get<owner_lease_found_t> (
+              store ().read_owner_lease (token.owner_id).result ().value ());
+            creation_terminal_publication_t publication{
+              {context->node_rid, 1, {18, 27}}, {std::byte{7}}, lease.store_now + 1h};
+            object_complete_creation_request_t completion{
+              request.key, reservation->fence,
+              object_creation_completed_t{ready_payload, publication}};
+            const auto completed = store ().complete_creation (completion).result ().value ();
+            EXPECT_TRUE (std::holds_alternative<object_creation_completed_result_t> (completed));
+            const auto replay = store ().complete_creation (completion).result ().value ();
+            EXPECT_TRUE (
+              std::holds_alternative<object_creation_already_completed_result_t> (replay));
+            const auto snapshot = std::visit (
+              [] (const auto &value) { return completion_ready_snapshot (value); }, replay);
+            EXPECT_TRUE (snapshot);
+            if (snapshot)
+                ready_snapshots[id] = *snapshot;
+            if (confirm)
+                confirm (snapshot).result ().value ();
+            return;
+        }
         const auto committed =
           store ().commit ({request.key, reservation->fence, ready_payload}).result ().value ();
         const auto *ready = std::get_if<object_committed_t> (&committed);
         EXPECT_NE (nullptr, ready);
-        if (ready && confirm)
-            confirm ();
+        if (ready) {
+            ready_snapshots[id] = ready->ready;
+            if (confirm)
+                confirm (ready->ready).result ().value ();
+        }
     };
     commit (placement_object_kind_t::user_spot, "registered-spot", "room");
     commit (placement_object_kind_t::actor, "early", "player");
+    if (loss == -24 || loss == -25) {
+        commit (placement_object_kind_t::actor, "late", "player");
+        commit (placement_object_kind_t::user_spot, "next-spot", "room");
+        node->snapshot.routing_id = descriptor.rid;
+        service_collection_t services;
+        services.add_factory<location_repository_t> (
+          [&] (service_provider_t &) {
+              return std::shared_ptr<location_repository_t> (&store (), [] (auto *) {});
+          },
+          service_lifetime_t::singleton);
+        node->root_services = services.build_provider ();
+        auto next = std::make_shared<detail::spot_context_state_t> ();
+        next->node = node;
+        next->lane_owner = node;
+        next->serial_executor = scheduler;
+        next->spot_id = spot_id_t ("next-spot");
+        next->spot_name = "room";
+        next->mesh_name = descriptor.mesh_name;
+        next->node_rid = context->node_rid;
+        next->object_generation = ready_snapshots.at ("next-spot").object_generation;
+        next->authority_owner_generation =
+          ready_snapshots.at ("next-spot").authority_owner_generation;
+        next->spot_instance = std::make_shared<int> (1);
+        next->lifecycle_domain = detail::spot_lifecycle_domain_t::user ();
+        node->spot_contexts_by_id.emplace ("next-spot",
+                                           detail::spot_context_access_t::create (next));
+        node->mesh_runtime_owned_native_actor_ids.insert ("early");
+        const auto actor = detail::actor_ref_access_t::make (
+          context->node_rid, "player", "early",
+          native->objects ().find (stateful::object_kind_t::actor, "early")->object_generation);
+        actor_location_t location;
+        location.mesh_name = descriptor.mesh_name;
+        location.actor_id = "early";
+        location.actor_ref = actor;
+        EXPECT_EQ (location_write_status_t::stored, lifecycle.claim_actor (location).status);
+        const auto before = ready_snapshots.at ("early").store_version;
+        detail::spot_node_runtime_test_access_t::commit_membership (
+          owner, node->spot_contexts_by_id.at ("next-spot"), actor)
+          .result ()
+          .value ();
+        const auto changed = std::get<authority_snapshot_t> (
+          store ().read_authority (actor_authority_key ("early")).result ().value ());
+        EXPECT_NE (before, changed.store_version);
+        EXPECT_EQ ("next-spot",
+                   decode_direct_actor_authority_payload (changed.payload)->current_spot_id);
+        runtime
+          .on_execution_discard (
+            [] (auto) {}, {},
+            [native] (location_runtime_t::execution_recovery_t recover, monotonic_time observed) {
+                return native->objects ().recover_location_execution (std::move (recover),
+                                                                      observed);
+            })
+          .result ()
+          .value ();
+        auto gate =
+          native->objects ()
+            .execution_gate (*native->objects ().find (stateful::object_kind_t::actor, "early"))
+            .result ()
+            .value ();
+        ASSERT_TRUE (gate);
+        scheduler->run_all ();
+        advance (5s);
+        lease_access::communication_failure (runtime);
+        advance (1s);
+        if (loss == -25) {
+            const auto superseding = store ()
+                                       .compare_exchange_authority_core (
+                                         actor_authority_key ("early"), changed.store_version,
+                                         authority_put_t{changed.payload})
+                                       .result ()
+                                       .value ();
+            ASSERT_TRUE (std::holds_alternative<authority_stored_t> (superseding));
+        }
+        lease_access::heartbeat (runtime, clock_now.load ());
+        lease_access::lane (runtime).run_sync ([] {});
+        EXPECT_EQ (loss == -24 ? serial_execution_queue_t::execution_status_t::allowed
+                               : serial_execution_queue_t::execution_status_t::ownership_lost,
+                   gate->execution_status ());
+        gate->cancel_pending ();
+        context->ensure_spot_serial_executor ()->close ();
+        next->ensure_spot_serial_executor ()->close ();
+        scheduler->run_all ();
+        context->node.reset ();
+        next->node.reset ();
+        node->spot_contexts_by_id.clear ();
+        return;
+    }
+    if (loss == -20 || loss == -21 || loss == -22 || loss == -23) {
+        commit (placement_object_kind_t::actor, "late", "player");
+        auto executor = context->ensure_spot_serial_executor ();
+        auto early = executor->actor_executor ("player:early")->queue ();
+        auto late = executor->actor_executor ("player:late")->queue ();
+        if (loss == -20 || loss == -21) {
+            auto source = *native->objects ().find (stateful::object_kind_t::actor, "early");
+            auto target = source;
+            stateful::public_authority_store_adapter_t adapter (store ());
+            const auto snapshot = ready_snapshots.at ("early");
+            const auto published =
+              adapter.publish (source, target, token, snapshot.allocation.target, "adopted", 7, {},
+                               snapshot.payload);
+            ASSERT_EQ (stateful::authority_publish_status_t::published, published.status);
+            ASSERT_TRUE (published.current);
+            EXPECT_EQ (stateful::stateful_error_t::none,
+                       host::public_host_runtime_test_access_t::adopt (*native, published)
+                         .result ()
+                         .value ());
+            const auto current =
+              store ().read_authority (actor_authority_key ("early")).result ().value ();
+            ready_snapshots["early"] = std::get<authority_snapshot_t> (current);
+        }
+        runtime
+          .on_execution_discard (
+            [] (auto) {}, {},
+            [native] (location_runtime_t::execution_recovery_t recover, monotonic_time observed) {
+                return native->objects ().recover_location_execution (std::move (recover),
+                                                                      observed);
+            })
+          .result ()
+          .value ();
+        scheduler->run_all ();
+        advance (5s);
+        lease_access::communication_failure (runtime);
+        advance (1s);
+        if (loss == -21 || loss == -23) {
+            const auto current =
+              store ().read_authority_core (actor_authority_key ("early")).result ().value ();
+            const auto snapshot = std::get<authority_snapshot_t> (current);
+            const auto changed = store ()
+                                   .compare_exchange_authority_core (
+                                     actor_authority_key ("early"), snapshot.store_version,
+                                     authority_put_t{snapshot.payload})
+                                   .result ()
+                                   .value ();
+            ASSERT_TRUE (std::holds_alternative<authority_stored_t> (changed));
+        }
+        provider.authority_reads = memory.authority_reads = 0;
+        int early_calls = 0, late_calls = 0;
+        task_completion_source_t<void> terminal;
+        serial_work_options_t work;
+        work.completion = [&] (result_t<void> result) { terminal.complete (result); };
+        EXPECT_TRUE (early->try_post (
+          "review-fence",
+          [&] {
+              ++early_calls;
+              terminal.complete (result_t<void>::success ());
+          },
+          work));
+        EXPECT_TRUE (late->try_post ("review-independent", [&] { ++late_calls; }));
+        lease_access::heartbeat (runtime, clock_now.load ());
+        lease_access::lane (runtime).run_sync ([] {});
+        auto terminal_task = terminal.task ();
+        scheduler->run_until (terminal_task);
+        scheduler->run_all ();
+        EXPECT_EQ (3u, GetParam () ? provider.authority_reads : memory.authority_reads);
+        const bool matches = loss == -20 || loss == -22;
+        EXPECT_EQ (matches, terminal.task ().result ().has_value ());
+        if (!matches && !terminal.task ().result ())
+            EXPECT_EQ (framework_error_kind_t::not_found, terminal.task ().result ().error_kind ());
+        EXPECT_EQ (matches ? 1 : 0, early_calls);
+        EXPECT_EQ (1, late_calls);
+        executor->close ();
+        scheduler->run_all ();
+        context->node.reset ();
+        node->spot_contexts_by_id.clear ();
+        return;
+    }
+    if (loss == -14 || loss == -15 || loss == -16) {
+        commit (placement_object_kind_t::actor, "late", "player");
+        runtime
+          .on_execution_discard (
+            [] (auto) {}, {},
+            [native] (location_runtime_t::execution_recovery_t recover, monotonic_time observed) {
+                return native->objects ().recover_location_execution (std::move (recover),
+                                                                      observed);
+            })
+          .result ()
+          .value ();
+        auto executor = context->ensure_spot_serial_executor ();
+        auto early = executor->actor_executor ("player:early")->queue ();
+        auto late = executor->actor_executor ("player:late")->queue ();
+        scheduler->run_all ();
+        advance (5s);
+        lease_access::communication_failure (runtime);
+        const auto episode = lease_access::snapshot (runtime)->outage;
+        advance (1s);
+        memory.held_authority = actor_authority_key ("early").value;
+        provider.held_authority = std::string ("authority\0actor\0early", 21);
+        if (loss == -16) {
+            memory.failed_authority = actor_authority_key ("late").value;
+            provider.failed_authority = std::string ("authority\0actor\0late", 20);
+        }
+        provider.authority_reads = memory.authority_reads = 0;
+        auto first = lease_access::heartbeat_async (runtime, clock_now.load ());
+        (GetParam () ? provider.authority_entered.task () : memory.authority_entered.task ())
+          .result ()
+          .value ();
+        // Drain the launch turn before observing any asynchronous result.
+        lease_access::lane (runtime).run_sync ([] {});
+        native->objects ()
+          .execution_gate (*native->objects ().find (stateful::object_kind_t::actor, "late"))
+          .result ()
+          .value ();
+        const bool first_completed = first.await_ready ();
+        const auto late_before = late->execution_status ();
+        EXPECT_EQ (episode, lease_access::snapshot (runtime)->outage);
+        advance (options.owner_lease_renew_interval);
+        memory.failed_authority.clear ();
+        provider.failed_authority.clear ();
+        auto second = lease_access::heartbeat_async (runtime, clock_now.load ());
+        lease_access::lane (runtime).run_sync ([] {});
+        native->objects ()
+          .execution_gate (*native->objects ().find (stateful::object_kind_t::actor, "late"))
+          .result ()
+          .value ();
+        const bool second_completed = second.await_ready ();
+        const auto reads = GetParam () ? provider.authority_reads : memory.authority_reads;
+        int calls = 0;
+        task_completion_source_t<void> terminal;
+        serial_work_options_t work;
+        work.completion = [&] (result_t<void> result) { terminal.complete (result); };
+        EXPECT_TRUE (early->try_post (
+          "held-review",
+          [&] {
+              ++calls;
+              terminal.complete (result_t<void>::success ());
+          },
+          work));
+        scheduler->run_all ();
+        EXPECT_EQ (0, calls);
+        bool cutoff_terminal = false, cutoff_released = false;
+        if (loss == -15) {
+            move_to (episode->cutoff);
+            detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+            lease_access::recovery_terminal (runtime, episode);
+            scheduler->run_all ();
+            cutoff_terminal = terminal.task ().await_ready ();
+            cutoff_released = !lease_access::snapshot (runtime)->outage;
+        }
+        provider.authority_release.complete (result_t<void>::success ());
+        memory.authority_release.complete (result_t<void>::success ());
+        first.result ().value ();
+        second.result ().value ();
+        lease_access::recovery_terminal (runtime, episode);
+        auto terminal_task = terminal.task ();
+        scheduler->run_until (terminal_task);
+        scheduler->run_all ();
+        EXPECT_TRUE (first_completed);
+        EXPECT_TRUE (second_completed);
+        EXPECT_EQ (loss == -16 ? 4u : 3u, reads);
+        EXPECT_EQ (loss == -16 ? serial_execution_queue_t::execution_status_t::stopped
+                               : serial_execution_queue_t::execution_status_t::allowed,
+                   late_before);
+        if (loss == -15) {
+            EXPECT_TRUE (cutoff_terminal);
+            EXPECT_TRUE (cutoff_released);
+            EXPECT_FALSE (terminal.task ().result ());
+            EXPECT_EQ (framework_error_kind_t::not_found, terminal.task ().result ().error_kind ());
+            EXPECT_EQ (0, calls);
+        } else {
+            EXPECT_TRUE (terminal.task ().result ());
+            EXPECT_EQ (1, calls);
+        }
+        EXPECT_FALSE (lease_access::snapshot (runtime)->outage);
+        executor->close ();
+        scheduler->run_all ();
+        context->node.reset ();
+        node->spot_contexts_by_id.clear ();
+        return;
+    }
+    if (loss == -13) {
+        unsigned recoveries = 0;
+        runtime
+          .on_execution_discard (
+            [] (auto) {}, {},
+            [&] (location_runtime_t::execution_recovery_t recover, monotonic_time observed_at) {
+                ++recoveries;
+                return native->objects ().recover_location_execution (std::move (recover),
+                                                                      observed_at);
+            })
+          .result ()
+          .value ();
+        auto executor = context->ensure_spot_serial_executor ();
+        auto gate = executor->actor_executor ("player:early")->queue ();
+        scheduler->run_all ();
+        advance (5s);
+        lease_access::communication_failure (runtime);
+        const auto episode = lease_access::snapshot (runtime)->outage;
+        store ().release_owner_lease (token).result ().value ();
+        move_to (lease_access::snapshot (runtime)->last_successful_lease->started_at
+                 + options.owner_lease_ttl + options.owner_lease_fencing_margin);
+        lease_access::heartbeat (runtime, clock_now.load ());
+        ASSERT_TRUE (lease_access::snapshot (runtime)->token);
+        EXPECT_NE (token.lease_generation,
+                   lease_access::snapshot (runtime)->token->lease_generation);
+        EXPECT_EQ (episode, lease_access::snapshot (runtime)->outage);
+        EXPECT_EQ (0u, recoveries);
+        EXPECT_EQ (serial_execution_queue_t::execution_status_t::allowed,
+                   gate->execution_status ());
+        const auto exact =
+          store ().read_authority (actor_authority_key ("early")).result ().value ();
+        EXPECT_EQ (token.lease_generation,
+                   std::get<authority_snapshot_t> (exact).owner.lease_generation);
+        int handlers = 0;
+        ASSERT_TRUE (gate->try_post ("unchanged-new-claim", [&] { ++handlers; }));
+        scheduler->run_all ();
+        EXPECT_EQ (1, handlers);
+        executor->close ();
+        scheduler->run_all ();
+        context->node.reset ();
+        node->spot_contexts_by_id.clear ();
+        return;
+    }
+    if (loss <= -10) {
+        commit (placement_object_kind_t::actor, "late", "player");
+        // Install recovery through the same owner registry used by the host.
+        runtime
+          .on_execution_discard ([] (auto) {}, {},
+                                 [native] (location_runtime_t::execution_recovery_t recover,
+                                           monotonic_time observed_at) {
+                                     return native->objects ().recover_location_execution (
+                                       std::move (recover), observed_at);
+                                 })
+          .result ()
+          .value ();
+        auto executor = context->ensure_spot_serial_executor ();
+        auto spot = executor->spot_queue ();
+        auto early = executor->actor_executor ("player:early")->queue ();
+        auto late = executor->actor_executor ("player:late")->queue ();
+        scheduler->run_all ();
+        const auto key = actor_authority_key ("early");
+        if (loss == -11) {
+            const auto removed =
+              store ()
+                .compare_exchange_authority (key, ready_snapshots.at ("early").store_version,
+                                             authority_delete_t{})
+                .result ()
+                .value ();
+            ASSERT_TRUE (std::holds_alternative<authority_deleted_t> (removed));
+        }
+        advance (5s);
+        lease_access::communication_failure (runtime);
+        const auto episode = lease_access::snapshot (runtime)->outage;
+        ASSERT_TRUE (episode);
+        advance (1s);
+        node->actor_types_by_id["new"] = "player";
+        node->actor_spot_ids["player:new"] = context->spot_id;
+        node->actor_generations["player:new"] = 1;
+        commit (placement_object_kind_t::actor, "new", "player");
+        auto fresh = executor->actor_executor ("player:new")->queue ();
+        const auto held = loss == -12 ? spot_authority_key ("registered-spot") : key;
+        memory.held_authority = held.value;
+        provider.held_authority = std::string ("authority\0", 10)
+                                  + (loss == -12 ? std::string ("spot\0registered-spot", 20)
+                                                 : std::string ("actor\0early", 11));
+        provider.authority_reads = memory.authority_reads = 0;
+        auto renewing = std::async (std::launch::async, [&] {
+            lease_access::heartbeat (runtime, clock_now.load ());
+            // Also release the observation boundary in the unfixed implementation.
+            provider.authority_entered.complete (result_t<void>::success ());
+            memory.authority_entered.complete (result_t<void>::success ());
+        });
+        (GetParam () ? provider.authority_entered.task () : memory.authority_entered.task ())
+          .result ()
+          .value ();
+        native->objects ()
+          .execution_gate (*native->objects ().find (stateful::object_kind_t::actor, "late"))
+          .result ()
+          .value ();
+        int early_calls = 0, late_calls = 0, spot_calls = 0, fresh_calls = 0;
+        task_completion_source_t<void> early_terminal;
+        serial_work_options_t early_work;
+        early_work.completion = [&] (result_t<void> result) {
+            early_terminal.complete (std::move (result));
+        };
+        EXPECT_TRUE (early->try_post (
+          "held-exact",
+          [&] {
+              ++early_calls;
+              early_terminal.complete (result_t<void>::success ());
+          },
+          early_work));
+        EXPECT_TRUE (late->try_post ("matching-exact", [&] { ++late_calls; }));
+        EXPECT_TRUE (spot->try_post ("spot-exact", [&] { ++spot_calls; }));
+        EXPECT_TRUE (fresh->try_post ("created-after-outage", [&] { ++fresh_calls; }));
+        scheduler->run_all ();
+        EXPECT_EQ (loss == -12 ? 0 : 1, fresh_calls);
+        EXPECT_EQ (0, early_calls);
+        const auto late_ready = late->execution_ready_at ();
+        EXPECT_TRUE (late_ready);
+        if (late_ready)
+            EXPECT_GE (*late_ready, episode->observed_at);
+        if (loss == -12) {
+            EXPECT_EQ (0, late_calls);
+            EXPECT_EQ (0, spot_calls);
+        } else {
+            EXPECT_EQ (1, late_calls);
+            EXPECT_EQ (1, spot_calls);
+        }
+        provider.authority_release.complete (result_t<void>::success ());
+        memory.authority_release.complete (result_t<void>::success ());
+        renewing.get ();
+        auto terminal = early_terminal.task ();
+        scheduler->run_until (terminal);
+        scheduler->run_all ();
+        if (loss == -11) {
+            EXPECT_FALSE (terminal.result ());
+            EXPECT_EQ (framework_error_kind_t::not_found, terminal.result ().error_kind ());
+        } else
+            EXPECT_TRUE (terminal.result ());
+        EXPECT_EQ (loss == -11 ? 0 : 1, early_calls);
+        EXPECT_EQ (1, late_calls);
+        EXPECT_EQ (1, spot_calls);
+        EXPECT_EQ (1, fresh_calls);
+        EXPECT_EQ (3u, GetParam () ? provider.authority_reads : memory.authority_reads);
+        EXPECT_EQ (loss == -11 ? serial_execution_queue_t::execution_status_t::ownership_lost
+                               : serial_execution_queue_t::execution_status_t::allowed,
+                   early->execution_status ());
+        EXPECT_EQ (serial_execution_queue_t::execution_status_t::allowed,
+                   late->execution_status ());
+        executor->close ();
+        scheduler->run_all ();
+        context->node.reset ();
+        node->spot_contexts_by_id.clear ();
+        return;
+    }
     if (loss == -3) {
         auto executor = context->ensure_spot_serial_executor ();
         auto gate = executor->actor_executor ("player:early")->queue ();
@@ -4926,7 +5458,7 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
             scheduler->run_all ();
             EXPECT_NE (0u, excluded->close_reservation);
             ASSERT_TRUE (late_confirmation);
-            late_confirmation ();
+            late_confirmation (std::nullopt).result ().value ();
         }
         if (std::string_view (id) == "source-spot" || std::string_view (id) == "target-spot") {
             const auto object = native->objects ().find (stateful::object_kind_t::user_spot, id);
@@ -4997,7 +5529,7 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
     ASSERT_TRUE (early_ref);
     auto replay_confirmation = native->prepare_store_ready (*early_ref).result ().value ();
     ASSERT_TRUE (replay_confirmation);
-    replay_confirmation ();
+    replay_confirmation (std::nullopt).result ().value ();
     early->invalidate_execution_ready ();
     early->confirm_execution_ready (clock_now.load ());
     ASSERT_TRUE (early->try_post ("recovered-new-claim", [&] { ++early_calls; }));
@@ -5023,6 +5555,45 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
     node->spot_contexts_by_id.clear ();
     node->native_node.reset ();
     context->node.reset ();
+}
+
+TEST_P (StoreOutageRetention, SameTokenRecoveryLeavesNewClaimPathPerActor)
+{
+    registered_owner (false, true, -13);
+}
+TEST_P (StoreOutageRetention, SameTokenRecoveryLeavesNewClaimPathSpotWide)
+{
+    registered_owner (true, true, -13);
+}
+
+TEST_P (StoreOutageRetention, SameTokenExactMatchPerActor)
+{
+    registered_owner (false, true, -10);
+}
+
+TEST_P (StoreOutageRetention, SameTokenExactMatchSpotWide)
+{
+    registered_owner (true, true, -10);
+}
+
+TEST_P (StoreOutageRetention, SameTokenExactMissingIsObjectLocalPerActor)
+{
+    registered_owner (false, true, -11);
+}
+
+TEST_P (StoreOutageRetention, SameTokenExactMissingIsObjectLocalSpotWide)
+{
+    registered_owner (true, true, -11);
+}
+
+TEST_P (StoreOutageRetention, SameTokenMemberWaitsForSpotPerActor)
+{
+    registered_owner (false, true, -12);
+}
+
+TEST_P (StoreOutageRetention, SameTokenMemberWaitsForSpotSpotWide)
+{
+    registered_owner (true, true, -12);
 }
 
 TEST_P (StoreOutageRetention, RuntimeStopPreventsQueuedOwnerCleanupPerActor)
@@ -5052,6 +5623,45 @@ TEST_P (StoreOutageRetention, RegisteredObjectOwnerPerActorDefault)
 TEST_P (StoreOutageRetention, RegisteredObjectOwnerSpotWideDefault)
 {
     registered_owner (true, false);
+}
+
+TEST_P (StoreOutageRetention, ReviewMembershipCasRefreshesPreservedFence)
+{
+    registered_owner (false, true, -24);
+}
+TEST_P (StoreOutageRetention, ReviewMembershipCasDoesNotAcceptSupersedingFence)
+{
+    registered_owner (false, true, -25);
+}
+
+TEST_P (StoreOutageRetention, ReviewAdoptionExactFenceMatches)
+{
+    registered_owner (false, true, -20);
+}
+TEST_P (StoreOutageRetention, ReviewAdoptionExactFenceMismatchIsObjectLocal)
+{
+    registered_owner (false, true, -21);
+}
+TEST_P (StoreOutageRetention, ReviewDuplicateTerminalExactFenceMatches)
+{
+    registered_owner (false, true, -22);
+}
+TEST_P (StoreOutageRetention, ReviewDuplicateTerminalExactFenceMismatchIsObjectLocal)
+{
+    registered_owner (false, true, -23);
+}
+
+TEST_P (StoreOutageRetention, ReviewHeartbeatDoesNotWaitOrRestartExactRead)
+{
+    registered_owner (false, true, -14);
+}
+TEST_P (StoreOutageRetention, ReviewCutoffTerminatesReadBeforeEpisodeRelease)
+{
+    registered_owner (false, true, -15);
+}
+TEST_P (StoreOutageRetention, ReviewOnlyReadErrorsRetryOnNextRenew)
+{
+    registered_owner (false, true, -16);
 }
 
 TEST_P (StoreOutageRetention, ContendedOwnerSnapshotCannotDelayCutoff)
@@ -5832,6 +6442,188 @@ TEST_P (StoreOutageRetention, CachedBoundSpotRouteSpotWideDefault)
 TEST_P (StoreOutageRetention, CachedBoundSpotRouteSpotWideRetention)
 {
     registered_owner (true, true, -1);
+}
+
+TEST (ZLinkFrameworkLocationRuntime, ParentRecoveryNotifiesChildOnceForThousandEnqueues)
+{
+    for (bool shared : {false, true}) {
+        test::manual_internal_scheduler_t scheduler;
+        auto parent = std::make_shared<serial_execution_queue_t> (
+          scheduler, serial_execution_queue_options_t{},
+          serial_execution_queue_t::error_handler_t{},
+          shared ? serial_lane_policy_t::spot_wide () : serial_lane_policy_t::per_actor_spot ());
+        auto child = std::make_shared<serial_execution_queue_t> (scheduler);
+        parent->set_execution_policy ([] { return true; });
+        child->set_execution_policy ([] { return true; });
+        child->attach_spot_gate (parent);
+        const auto at = monotonic_time{std::chrono::hours (1000000)};
+        parent->confirm_execution_ready (at);
+        child->confirm_execution_ready (at);
+        scheduler.run_all ();
+        task_completion_source_t<serial_execution_queue_t::execution_operation_t> pending;
+        parent->set_execution_operation (pending.task ());
+        unsigned calls = 0;
+        for (unsigned i = 0; i != 1000; ++i)
+            ASSERT_TRUE (child->try_post ("retained", [&] { ++calls; }));
+        scheduler.run_all ();
+        EXPECT_EQ (0u, calls);
+        pending.complete (result_t<serial_execution_queue_t::execution_operation_t>::success (
+          {serial_execution_queue_t::execution_status_t::allowed, at + 1s}));
+        // A PerActor Spot has its own control turn before the child mailbox drain.
+        // Observe the child's one resume only after that parent control turn completes.
+        if (!shared) {
+            ASSERT_TRUE (scheduler.run_one ());
+            EXPECT_EQ (0u, calls);
+        }
+        EXPECT_EQ (1u, scheduler.pending_work ());
+        scheduler.run_all ();
+        EXPECT_EQ (1000u, calls);
+        EXPECT_EQ (0u, scheduler.pending_work ());
+        child->cancel_pending ();
+        parent->cancel_pending ();
+        scheduler.run_all ();
+    }
+}
+
+TEST (ZLinkFrameworkLocationRuntime, RecoveryOperationPublishesAllowedLostAndReadFailure)
+{
+    using status_t = serial_execution_queue_t::execution_status_t;
+    using operation_t = serial_execution_queue_t::execution_operation_t;
+    for (auto terminal : {status_t::allowed, status_t::ownership_lost, status_t::stopped}) {
+        test::manual_internal_scheduler_t scheduler;
+        auto gate = std::make_shared<serial_execution_queue_t> (scheduler);
+        gate->set_execution_policy ([] { return true; });
+        const auto at = monotonic_time{std::chrono::hours (1000000)};
+        gate->confirm_execution_ready (at);
+        scheduler.run_all ();
+        EXPECT_EQ (status_t::allowed, gate->execution_status ());
+        task_completion_source_t<operation_t> superseded;
+        gate->set_execution_operation (superseded.task ());
+        task_completion_source_t<operation_t> pending;
+        gate->set_execution_operation (pending.task ());
+        superseded.complete (result_t<operation_t>::success ({status_t::allowed, at + 3s}));
+        EXPECT_EQ (status_t::stopped, gate->execution_status ());
+        EXPECT_FALSE (gate->execution_allowed ());
+        // A paused object retains eligibility for the original episode's T latch.
+        ASSERT_TRUE (gate->execution_ready_at ());
+        EXPECT_LT (*gate->execution_ready_at (), at + 1s);
+        if (terminal == status_t::stopped)
+            pending.complete (result_t<operation_t>::failure (framework_error_kind_t::unavailable,
+                                                              "injected exact read failure"));
+        else
+            pending.complete (result_t<operation_t>::success ({terminal, at + 2s}));
+        scheduler.run_all ();
+        EXPECT_EQ (terminal, gate->execution_status ());
+        EXPECT_EQ (terminal == status_t::allowed, gate->execution_allowed ());
+        EXPECT_EQ (0u, tests::count_allocations ([&] {
+                       for (unsigned i = 0; i != 1000; ++i) {
+                           (void) gate->execution_status ();
+                           (void) gate->execution_allowed ();
+                           (void) gate->execution_ready_at ();
+                       }
+                   }));
+        gate->cancel_pending ();
+        scheduler.run_all ();
+    }
+}
+
+TEST (ZLinkFrameworkLocationRuntime, LocationRecoveryCannotRestoreInvalidatedReadyProof)
+{
+    test::manual_internal_scheduler_t scheduler;
+    auto gate = std::make_shared<serial_execution_queue_t> (scheduler);
+    gate->set_execution_policy ([] { return true; });
+    const auto at = monotonic_time{std::chrono::hours (1000000)};
+    gate->confirm_execution_ready (at);
+    task_completion_source_t<serial_execution_queue_t::execution_operation_t> pending;
+    gate->set_execution_operation (pending.task ());
+    gate->invalidate_execution_ready ();
+    pending.complete (result_t<serial_execution_queue_t::execution_operation_t>::success (
+      {serial_execution_queue_t::execution_status_t::allowed, at + 1s}));
+    scheduler.run_all ();
+    EXPECT_FALSE (gate->execution_ready_at ());
+    task_completion_source_t<serial_execution_queue_t::execution_operation_t> stale;
+    gate->set_execution_operation (stale.task ());
+    stale.complete (result_t<serial_execution_queue_t::execution_operation_t>::success (
+      {serial_execution_queue_t::execution_status_t::allowed, at + 2s}));
+    scheduler.run_all ();
+    EXPECT_FALSE (gate->execution_ready_at ());
+    gate->cancel_pending ();
+    scheduler.run_all ();
+}
+
+TEST (ZLinkFrameworkLocationRuntime, PreservedRegistryDoesNotParticipateInNormalTurnAdmission)
+{
+    in_memory_location_repository_t repository;
+    location_runtime_t runtime (repository);
+    int clocks = 0;
+    const auto at = monotonic_time{std::chrono::hours (1000000)};
+    lease_access::clock (runtime, [&] {
+        ++clocks;
+        return at;
+    });
+    stateful::stateful_object_runtime_t objects;
+    test::manual_internal_scheduler_t scheduler;
+    std::vector<std::shared_ptr<serial_execution_queue_t>> gates;
+    for (unsigned i = 0; i != 5000; ++i) {
+        stateful::object_ref_t object{
+          stateful::object_kind_t::actor, "preserved-" + std::to_string (i), 1, 1, "mesh", "node"};
+        const auto created =
+          objects.begin_reserved_object_async (object, "player", {}).result ().value ();
+        ASSERT_EQ (stateful::stateful_error_t::none, created.error);
+        ASSERT_EQ (stateful::stateful_error_t::none, objects.commit_create (created.attempt));
+        auto gate = std::make_shared<serial_execution_queue_t> (scheduler);
+        gate->set_execution_policy (runtime.execution_policy ());
+        objects.bind_execution_gate (object, gate).result ().value ();
+        authority_snapshot_t snapshot;
+        snapshot.store_version = "confirmed-" + std::to_string (i);
+        snapshot.object_generation = snapshot.authority_owner_generation = 1;
+        objects.confirm_location_ready (object, snapshot, gate->ready_confirmation (), at)
+          .result ()
+          .value ();
+        gates.push_back (std::move (gate));
+    }
+    unsigned enumerations = 0, validations = 0;
+    const auto recover = [&] {
+        ++enumerations;
+        return objects.recover_location_execution (
+          [&] (authority_key_t, authority_snapshot_t snapshot) {
+              ++validations;
+              EXPECT_TRUE (snapshot.store_version.starts_with ("confirmed-"));
+              return task_t<serial_execution_queue_t::execution_operation_t> (
+                result_t<serial_execution_queue_t::execution_operation_t>::success (
+                  {serial_execution_queue_t::execution_status_t::allowed, at + 2s}));
+          },
+          at + 1s);
+    };
+    recover ().result ().value ();
+    scheduler.run_all ();
+    ASSERT_EQ (5000u, validations);
+    ASSERT_EQ (1u, enumerations);
+    clocks = 0;
+    std::size_t allowed = 0;
+    const auto allocations = tests::count_allocations ([&] {
+        for (unsigned turn = 0; turn != 32; ++turn)
+            for (const auto &gate : gates)
+                allowed += gate->execution_allowed ();
+    });
+    EXPECT_EQ (160000u, allowed);
+    EXPECT_EQ (0u, allocations);
+    EXPECT_EQ (0, clocks);
+    EXPECT_EQ (5000u, validations);
+    EXPECT_EQ (1u, enumerations);
+    recover ().result ().value ();
+    scheduler.run_all ();
+    EXPECT_EQ (2u, enumerations);
+    EXPECT_EQ (5000u, validations); // The same episode cannot pause recovered objects again.
+    // Positive control: the same counter must detect a deliberately allocated object.
+    EXPECT_GT (tests::count_allocations ([] {
+                   auto value = std::make_shared<int> (1);
+                   EXPECT_EQ (1, *value);
+               }),
+               0u);
+    for (auto &gate : gates)
+        gate->cancel_pending ();
+    scheduler.run_all ();
 }
 
 INSTANTIATE_TEST_SUITE_P (BothRepositories, StoreOutageRetention, ::testing::Bool ());

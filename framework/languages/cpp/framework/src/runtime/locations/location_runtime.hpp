@@ -104,6 +104,8 @@ class location_runtime_t
         // Retain the heartbeat lifecycle, including after runtime teardown.
         const std::shared_ptr<heartbeat_owner_t> owner;
         std::atomic_bool discarded = false;
+        task_completion_source_t<serial_execution_queue_t::execution_operation_t> terminal;
+        std::shared_ptr<task_t<void>> recovery;
         std::vector<std::function<void (serial_execution_queue_t::execution_admission_t)>>
           discard_requests;
         std::shared_ptr<detail::deadline_state_t> deadline =
@@ -124,6 +126,9 @@ class location_runtime_t
                                    ? serial_execution_queue_t::execution_status_t::allowed
                                    : execution_admission (episode, queue.execution_ready_at (), {});
                       });
+                terminal.complete (
+                  result_t<serial_execution_queue_t::execution_operation_t>::success (
+                    {serial_execution_queue_t::execution_status_t::ownership_lost, cutoff}));
             }
             return discarded.load (std::memory_order_acquire);
         }
@@ -146,10 +151,18 @@ class location_runtime_t
         std::optional<std::chrono::system_clock::time_point> renewed_at;
     };
 
+  public:
+    using execution_recovery_t =
+      std::function<task_t<serial_execution_queue_t::execution_operation_t> (authority_key_t,
+                                                                             authority_snapshot_t)>;
+
+  private:
     struct execution_observer_t
     {
         std::function<void (serial_execution_queue_t::execution_admission_t)> discard;
         std::function<void (authority_key_t, authority_snapshot_t)> observe;
+        std::function<task_t<void> (execution_recovery_t, std::chrono::steady_clock::time_point)>
+          recover;
     };
     struct lease_renew_outcome_t
     {
@@ -308,12 +321,15 @@ class location_runtime_t
 
     task_t<void> on_execution_discard (
       std::function<void (serial_execution_queue_t::execution_admission_t)> request,
-      std::function<void (authority_key_t, authority_snapshot_t)> observe = {})
+      std::function<void (authority_key_t, authority_snapshot_t)> observe = {},
+      std::function<task_t<void> (execution_recovery_t, std::chrono::steady_clock::time_point)>
+        recover = {})
     {
-        return _lane->run_task (
-          [this, request = std::move (request), observe = std::move (observe)] () mutable {
-              _execution_discard_requests->push_back ({std::move (request), std::move (observe)});
-          });
+        return _lane->run_task ([this, request = std::move (request), observe = std::move (observe),
+                                 recover = std::move (recover)] () mutable {
+            _execution_discard_requests->push_back (
+              {std::move (request), std::move (observe), std::move (recover)});
+        });
     }
 
     const std::string &owner_id () const noexcept { return _owner_id; }
@@ -712,15 +728,24 @@ class location_runtime_t
         return std::nullopt;
     }
 
-    template <typename Work> void update_owner_lease_on_lane (Work work) const
+    template <typename Work>
+    static void update_owner_lease_on_lane (
+      const std::shared_ptr<std::shared_ptr<const owner_lease_snapshot_t>> &owner_lease,
+      const std::shared_ptr<std::atomic_bool> &episode_open,
+      Work work)
     {
-        auto lease = *std::atomic_load_explicit (_owner_lease.get (), std::memory_order_acquire);
+        auto lease = *std::atomic_load_explicit (owner_lease.get (), std::memory_order_acquire);
         work (lease);
         const bool open = static_cast<bool> (lease.outage);
         std::atomic_store_explicit (
-          _owner_lease.get (), std::make_shared<const owner_lease_snapshot_t> (std::move (lease)),
+          owner_lease.get (), std::make_shared<const owner_lease_snapshot_t> (std::move (lease)),
           std::memory_order_release);
-        _episode_open->store (open, std::memory_order_release);
+        episode_open->store (open, std::memory_order_release);
+    }
+
+    template <typename Work> void update_owner_lease_on_lane (Work work) const
+    {
+        update_owner_lease_on_lane (_owner_lease, _episode_open, std::move (work));
     }
 
     void clear_owner_lease_on_lane () const
@@ -766,7 +791,7 @@ class location_runtime_t
         });
     }
 
-    void observe_successful_lease_on_lane (owner_lease_snapshot_t &lease,
+    bool observe_successful_lease_on_lane (owner_lease_snapshot_t &lease,
                                            const location_owner_token_t &token,
                                            std::chrono::steady_clock::time_point started_at,
                                            std::chrono::steady_clock::time_point admission_deadline,
@@ -782,13 +807,11 @@ class location_runtime_t
                 || lease.token->lease_generation != token.lease_generation
                 || episode->token.owner_id != token.owner_id
                 || episode->token.lease_generation != token.lease_generation)
-                return;
-            episode->deadline->cancelled.store (true, std::memory_order_release);
-            detail::deadline_scheduler_t::instance ().wake ();
-            lease.outage.reset ();
+                return false;
         }
         if (!lease.last_successful_lease || started_at >= lease.last_successful_lease->started_at)
             lease.last_successful_lease = successful_lease_t{token, started_at, admission_deadline};
+        return static_cast<bool> (episode);
     }
 
     static task_t<void>
@@ -896,6 +919,126 @@ class location_runtime_t
         co_return result;
     }
 
+    static task_t<serial_execution_queue_t::execution_operation_t>
+    recover_execution (location_repository_t *store,
+                       std::shared_ptr<store_outage_t> episode,
+                       std::shared_ptr<std::function<std::chrono::steady_clock::time_point ()>> now,
+                       authority_key_t key,
+                       authority_snapshot_t fence)
+    {
+        using status_t = serial_execution_queue_t::execution_status_t;
+        using operation_t = serial_execution_queue_t::execution_operation_t;
+        auto completion = std::make_shared<task_completion_source_t<operation_t>> ();
+        auto terminal = completion->task ();
+        auto episode_terminal = episode->terminal.task ();
+        detail::observe_task_terminal (episode_terminal, [weak = std::weak_ptr{completion}] (
+                                                           const result_t<operation_t> &result) {
+            if (auto active = weak.lock ())
+                active->complete (result);
+        });
+        auto read = store->read_authority_core (std::move (key));
+        detail::observe_task_terminal (
+          read,
+          [weak = std::weak_ptr{completion}, episode = std::move (episode), now = std::move (now),
+           fence = std::move (fence)] (const result_t<authority_read_result_t> &read) {
+              auto active = weak.lock ();
+              if (!active)
+                  return;
+              const auto observed_at = (*now) ();
+              if (episode->owner->stop.load (std::memory_order_acquire)) {
+                  active->complete (
+                    result_t<operation_t>::success ({status_t::stopped, observed_at}));
+                  return;
+              }
+              if (episode->latch (observed_at)) {
+                  active->complete (
+                    result_t<operation_t>::success ({status_t::ownership_lost, observed_at}));
+                  return;
+              }
+              if (!read) {
+                  active->complete (detail::propagate_failure<operation_t> (
+                    read, "Location recovery exact read failed"));
+                  return;
+              }
+              const auto *current = std::get_if<authority_snapshot_t> (&read.value ());
+              active->complete (result_t<operation_t>::success (
+                {current && current->same_incarnation (fence)
+                     && current->store_version == fence.store_version
+                     && current->allocation.state == placement_allocation_state_t::active
+                     && current->owner.lease_generation == fence.owner.lease_generation
+                     && current->owner.owner_id == episode->token.owner_id
+                     && current->owner.lease_generation == episode->token.lease_generation
+                     && current->allocation.target.node_lifecycle_generation
+                          == fence.allocation.target.node_lifecycle_generation
+                   ? status_t::allowed
+                   : status_t::ownership_lost,
+                 observed_at}));
+          });
+        co_return co_await terminal;
+    }
+
+    static task_t<void>
+    join_execution_recovery (std::shared_ptr<std::vector<task_t<void>>> recoveries,
+                             std::shared_ptr<task_t<void>> previous)
+    {
+        // Earlier reads must terminate too, including reads whose local object retired.
+        // A previous read error is retried by the current pass, not carried forward.
+        if (previous)
+            co_await detail::project_task_terminal<void> (
+              *previous, [] (const result_t<void> &) { return result_t<void>::success (); });
+        result_t<void> terminal = result_t<void>::success ();
+        for (auto &recovery : *recoveries) {
+            const auto result = co_await await_result (std::move (recovery));
+            if (!result)
+                terminal = detail::propagate_failure<void> (result, "Location recovery failed");
+        }
+        terminal.value ();
+    }
+
+    static task_t<void> finish_execution_recovery (
+      std::shared_ptr<task_t<void>> recovery,
+      std::shared_ptr<state_lane_t> lane,
+      std::shared_ptr<std::shared_ptr<const owner_lease_snapshot_t>> owner_lease,
+      std::shared_ptr<std::atomic_bool> episode_open,
+      std::shared_ptr<store_outage_t> episode,
+      std::shared_ptr<std::function<std::chrono::steady_clock::time_point ()>> now)
+    {
+        const auto result = co_await await_result (detail::project_task_terminal<void> (
+          *recovery, [] (const result_t<void> &result) { return result; }));
+        // An unconfirmed read retains the original T until a later pass succeeds or T fires.
+        if (!result)
+            co_await episode->terminal.task ();
+        auto completed = std::make_shared<task_completion_source_t<void>> ();
+        auto posted = lane->try_post (
+          [owner_lease, episode_open, episode, now, recovery, completed] {
+              if (!episode->owner->stop.load (std::memory_order_acquire)
+                  && episode->recovery == recovery) {
+                  const auto at = (*now) ();
+                  episode->latch (at);
+                  update_owner_lease_on_lane (owner_lease, episode_open, [&] (auto &lease) {
+                      if (lease.outage != episode || !lease.token
+                          || lease.token->owner_id != episode->token.owner_id
+                          || lease.token->lease_generation != episode->token.lease_generation)
+                          return;
+                      episode->deadline->cancelled.store (true, std::memory_order_release);
+                      detail::deadline_scheduler_t::instance ().wake ();
+                      lease.outage.reset ();
+                      episode->terminal.complete (
+                        result_t<serial_execution_queue_t::execution_operation_t>::success (
+                          {serial_execution_queue_t::execution_status_t::allowed, at}));
+                  });
+              }
+              completed->complete (result_t<void>::success ());
+          },
+          [completed] (std::exception_ptr error) {
+              completed->complete (detail::result_access_t::failure<void> (std::move (error)));
+          });
+        if (!posted)
+            throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                         "Location recovery lane stopped");
+        co_await completed->task ();
+    }
+
     static task_t<void> heartbeat_accept (std::shared_ptr<heartbeat_attempt_t> attempt,
                                           location_owner_token_t token,
                                           std::chrono::system_clock::time_point expires_at,
@@ -904,28 +1047,52 @@ class location_runtime_t
                                           bool renewal = false)
     {
         auto *runtime = attempt->runtime;
-        co_await lease_lane (attempt, [runtime, token = std::move (token), expires_at, store_now,
-                                       started_at, renewal,
-                                       requested_outage = attempt->requested_outage] () mutable {
-            const auto admission_lifetime =
-              expires_at > store_now + runtime->_options.owner_lease_fencing_margin
-                ? expires_at - store_now - runtime->_options.owner_lease_fencing_margin
-                : std::chrono::system_clock::duration::zero ();
-            const auto admission_deadline =
-              started_at
-              + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
-                admission_lifetime);
-            runtime->update_owner_lease_on_lane ([&] (auto &lease) {
-                runtime->observe_successful_lease_on_lane (
-                  lease, token, started_at, admission_deadline, renewal, requested_outage);
-                lease.token = std::move (token);
-                lease.healthy = true;
-                lease.renewed_at = store_now;
-                lease.admission_deadline = admission_deadline;
-            });
-            runtime->_last_error.reset ();
-            return true;
-        });
+        auto recovery = co_await lease_lane (
+          attempt, [runtime, token = std::move (token), expires_at, store_now, started_at, renewal,
+                    requested_outage = attempt->requested_outage] () mutable {
+              const auto admission_lifetime =
+                expires_at > store_now + runtime->_options.owner_lease_fencing_margin
+                  ? expires_at - store_now - runtime->_options.owner_lease_fencing_margin
+                  : std::chrono::system_clock::duration::zero ();
+              const auto admission_deadline =
+                started_at
+                + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
+                  admission_lifetime);
+              auto recoveries = std::make_shared<std::vector<task_t<void>>> ();
+              std::shared_ptr<task_t<void>> recovery;
+              runtime->update_owner_lease_on_lane ([&] (auto &lease) {
+                  if (runtime->observe_successful_lease_on_lane (
+                        lease, token, started_at, admission_deadline, renewal, requested_outage)) {
+                      for (const auto &observer : *runtime->_execution_discard_requests)
+                          if (observer.recover)
+                              recoveries->push_back (observer.recover (
+                                [store = runtime->_store, episode = lease.outage,
+                                 now = runtime->_lease_now] (authority_key_t key,
+                                                             authority_snapshot_t fence) {
+                                    return recover_execution (store, episode, now, std::move (key),
+                                                              std::move (fence));
+                                },
+                                lease.outage->observed_at));
+                      recovery = std::make_shared<task_t<void>> (
+                        join_execution_recovery (std::move (recoveries), lease.outage->recovery));
+                      lease.outage->recovery = recovery;
+                  }
+                  lease.token = std::move (token);
+                  lease.healthy = true;
+                  lease.renewed_at = store_now;
+                  lease.admission_deadline = admission_deadline;
+              });
+              runtime->_last_error.reset ();
+              return recovery;
+          });
+        if (recovery) {
+            auto finishing = finish_execution_recovery (
+              recovery, runtime->_lane, runtime->_owner_lease, runtime->_episode_open,
+              attempt->requested_outage, runtime->_lease_now);
+            // Only the lane publication may still be pending; no Store validation is awaited here.
+            if (recovery->await_ready () && detail::task_result_access_t::read (*recovery))
+                co_await finishing;
+        }
         runtime->wake_owner_lease_observers ();
     }
 
@@ -1288,8 +1455,12 @@ class location_runtime_t
             return _lane->run_task ([this] {
                 const auto lease =
                   std::atomic_load_explicit (_owner_lease.get (), std::memory_order_acquire);
-                if (lease->outage)
+                if (lease->outage) {
                     lease->outage->deadline->cancelled.store (true, std::memory_order_release);
+                    lease->outage->terminal.complete (
+                      result_t<serial_execution_queue_t::execution_operation_t>::success (
+                        {serial_execution_queue_t::execution_status_t::stopped, {}}));
+                }
             });
         }).value ();
         detail::deadline_scheduler_t::instance ().wake ();

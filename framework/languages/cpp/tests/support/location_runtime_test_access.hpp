@@ -58,6 +58,27 @@ struct location_runtime_test_access_t
         pending.result ().value ();
     }
 
+    static task_t<void> heartbeat_async (location_runtime_t &runtime, time_point started_at)
+    {
+        auto owner = std::make_shared<location_runtime_t::heartbeat_owner_t> ();
+        auto attempt = std::make_shared<location_runtime_t::heartbeat_attempt_t> (
+          &runtime, started_at, started_at + runtime._options.owner_lease_renew_timeout, owner);
+        co_await location_runtime_t::heartbeat_renew_once_async (attempt);
+    }
+
+    template <class Episode>
+    static void recovery_terminal (location_runtime_t &runtime,
+                                   const std::shared_ptr<Episode> &episode)
+    {
+        if constexpr (requires { episode->recovery; }) {
+            const auto pending =
+              runtime._lane->run_checked ([&] { return episode->recovery; }).get ();
+            if (pending)
+                (void) detail::task_result_access_t::read (*pending);
+        }
+        runtime._lane->run_checked ([] {}).get ();
+    }
+
     static void confirm (location_runtime_t &runtime,
                          time_point started_at,
                          std::function<void ()> submitted = {})
