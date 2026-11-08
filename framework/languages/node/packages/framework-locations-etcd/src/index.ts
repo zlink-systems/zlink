@@ -1,2 +1,7 @@
-// The provider's public declarations are introduced with the SPI implementation.
-export {};
+export { ZLinkEtcdLocationStore } from './location-store';
+export type {
+  ZLinkEtcdLocationOptions,
+  ZLinkEtcdTlsOptions,
+  ZLinkEtcdClientIdentity,
+  ZLinkEtcdCredentials
+} from './options';

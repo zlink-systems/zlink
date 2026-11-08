@@ -28,21 +28,23 @@ const internalLocationCodecHelpers = new Set([
   'zlinkLocationAutoConnectTypeName',
   'zlinkLocationRoleName'
 ]);
-const publicContractSnapshot = JSON.parse(fs.readFileSync(
-  path.join(__dirname, 'fixtures', 'node-public-contract.json'),
-  'utf8'
-));
+const publicContractSnapshot = JSON.parse(
+  fs.readFileSync(path.join(__dirname, 'fixtures', 'node-public-contract.json'), 'utf8')
+);
 
 test('server package declarations collectively cover the exact interface catalog exports', () => {
   const spec = readTree(interfaceSpecRoot);
   const declarations = [
     readTree(declarationsRoot),
     readTree(path.join(workspaceRoot, 'packages', 'nestjs', 'dist')),
-    readTree(path.join(workspaceRoot, 'packages', 'framework-locations-redis', 'dist'))
+    readTree(path.join(workspaceRoot, 'packages', 'framework-locations-redis', 'dist')),
+    readTree(path.join(workspaceRoot, 'packages', 'framework-locations-etcd', 'dist'))
   ].join('\n');
   const missing = [];
 
-  for (const name of exportedCatalogNames(frameworkCatalog(spec)).filter((name) => !internalLocationCodecHelpers.has(name))) {
+  for (const name of exportedCatalogNames(frameworkCatalog(spec)).filter(
+    (name) => !internalLocationCodecHelpers.has(name)
+  )) {
     const declarationPattern = new RegExp(`\\b(?:interface|type|enum|function)\\s+${name}\\b`);
     if (!declarationPattern.test(declarations)) {
       missing.push(name);
@@ -57,7 +59,9 @@ test('framework runtime exports decorator factories and enums from the catalog',
   const spec = readTree(interfaceSpecRoot);
   const missing = [];
 
-  for (const name of runtimeCatalogNames(frameworkCatalog(spec)).filter((name) => !internalLocationCodecHelpers.has(name))) {
+  for (const name of runtimeCatalogNames(frameworkCatalog(spec)).filter(
+    (name) => !internalLocationCodecHelpers.has(name)
+  )) {
     if (!(name in framework)) {
       missing.push(name);
     }
@@ -100,7 +104,6 @@ test('Nest options builder matches the exact public member set', () => {
     'Nest builder runtime member set must not expose internal helpers'
   );
   assert.equal('channelName' in builder, false);
-
 });
 
 test('Nest fanout builder matches the exact public member set', () => {
@@ -121,10 +124,7 @@ test('Nest RouteMesh builder keeps the formal scheduler limits in build output',
   const nestjs = require('../../packages/nestjs/dist');
   const builder = nestjs.zlinkFramework();
 
-  builder.addRouteMesh('api')
-    .setActorLimit(11)
-    .setSpotLimit(22)
-    .setActivationConcurrency(33);
+  builder.addRouteMesh('api').setActorLimit(11).setSpotLimit(22).setActivationConcurrency(33);
 
   const built = builder.build();
   assert.equal(built.spotNodes.api.actorLimit, 11);
@@ -191,8 +191,9 @@ test('Node public contract snapshot pins the binding package version', () => {
 
 test('stream connector public root does not expose raw frame or header codecs', () => {
   const connector = require('../../packages/stream-connector/dist');
-  const exposed = ['ZlinkStreamFrameCodec', 'ZlinkStreamHeaderCodec']
-    .filter((name) => name in connector);
+  const exposed = ['ZlinkStreamFrameCodec', 'ZlinkStreamHeaderCodec'].filter(
+    (name) => name in connector
+  );
 
   assert.deepEqual(exposed, []);
 });
@@ -211,7 +212,10 @@ test('inbound dispatch keeps Core HWM and application job queue as independent o
   const declarations = readTree(declarationsRoot);
   const nestDeclarations = readTree(path.join(workspaceRoot, 'packages', 'nestjs', 'dist'));
   const frameworkOptions = declarationBody(declarations, 'ZLinkFrameworkOptions');
-  const nestFrameworkOptions = declarationBody(nestDeclarations, 'ZLinkNestFrameworkOptionsBuilder');
+  const nestFrameworkOptions = declarationBody(
+    nestDeclarations,
+    'ZLinkNestFrameworkOptionsBuilder'
+  );
   const inboundDispatch = declarationBody(declarations, 'ZLinkInboundDispatchOptions');
 
   assert.match(frameworkOptions, /configureInboundDispatch\(\): ZLinkInboundDispatchOptions/);
@@ -221,7 +225,10 @@ test('inbound dispatch keeps Core HWM and application job queue as independent o
   assert.match(inboundDispatch, /coreHwmMemoryLimitBytes\(value: bigint \| undefined\): this/);
   assert.match(inboundDispatch, /coreHwmBudgetBytes\(value: bigint \| undefined\): this/);
   assert.match(inboundDispatch, /coreHwmProfile\(value: ZLinkCoreHwmProfile\): this/);
-  assert.match(inboundDispatch, /applicationJobQueueProfile\(value: ZLinkApplicationJobQueueProfile\): this/);
+  assert.match(
+    inboundDispatch,
+    /applicationJobQueueProfile\(value: ZLinkApplicationJobQueueProfile\): this/
+  );
   assert.match(inboundDispatch, /maxQueuedApplicationJobs\(value: bigint \| undefined\): this/);
   assert.match(inboundDispatch, /applicationJobQueuePauseThresholdPercent\(value: number\): this/);
   assert.match(inboundDispatch, /applicationJobQueueResumeThresholdPercent\(value: number\): this/);
@@ -272,7 +279,9 @@ test('channel request yield and Mesh channel roles match the exact contract', ()
 test('runtime topology and supporting exact names are declared by their production packages', () => {
   const frameworkDeclarations = readTree(declarationsRoot);
   const nestDeclarations = readTree(path.join(workspaceRoot, 'packages', 'nestjs', 'dist'));
-  const redisDeclarations = readTree(path.join(workspaceRoot, 'packages', 'framework-locations-redis', 'dist'));
+  const redisDeclarations = readTree(
+    path.join(workspaceRoot, 'packages', 'framework-locations-redis', 'dist')
+  );
   const exactInterfaceCatalog = readTree(interfaceSpecRoot);
   const runtimeTypes = [
     'ZLinkFrameworkRelocationOptions',
@@ -338,14 +347,27 @@ test('runtime topology and supporting exact names are declared by their producti
   assert.match(frameworkRuntimeStatus, /readonly capacity: ZLinkHostCapacityStatus/);
   assert.match(frameworkRuntime, /readonly status: ZLinkFrameworkRuntimeStatus/);
   assert.match(frameworkRuntime, /resetCapacityMetrics\(\): void/);
-  assert.match(frameworkRuntime, /relocate\(options: ZLinkFrameworkRelocationOptions\): Promise<ZLinkFrameworkRelocationResult>/);
-  assert.match(frameworkRuntime, /shutdown\(options\?: ZLinkFrameworkLifecycleOptions\): Promise<ZLinkFrameworkTerminationResult>/);
+  assert.match(
+    frameworkRuntime,
+    /relocate\(options: ZLinkFrameworkRelocationOptions\): Promise<ZLinkFrameworkRelocationResult>/
+  );
+  assert.match(
+    frameworkRuntime,
+    /shutdown\(options\?: ZLinkFrameworkLifecycleOptions\): Promise<ZLinkFrameworkTerminationResult>/
+  );
   assert.match(routeMeshRuntime, /snapshot\(meshName: string\): ZLinkRouteMeshStatus/);
-  assert.match(routeMeshRuntime, /observe\(meshName: string, capacity\?: number, signal\?: AbortSignal\): AsyncIterable<ZLinkObservedStatus<ZLinkRouteMeshStatus>>/);
+  assert.match(
+    routeMeshRuntime,
+    /observe\(meshName: string, capacity\?: number, signal\?: AbortSignal\): AsyncIterable<ZLinkObservedStatus<ZLinkRouteMeshStatus>>/
+  );
   assert.match(routeMeshRuntime, /isReady\(meshName: string\): boolean/);
   assert.doesNotMatch(routeMeshRuntime, /\bdrain\(/);
   assert.doesNotMatch(routeMeshRuntime, /\bawaitDrained\(/);
-  for (const removed of ['ZLinkMeshDrainSnapshot', 'ZLinkDrainForceReason', 'ZLinkMeshDrainResult']) {
+  for (const removed of [
+    'ZLinkMeshDrainSnapshot',
+    'ZLinkDrainForceReason',
+    'ZLinkMeshDrainResult'
+  ]) {
     assert.doesNotMatch(frameworkDeclarations, new RegExp(`\\b(?:interface|type) ${removed}\\b`));
     assert.doesNotMatch(exactInterfaceCatalog, new RegExp(`\\b(?:interface|type) ${removed}\\b`));
   }
@@ -364,9 +386,15 @@ test('runtime topology and supporting exact names are declared by their producti
 });
 
 test('Redis Location and relocation capabilities remain separate public classes', () => {
-  const declarations = readTree(path.join(workspaceRoot, 'packages', 'framework-locations-redis', 'dist'));
-  const locationHeader = declarations.match(/export declare class ZLinkRedisLocationStore implements[\s\S]*? \{/);
-  const relocationHeader = declarations.match(/export declare class ZLinkRedisRelocationStore implements[^\{]+ \{/);
+  const declarations = readTree(
+    path.join(workspaceRoot, 'packages', 'framework-locations-redis', 'dist')
+  );
+  const locationHeader = declarations.match(
+    /export declare class ZLinkRedisLocationStore implements[\s\S]*? \{/
+  );
+  const relocationHeader = declarations.match(
+    /export declare class ZLinkRedisRelocationStore implements[^\{]+ \{/
+  );
 
   assert.ok(locationHeader);
   assert.ok(relocationHeader);
@@ -382,9 +410,7 @@ test('diagnostics options do not expose inert native diagnostics configuration',
 });
 
 test('public declarations do not expose raw runtime events or monitoring registration', () => {
-  const contracts = readTree(
-    path.join(workspaceRoot, 'packages', 'framework', 'src', 'contracts')
-  );
+  const contracts = readTree(path.join(workspaceRoot, 'packages', 'framework', 'src', 'contracts'));
   const spec = readTree(interfaceSpecRoot);
 
   for (const removed of [
@@ -410,8 +436,30 @@ test('public declarations do not expose raw runtime events or monitoring registr
 test('framework configuration surface does not expose codec callback options', () => {
   const text = [
     readTree(declarationsRoot),
-    fs.readFileSync(path.join(workspaceRoot, 'packages', 'framework', 'src', 'contracts', 'Configuration', 'Builders.ts'), 'utf8'),
-    fs.readFileSync(path.join(workspaceRoot, 'packages', 'framework', 'src', 'contracts', 'Configuration', 'Registration.ts'), 'utf8'),
+    fs.readFileSync(
+      path.join(
+        workspaceRoot,
+        'packages',
+        'framework',
+        'src',
+        'contracts',
+        'Configuration',
+        'Builders.ts'
+      ),
+      'utf8'
+    ),
+    fs.readFileSync(
+      path.join(
+        workspaceRoot,
+        'packages',
+        'framework',
+        'src',
+        'contracts',
+        'Configuration',
+        'Registration.ts'
+      ),
+      'utf8'
+    ),
     fs.readFileSync(path.join(workspaceRoot, 'packages', 'nestjs', 'src', 'index.ts'), 'utf8')
   ].join('\n');
   const forbidden = [
@@ -464,7 +512,8 @@ test('NestJS public declarations do not export object-shaped module option types
 
 test('framework package exports only the public root contract', () => {
   const packageJson = JSON.parse(
-    fs.readFileSync(path.join(workspaceRoot, 'packages', 'framework', 'package.json'), 'utf8'));
+    fs.readFileSync(path.join(workspaceRoot, 'packages', 'framework', 'package.json'), 'utf8')
+  );
 
   assert.deepEqual(Object.keys(packageJson.exports).sort(), ['.']);
   assert.equal(packageJson.exports['.'].default, './dist/index.js');
@@ -485,7 +534,8 @@ test('framework public root exposes declared-type codec selection without per-me
 
 test('NestJS package declarations stay inside declared public package boundaries', () => {
   const packageJson = JSON.parse(
-    fs.readFileSync(path.join(workspaceRoot, 'packages', 'nestjs', 'package.json'), 'utf8'));
+    fs.readFileSync(path.join(workspaceRoot, 'packages', 'nestjs', 'package.json'), 'utf8')
+  );
   const declarations = readTree(path.join(workspaceRoot, 'packages', 'nestjs', 'dist'));
 
   assert.deepEqual(Object.keys(packageJson.exports).sort(), ['.']);
@@ -553,11 +603,29 @@ test('Spot handler registry includes the Actor handler registration contract', (
 
 test('actor join and one-way calls expose only their target terminators', () => {
   const actorContracts = fs.readFileSync(
-    path.join(workspaceRoot, 'packages', 'framework', 'src', 'contracts', 'Actors', 'ZLinkActorFactory.ts'),
-    'utf8');
+    path.join(
+      workspaceRoot,
+      'packages',
+      'framework',
+      'src',
+      'contracts',
+      'Actors',
+      'ZLinkActorFactory.ts'
+    ),
+    'utf8'
+  );
   const boundSessionContracts = fs.readFileSync(
-    path.join(workspaceRoot, 'packages', 'framework', 'src', 'contracts', 'Streams', 'BoundSessionContracts.ts'),
-    'utf8');
+    path.join(
+      workspaceRoot,
+      'packages',
+      'framework',
+      'src',
+      'contracts',
+      'Streams',
+      'BoundSessionContracts.ts'
+    ),
+    'utf8'
+  );
 
   const actorJoinCall = declarationBody(actorContracts, 'ZLinkActorJoinCall');
   const actorJoinSpotCall = declarationBody(actorContracts, 'ZLinkActorJoinSpotCall');
@@ -583,8 +651,14 @@ test('spot manager exposes exact single-use stable-type calls and generation-fen
   const objectServerBuilder = declarationBody(declarations, 'ZLinkMeshObjectServerBuilder');
 
   assert.match(spotManager, /create\(spotType: string\): ZLinkSpotCreateCall/);
-  assert.match(spotManager, /getOrCreate\(spotId: SpotId, spotType: string\): ZLinkSpotGetOrCreateCall/);
-  assert.match(spotManager, /find\(spotId: SpotId, signal\?: AbortSignal\): Promise<SpotRef \| undefined>/);
+  assert.match(
+    spotManager,
+    /getOrCreate\(spotId: SpotId, spotType: string\): ZLinkSpotGetOrCreateCall/
+  );
+  assert.match(
+    spotManager,
+    /find\(spotId: SpotId, signal\?: AbortSignal\): Promise<SpotRef \| undefined>/
+  );
   assert.match(spotManager, /close\(spot: SpotRef, signal\?: AbortSignal\): Promise<boolean>/);
   assert.match(spotCreateCall, /submit\(signal\?: AbortSignal\): Promise<ZLinkSpotCreateResult>/);
   assert.match(spotCreateCall, /yield\(signal\?: AbortSignal\): Promise<ZLinkSpotCreateResult>/);
@@ -641,10 +715,10 @@ test('location wire enums retain values while provider write enums stay internal
   // reverse key-set check; the other eight were unguarded. Assert both directions for
   // every enum instead, so an added member fails rather than going unverified.
   for (const [enumName, expected] of Object.entries(expectedLocationEnums)) {
-    const enumObject = enumName === 'ZLinkLocationWriteIntent'
-      || enumName === 'ZLinkLocationWriteStatus'
-      ? internal[enumName]
-      : framework[enumName];
+    const enumObject =
+      enumName === 'ZLinkLocationWriteIntent' || enumName === 'ZLinkLocationWriteStatus'
+        ? internal[enumName]
+        : framework[enumName];
     assert.deepEqual(pickEnumValues(enumObject, Object.keys(expected)), expected, enumName);
     assert.deepEqual(
       Object.keys(enumObject)
@@ -676,7 +750,11 @@ test('formal declarations expose role-specific ClientServer builders and exclude
   ];
 
   for (const name of removedNames) {
-    assert.equal(frameworkDeclarations.includes(name), false, `framework declaration retained ${name}`);
+    assert.equal(
+      frameworkDeclarations.includes(name),
+      false,
+      `framework declaration retained ${name}`
+    );
     assert.equal(nestDeclarations.includes(name), false, `Nest declaration retained ${name}`);
   }
 
@@ -686,7 +764,11 @@ test('formal declarations expose role-specific ClientServer builders and exclude
     'ZLinkClientServerChannelServerBuilder',
     'addClientServerChannel'
   ]) {
-    assert.equal(frameworkDeclarations.includes(name), true, `framework declaration missing ${name}`);
+    assert.equal(
+      frameworkDeclarations.includes(name),
+      true,
+      `framework declaration missing ${name}`
+    );
   }
   for (const name of [
     'ZLinkNestClientServerChannelRoleBuilder',
@@ -716,13 +798,11 @@ test('framework error kind values and exception surface match the shared table',
   ];
 
   assert.equal(expected.length, 12);
-  const enumNames = Object.keys(framework.ZLinkFrameworkErrorKind)
-    .filter((name) => Number.isNaN(Number(name)));
-  assert.equal(enumNames.length, 12);
-  assert.deepEqual(
-    enumNames.sort(),
-    expected.map(([name]) => name).sort()
+  const enumNames = Object.keys(framework.ZLinkFrameworkErrorKind).filter((name) =>
+    Number.isNaN(Number(name))
   );
+  assert.equal(enumNames.length, 12);
+  assert.deepEqual(enumNames.sort(), expected.map(([name]) => name).sort());
   for (const [name, numericValue] of expected) {
     const kind = framework.ZLinkFrameworkErrorKind[name];
     assert.equal(kind, numericValue, name);
@@ -747,19 +827,10 @@ test('handler filter public contract exposes only the five supported dispatch ki
   assert.match(filter, /next: ZLinkHandlerFilterNext/);
   assert.match(filter, /\): Promise<void>/);
   assert.match(context, /dispatchKind: ZLinkHandlerDispatchKind/);
-  assert.match(
-    declarations,
-    /type ZLinkHandlerFilterNext\s*=\s*\(\) => Promise<void>/
-  );
+  assert.match(declarations, /type ZLinkHandlerFilterNext\s*=\s*\(\) => Promise<void>/);
   assert.deepEqual(
     Object.values(require('../../packages/framework/dist').ZLinkHandlerDispatchKind),
-    [
-      'nodeDirectSend',
-      'nodeDirectRequest',
-      'channelSend',
-      'channelRequest',
-      'classicFanout'
-    ]
+    ['nodeDirectSend', 'nodeDirectRequest', 'channelSend', 'channelRequest', 'classicFanout']
   );
   assert.doesNotMatch(filter + context, /ownerKind|descriptor|endpoint|socket/i);
 });
@@ -779,10 +850,16 @@ test('location contract exposes only opaque provider primitives and aggregate op
   }
   assert.match(locationStore, /\bdispose\?\(\): void \| Promise<void>/);
   for (const removed of [
-    'updateMeshNode', 'listClientServers', 'readAuthority', 'claimOwnerLease',
-    'reserveRelocationCapacity', 'prepareAggregate', 'removeAllByOwner',
+    'updateMeshNode',
+    'listClientServers',
+    'readAuthority',
+    'claimOwnerLease',
+    'reserveRelocationCapacity',
+    'prepareAggregate',
+    'removeAllByOwner',
     'getMeshNodeChangeStamp'
-  ]) assert.doesNotMatch(locationStore, new RegExp(`\\b${removed}\\(`));
+  ])
+    assert.doesNotMatch(locationStore, new RegExp(`\\b${removed}\\(`));
   assert.match(
     declarations,
     /kind: 'restore';[\s\S]*?payload: Uint8Array;[\s\S]*?expectedOwner: ZLinkLocationOwnerToken/
@@ -807,18 +884,28 @@ test('location contract exposes only opaque provider primitives and aggregate op
   assert.doesNotMatch(serviceSummaryFilter, /role|kind/);
 
   for (const removed of [
-    'ZLinkClientServerLocationStore', 'ZLinkMeshNodeLocationStore',
-    'ZLinkSpotLocationStore', 'ZLinkActorLocationStore',
+    'ZLinkClientServerLocationStore',
+    'ZLinkMeshNodeLocationStore',
+    'ZLinkSpotLocationStore',
+    'ZLinkActorLocationStore',
     'ZLinkRoutingIdSlotAllocationStore'
-  ]) assert.equal(declarations.includes(`interface ${removed}`), false, removed);
+  ])
+    assert.equal(declarations.includes(`interface ${removed}`), false, removed);
   for (const field of [
-    'channelName', 'serverRid', 'lifecycleGeneration', 'descriptorRevision',
-    'endpoint', 'weight', 'state', 'securityIdentity', 'ownerId',
-    'leaseGeneration', 'updatedAt'
+    'channelName',
+    'serverRid',
+    'lifecycleGeneration',
+    'descriptorRevision',
+    'endpoint',
+    'weight',
+    'state',
+    'securityIdentity',
+    'ownerId',
+    'leaseGeneration',
+    'updatedAt'
   ]) {
     assert.match(clientServerDescriptor, new RegExp(`readonly ${field}:`));
   }
-
 });
 
 test('actor declarations resolve global ActorId calls and expose fluent manager shapes', () => {
@@ -832,8 +919,14 @@ test('actor declarations resolve global ActorId calls and expose fluent manager 
   const sessionActors = declarationBody(declarations, 'ZLinkSessionActors');
   const actorRef = declarationBody(declarations, 'ActorRef');
 
-  assert.match(actorClient, /sendToActor\(actorId: ActorId, message: unknown\): ZLinkActorSendCall/);
-  assert.match(actorClient, /requestToActor\(actorId: ActorId, request: unknown\): ZLinkActorRequestCall/);
+  assert.match(
+    actorClient,
+    /sendToActor\(actorId: ActorId, message: unknown\): ZLinkActorSendCall/
+  );
+  assert.match(
+    actorClient,
+    /requestToActor\(actorId: ActorId, request: unknown\): ZLinkActorRequestCall/
+  );
   assert.equal(actorClient.includes('meshName:'), false);
   assert.equal(actorClient.includes('actor: ActorRef'), false);
   assert.match(actorSendCall, /metadata\(key: string, value: string\): this/);
@@ -845,9 +938,18 @@ test('actor declarations resolve global ActorId calls and expose fluent manager 
   assert.match(actorRequestCall, /submit<TReply>\(signal\?: AbortSignal\): ZLinkRequest<TReply>/);
   assert.match(actorRequestCall, /yield<TReply>\(signal\?: AbortSignal\): Promise<TReply>/);
   assert.match(manager, /create\(actorId: ActorId, actorType: string\): ZLinkActorCreateCall/);
-  assert.match(manager, /getOrCreate\(actorId: ActorId, actorType: string\): ZLinkActorGetOrCreateCall/);
-  assert.match(manager, /find\(actorId: ActorId, signal\?: AbortSignal\): Promise<ActorRef \| undefined>/);
-  assert.match(manager, /findSpot\(actorId: ActorId, signal\?: AbortSignal\): Promise<SpotRef \| undefined>/);
+  assert.match(
+    manager,
+    /getOrCreate\(actorId: ActorId, actorType: string\): ZLinkActorGetOrCreateCall/
+  );
+  assert.match(
+    manager,
+    /find\(actorId: ActorId, signal\?: AbortSignal\): Promise<ActorRef \| undefined>/
+  );
+  assert.match(
+    manager,
+    /findSpot\(actorId: ActorId, signal\?: AbortSignal\): Promise<SpotRef \| undefined>/
+  );
   assert.match(manager, /destroy\(actor: ActorRef, signal\?: AbortSignal\): Promise<boolean>/);
   for (const call of [createCall, getOrCreateCall]) {
     assert.match(call, /inMesh\(meshName: string\): this/);
@@ -862,9 +964,15 @@ test('actor declarations resolve global ActorId calls and expose fluent manager 
   assert.match(actorRef, /readonly objectGeneration: bigint/);
   assert.match(actorRef, /readonly meshName: string/);
   assert.doesNotMatch(declarations, /\bZLinkActorRefSnapshot\b/);
-  assert.match(sessionActors, /bind\(actor: ActorRef, signal\?: AbortSignal\): Promise<ZLinkSessionActor>/);
+  assert.match(
+    sessionActors,
+    /bind\(actor: ActorRef, signal\?: AbortSignal\): Promise<ZLinkSessionActor>/
+  );
   assert.doesNotMatch(sessionActors, /bind\(actor: ZLinkActor \| ActorRef/);
-  assert.match(sessionActors, /bindOrGet\(actor: ActorRef, signal\?: AbortSignal\): Promise<ZLinkSessionActor>/);
+  assert.match(
+    sessionActors,
+    /bindOrGet\(actor: ActorRef, signal\?: AbortSignal\): Promise<ZLinkSessionActor>/
+  );
 });
 
 test('one-way call declarations complete without exposing transport admission results', () => {
@@ -889,16 +997,34 @@ test('one-way call declarations complete without exposing transport admission re
     sessionActor,
     /relay\(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage\): Promise<void>/
   );
-  assert.doesNotMatch(declarations, /ZLinkSubmitResult|ZLinkPublishResult|ZLinkSubmitStatus|ZLinkLogicalMulticastDetail/);
-  for (const call of [sendCall, fanoutPublishCall, publishCall, actorSendCall,
-    boundSessionSendCall, sessionSendCall, sessionReplyCall]) {
+  assert.doesNotMatch(
+    declarations,
+    /ZLinkSubmitResult|ZLinkPublishResult|ZLinkSubmitStatus|ZLinkLogicalMulticastDetail/
+  );
+  for (const call of [
+    sendCall,
+    fanoutPublishCall,
+    publishCall,
+    actorSendCall,
+    boundSessionSendCall,
+    sessionSendCall,
+    sessionReplyCall
+  ]) {
     assert.doesNotMatch(call, new RegExp(['try', 'Submit'].join('')));
   }
 });
 
 test('stream connector one-way calls and server HTTP typed calls expose their terminal contracts', () => {
   const streamCalls = fs.readFileSync(
-    path.join(workspaceRoot, 'packages', 'stream-connector', 'dist', 'Contracts', 'Calls', 'ZlinkStreamCalls.d.ts'),
+    path.join(
+      workspaceRoot,
+      'packages',
+      'stream-connector',
+      'dist',
+      'Contracts',
+      'Calls',
+      'ZlinkStreamCalls.d.ts'
+    ),
     'utf8'
   );
   const serverHttp = fs.readFileSync(
@@ -906,10 +1032,7 @@ test('stream connector one-way calls and server HTTP typed calls expose their te
     'utf8'
   );
 
-  assert.match(
-    declarationBody(streamCalls, 'ZlinkStreamSendCall'),
-    /submit\(\): Promise<void>/
-  );
+  assert.match(declarationBody(streamCalls, 'ZlinkStreamSendCall'), /submit\(\): Promise<void>/);
   assert.match(
     declarationBody(serverHttp, 'ZLinkServerHttpRequestBuilder'),
     /yield<T>\(\): Promise<HttpResponse<T>>/
@@ -924,10 +1047,22 @@ test('route client surface scopes node routing by MeshName and resolves channels
   const declarations = readTree(declarationsRoot);
   const routeClient = declarationBody(declarations, 'ZLinkRouteClient');
 
-  assert.match(routeClient, /sendToNode\(meshName: string, targetNodeRid: RoutingId, message: unknown\): ZLinkSendCall/);
-  assert.match(routeClient, /requestToNode\(meshName: string, targetNodeRid: RoutingId, request: unknown\): ZLinkRequestCall/);
-  assert.match(routeClient, /sendToChannel\(channelName: string, message: unknown\): ZLinkSendCall/);
-  assert.match(routeClient, /requestToChannel\(channelName: string, request: unknown\): ZLinkChannelRequestCall/);
+  assert.match(
+    routeClient,
+    /sendToNode\(meshName: string, targetNodeRid: RoutingId, message: unknown\): ZLinkSendCall/
+  );
+  assert.match(
+    routeClient,
+    /requestToNode\(meshName: string, targetNodeRid: RoutingId, request: unknown\): ZLinkRequestCall/
+  );
+  assert.match(
+    routeClient,
+    /sendToChannel\(channelName: string, message: unknown\): ZLinkSendCall/
+  );
+  assert.match(
+    routeClient,
+    /requestToChannel\(channelName: string, request: unknown\): ZLinkChannelRequestCall/
+  );
   assert.doesNotMatch(routeClient, /SpotHandle|sendToSpot|requestToSpot/);
 });
 
@@ -939,7 +1074,10 @@ test('Spot public declarations use SpotId calls and keep Instance handlers actor
   const spotsIndex = fs.readFileSync(path.join(declarationsRoot, 'Spots', 'index.d.ts'), 'utf8');
 
   assert.match(spotOutbound, /sendToSpot\(spotId: SpotId, message: unknown\): ZLinkSpotSendCall/);
-  assert.match(spotOutbound, /requestToSpot\(spotId: SpotId, request: unknown\): ZLinkSpotRequestCall/);
+  assert.match(
+    spotOutbound,
+    /requestToSpot\(spotId: SpotId, request: unknown\): ZLinkSpotRequestCall/
+  );
   assert.match(instanceContext, /readonly handlers: ZLinkInstanceSpotHandlerRegistry/);
   assert.match(instanceHandlers, /addPacket<THandler>\(handlerType: Type<THandler>\): this/);
   assert.doesNotMatch(instanceHandlers, /addSubscribe|addActor/);
@@ -967,9 +1105,7 @@ test('old public contract names from the redesign rename table do not re-enter n
     'actorIdConflict',
     'locationKey'
   ];
-  const allowlist = new Set([
-    'test/contract/contract-surface.test.js'
-  ]);
+  const allowlist = new Set(['test/contract/contract-surface.test.js']);
   const matches = [];
 
   for (const file of readTextFiles([
@@ -993,7 +1129,10 @@ test('old public contract names from the redesign rename table do not re-enter n
 });
 
 function exportedCatalogNames(spec) {
-  return uniqueMatches(spec, /^export\s+(?:interface|type|enum|function)\s+([A-Za-z][A-Za-z0-9_]*)/gm);
+  return uniqueMatches(
+    spec,
+    /^export\s+(?:interface|type|enum|function)\s+([A-Za-z][A-Za-z0-9_]*)/gm
+  );
 }
 
 function frameworkCatalog(spec) {
@@ -1042,7 +1181,9 @@ function interfaceMemberNames(declaration) {
 }
 
 function declarationBody(text, name) {
-  const match = text.match(new RegExp(`export interface ${name}(?:<[^>{]+>)?(?: [^{]+)? \\{([\\s\\S]*?)\\n\\}`));
+  const match = text.match(
+    new RegExp(`export interface ${name}(?:<[^>{]+>)?(?: [^{]+)? \\{([\\s\\S]*?)\\n\\}`)
+  );
   assert.ok(match, `missing declaration for ${name}`);
   return match[0];
 }
@@ -1065,7 +1206,8 @@ function pickEnumValues(enumObject, names) {
 
 test('framework public root excludes internal registration implementation', () => {
   const framework = require('../../packages/framework/dist');
-  const declarations = fs.readFileSync(path.join(declarationsRoot, '..', 'index.d.ts'), 'utf8') +
+  const declarations =
+    fs.readFileSync(path.join(declarationsRoot, '..', 'index.d.ts'), 'utf8') +
     fs.readFileSync(path.join(declarationsRoot, 'index.d.ts'), 'utf8') +
     fs.readFileSync(path.join(declarationsRoot, 'Configuration', 'index.d.ts'), 'utf8');
   const forbidden = [
@@ -1079,8 +1221,13 @@ test('framework public root excludes internal registration implementation', () =
 
   for (const name of forbidden) {
     assert.equal(Object.hasOwn(framework, name), false, `${name} must not be a runtime export`);
-    assert.equal(new RegExp(`export (?:declare )?(?:function|interface|type|class) ${name}\\b`).test(declarations), false,
-      `${name} must not be a declaration export`);
+    assert.equal(
+      new RegExp(`export (?:declare )?(?:function|interface|type|class) ${name}\\b`).test(
+        declarations
+      ),
+      false,
+      `${name} must not be a declaration export`
+    );
   }
 });
 
