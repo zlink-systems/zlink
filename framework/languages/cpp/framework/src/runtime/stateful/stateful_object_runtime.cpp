@@ -428,24 +428,26 @@ task_t<void> stateful_object_runtime_t::confirm_location_ready (
 }
 
 task_t<void> stateful_object_runtime_t::recover_location_execution (
+  std::shared_ptr<stateful_object_runtime_t> self,
   std::function<task_t<runtime::serial_execution_queue_t::execution_operation_t> (
     authority_key_t, authority_snapshot_t, std::function<task_t<void> (authority_snapshot_t)>)>
     recover,
   std::chrono::steady_clock::time_point observed_at)
 {
     using operation_t = runtime::serial_execution_queue_t::execution_operation_t;
-    auto operations = co_await _lane.run_task ([this, recover = std::move (recover), observed_at] {
+    auto operations = co_await self->_lane.run_task ([self, recover = std::move (recover),
+                                                      observed_at] {
         std::vector<
           std::pair<object_record_t *, std::shared_ptr<task_completion_source_t<operation_t>>>>
           pending;
         auto operations = std::make_shared<std::vector<task_t<operation_t>>> ();
-        for (auto &[_, object] : _objects) {
+        for (auto &[_, object] : self->_objects) {
             const auto gate = object.execution_gate.lock ();
             if (!gate || gate->closed ())
                 continue;
             const auto ready_at = gate->execution_ready_at ();
             if (!ready_at || *ready_at >= observed_at
-                || state_on_lane (object) != object_state_t::ready)
+                || self->state_on_lane (object) != object_state_t::ready)
                 continue;
             if (auto existing = gate->pending_execution_operation ()) {
                 operations->push_back (std::move (*existing));
@@ -467,14 +469,14 @@ task_t<void> stateful_object_runtime_t::recover_location_execution (
             pending.emplace_back (&object, std::move (completion));
         }
         for (auto &[object, completion] : pending) {
-            auto operation =
-              recover ((object->reference.kind == object_kind_t::actor
-                          ? actor_authority_key (object->reference.key)
-                          : spot_authority_key (object->reference.key)),
-                       *object->location_fence,
-                       [this, reference = object->reference] (authority_snapshot_t snapshot) {
-                           return confirm_location_ready (reference, std::move (snapshot), {}, {});
-                       });
+            auto operation = recover (
+              (object->reference.kind == object_kind_t::actor
+                 ? actor_authority_key (object->reference.key)
+                 : spot_authority_key (object->reference.key)),
+              *object->location_fence,
+              [self, reference = object->reference] (authority_snapshot_t snapshot) {
+                  return self->confirm_location_ready (reference, std::move (snapshot), {}, {});
+              });
             detail::observe_task_terminal (
               operation, [completion] (const result_t<operation_t> &result) mutable {
                   completion->complete (result);

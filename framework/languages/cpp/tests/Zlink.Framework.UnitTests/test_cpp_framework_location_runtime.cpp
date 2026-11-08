@@ -3501,6 +3501,17 @@ using namespace std::chrono_literals;
 using lease_access = location_runtime_test_access_t;
 using monotonic_time = std::chrono::steady_clock::time_point;
 
+TEST (StoreOutageRetentionWait, BoundedTerminalWaitReportsMissingAndCompletedSignals)
+{
+    test::manual_internal_scheduler_t scheduler;
+    task_completion_source_t<void> source;
+    auto terminal = source.task ();
+    EXPECT_FALSE (scheduler.run_until (terminal, 0ms));
+    ASSERT_TRUE (
+      scheduler.try_submit_internal ([&] { source.complete (result_t<void>::success ()); }));
+    EXPECT_TRUE (scheduler.run_until (terminal, auto_connect_wait));
+}
+
 class outage_provider_t final : public location_store_t
 {
   public:
@@ -4747,6 +4758,15 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
     auto node =
       test::runtime_failure_fixture<detail::spot_node_builder_state_t> (descriptor.mesh_name);
     auto scheduler = std::make_shared<test::manual_internal_scheduler_t> ();
+    const auto close_executor = [&] (const auto &executor) {
+        std::vector<task_t<void>> completions;
+        executor->close (&completions);
+        for (auto &completion : completions)
+            if (!scheduler->run_until (completion, auto_connect_wait))
+                return false;
+        scheduler->retire ();
+        return true;
+    };
     node->worker_executor = scheduler;
     mesh::service_node_descriptor_t native_descriptor;
     native_descriptor.mesh_name = descriptor.mesh_name;
@@ -4888,8 +4908,8 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
           .on_execution_discard (
             [] (auto) {}, {},
             [native] (location_runtime_t::execution_recovery_t recover, monotonic_time observed) {
-                return native->objects ().recover_location_execution (std::move (recover),
-                                                                      observed);
+                return stateful::stateful_object_runtime_t::recover_location_execution (
+                  {native, &native->objects ()}, std::move (recover), observed);
             })
           .result ()
           .value ();
@@ -4933,17 +4953,11 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
         if (loss == -57) {
             move_to (episode->cutoff);
             detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
-            lease_access::recovery_terminal (runtime, episode);
+            ASSERT_TRUE (lease_access::recovery_terminal (runtime, episode, auto_connect_wait));
             auto completed = terminal.task ();
-            scheduler->run_until (completed);
+            ASSERT_TRUE (scheduler->run_until (completed, auto_connect_wait));
             EXPECT_FALSE (completed.result ());
             EXPECT_EQ (framework_error_kind_t::not_found, completed.result ().error_kind ());
-            // Recovery terminal precedes the separate finish continuation on the runtime lane.
-            // Observe its outage release before stop transfers cleanup to the Host.
-            const auto release_deadline = std::chrono::steady_clock::now () + auto_connect_wait;
-            while (lease_access::snapshot (runtime)->outage
-                   && std::chrono::steady_clock::now () < release_deadline)
-                lease_access::lane (runtime).run_sync ([] {});
             EXPECT_FALSE (lease_access::snapshot (runtime)->outage);
         }
         task_completion_source_t<void> stopped;
@@ -4969,10 +4983,9 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
         memory.authority_release.complete (result_t<void>::success ());
         stop_complete.result ().value ();
         stopper.join ();
-        lease_access::recovery_terminal (runtime, episode);
+        ASSERT_TRUE (lease_access::recovery_terminal (runtime, episode, auto_connect_wait));
         EXPECT_EQ (0, calls);
-        executor->close ();
-        scheduler->run_all ();
+        ASSERT_TRUE (close_executor (executor));
         context->node.reset ();
         node->spot_contexts_by_id.clear ();
         return;
@@ -5026,8 +5039,8 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
           .on_execution_discard (
             [] (auto) {}, {},
             [native] (location_runtime_t::execution_recovery_t recover, monotonic_time observed) {
-                return native->objects ().recover_location_execution (std::move (recover),
-                                                                      observed);
+                return stateful::stateful_object_runtime_t::recover_location_execution (
+                  {native, &native->objects ()}, std::move (recover), observed);
             })
           .result ()
           .value ();
@@ -5091,8 +5104,8 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
           .on_execution_discard (
             [] (auto) {}, {},
             [native] (location_runtime_t::execution_recovery_t recover, monotonic_time observed) {
-                return native->objects ().recover_location_execution (std::move (recover),
-                                                                      observed);
+                return stateful::stateful_object_runtime_t::recover_location_execution (
+                  {native, &native->objects ()}, std::move (recover), observed);
             })
           .result ()
           .value ();
@@ -5128,7 +5141,7 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
         lease_access::heartbeat (runtime, clock_now.load ());
         lease_access::lane (runtime).run_sync ([] {});
         auto terminal_task = terminal.task ();
-        scheduler->run_until (terminal_task);
+        ASSERT_TRUE (scheduler->run_until (terminal_task, auto_connect_wait));
         scheduler->run_all ();
         EXPECT_EQ (3u, GetParam () ? provider.authority_reads : memory.authority_reads);
         const bool matches = loss == -20 || loss == -22;
@@ -5137,8 +5150,7 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
             EXPECT_EQ (framework_error_kind_t::not_found, terminal.task ().result ().error_kind ());
         EXPECT_EQ (matches ? 1 : 0, early_calls);
         EXPECT_EQ (1, late_calls);
-        executor->close ();
-        scheduler->run_all ();
+        ASSERT_TRUE (close_executor (executor));
         context->node.reset ();
         node->spot_contexts_by_id.clear ();
         return;
@@ -5149,8 +5161,8 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
           .on_execution_discard (
             [] (auto) {}, {},
             [native] (location_runtime_t::execution_recovery_t recover, monotonic_time observed) {
-                return native->objects ().recover_location_execution (std::move (recover),
-                                                                      observed);
+                return stateful::stateful_object_runtime_t::recover_location_execution (
+                  {native, &native->objects ()}, std::move (recover), observed);
             })
           .result ()
           .value ();
@@ -5173,25 +5185,31 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
         (GetParam () ? provider.authority_entered.task () : memory.authority_entered.task ())
           .result ()
           .value ();
-        // Drain the launch turn before observing any asynchronous result.
-        lease_access::lane (runtime).run_sync ([] {});
+        // The heartbeat terminal precedes its object pass and Store submission fences.
+        const bool first_completed = bool (first.result_for (auto_connect_wait));
         native->objects ()
           .execution_gate (*native->objects ().find (stateful::object_kind_t::actor, "late"))
           .result ()
           .value ();
-        const bool first_completed = first.await_ready ();
+        lease_access::lane (runtime).run_sync ([] {});
+        ASSERT_TRUE (lease_access::wait_on_lane (
+          runtime, [&] { return !late->pending_execution_operation (); },
+          std::chrono::steady_clock::now () + auto_connect_wait));
         const auto late_before = late->execution_status ();
         EXPECT_EQ (episode, lease_access::snapshot (runtime)->outage);
         advance (options.owner_lease_renew_interval);
         memory.failed_authority.clear ();
         provider.failed_authority.clear ();
         auto second = lease_access::heartbeat_async (runtime, clock_now.load ());
-        lease_access::lane (runtime).run_sync ([] {});
+        const bool second_completed = bool (second.result_for (auto_connect_wait));
         native->objects ()
           .execution_gate (*native->objects ().find (stateful::object_kind_t::actor, "late"))
           .result ()
           .value ();
-        const bool second_completed = second.await_ready ();
+        lease_access::lane (runtime).run_sync ([] {});
+        ASSERT_TRUE (lease_access::wait_on_lane (
+          runtime, [&] { return !late->pending_execution_operation (); },
+          std::chrono::steady_clock::now () + auto_connect_wait));
         const auto reads = GetParam () ? provider.authority_reads : memory.authority_reads;
         int calls = 0;
         task_completion_source_t<void> terminal;
@@ -5210,25 +5228,18 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
         if (loss == -15) {
             move_to (episode->cutoff);
             detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
-            lease_access::recovery_terminal (runtime, episode);
-            scheduler->run_all ();
-            cutoff_terminal = terminal.task ().await_ready ();
-            // Read on the lane so a late finish post has also completed its turn; the
-            // bound turns a missing release into a failed expectation, not a hang.
-            const auto release_deadline = std::chrono::steady_clock::now () + auto_connect_wait;
-            while (lease_access::lane (runtime).run_sync ([&] {
-                return bool (lease_access::snapshot (runtime)->outage);
-            }) && std::chrono::steady_clock::now () < release_deadline)
-                std::this_thread::yield ();
+            ASSERT_TRUE (lease_access::recovery_terminal (runtime, episode, auto_connect_wait));
+            auto cutoff = terminal.task ();
+            cutoff_terminal = scheduler->run_until (cutoff, auto_connect_wait);
             cutoff_released = !lease_access::snapshot (runtime)->outage;
         }
         provider.authority_release.complete (result_t<void>::success ());
         memory.authority_release.complete (result_t<void>::success ());
         first.result ().value ();
         second.result ().value ();
-        lease_access::recovery_terminal (runtime, episode);
+        ASSERT_TRUE (lease_access::recovery_terminal (runtime, episode, auto_connect_wait));
         auto terminal_task = terminal.task ();
-        scheduler->run_until (terminal_task);
+        ASSERT_TRUE (scheduler->run_until (terminal_task, auto_connect_wait));
         scheduler->run_all ();
         EXPECT_TRUE (first_completed);
         EXPECT_TRUE (second_completed);
@@ -5247,8 +5258,7 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
             EXPECT_EQ (1, calls);
         }
         EXPECT_FALSE (lease_access::snapshot (runtime)->outage);
-        executor->close ();
-        scheduler->run_all ();
+        ASSERT_TRUE (close_executor (executor));
         context->node.reset ();
         node->spot_contexts_by_id.clear ();
         return;
@@ -5265,8 +5275,8 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
                 [second_owner, &second_recoveries] (
                   location_runtime_t::execution_recovery_t recover, monotonic_time observed_at) {
                     ++second_recoveries;
-                    return second_owner->recover_location_execution (std::move (recover),
-                                                                     observed_at);
+                    return stateful::stateful_object_runtime_t::recover_location_execution (
+                      second_owner, std::move (recover), observed_at);
                 })
               .result ()
               .value ();
@@ -5329,8 +5339,8 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
             {},
             [&] (location_runtime_t::execution_recovery_t recover, monotonic_time observed_at) {
                 ++recoveries;
-                return native->objects ().recover_location_execution (std::move (recover),
-                                                                      observed_at);
+                return stateful::stateful_object_runtime_t::recover_location_execution (
+                  {native, &native->objects ()}, std::move (recover), observed_at);
             })
           .result ()
           .value ();
@@ -5406,6 +5416,8 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
           .execution_gate (*native->objects ().find (stateful::object_kind_t::actor, "late"))
           .result ()
           .value ();
+        // The object pass submits Store work to the runtime lane.
+        lease_access::lane (runtime).run_sync ([] {});
         const auto next_token = *lease_access::snapshot (runtime)->token;
         EXPECT_NE (token.lease_generation, next_token.lease_generation);
         EXPECT_EQ (loss == -38 ? 0u : 1u, recoveries);
@@ -5440,7 +5452,9 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
                 operations.push_back (std::move (*pending));
         const auto wait_operations = [&] {
             for (auto &operation : operations)
-                (void) detail::task_result_access_t::read (operation);
+                if (!operation.result_for (auto_connect_wait))
+                    return false;
+            return true;
         };
         scheduler->run_all ();
         EXPECT_EQ (0, handlers);
@@ -5487,7 +5501,7 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
             publication.complete (result_t<bool>::success (true));
         if (loss != -34 && loss != -38 && loss != -40 && loss != -41 && loss != -43 && loss != -45
             && loss != -47 && loss > -52)
-            wait_operations ();
+            ASSERT_TRUE (wait_operations ());
         // Flush the object lane after its operation's terminal continuation.
         native->objects ()
           .execution_gate (*native->objects ().find (stateful::object_kind_t::actor, "late"))
@@ -5509,6 +5523,17 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
                     EXPECT_EQ (nullptr, failed.error ());
                 }
             }
+            // A renew may reuse an in-flight pass; finish the injected failure first.
+            ASSERT_TRUE (lease_access::recovery_terminal (runtime, episode, auto_connect_wait));
+            ASSERT_TRUE (lease_access::wait_on_lane (
+              runtime,
+              [&] {
+                  for (const auto &queue : {gate, late, spot})
+                      if (queue->pending_execution_operation ())
+                          return false;
+                  return true;
+              },
+              std::chrono::steady_clock::now () + auto_connect_wait));
             provider.fail_cas = memory.fail_cas = false;
             publication = task_completion_source_t<bool>{};
             publication.complete (result_t<bool>::success (true));
@@ -5523,18 +5548,18 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
             EXPECT_EQ (loss == -39 ? 2u : 1u, publications);
             for (const auto &queue : {gate, late, spot})
                 if (auto operation = queue->pending_execution_operation ())
-                    (void) detail::task_result_access_t::read (*operation);
+                    ASSERT_TRUE (operation->result_for (auto_connect_wait));
         }
         if (loss == -40 || loss == -41 || loss == -43 || loss == -45 || loss == -47
             || loss <= -52) {
             if (loss == -41)
-                wait_operations ();
+                ASSERT_TRUE (wait_operations ());
             scheduler->run_all ();
             EXPECT_EQ (0, handlers);
             if (loss == -41)
                 for (auto *signal : {&terminal, &late_terminal, &spot_terminal}) {
                     auto completed = signal->task ();
-                    scheduler->run_until (completed);
+                    ASSERT_TRUE (scheduler->run_until (completed, auto_connect_wait));
                     const auto result = completed.result ();
                     EXPECT_FALSE (result);
                     if (!result)
@@ -5549,7 +5574,7 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
                   .result ()
                   .value ();
                 scheduler->run_all ();
-                wait_operations ();
+                ASSERT_TRUE (wait_operations ());
                 EXPECT_EQ (status_t::stopped, gate->execution_status ());
             }
             if (loss <= -52)
@@ -5566,11 +5591,11 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
             }
         }
         if (loss != -38)
-            wait_operations ();
+            ASSERT_TRUE (wait_operations ());
         if (loss != -38)
             for (auto *signal : {&terminal, &late_terminal, &spot_terminal}) {
                 auto completed = signal->task ();
-                scheduler->run_until (completed);
+                ASSERT_TRUE (scheduler->run_until (completed, auto_connect_wait));
             }
         scheduler->run_all ();
         const bool allowed = loss != -31 && loss != -32 && loss != -34 && loss != -36 && loss != -37
@@ -5591,14 +5616,22 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
             check_outcome (spot_terminal, allowed || loss == -32);
         }
         if (loss == -44) {
-            lease_access::recovery_terminal (runtime, episode);
+            ASSERT_TRUE (lease_access::recovery_terminal (runtime, episode, auto_connect_wait));
             ASSERT_FALSE (lease_access::snapshot (runtime)->outage);
             advance (1s);
             lease_access::communication_failure (runtime);
             const auto second_episode = lease_access::snapshot (runtime)->outage;
             advance (1s);
             lease_access::heartbeat (runtime, clock_now.load ());
-            lease_access::recovery_terminal (runtime, second_episode);
+            ASSERT_TRUE (
+              lease_access::recovery_terminal (runtime, second_episode, auto_connect_wait));
+            ASSERT_TRUE (lease_access::wait_on_lane (
+              runtime,
+              [&] {
+                  return !gate->pending_execution_operation ()
+                         && !spot->pending_execution_operation ();
+              },
+              std::chrono::steady_clock::now () + auto_connect_wait));
             scheduler->run_all ();
             EXPECT_EQ (status_t::allowed, gate->execution_status ());
             EXPECT_EQ (status_t::allowed, spot->execution_status ());
@@ -5609,8 +5642,7 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
             memory.publication_release.complete (result_t<void>::success ());
             runtime.stop ();
         }
-        executor->close ();
-        scheduler->run_all ();
+        ASSERT_TRUE (close_executor (executor));
         context->node.reset ();
         node->spot_contexts_by_id.clear ();
         return;
@@ -5619,12 +5651,13 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
         commit (placement_object_kind_t::actor, "late", "player");
         // Install recovery through the same owner registry used by the host.
         runtime
-          .on_execution_discard ([] (auto) {}, {},
-                                 [native] (location_runtime_t::execution_recovery_t recover,
-                                           monotonic_time observed_at) {
-                                     return native->objects ().recover_location_execution (
-                                       std::move (recover), observed_at);
-                                 })
+          .on_execution_discard (
+            [] (auto) {}, {},
+            [native] (location_runtime_t::execution_recovery_t recover,
+                      monotonic_time observed_at) {
+                return stateful::stateful_object_runtime_t::recover_location_execution (
+                  {native, &native->objects ()}, std::move (recover), observed_at);
+            })
           .result ()
           .value ();
         auto executor = context->ensure_spot_serial_executor ();
@@ -5672,8 +5705,11 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
           .result ()
           .value ();
         lease_access::lane (runtime).run_sync ([] {});
+        ASSERT_TRUE (lease_access::wait_on_lane (
+          runtime, [&] { return !late->pending_execution_operation (); },
+          std::chrono::steady_clock::now () + auto_connect_wait));
         int early_calls = 0, late_calls = 0, spot_calls = 0, fresh_calls = 0;
-        task_completion_source_t<void> early_terminal;
+        task_completion_source_t<void> early_terminal, late_terminal, spot_terminal, fresh_terminal;
         serial_work_options_t early_work;
         early_work.completion = [&] (result_t<void> result) {
             early_terminal.complete (std::move (result));
@@ -5685,9 +5721,30 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
               early_terminal.complete (result_t<void>::success ());
           },
           early_work));
-        EXPECT_TRUE (late->try_post ("matching-exact", [&] { ++late_calls; }));
-        EXPECT_TRUE (spot->try_post ("spot-exact", [&] { ++spot_calls; }));
-        EXPECT_TRUE (fresh->try_post ("created-after-outage", [&] { ++fresh_calls; }));
+        early_work.completion = [&] (result_t<void> result) { late_terminal.complete (result); };
+        EXPECT_TRUE (late->try_post (
+          "matching-exact",
+          [&] {
+              ++late_calls;
+              late_terminal.complete (result_t<void>::success ());
+          },
+          early_work));
+        early_work.completion = [&] (result_t<void> result) { spot_terminal.complete (result); };
+        EXPECT_TRUE (spot->try_post (
+          "spot-exact",
+          [&] {
+              ++spot_calls;
+              spot_terminal.complete (result_t<void>::success ());
+          },
+          early_work));
+        early_work.completion = [&] (result_t<void> result) { fresh_terminal.complete (result); };
+        EXPECT_TRUE (fresh->try_post (
+          "created-after-outage",
+          [&] {
+              ++fresh_calls;
+              fresh_terminal.complete (result_t<void>::success ());
+          },
+          early_work));
         scheduler->run_all ();
         EXPECT_EQ (loss == -12 ? 0 : 1, fresh_calls);
         EXPECT_EQ (0, early_calls);
@@ -5706,7 +5763,11 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
         memory.authority_release.complete (result_t<void>::success ());
         renewing.get ();
         auto terminal = early_terminal.task ();
-        scheduler->run_until (terminal);
+        ASSERT_TRUE (scheduler->run_until (terminal, auto_connect_wait));
+        for (auto *signal : {&late_terminal, &spot_terminal, &fresh_terminal}) {
+            auto completed = signal->task ();
+            ASSERT_TRUE (scheduler->run_until (completed, auto_connect_wait));
+        }
         scheduler->run_all ();
         if (loss == -11) {
             EXPECT_FALSE (terminal.result ());
@@ -5723,8 +5784,7 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
                    early->execution_status ());
         EXPECT_EQ (serial_execution_queue_t::execution_status_t::allowed,
                    late->execution_status ());
-        executor->close ();
-        scheduler->run_all ();
+        ASSERT_TRUE (close_executor (executor));
         context->node.reset ();
         node->spot_contexts_by_id.clear ();
         return;
@@ -5768,8 +5828,7 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
         EXPECT_EQ (1u, context->actor_count);
         EXPECT_TRUE (node->actor_instances.contains ("player:early"));
         gate->cancel_pending ();
-        executor->close ();
-        scheduler->run_all ();
+        ASSERT_TRUE (close_executor (executor));
         context->node.reset ();
         node->spot_contexts_by_id.clear ();
         node->native_node.reset ();
@@ -5820,8 +5879,7 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
             .result ()
             .value ());
         provider.forbid_io = memory.forbid_io = false;
-        executor->close ();
-        scheduler->run_all ();
+        ASSERT_TRUE (close_executor (executor));
         context->node.reset ();
         node->spot_contexts_by_id.clear ();
         return;
@@ -5898,10 +5956,10 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
         node->lane.run_sync ([] {});
         provider.forbid_io = memory.forbid_io = true;
         scheduler->run_all ();
-        scheduler->run_until (cancellations_finished);
+        ASSERT_TRUE (scheduler->run_until (cancellations_finished, auto_connect_wait));
         if (loss % 2 == 0 && spot_gate->closed ()) {
             auto closed = finished->task ();
-            scheduler->run_until (closed);
+            ASSERT_TRUE (scheduler->run_until (closed, auto_connect_wait));
             EXPECT_TRUE (closed.result ().value ());
         }
         EXPECT_EQ (0, handlers);
@@ -5923,7 +5981,7 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
             scheduler->run_all ();
             EXPECT_TRUE (late->closed ());
             auto closed = finished->task ();
-            scheduler->run_until (closed);
+            ASSERT_TRUE (scheduler->run_until (closed, auto_connect_wait));
             EXPECT_TRUE (closed.result ().value ());
         }
         EXPECT_TRUE (early_instance.expired ());
@@ -5945,8 +6003,7 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
         EXPECT_FALSE (early->try_post ("cannot-resume", [&] { ++handlers; }));
         if (loss % 2 == 0)
             EXPECT_FALSE (spot_gate->try_post ("cannot-resume-spot", [&] { ++handlers; }));
-        executor->close ();
-        scheduler->run_all ();
+        ASSERT_TRUE (close_executor (executor));
         context->node.reset ();
         node->spot_contexts_by_id.clear ();
         return;
@@ -6068,7 +6125,7 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
     scheduler->run_all ();
     closing->complete (result_t<host::spot_close_commit_t>::success ({}));
     auto close_terminal = closing_finished->task ();
-    scheduler->run_until (close_terminal);
+    ASSERT_TRUE (scheduler->run_until (close_terminal, auto_connect_wait));
     EXPECT_FALSE (close_terminal.result ().value ());
     scheduler->run_all ();
     for (const auto &excluded : excluded_spots) {
@@ -7463,7 +7520,8 @@ TEST (ZLinkFrameworkLocationRuntime, PreservedRegistryDoesNotParticipateInNormal
         ++clocks;
         return at;
     });
-    stateful::stateful_object_runtime_t objects;
+    auto object_owner = std::make_shared<stateful::stateful_object_runtime_t> ();
+    auto &objects = *object_owner;
     test::manual_internal_scheduler_t scheduler;
     std::vector<std::shared_ptr<serial_execution_queue_t>> gates;
     for (unsigned i = 0; i != 5000; ++i) {
@@ -7487,7 +7545,8 @@ TEST (ZLinkFrameworkLocationRuntime, PreservedRegistryDoesNotParticipateInNormal
     unsigned enumerations = 0, validations = 0;
     const auto recover = [&] {
         ++enumerations;
-        return objects.recover_location_execution (
+        return stateful::stateful_object_runtime_t::recover_location_execution (
+          object_owner,
           [&] (authority_key_t, authority_snapshot_t snapshot,
                std::function<task_t<void> (authority_snapshot_t)>) {
               ++validations;

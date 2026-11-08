@@ -311,6 +311,8 @@ class location_runtime_t
     {
         stop ();
         _store->configure_access ({});
+        // Borrowed lane handles can outlive the Runtime; callbacks using its fields cannot.
+        _lane->close ();
     }
 
     location_runtime_t (const location_runtime_t &) = delete;
@@ -658,6 +660,7 @@ class location_runtime_t
       std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt,
       std::stop_token owner_cancellation = {}) const
     {
+        auto lane = _lane;
         auto operation = std::make_shared<descriptor_publication_t> (
           _options.owner_lease_renew_timeout, std::move (now), deadline);
         const auto cancel = [weak = std::weak_ptr{operation}] {
@@ -669,7 +672,7 @@ class location_runtime_t
         std::stop_callback stopped (cancellation, cancel);
         std::stop_callback owner_stopped (owner_cancellation, cancel);
         try {
-            co_await _lane->run_task (
+            co_await lane->run_task (
               [this, operation] { register_repository_operation (operation); });
         }
         catch (...) {
@@ -716,7 +719,7 @@ class location_runtime_t
 
             if (result.error_kind () == framework_error_kind_t::shutting_down)
                 co_return false;
-            co_await _lane->run_task (
+            co_await lane->run_task (
               [this, message = std::string (result.error ()->what ())] () mutable {
                   record_failure_on_lane (std::move (message));
               });

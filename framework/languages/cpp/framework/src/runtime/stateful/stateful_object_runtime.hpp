@@ -349,7 +349,8 @@ class stateful_object_runtime_t
                             std::optional<authority_snapshot_t> snapshot,
                             runtime::serial_execution_queue_t::ready_confirmation_t writer,
                             std::chrono::steady_clock::time_point at);
-    task_t<void> recover_location_execution (
+    static task_t<void> recover_location_execution (
+      std::shared_ptr<stateful_object_runtime_t> self,
       std::function<task_t<runtime::serial_execution_queue_t::execution_operation_t> (
         authority_key_t, authority_snapshot_t, std::function<task_t<void> (authority_snapshot_t)>)>
         recover,
