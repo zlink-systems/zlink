@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <TargetFrameworks>$(ZLinkFrameworkTargetFrameworks)</TargetFrameworks>
+    <Description>Official etcd Location Store provider for the ZLink .NET framework.</Description>
+    <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
+    <EtcdProtoRoot>$(MSBuildThisFileDirectory)../../../../runtime/protocol/etcd/v3.6.16</EtcdProtoRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Grpc.Net.Client" />
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Tools" PrivateAssets="all" />
+    <ProjectReference Include="../Zlink.Framework.Provider.Abstractions/Zlink.Framework.Provider.Abstractions.csproj" />
+    <Protobuf Include="$(EtcdProtoRoot)/**/*.proto" ProtoRoot="$(EtcdProtoRoot)" GrpcServices="None" Access="Internal" />
+    <Protobuf Update="$(EtcdProtoRoot)/etcd/api/etcdserverpb/rpc.proto" GrpcServices="Client" />
+  </ItemGroup>
+  <Target Name="PinProviderAbstractionsPackageDependency" AfterTargets="_GetProjectReferenceVersions">
+    <ItemGroup>
+      <_ProjectReferencesWithVersions Update="@(_ProjectReferencesWithVersions)" Condition="'%(_ProjectReferencesWithVersions.Filename)' == 'Zlink.Framework.Provider.Abstractions'">
+        <ProjectVersion>[%(_ProjectReferencesWithVersions.ProjectVersion)]</ProjectVersion>
+      </_ProjectReferencesWithVersions>
+    </ItemGroup>
+  </Target>
+</Project>

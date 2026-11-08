@@ -35,6 +35,7 @@
         <ProjectReference Include="../../src/Zlink.Framework.Codecs.MessagePack/Zlink.Framework.Codecs.MessagePack.csproj"/>
         <ProjectReference Include="../../src/Zlink.Framework.Codecs.Protobuf/Zlink.Framework.Codecs.Protobuf.csproj"/>
         <ProjectReference Include="../../src/Zlink.Framework.Locations.Redis/Zlink.Framework.Locations.Redis.csproj"/>
+        <ProjectReference Include="../../src/Zlink.Framework.Locations.Etcd/Zlink.Framework.Locations.Etcd.csproj"/>
         <ProjectReference Include="../../src/Zlink.Framework.Provider.Abstractions/Zlink.Framework.Provider.Abstractions.csproj"/>
         <ProjectReference Include="../../src/Zlink.HttpClient/Zlink.HttpClient.csproj"/>
         <ProjectReference Include="../../src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj"/>

@@ -9,6 +9,7 @@
       "src\\Zlink.Framework.Codecs.Protobuf\\Zlink.Framework.Codecs.Protobuf.csproj",
       "src\\Zlink.Framework.Contracts\\Zlink.Framework.Contracts.csproj",
       "src\\Zlink.Framework.Locations.Redis\\Zlink.Framework.Locations.Redis.csproj",
+      "src\\Zlink.Framework.Locations.Etcd\\Zlink.Framework.Locations.Etcd.csproj",
       "src\\Zlink.Framework.Provider.Abstractions\\Zlink.Framework.Provider.Abstractions.csproj",
       "src\\Zlink.Framework\\Zlink.Framework.csproj",
       "src\\Zlink.HttpClient\\Zlink.HttpClient.csproj",
@@ -16,6 +17,7 @@
       "tests\\Systems.Zlink.Stream.Connector.Tests\\Systems.Zlink.Stream.Connector.Tests.csproj",
       "tests\\Zlink.Framework.ContractTests\\Zlink.Framework.ContractTests.csproj",
       "tests\\Zlink.Framework.Locations.Redis.Tests\\Zlink.Framework.Locations.Redis.Tests.csproj",
+      "tests\\Zlink.Framework.Locations.Etcd.Tests\\Zlink.Framework.Locations.Etcd.Tests.csproj",
       "tests\\Zlink.Framework.UnitTests\\Zlink.Framework.UnitTests.csproj",
       "tests\\Zlink.HttpClient.UnitTests\\Zlink.HttpClient.UnitTests.csproj"
     ]
