@@ -111,6 +111,12 @@ offset 10  u32 BE  payloadLength // payload key의 bytes 길이 (0..1,048,576)
 `expiresAtMs`는 그 record를 쓴 commit의 Store 시각에 retention을 밀리초 단위로 올림해 더한 값이다.
 `payloadLength`가 실제 payload 길이와 다르면 Store failure다.
 
+**저장하는 시각은 9,223,372,036,854(2262-04-11T23:47:16.854Z) 이하다.** 네 언어의 공개 시각 타입 중 가장
+좁은 C++ `std::chrono::system_clock::time_point`가 signed 64-bit nanosecond로 표현될 때의 최대 밀리초
+시각이다. `Put`의 `expiresAtMs`가 이 값을 넘으면
+provider는 그 batch를 caller 입력 오류로 거부하고 아무것도 쓰지 않는다. 읽은 `expiresAtMs`나 Store 시각이
+이 값을 넘으면 저장 형식 손상으로 보고 Store failure를 반환한다.
+
 ### 3.3 Store 시각 key 형식
 
 Store 시각 key의 value는 밀리초 단위 시각을 **8-byte big-endian unsigned 정수**로 담는다. 값의 의미는
@@ -219,12 +225,69 @@ Framework와 SPI commit이 결정한다.
 
 Store 시각 key는 운영자가 새 namespace를 처음 사용할 때 Store 관리 process의 초기화 명령으로 한 번만
 만든다. 초기화 명령은 그 namespace에 key가 하나도 없을 때만 Store 시각 key를 host wall clock 값으로
-만들며, key가 하나라도 있으면 아무것도 쓰지 않고 실패한다.
+만들며, key가 하나라도 있으면 아무것도 쓰지 않고 실패한다. 명령의 형태는 §4.4가 정한다.
 
 갱신 절차(§4.2)는 Store 시각 key를 만들지 않는다. 운영 중인 namespace에서 Store 시각 key가 없으면
 Store 관리 process는 기록하지 않고 오류를 보고하며, provider는 모든 operation에 Store failure를
 반환한다. Store 시각을 다시 만들면 이전보다 작은 값에서 시작해 이미 기록된 만료 시각의 의미가 바뀔 수
 있으므로 같은 namespace에서 다시 초기화하지 않는다.
+
+### 4.4 Store 관리 도구 명령
+
+Store 관리 도구는 Node.js etcd extension package가 제공하는 `zlink-location-etcd-admin` 명령 하나다. 세
+하위 명령은 모두 `--config <파일>`로 같은 설정 파일을 받는다.
+
+```text
+zlink-location-etcd-admin init    --config <파일>  // §4.3 초기화를 한 번 수행하고 끝난다
+zlink-location-etcd-admin run     --config <파일>  // §4.2 갱신과 §8 정리를 멈출 때까지 계속 수행한다
+zlink-location-etcd-admin cleanup --config <파일>  // §8 정리를 한 번 수행하고 끝난다
+```
+
+설정 파일은 UTF-8 JSON이며 provider option(§11)과 같은 값을 같은 조건으로 담는다. 인증서와 비밀번호는
+파일 경로로 받아 설정 파일에 비밀 값을 직접 쓰지 않게 한다.
+
+```json
+{
+  "endpoints": ["https://10.0.0.1:2379"],
+  "namespace": "zlink-game",
+  "tls": {
+    "trustedCaPemFile": "ca.pem",
+    "clientIdentity": {
+      "certificatePemFile": "client.pem",
+      "keyPemFile": "client-key.pem"
+    }
+  },
+  "credentials": {
+    "user": "zlink-admin",
+    "passwordFile": "password.txt"
+  },
+  "operationTimeoutMs": 5000
+}
+```
+
+| 필드 | 대응하는 §11 option |
+|---|---|
+| `endpoints`, `namespace` | 같은 이름의 option(필수) |
+| `tls.trustedCaPemFile`, `tls.clientIdentity` | `tls`의 `trustedCa`, `clientIdentity`. 값 대신 PEM 파일 경로 |
+| `credentials.user`, `credentials.passwordFile` | `credentials`. password는 파일 경로 |
+| `operationTimeoutMs` | `operationTimeout`(밀리초) |
+
+- **`init`은 namespace에 key가 없다는 비교와 Store 시각 key 생성을 하나의 transaction으로 보낸다.** 여러
+  운영자가 동시에 실행해도 하나만 성공한다. 먼저 조회한 뒤 따로 쓰면 그 사이에 다른 초기화나 쓰기가
+  끼어들 수 있기 때문이다.
+- **`run`은 etcd에 닿지 않는 동안 오류를 보고하고 다음 주기에 다시 시도하며 종료하지 않는다.** Store 시각
+  key가 없으면 기록하지 않고 종료한다(§4.3). `SIGINT`·`SIGTERM`을 받으면 새 요청을 시작하지 않고, 보낸
+  요청의 응답을 operation timeout 안에서 기다린 뒤 종료한다.
+- `run`의 만료 정리 주기와 절차는 §8을 따른다.
+- 오류 메시지는 표준 오류로 쓰며 비밀번호, 인증서 내용과 etcd 응답 본문을 담지 않는다.
+
+| 종료 코드 | 뜻 |
+|---|---|
+| 0 | 성공. `run`은 `SIGINT`·`SIGTERM`으로 멈춘 경우 |
+| 1 | 설정 파일이나 명령 인자가 잘못됨. etcd에 접속하기 전에 판정한다 |
+| 2 | `init`: namespace에 key가 있어 초기화하지 않음 |
+| 3 | `run`·`cleanup`: Store 시각 key가 없음 |
+| 4 | `init`·`cleanup`: etcd에 닿지 않거나 요청이 timeout·오류로 끝남 |
 
 ## 5. Exact read
 
@@ -333,9 +396,10 @@ metadata key와 payload key를 revision `R`로 읽고, `StoreNow = c0`를 반환
 
 ## 8. 만료 record 정리
 
-만료된 record는 Store 시각 기준으로 이미 `Missing`이지만 etcd에는 남아 있다. Store 관리 process가
-주기적으로 metadata를 읽고, `expiresAtMs ≤ Store 시각`인 record의 metadata key와 payload key를 함께
-지운다. 지울 때는 읽은 metadata의 `mod_revision`이 그대로인 조건을 건다. 그 사이 lease가 다시
+만료된 record는 Store 시각 기준으로 이미 `Missing`이지만 etcd에는 남아 있다. Store 관리 process는 정리를
+회차 단위로 수행한다. 한 회차는 namespace의 metadata를 최대 1,000개씩 page로 나눠 끝까지 읽고,
+`expiresAtMs ≤ Store 시각`인 record의 metadata key와 payload key를 함께 지운다. 한 회차가 끝나고 60초가
+지나면 다음 회차를 시작한다. 지울 때는 읽은 metadata의 `mod_revision`이 그대로인 조건을 건다. 그 사이 lease가 다시
 기록됐다면 지우지 않는다. 만료 시각이 없는 record(counter와 durable record)는 정리 대상이 아니다.
 
 정리가 늦어도 결과는 바뀌지 않는다. 지우지 않은 만료 record는 read와 commit에서 계속 `Missing`이다.
@@ -348,7 +412,7 @@ Provider는 [SPI §3~§5](02-location-store-redis.ko.md#3-key-value-version과-c
 batch 2,048 unique key·encoded 4 MiB, page 1,000 item·4 MiB)를 낮추지 않는다. etcd 요청에서는 Framework
 key 하나가 metadata 읽기·비교, metadata 쓰기와 payload 쓰기에 나온다. 가장 큰 SPI batch에서 판정을 위한
 읽기 transaction은 읽기 최대 2,049개(Store 시각 1개, metadata 2,048개), 이어지는 payload 읽기는 최대
-2,048개, 적용 transaction은 비교 최대 2,049개와 쓰기 최대 4,096개이며 encoded 약 11 MiB다. 이 크기는
+2,048개, 적용 transaction은 비교 최대 2,050개(Store 시각 존재·값 2개, metadata 2,048개)와 쓰기 최대 4,096개이며 encoded 약 11 MiB다. 이 크기는
 계산값이며 §12의 시험으로 확인한다.
 
 ### 9.2 etcd와 client 설정의 하한
@@ -375,7 +439,38 @@ lease 갱신이 renew timeout(기본 3초) 안에 끝나는지 §12의 시험으
 | Scan 중 compaction, snapshot 유효 시간 초과, 다른 cluster의 cursor | `Expired` |
 
 이 오류들을 `Missing`, `Conflict`나 빈 page로 반환하지 않는다. etcd 오류 code와 endpoint 정보는
-application 공개 API에 노출하지 않는다.
+application 공개 API에 노출하지 않는다. etcd 오류를 위 상황 중 무엇으로 분류하는지와 인증 오류로 거절된
+요청의 처리는 [§10.1](#101-etcd-호출-규칙)이 정한다.
+
+### 10.1 etcd 호출 규칙
+
+**공식 provider와 Store 관리 도구는 etcd v3.6.16의 공식 gRPC 정의(proto)로 etcd를 직접 호출한다.** 언어별
+etcd client library를 사용하지 않는다. 기존 client들은 결과를 받지 못한 요청을 다시 보내는 정책이나 응답의
+cluster ID·오류 설명을 버리는 변환을 각자 가지고 있어, 네 언어가 같은 결과를 내도록 맞추기 어렵기 때문이다.
+네 언어는 저장소에 한 벌 보관한 같은 proto 사본을 사용한다.
+
+- **gRPC 수준의 재시도(retry)와 hedging을 끈다.** 요청을 다시 보내는 경우는 아래 두 가지뿐이다.
+  - [§6](#6-conditional-atomic-batch)이 정한 경우(적용 비교가 거짓, 판정용 payload 읽기의 compaction)에는
+    §6의 절차를 1단계부터 다시 수행한다.
+  - 인증 오류(아래 표)로 거절된 RPC는 재인증한 뒤 같은 RPC를 한 번 다시 보낸다. etcd는 인증을 검사한 뒤에만
+    요청을 처리하므로 이 RPC는 적용되지 않았음이 확정이다.
+- **그 밖에 결과를 받지 못한 쓰기는 다시 보내지 않는다.** 연결이 다른 endpoint로 바뀌었거나 재인증에
+  성공했다는 사실은 이전 쓰기가 적용되지 않았다는 근거가 아니다. 그 operation은
+  [§10](#10-결과-유실과-오류)대로 commit 여부 불명으로 끝난다.
+- **오류는 gRPC status code와 status 설명을 함께 보고 분류한다.** etcd는 서로 다른 오류에 같은 code를
+  쓰기 때문이다. 이 표가 오류 분류를 소유하며 §6·§7·§10은 분류 결과를 사용한다.
+
+| gRPC status | 설명에 포함된 문구 | 분류 |
+|---|---|---|
+| `OUT_OF_RANGE` | `required revision has been compacted` | Compaction(처리: [§6](#6-conditional-atomic-batch), [§7](#7-snapshot-scan)) |
+| `RESOURCE_EXHAUSTED` | `database space exceeded` | `NOSPACE`(처리: [§10](#10-결과-유실과-오류)) |
+| `UNAUTHENTICATED` | `invalid auth token` | 인증 오류 |
+| `INVALID_ARGUMENT` | `revision of auth store is old` | 인증 오류 |
+| 그 밖의 모든 오류 | — | Store failure(처리: [§10](#10-결과-유실과-오류)) |
+
+- 한 operation 안의 모든 RPC(재인증 포함)는 그 operation의 남은 시간을 deadline으로 사용한다. RPC마다
+  시간을 새로 주지 않는다.
+- Revision, cluster ID와 시각 값은 64-bit 정수 또는 그 10진 문자열로 다루며 부동소수점으로 바꾸지 않는다.
 
 ## 11. 공개 option
 
@@ -383,13 +478,19 @@ application 공개 API에 노출하지 않는다.
 언어 interface 문서가 정한다.
 
 ```text
-endpoints         // etcd client endpoint 목록 (필수, 1개 이상)
-tls / credentials // client 인증서와 인증 정보 (선택)
+endpoints         // etcd client endpoint URL 목록 (필수, 1개 이상). 모두 http:// 이거나 모두 https://
+tls               // 선택. https endpoint에만 사용
+  trustedCa       //   선택. 신뢰할 CA 인증서(PEM). 없으면 운영체제 신뢰 저장소
+  clientIdentity  //   선택. client 인증서 chain과 개인 key(PEM)를 함께 담는 값. 둘 다 필수
+credentials       // 선택. etcd 사용자 인증의 user와 password. 둘 다 필수
 namespace         // §3.1의 namespace, UTF-8 1..64 bytes, 0x00 불가 (필수)
-operationTimeout  // operation 하나의 전체 시간 상한, 다시 수행하는 시간 포함 (선택)
+operationTimeout  // operation 하나의 전체 시간 상한, 다시 수행하는 시간 포함 (선택, 기본 5초, 0보다 큼)
 ```
 
-Store 시각의 갱신 주기·따라잡기 비율과 snapshot 유효 시간은 option이 아니다.
+Provider는 생성할 때 위 조건을 검사하고, 어긋나면 etcd에 접속하기 전에 언어별 argument 오류로 거부한다.
+http와 https endpoint를 섞은 목록, http endpoint에 준 `tls`, 비어 있는 인증서·key·user·password가
+여기에 해당한다. Store 시각의 갱신 주기·따라잡기 비율과 snapshot 유효 시간은 option이
+아니다.
 
 ## 12. 검증 요구
 

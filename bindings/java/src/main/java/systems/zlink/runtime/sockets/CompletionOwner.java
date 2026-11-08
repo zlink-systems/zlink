@@ -80,7 +80,7 @@ final class CompletionOwner implements AutoCloseable {
     private final NativeSocketRuntime socket;
     private final ConcurrentHashMap<Long, Pending<?>> pending =
         new ConcurrentHashMap<>();
-    private final Object ownerLock = new Object();
+    private final SocketCore core;
     private final HashMap<Long, WritableCompletion> earlyWritable =
         new HashMap<>();
     private long[] unpublishedSends = new long[4];
@@ -91,12 +91,12 @@ final class CompletionOwner implements AutoCloseable {
         new ConcurrentLinkedQueue<>();
     private PublicSettlement publicSettlementHead;
     private PublicSettlement publicSettlementTail;
-    private volatile boolean closed;
     private boolean finalized;
     private Object publicOwner;
 
-    CompletionOwner(NativeSocketRuntime socket) {
+    CompletionOwner(NativeSocketRuntime socket, SocketCore core) {
         this.socket = Objects.requireNonNull(socket, "socket");
+        this.core = Objects.requireNonNull(core, "core");
     }
 
     SendSubmission submitSend(RoutingId target, List<Message> parts) {
@@ -105,10 +105,13 @@ final class CompletionOwner implements AutoCloseable {
         SubmitAttempt attempt;
         List<Message> retained;
         try {
-            attempt = submitPartsAttempt(target, parts,
-                SendFlags.DONT_WAIT.value(), 0,
-                MemorySegment.ofAddress(token), true, false,
-                0L);
+            try {
+                attempt = submitPartsAttempt(target, parts,
+                    SendFlags.DONT_WAIT.value(), 0,
+                    MemorySegment.ofAddress(token), true, false, 0L);
+            } finally {
+                core.releaseNativeCall();
+            }
             if (attempt.result() == SubmitResult.OK) {
                 if (attempt.completionId() != 0L) {
                     throw new ZlinkSubmitException(
@@ -132,15 +135,15 @@ final class CompletionOwner implements AutoCloseable {
         }
         Pending<Void> state;
         boolean rejectClosed;
-        synchronized (ownerLock) {
+        synchronized (core.ownerLock) {
             removeUnpublishedSendLocked(token);
             state = new Pending<>(token, PendingKind.RETRY_SEND, target,
                 retained, 0);
             state.armWritable(attempt.completionId());
-            rejectClosed = closed;
+            rejectClosed = core.isClosed();
             if (!rejectClosed)
                 pending.put(token, state);
-            ownerLock.notifyAll();
+            core.ownerLock.notifyAll();
         }
         if (rejectClosed)
             state.rejectClosed();
@@ -155,8 +158,9 @@ final class CompletionOwner implements AutoCloseable {
     }
 
     void submitSendBlocking(RoutingId target, List<Message> parts) {
-        SubmitAttempt attempt = submitPartsAttempt(target, parts,
-            SendFlags.NONE.value(), 0, MemorySegment.NULL, false, false, 0L);
+        SubmitAttempt attempt = core.withNativeCall(() ->
+            submitPartsAttempt(target, parts, SendFlags.NONE.value(), 0,
+                MemorySegment.NULL, false, false, 0L));
         requireSuccess(attempt);
         closeParts(parts);
     }
@@ -170,9 +174,13 @@ final class CompletionOwner implements AutoCloseable {
         SubmitAttempt attempt;
         List<Message> retained;
         try {
-            attempt = submitPartsAttempt(target, parts,
-                SendFlags.DONT_WAIT.value(), timeoutMs, state.context(), true,
-                true, 0L);
+            try {
+                attempt = submitPartsAttempt(target, parts,
+                    SendFlags.DONT_WAIT.value(), timeoutMs, state.context(),
+                    true, true, 0L);
+            } finally {
+                core.releaseNativeCall();
+            }
             if (attempt.result() == SubmitResult.OK) {
                 if (attempt.completionId() == 0L) {
                     throw new ZlinkSubmitException(
@@ -225,10 +233,15 @@ final class CompletionOwner implements AutoCloseable {
             RoutingId target, List<Message> parts, Duration timeout, int flags) {
         Pending<List<Message>> state = null;
         try {
-            state = registerRequest();
-            SubmitAttempt attempt = submitPartsAttempt(target, parts,
-                flags, timeoutMillis(timeout), state.context(), true,
-                true, 0L);
+            state = register(PendingKind.REQUEST, null, List.of(), 0);
+            SubmitAttempt attempt;
+            try {
+                attempt = submitPartsAttempt(target, parts,
+                    flags, timeoutMillis(timeout), state.context(), true,
+                    true, 0L);
+            } finally {
+                core.releaseNativeCall();
+            }
             requireSuccess(attempt);
             closeParts(parts);
             if (attempt.completionId() == 0L) {
@@ -245,18 +258,11 @@ final class CompletionOwner implements AutoCloseable {
     }
 
     void submitReply(RoutingId target, long token, List<Message> parts) {
-        SubmitAttempt attempt = submitPartsAttempt(target, parts,
-            SendFlags.NONE.value(), 0, MemorySegment.NULL, false, false, token);
+        SubmitAttempt attempt = core.withNativeCall(() ->
+            submitPartsAttempt(target, parts, SendFlags.NONE.value(), 0,
+                MemorySegment.NULL, false, false, token));
         requireSuccess(attempt);
         closeParts(parts);
-    }
-
-    <T> T withNativeCall(NativeSendAction<T> action) {
-        Objects.requireNonNull(action, "action");
-        if (closed) {
-            throw new IllegalStateException("socket is closed");
-        }
-        return action.run();
     }
 
     /**
@@ -266,36 +272,29 @@ final class CompletionOwner implements AutoCloseable {
     NoWaitAttempt trackNoWaitSend(NoWaitSubmitter submitter) {
         Objects.requireNonNull(submitter, "submitter");
         long token = nextContextToken();
-        return withNativeCall(() -> {
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment idOut = arena.allocate(ValueLayout.JAVA_LONG);
-                int result = submitter.submit(MemorySegment.ofAddress(token),
-                    idOut);
-                int errno = result == SubmitResult.OK.value()
-                    ? 0 : Native.errno();
-                SubmitResult submitted = SubmitResult.fromValue(result);
-                if (submitted == SubmitResult.OK
-                        && idOut.get(ValueLayout.JAVA_LONG, 0) != 0L) {
-                    throw new ZlinkSubmitException(
-                        SubmitResult.INTERNAL_ERROR);
-                }
-                return new NoWaitAttempt(submitted.value(), errno);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment idOut = arena.allocate(ValueLayout.JAVA_LONG);
+            int result = submitter.submit(MemorySegment.ofAddress(token),
+                idOut);
+            int errno = result == SubmitResult.OK.value()
+                ? 0 : Native.errno();
+            SubmitResult submitted = SubmitResult.fromValue(result);
+            if (submitted == SubmitResult.OK
+                    && idOut.get(ValueLayout.JAVA_LONG, 0) != 0L) {
+                throw new ZlinkSubmitException(
+                    SubmitResult.INTERNAL_ERROR);
             }
-        });
+            return new NoWaitAttempt(submitted.value(), errno);
+        } finally {
+            core.releaseNativeCall();
+        }
     }
 
     private SubmitAttempt submitPartsAttempt(
             RoutingId target, List<Message> originals, int flags,
             int timeoutMs, MemorySegment userContext, boolean completion,
             boolean request, long replyToken) {
-        return withNativeCall(() -> submitPartsAttemptLocked(target, originals,
-            flags, timeoutMs, userContext, completion, request, replyToken));
-    }
-
-    private SubmitAttempt submitPartsAttemptLocked(
-            RoutingId target, List<Message> originals, int flags,
-            int timeoutMs, MemorySegment userContext, boolean completion,
-            boolean request, long replyToken) {
+        // The caller holds a native-call reservation through all preparation.
         validateParts(originals);
         NativeScratch scratch = NATIVE_SCRATCH.get();
         MemorySegment nativeTarget = target == null ? MemorySegment.NULL
@@ -355,16 +354,6 @@ final class CompletionOwner implements AutoCloseable {
         }
     }
 
-    int closeNativeSocket() {
-        int rc = Native.close(socket.handle());
-        if (rc == systems.zlink.contracts.errors.CloseResult.OK.value()) {
-            synchronized (ownerLock) {
-                closed = true;
-            }
-        }
-        return rc;
-    }
-
     private static void validateParts(List<Message> parts) {
         Objects.requireNonNull(parts, "parts");
         if (parts.isEmpty()) {
@@ -399,57 +388,47 @@ final class CompletionOwner implements AutoCloseable {
         Message.closeAll(parts);
     }
 
-    private Pending<List<Message>> registerRequest() {
-        return register(PendingKind.REQUEST, null, List.of(), 0);
-    }
-
-    private <T> Pending<T> register(PendingKind kind, RoutingId target,
-                                    List<Message> retained) {
-        return register(kind, target, retained, 0);
-    }
-
     private <T> Pending<T> register(PendingKind kind, RoutingId target,
                                     List<Message> retained,
                                     int requestTimeoutMs) {
-        synchronized (ownerLock) {
-            if (closed) {
-                throw new IllegalStateException("socket is closed");
-            }
+        synchronized (core.ownerLock) {
+            core.ensureOpenForSubmitLocked();
             long token = nextContextTokenLocked();
             Pending<T> state = new Pending<>(token, kind, target, retained,
                 requestTimeoutMs);
             pending.put(token, state);
+            core.reserveNativeCallLocked();
             return state;
         }
     }
 
     private long nextContextToken() {
-        synchronized (ownerLock) {
-            if (closed) {
-                throw new IllegalStateException("socket is closed");
-            }
-            return nextContextTokenLocked();
+        synchronized (core.ownerLock) {
+            core.ensureOpenForSubmitLocked();
+            long token = nextContextTokenLocked();
+            core.reserveNativeCallLocked();
+            return token;
         }
     }
 
     private long nextSendContextToken() {
-        synchronized (ownerLock) {
-            if (closed)
-                throw new IllegalStateException("socket is closed");
+        synchronized (core.ownerLock) {
+            core.ensureOpenForSubmitLocked();
             long token = nextContextTokenLocked();
             if (unpublishedSendCount == unpublishedSends.length)
                 unpublishedSends = Arrays.copyOf(unpublishedSends,
                     unpublishedSends.length * 2);
             unpublishedSends[unpublishedSendCount++] = token;
+            core.reserveNativeCallLocked();
             return token;
         }
     }
 
     private void discardUnpublishedSend(long token) {
-        synchronized (ownerLock) {
+        synchronized (core.ownerLock) {
             removeUnpublishedSendLocked(token);
             if (earlyWritable.remove(token) != null)
-                ownerLock.notifyAll();
+                core.ownerLock.notifyAll();
         }
     }
 
@@ -547,7 +526,7 @@ final class CompletionOwner implements AutoCloseable {
     }
 
     private void receiveOneBlocking() {
-        if (closed)
+        if (core.isClosed())
             throw new IllegalStateException("socket is closed");
         MemorySegment completion = NATIVE_SCRATCH.get().completion;
         while (true) {
@@ -570,7 +549,7 @@ final class CompletionOwner implements AutoCloseable {
     private int drainLocked(boolean settleInline) {
         int progress = 0;
         MemorySegment completion = NATIVE_SCRATCH.get().completion;
-        while (!closed) {
+        while (!core.isClosed()) {
             completion.fill((byte) 0);
             completion.set(ValueLayout.JAVA_INT,
                 NativeLayouts.COMPLETION_STRUCT_SIZE_OFFSET,
@@ -579,7 +558,7 @@ final class CompletionOwner implements AutoCloseable {
                 RECV_DONT_WAIT);
             if (rc == RecvResult.NO_DATA.value()) {
                 Pending<?> state;
-                while (!closed && (state = retries.poll()) != null) {
+                while (!core.isClosed() && (state = retries.poll()) != null) {
                     if (!state.awaitingWritable())
                         continue;
                     if (state.kind == PendingKind.REQUEST)
@@ -611,7 +590,7 @@ final class CompletionOwner implements AutoCloseable {
             MemorySegment context = completion.get(ValueLayout.ADDRESS,
                 NativeLayouts.COMPLETION_CONTEXT_OFFSET);
             token = context.address();
-            synchronized (ownerLock) {
+            synchronized (core.ownerLock) {
                 state = pending.get(token);
                 if (state == null && unpublishedSendLocked(token)) {
                     WritableCompletion record = (WritableCompletion)
@@ -635,16 +614,16 @@ final class CompletionOwner implements AutoCloseable {
         }
         if (storedEarly) {
             boolean interrupted = false;
-            synchronized (ownerLock) {
-                while (unpublishedSendLocked(token) && !closed) {
+            synchronized (core.ownerLock) {
+                while (unpublishedSendLocked(token) && !core.isClosed()) {
                     try {
-                        ownerLock.wait();
+                        core.ownerLock.wait();
                     } catch (InterruptedException failure) {
                         interrupted = true;
                     }
                 }
                 result = earlyWritable.remove(token);
-                if (!closed && result != null)
+                if (!core.isClosed() && result != null)
                     state = pending.get(token);
             }
             if (interrupted)
@@ -700,14 +679,17 @@ final class CompletionOwner implements AutoCloseable {
     }
 
     private boolean hasPublicOwner() {
-        synchronized (ownerLock) {
+        synchronized (core.ownerLock) {
             return publicOwner != null;
         }
     }
 
     private void ensurePublicOwner() {
-        if (!hasPublicOwner())
-            throw new ZlinkSubmitException(SubmitResult.INVALID_STATE);
+        synchronized (core.ownerLock) {
+            core.ensureOpenForSubmitLocked();
+            if (publicOwner == null)
+                throw new ZlinkSubmitException(SubmitResult.INVALID_STATE);
+        }
     }
 
     boolean transferToPublic(Object claimant) {
@@ -716,8 +698,8 @@ final class CompletionOwner implements AutoCloseable {
         try {
             drainLock.lock();
             try {
-                synchronized (ownerLock) {
-                    if (closed)
+                synchronized (core.ownerLock) {
+                    if (core.isClosed())
                         throw new IllegalStateException("socket is closed");
                     if (publicOwner == claimant)
                         return false;
@@ -739,7 +721,7 @@ final class CompletionOwner implements AutoCloseable {
         Objects.requireNonNull(claimant, "claimant");
         drainLock.lock();
         try {
-            synchronized (ownerLock) {
+            synchronized (core.ownerLock) {
                 if (publicOwner != claimant)
                     return;
                 publicOwner = null;
@@ -757,9 +739,10 @@ final class CompletionOwner implements AutoCloseable {
         }
         SubmitAttempt attempt;
         try {
-            attempt = submitPartsAttempt(state.target, state.retained,
-                SendFlags.DONT_WAIT.value(), 0, state.context(), true, false,
-                0L);
+            attempt = core.withNativeCall(() ->
+                submitPartsAttempt(state.target, state.retained,
+                    SendFlags.DONT_WAIT.value(), 0, state.context(), true,
+                    false, 0L));
         } catch (RuntimeException | Error failure) {
             state.finishRetry(true);
             state.reject(failure, settleInline);
@@ -797,9 +780,10 @@ final class CompletionOwner implements AutoCloseable {
         }
         SubmitAttempt attempt;
         try {
-            attempt = submitPartsAttempt(state.target, state.retained,
-                SendFlags.DONT_WAIT.value(), state.requestTimeoutMs,
-                state.context(), true, true, 0L);
+            attempt = core.withNativeCall(() ->
+                submitPartsAttempt(state.target, state.retained,
+                    SendFlags.DONT_WAIT.value(), state.requestTimeoutMs,
+                    state.context(), true, true, 0L));
         } catch (RuntimeException | Error failure) {
             state.finishRetry(true);
             state.reject(failure, settleInline);
@@ -840,17 +824,16 @@ final class CompletionOwner implements AutoCloseable {
 
     @Override
     public void close() {
-        synchronized (ownerLock) {
+        synchronized (core.ownerLock) {
             if (finalized)
                 return;
             finalized = true;
-            closed = true;
             publicOwner = this;
-            ownerLock.notifyAll();
+            core.ownerLock.notifyAll();
         }
         rejectPendingClosed();
         pending.clear();
-        synchronized (ownerLock) {
+        synchronized (core.ownerLock) {
             earlyWritable.clear();
         }
         retries.clear();
@@ -907,11 +890,6 @@ final class CompletionOwner implements AutoCloseable {
     interface NoWaitSubmitter {
         int submit(MemorySegment userContext,
                    MemorySegment completionIdOut);
-    }
-
-    @FunctionalInterface
-    interface NativeSendAction<T> {
-        T run();
     }
 
     private record WritableCompletion(int kind, long completionId,
@@ -1152,7 +1130,7 @@ final class CompletionOwner implements AutoCloseable {
         }
 
         synchronized boolean beginRetry() {
-            if (closed || dispatched || (kind == PendingKind.RETRY_SEND
+            if (core.isClosed() || dispatched || (kind == PendingKind.RETRY_SEND
                     && admitted.isCancelled())) {
                 return false;
             }

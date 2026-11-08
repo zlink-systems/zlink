@@ -11,9 +11,13 @@ import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.sockets.*;
+import systems.zlink.contracts.errors.CloseResult;
+import systems.zlink.contracts.errors.ZlinkCloseException;
 import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.runtime.eventing.NativeMonitorSocket;
@@ -48,6 +52,11 @@ final class SocketCore {
     }
 
     private final NativeSocketRuntime socket;
+    final Object ownerLock = new Object();
+    private volatile boolean closed;
+    // Covers native preparation as well as the call. Increment under ownerLock
+    // after the open check; atomic release needs no second lock entry.
+    private final AtomicInteger activeNativeCalls = new AtomicInteger();
     private Arena sendScratchArena = Arena.ofShared();
     private MemorySegment sendScratch = MemorySegment.NULL;
     private int sendScratchCapacity = NativeSocketRuntime.DEFAULT_IO_BUFFER_SIZE;
@@ -59,7 +68,7 @@ final class SocketCore {
             || type == SocketType.DEALER
             || type == SocketType.ROUTER
             || type == SocketType.STREAM
-            ? new CompletionOwner(socket) : null;
+            ? new CompletionOwner(socket, this) : null;
     }
 
     void bind(String endpoint) {
@@ -241,9 +250,50 @@ final class SocketCore {
     }
 
     int closeNativeHandle() {
-        return completionOwner == null
-            ? Native.close(socket.handle())
-            : completionOwner.closeNativeSocket();
+        synchronized (ownerLock) {
+            if (closed)
+                return CloseResult.OK.value();
+            // Core cannot see a submit still preparing its native arguments.
+            if (activeNativeCalls.get() != 0)
+                throw new ZlinkCloseException(CloseResult.BUSY,
+                    NativeErrno.EBUSY);
+            int rc = Native.close(socket.handle());
+            if (rc == CloseResult.OK.value())
+                closed = true;
+            return rc;
+        }
+    }
+
+    <T> T withNativeCall(Supplier<T> action) {
+        Objects.requireNonNull(action, "action");
+        synchronized (ownerLock) {
+            ensureOpenForSubmitLocked();
+            reserveNativeCallLocked();
+        }
+        try {
+            return action.get();
+        } finally {
+            releaseNativeCall();
+        }
+    }
+
+    void ensureOpenForSubmitLocked() {
+        if (closed)
+            throw new ZlinkSubmitException(SubmitResult.TERMINATED,
+                NativeErrno.ESHUTDOWN);
+    }
+
+    // Caller holds ownerLock and has checked open before fallible preparation.
+    void reserveNativeCallLocked() {
+        activeNativeCalls.incrementAndGet();
+    }
+
+    void releaseNativeCall() {
+        activeNativeCalls.decrementAndGet();
+    }
+
+    boolean isClosed() {
+        return closed;
     }
 
     MemorySegment ensureSendScratch(int length) {
@@ -272,6 +322,10 @@ final class SocketCore {
     }
 
     void closeCommonState() {
+        // A borrowed handle is never closed natively but still ends submits.
+        synchronized (ownerLock) {
+            closed = true;
+        }
         if (completionOwner != null)
             completionOwner.close();
         RuntimeResources.closeArena(sendScratchArena);

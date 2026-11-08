@@ -20,6 +20,9 @@
       "path": "./packages/framework-locations-redis"
     },
     {
+      "path": "./packages/framework-locations-etcd"
+    },
+    {
       "path": "./packages/http-client"
     },
     {
