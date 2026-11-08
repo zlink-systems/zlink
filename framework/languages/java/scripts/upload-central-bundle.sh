@@ -26,6 +26,7 @@ artifact_ids=(
   zlink-framework-core
   zlink-framework-json-internal
   zlink-framework-kotlin
+  zlink-framework-locations-etcd
   zlink-framework-locations-redis
   zlink-framework-provider-abstractions
   zlink-framework-spring-boot-starter

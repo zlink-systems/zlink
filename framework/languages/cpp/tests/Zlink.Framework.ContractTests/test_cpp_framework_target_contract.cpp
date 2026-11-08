@@ -125,6 +125,8 @@ int main ()
       read_text_file (root / "framework/src/runtime/channels/channel_reply_writer.cpp");
     const auto location_auto_connect = read_text_file (
       root / "framework/src/runtime/locations/location_auto_connect_host_service.hpp");
+    const auto location_runtime =
+      read_text_file (root / "framework/src/runtime/locations/location_runtime.hpp");
     const auto client_server_location_runtime = read_text_file (
       root / "framework/src/runtime/client_server/client_server_location_runtime.cpp");
     const auto store_location_resolvers =
@@ -775,8 +777,22 @@ int main ()
       location_auto_connect.find ("auto polled = co_await observe_until (");
     const auto recovery_owner_check =
       location_auto_connect.find ("owner_lease_usable ()", complete_recovery_snapshot);
-    const auto recovery_republish = location_auto_connect.find (
-      "co_await _republish_after_store_recovery (intent, stopped, deadline)", recovery_owner_check);
+    const auto recovery_republish =
+      location_auto_connect.find ("_runtime->republish_descriptors (", recovery_owner_check);
+    const auto recovery_publisher =
+      location_runtime.find ("auto pending = publish (intent, cancellation, deadline);");
+    const auto recovery_accept = location_runtime.find ("static task_t<void> heartbeat_accept");
+    const auto recovery_episode = location_runtime.find ("if (recovering) {", recovery_accept);
+    const auto recovery_new_token = location_runtime.find (
+      "if (episode->token.lease_generation != token.lease_generation)", recovery_episode);
+    const auto recovery_start =
+      location_runtime.find ("runtime->republish_descriptors (", recovery_new_token);
+    const auto recovery_intent = location_runtime.find (
+      "location_write_intent_t::renew, attempt->cancellation", recovery_start);
+    const auto recovery_submitted =
+      location_runtime.find ("co_await submitted->task ();", recovery_intent);
+    const auto recovery_objects =
+      location_runtime.find ("return recover_execution (", recovery_submitted);
     const auto recovery_invalidation = location_auto_connect.find (
       "invalidate_all_routes_after_store_recovery_async ();", recovery_republish);
     const auto recovery_diff =
@@ -790,6 +806,10 @@ int main ()
              != std::string::npos
         && live_location_reader.find ("} while (page.continuation_token);") != std::string::npos
         && recovery_owner_check != std::string::npos && recovery_republish != std::string::npos
+        && recovery_publisher != std::string::npos && recovery_accept != std::string::npos
+        && recovery_episode != std::string::npos && recovery_new_token != std::string::npos
+        && recovery_start != std::string::npos && recovery_intent != std::string::npos
+        && recovery_submitted != std::string::npos && recovery_objects != std::string::npos
         && recovery_invalidation != std::string::npos && recovery_diff != std::string::npos
         && location_auto_connect.find (
              "loop.recovery_started_at = std::chrono::steady_clock::now ()", recovery_republish)
