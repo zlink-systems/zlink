@@ -169,6 +169,7 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
         if (const auto *stored = std::get_if<authority_stored_t> (&exchanged)) {
             if (source.kind == object_kind_t::actor) {
                 reference.application_payload = stored->snapshot.payload;
+                reference.ready = stored->snapshot;
                 if (!same_owner (stored->snapshot.owner, target_owner))
                     return {authority_publish_status_t::failed, std::nullopt};
                 // Location Store authority generations are globally
@@ -359,7 +360,8 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
         return authority_relocation_reference_t{.source = current,
                                                 .target = current,
                                                 .target_owner = snapshot->owner,
-                                                .application_payload = snapshot->payload};
+                                                .application_payload = snapshot->payload,
+                                                .ready = *snapshot};
     }
 
     authority_publish_result_t publish_completion (object_kind_t kind,
@@ -735,6 +737,7 @@ class public_aggregate_authority_adapter_t final : public aggregate_authority_po
                                 std::string (snapshot->allocation.target.node_rid.value ())};
             placement.target_owner = snapshot->owner;
             placement.application_payload = snapshot->payload;
+            placement.ready = *snapshot;
             current.push_back (std::move (placement));
         }
         return {aggregate_publish_status_t::committed, fence, std::move (current)};

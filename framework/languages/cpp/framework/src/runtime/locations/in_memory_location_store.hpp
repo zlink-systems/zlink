@@ -785,9 +785,16 @@ class in_memory_location_repository_t : public location_repository_t
                   throw std::invalid_argument ("creation terminal expiry is not in the future");
               const auto terminal_key = creation_operation_key (publication.operation);
               if (const auto existing = _creation_terminals.find (terminal_key);
-                  existing != _creation_terminals.end () && existing->second.expires_at > now)
-                  return completed (object_complete_creation_result_t{
-                    object_creation_already_completed_result_t{existing->second}});
+                  existing != _creation_terminals.end () && existing->second.expires_at > now) {
+                  const auto authority = _authorities.find (object_key (request.key));
+                  const authority_read_result_t read =
+                    authority == _authorities.end ()
+                      ? authority_read_result_t{authority_missing_t{now}}
+                      : authority_read_result_t{authority->second};
+                  return completed (
+                    object_complete_creation_result_t{object_creation_already_completed_result_t{
+                      existing->second, creation_replay_ready (request, read)}});
+              }
 
               const auto key = object_key (request.key);
               const auto reservation = _reservations.find (key);

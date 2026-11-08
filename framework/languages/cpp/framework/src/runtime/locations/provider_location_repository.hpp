@@ -1338,10 +1338,16 @@ class provider_location_repository_t final : public location_repository_t
         if (const auto *found = std::get_if<store_found_t> (&existing)) {
             if (!found->value.expires_at)
                 throw std::invalid_argument ("creation terminal record is missing expiry");
+            std::optional<authority_snapshot_t> ready;
+            if (std::holds_alternative<object_creation_completed_t> (request.completion))
+                ready = creation_replay_ready (
+                  request, co_await read_authority_core (authority_key_t{object_key (request.key)},
+                                                         cancellation));
             co_return object_complete_creation_result_t{object_creation_already_completed_result_t{
-              creation_terminal_record_t{publication.operation, found->value.bytes,
-                                         std::chrono::time_point_cast<std::chrono::milliseconds> (
-                                           *found->value.expires_at)}}};
+              creation_terminal_record_t{
+                publication.operation, found->value.bytes,
+                std::chrono::time_point_cast<std::chrono::milliseconds> (*found->value.expires_at)},
+              std::move (ready)}};
         }
 
         const auto store_now = std::get<store_missing_t> (existing).store_now;
@@ -1350,6 +1356,7 @@ class provider_location_repository_t final : public location_repository_t
         creation_terminal_record_t terminal{publication.operation, publication.terminal_envelope,
                                             expires_at};
         object_complete_creation_result_t result{object_creation_completion_stale_t{}};
+        std::optional<authority_snapshot_t> observed_ready;
         if (const auto *created = std::get_if<object_creation_completed_t> (&request.completion)) {
             object_commit_request_t commit_request{request.key, request.fence,
                                                    created->ready_payload};
@@ -1359,9 +1366,12 @@ class provider_location_repository_t final : public location_repository_t
             if (const auto *value = std::get_if<object_committed_t> (&committed))
                 co_return object_complete_creation_result_t{
                   object_creation_completed_result_t{std::move (terminal), value->ready}};
-            if (const auto *conflict = std::get_if<object_commit_conflict_t> (&committed))
+            if (const auto *already = std::get_if<object_already_committed_t> (&committed))
+                observed_ready = creation_replay_ready (request, already->ready);
+            if (const auto *conflict = std::get_if<object_commit_conflict_t> (&committed)) {
+                observed_ready = creation_replay_ready (request, conflict->current);
                 result = object_creation_completion_conflict_t{conflict->current};
-            else if (std::holds_alternative<authority_generation_exhausted_t> (committed))
+            } else if (std::holds_alternative<authority_generation_exhausted_t> (committed))
                 result = authority_generation_exhausted_t{};
         } else {
             object_abort_request_t abort_request{request.key, request.fence};
@@ -1379,10 +1389,16 @@ class provider_location_repository_t final : public location_repository_t
         if (const auto *found = std::get_if<store_found_t> (&concurrent)) {
             if (!found->value.expires_at)
                 throw std::invalid_argument ("creation terminal record is missing expiry");
+            auto ready = std::move (observed_ready);
+            if (!ready && std::holds_alternative<object_creation_completed_t> (request.completion))
+                ready = creation_replay_ready (
+                  request, co_await read_authority_core (authority_key_t{object_key (request.key)},
+                                                         cancellation));
             co_return object_complete_creation_result_t{object_creation_already_completed_result_t{
-              creation_terminal_record_t{publication.operation, found->value.bytes,
-                                         std::chrono::time_point_cast<std::chrono::milliseconds> (
-                                           *found->value.expires_at)}}};
+              creation_terminal_record_t{
+                publication.operation, found->value.bytes,
+                std::chrono::time_point_cast<std::chrono::milliseconds> (*found->value.expires_at)},
+              std::move (ready)}};
         }
         co_return result;
     }

@@ -268,6 +268,10 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     using execution_admission_t =
       std::function<execution_status_t (const serial_execution_queue_t &)>;
     void set_execution_policy (execution_admission_t policy);
+    using execution_operation_t =
+      std::pair<execution_status_t, std::chrono::steady_clock::time_point>;
+    void set_execution_operation (task_t<execution_operation_t> operation);
+    std::optional<task_t<execution_operation_t>> pending_execution_operation () const;
     using ready_confirmation_t = std::function<void (std::chrono::steady_clock::time_point)>;
     ready_confirmation_t ready_confirmation () const;
     void confirm_execution_ready (std::chrono::steady_clock::time_point at);
@@ -416,6 +420,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     void close (execution_status_t status);
     void close_locked (execution_status_t status = execution_status_t::stopped);
     void install_execution_policy_locked (execution_admission_t policy);
+    void execution_operation_changed ();
     void drain_loop ();
     void execute_item (work_item_t item);
     void complete_one (std::string name,
@@ -486,6 +491,22 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     {
         explicit execution_policy_t (execution_admission_t admit) : admit (std::move (admit)) {}
         const execution_admission_t admit;
+        std::shared_ptr<task_t<execution_operation_t>> operation;
+        execution_status_t status (const serial_execution_queue_t &queue) const
+        {
+            const auto base = admit (queue);
+            if (base != execution_status_t::allowed)
+                return base;
+            const auto at = ready_at.load (std::memory_order_acquire);
+            if (at == verifying || at == failed)
+                return execution_status_t::stopped;
+            return at == lost ? execution_status_t::ownership_lost : base;
+        }
+        static constexpr auto unready =
+          std::chrono::steady_clock::time_point::min ().time_since_epoch ().count ();
+        static constexpr auto verifying = unready + 1;
+        static constexpr auto failed = unready + 2;
+        static constexpr auto lost = unready + 3;
         // Only lifecycle writers serialize here; turn selection reads ready_at directly.
         std::mutex ready_mutex;
         std::shared_ptr<const unsigned char> incarnation =
@@ -513,6 +534,8 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     publication_node_t *_publication_tail = nullptr;
     publication_node_t *_publication_cursor = nullptr;
     std::shared_ptr<serial_execution_queue_t> _spot_gate;
+    // Reverse of attach_spot_gate; lifecycle notifications only, never turn selection.
+    std::vector<std::weak_ptr<serial_execution_queue_t>> _execution_children;
     enum class gate_state_t : unsigned char
     {
         idle,
