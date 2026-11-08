@@ -26,7 +26,10 @@ relocation phase의 의미를 알아야 하는 것은 아니다. Framework가 �
 **운영 요구: Location Store는 되돌아가지 않아야 한다.** AOF·동기 복제 등으로 장애 전환,
 요금제 변경과 Store 노드 교체 뒤에도 성공한 변경과 generation counter의 연속성을 보장한다.
 설정 이름만으로 이 보장을 충족한다고 간주하지 않는다. 운영자는 복구·승격 뒤 성공한 쓰기를
-잃지 않고 이전 primary의 쓰기가 차단되는 구성을 사용해야 한다. 후퇴를 감지하면 Framework는
+잃지 않고 이전 primary의 쓰기가 차단되는 구성을 사용해야 한다. 마지막 성공 변경 이후의 쓰기를
+담지 않은 백업으로 같은 namespace를 복원하는 것도 후퇴다. 비동기 복제와 자동 승격을 함께 쓰는
+Redis·Valkey 구성은 이 요구를 만족하지 않는다. 합의(Raft)로 이 요구를 만족하는 공식 provider는
+[07. Location Store (etcd)](07-location-store-etcd.ko.md)가 정의한다. 후퇴를 감지하면 Framework는
 보존 없이 local 객체를 모두 정리하고 빈 상태로 재참여한다([Location runtime §5.1](01-location-runtime.ko.md#51-짧은-장애의-보존과-재참여)).
 Node는 같은 발급 counter 자체의 현재값을 관측하고, 그 이전 관측 뒤에 수행했음이 확인되는
 현재값 관측이 더 작을 때만 후퇴로 판정한다. 기존 object record의 과거 generation read나
@@ -55,8 +58,9 @@ Framework가 등록된 instance를 사용한다.
 provider(Redis가 아닌 provider 포함)가 지켜야 하는 SPI 계약이다 — 코드가 이와 다르면 코드를
 고친다. §8~§9는 공식 Redis provider가 사용하는 Redis 자체의 key 배치와 data type을 정하는
 구현 계약이다. 이 중 §8~§9에서 서로 다른 언어의 Redis provider가 상호 읽어야 하는
-부분(counter 발급 key, 5개 record의 opaque 저장 형식)은 **MUST-level 공개 계약**이며 코드가
-이와 다르면 코드를 고친다 — Redis가 아닌 provider는 이 부분을 따를 필요가 없다. 그 밖에
+부분(counter 발급 key, 여섯 record의 opaque 저장 형식)은 **MUST-level 공개 계약**이며 코드가
+이와 다르면 코드를 고친다 — Redis가 아닌 provider는 이 부분을 따를 필요가 없다. 공식 etcd
+provider의 저장 형식은 [07. Location Store (etcd)](07-location-store-etcd.ko.md)가 소유한다. 그 밖에
 Redis provider가 내부적으로 선택하는 세부 구현(Lua script 분할, connection 관리)은 §9
 끝에서 명시적으로 구분하며, 이 부분은 구현이 바뀌면 문서를 코드에 맞춘다.
 
@@ -126,7 +130,8 @@ Framework domain generation은 provider version과 다르다. Provider는 domain
 Write request는 condition 집합과 mutation 집합으로 구성한다.
 
 - `Missing(key)`는 key가 없거나 만료된 경우에만 참이다.
-- `Version(key, expected)`는 current version이 `expected`와 같은 경우에만 참이다.
+- `Version(key, expected)`는 key가 있고 만료되지 않았으며 current version이 `expected`와 같은
+  경우에만 참이다.
 - `Value(key, expected)`는 key가 있고 만료되지 않았으며 current bytes가 `expected`와 byte 단위로
   같은 경우에만 참이다.
 - `Put(key, bytes, optional retention)`은 새 opaque version을 발급한다.
@@ -161,6 +166,9 @@ Snapshot scan은 복구와 maintenance가 Framework record를 제한된 크기�
 - 첫 page 요청에는 cursor가 없다. Provider는 크기를 제한한 snapshot을 만들고 다음 page가
   있으면 opaque cursor를 반환한다.
 - 같은 cursor의 다음 page는 처음 고정한 snapshot만 읽는다.
+- Snapshot을 고정할 때 그 관측의 `StoreNow`도 함께 고정한다. 모든 page는 이 시각을 `StoreNow`로
+  반환하고 만료 판정에도 이 시각만 사용한다. Provider instance가 실행되는 host의 local clock으로
+  대신하지 않는다.
 - Page limit은 `1..1000`이고 encoded page 크기는 최대 4 MiB다.
 - Cursor는 opaque UTF-8 `1..4096` bytes다.
 - Snapshot이 더 이상 존재하지 않거나 cursor가 유효하지 않으면 `Expired`를 반환한다.
@@ -325,11 +333,15 @@ golden fixture로 검증하는 key·value byte — 만으로 다음을 확인한
 - 만료된 value는 provider clock 기준 `Missing`이고 durable value는 explicit delete 전까지
   유지된다.
 - Condition 하나가 실패하면 모든 mutation과 version 증가가 0이다.
+- 만료된 key에 읽기 때 받은 version으로 `Version` 조건을 걸면 `Conflict`이고 mutation은 0이다.
 - `Value`는 같은 bytes로 `Put`해 version과 expiry가 바뀌어도 참이고, bytes 변경·삭제·만료 시
   거짓이며 그때 batch mutation은 0이다.
 - 최대 2,048 unique key와 encoded 4 MiB request가 하나의 atomic commit으로 적용된다.
 - Scan page가 같은 snapshot을 사용하며 snapshot 또는 cursor가 유효하지 않으면 `Expired`를
   반환한다.
+- 같은 snapshot의 모든 page가 첫 page와 같은 `StoreNow`를 반환하고, 첫 page 뒤에 만료 시각이
+  지난 item도 그 snapshot의 page에는 그대로 나온다. Provider host의 local clock을 Store 시각과
+  다르게 맞춰도 결과가 같다.
 - Cursor는 4,096 bytes까지 opaque하게 왕복하고 page는 1,000 item·4 MiB bound를 지킨다.
 - Cancellation이나 결과 유실 뒤 직접 읽기와 version으로 commit 여부를 재구성할 수 있다.
 - Redis provider public declaration에 authority·reservation·aggregate DTO, script와 key
