@@ -2671,6 +2671,7 @@ function decodeMultipartRecord(
     channelName,
     topic: null,
     applicationMetadata: null,
+    receivedAt: record.receivedAt,
     packetName: SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
     contentType: SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
     kindData: null,
