@@ -63,6 +63,45 @@ final class ZLinkSessionActorBindingContractTest {
     private static final int MIXED_RELAY_ATTEMPTS = 1000;
     private static final int MIXED_PARALLEL_RELAYS = 64;
 
+    @org.junit.jupiter.api.RepeatedTest(100)
+    void confirmedActorLeaseUpdatesBothCopiesOnlyInTheCurrentSessionGate() {
+        var stream = new FakeStream();
+        var runtime = runtime(stream);
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        long generation = runtime.boundBindingGeneration("actor-1").orElseThrow();
+        var actor = new ZLinkBackendActorRef(NODE_A, "actor-1", 7);
+        var publications = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.function.BooleanSupplier publish =
+                () -> {
+                    publications.incrementAndGet();
+                    return true;
+                };
+        runtime.refreshActorLease(actor, generation + 1, 6, publish).toCompletableFuture().join();
+        runtime.refreshActorLease(
+                        new ZLinkBackendActorRef(NODE_A, "actor-1", 8), generation, 6, publish)
+                .toCompletableFuture()
+                .join();
+        runtime.refreshActorLease(
+                        new ZLinkBackendActorRef(NODE_B, "actor-1", 7), generation, 6, publish)
+                .toCompletableFuture()
+                .join();
+        assertEquals(0, publications.get());
+        runtime.refreshActorLease(actor, generation, 6, () -> false).toCompletableFuture().join();
+        runtime.refreshActorLease(actor, generation, 6, publish).toCompletableFuture().join();
+        assertEquals(1, publications.get());
+        var old = seal(relocation(), NODE_A, 9, 5, generation);
+        assertThrows(
+                CompletionException.class,
+                () -> runtime.applyRelocationSealCommand(old).toCompletableFuture().join());
+        assertTrue(
+                runtime.applyRelocationSealCommand(seal(relocation(), NODE_A, 9, 6, generation))
+                        .toCompletableFuture()
+                        .join()
+                        .sealed());
+        assertEquals(generation, runtime.boundBindingGeneration("actor-1").orElseThrow());
+        runtime.notifyDisconnectedAll().toCompletableFuture().join();
+    }
+
     @Test
     void closeCurrentBindingUsesOnlyExactIdentityAndTransportTerminal() {
         FakeStream stream = new FakeStream();

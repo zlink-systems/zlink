@@ -20,6 +20,7 @@ public final class ZLinkMeshPeerAuthorityResolver
         implements ZLinkInternalMeshNode.PeerAuthorityResolver {
     private static final int PAGE_SIZE = 128;
 
+    private final ZLinkLocationRuntime localRuntime;
     private final ZLinkLocationRepository store;
     private final ZLinkOwnerLeaseTracker leases;
     private final long cacheNanos;
@@ -30,8 +31,24 @@ public final class ZLinkMeshPeerAuthorityResolver
         this(store, pollingInterval, System::nanoTime);
     }
 
+    public ZLinkMeshPeerAuthorityResolver(
+            ZLinkLocationRepository store,
+            Duration pollingInterval,
+            ZLinkLocationRuntime localRuntime) {
+        this(store, pollingInterval, System::nanoTime, localRuntime);
+    }
+
     ZLinkMeshPeerAuthorityResolver(
             ZLinkLocationRepository store, Duration pollingInterval, LongSupplier nanoTime) {
+        this(store, pollingInterval, nanoTime, null);
+    }
+
+    ZLinkMeshPeerAuthorityResolver(
+            ZLinkLocationRepository store,
+            Duration pollingInterval,
+            LongSupplier nanoTime,
+            ZLinkLocationRuntime localRuntime) {
+        this.localRuntime = localRuntime;
         this.store = Objects.requireNonNull(store, "store");
         if (pollingInterval == null || pollingInterval.isZero() || pollingInterval.isNegative()) {
             throw new IllegalArgumentException("pollingInterval must be positive");
@@ -39,6 +56,16 @@ public final class ZLinkMeshPeerAuthorityResolver
         this.leases = new ZLinkOwnerLeaseTracker(store, pollingInterval, nanoTime);
         this.cacheNanos = pollingInterval.toNanos();
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
+    }
+
+    @Override
+    public boolean acceptsSessionOwnerLease(
+            ZLinkInternalMeshNode.PeerAuthorityFence current, String ownerId, long generation) {
+        return localRuntime == null
+                ? ZLinkInternalMeshNode.PeerAuthorityResolver.super.acceptsSessionOwnerLease(
+                        current, ownerId, generation)
+                : localRuntime.acceptsSessionOwnerLease(
+                        ownerId, current.ownerLeaseGeneration(), generation);
     }
 
     @Override

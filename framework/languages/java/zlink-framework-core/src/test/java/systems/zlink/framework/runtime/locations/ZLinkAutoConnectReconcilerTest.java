@@ -21,6 +21,64 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicLong;
 
 final class ZLinkAutoConnectReconcilerTest {
+    @org.junit.jupiter.api.RepeatedTest(100)
+    void sessionFenceVerificationDoesNotHoldTopologyAndItsFailureRemainsVisible() {
+        var resolver = new MutableResolver();
+        resolver.rows = List.of(peer());
+        var verification = new CompletableFuture<Void>();
+        var connected = new CompletableFuture<Void>();
+        var connects = new java.util.concurrent.atomic.AtomicInteger();
+        var executor =
+                new ZLinkAutoConnectExecutor() {
+                    public boolean connect(ZLinkAutoConnectPlanner.Target target) {
+                        connects.incrementAndGet();
+                        connected.complete(null);
+                        return true;
+                    }
+
+                    public boolean disconnect(ZLinkAutoConnectPlanner.Target target) {
+                        return true;
+                    }
+
+                    public CompletionStage<Void> refreshSessionFences(
+                            List<ZLinkAutoConnectPeer> rows) {
+                        return verification;
+                    }
+                };
+        var reconciler =
+                new ZLinkAutoConnectReconciler(
+                        new ZLinkAutoConnectPlanner.Local(
+                                ZLinkAutoConnectType.CLIENT_SERVER,
+                                "orders",
+                                ZLinkLocationRole.DEALER,
+                                RoutingId.from("client"),
+                                "inproc://client"),
+                        resolver,
+                        executor,
+                        new ZLinkLocationOptions(),
+                        () -> 0L,
+                        failure -> {
+                            throw failure;
+                        });
+        var first = reconciler.tick().toCompletableFuture();
+        connected.orTimeout(5, java.util.concurrent.TimeUnit.SECONDS).join();
+        assertEquals(1, connects.get());
+        assertFalse(first.isDone());
+        var failure = new IllegalStateException("injected fence verification failure");
+        verification.completeExceptionally(failure);
+        assertSame(
+                failure,
+                assertThrows(java.util.concurrent.CompletionException.class, first::join)
+                        .getCause());
+        assertSame(
+                failure,
+                assertThrows(
+                                java.util.concurrent.CompletionException.class,
+                                () -> reconciler.tick().toCompletableFuture().join())
+                        .getCause());
+        assertEquals(1, connects.get());
+    }
+
     @Test
     void reconcileCompletionIncludesDescriptorRegistrationAndRemoval() {
         var resolver = new MutableResolver();
@@ -208,6 +266,9 @@ final class ZLinkAutoConnectReconcilerTest {
                                 ZLinkAutoConnectExecutor.class.getClassLoader(),
                                 new Class<?>[] {ZLinkAutoConnectExecutor.class},
                                 (proxy, method, arguments) -> {
+                                    if (method.getName().equals("refreshSessionFences"))
+                                        return java.lang.reflect.InvocationHandler.invokeDefault(
+                                                proxy, method, arguments);
                                     if (method.getName().equals("isManual")) return false;
                                     if (method.getName().equals("observeAdmissionExpectation"))
                                         return CompletableFuture.completedFuture(null);

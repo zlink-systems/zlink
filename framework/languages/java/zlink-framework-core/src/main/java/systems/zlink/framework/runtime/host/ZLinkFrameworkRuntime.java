@@ -330,7 +330,9 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 && this.locationStores.unifiedStore() instanceof ZLinkLocationRepository store) {
             var peerAuthorityResolver =
                     new systems.zlink.framework.runtime.locations.ZLinkMeshPeerAuthorityResolver(
-                            store, this.registration.locations().options().pollingInterval());
+                            store,
+                            this.registration.locations().options().pollingInterval(),
+                            this.locationRuntime);
             this.meshNodes
                     .nodesByName()
                     .values()
@@ -474,6 +476,13 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                             node ->
                                     node.setSessionRelocationRouteHandler(
                                             this.streams::handleSessionRelocationRoute));
+            this.meshNodes
+                    .nodesByName()
+                    .values()
+                    .forEach(
+                            node ->
+                                    node.setSessionActorFenceHandler(
+                                            this.streams::refreshSessionActorFence));
             this.meshNodes
                     .nodesByName()
                     .values()

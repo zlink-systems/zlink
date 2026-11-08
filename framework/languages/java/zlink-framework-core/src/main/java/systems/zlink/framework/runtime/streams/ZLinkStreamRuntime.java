@@ -766,16 +766,11 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                             ZLinkFrameworkErrorKind.UNAVAILABLE,
                             "Session owner has no live MeshNode descriptor"));
         }
-        if (receivingNode
-                .localSessionOwner()
-                .filter(
-                        owner ->
-                                owner.identifies(
-                                        session.nodeRid(),
-                                        session.nodeGeneration(),
-                                        session.ownerId(),
-                                        session.ownerLeaseGeneration()))
-                .isEmpty()) {
+        if (!receivingNode.matchesLocalSessionOwner(
+                session.nodeRid(),
+                session.nodeGeneration(),
+                session.ownerId(),
+                session.ownerLeaseGeneration())) {
             return CompletableFuture.failedFuture(
                     new ZLinkConfigurationException(
                             "command 42 names a different Session owner identity"));
@@ -976,6 +971,36 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
     }
 
+    public CompletionStage<java.util.OptionalLong> refreshSessionActorFence(
+            RoutingId ownerNodeRid,
+            ZLinkBackendStreamSocket stream,
+            RoutingId sessionRid,
+            ZLinkBackendActorRef actor,
+            long bindingGeneration,
+            long leaseGeneration,
+            java.util.function.BooleanSupplier publishBinding) {
+        return stateLane
+                .<CompletionStage<java.util.OptionalLong>>runNowOrQueue(
+                        () -> {
+                            for (var entry : streamsByName.entrySet()) {
+                                if (entry.getValue() != stream) continue;
+                                var session = sessions.get(sessionKey(entry.getKey(), sessionRid));
+                                if (session != null
+                                        && ownerNodeRid.equals(session.ownerNodeRid)
+                                        && session.actorRuntime() != null)
+                                    return session.actorRuntime()
+                                            .refreshActorLease(
+                                                    actor,
+                                                    bindingGeneration,
+                                                    leaseGeneration,
+                                                    publishBinding);
+                            }
+                            return CompletableFuture.completedFuture(
+                                    java.util.OptionalLong.empty());
+                        })
+                .thenCompose(stage -> stage);
+    }
+
     public CompletionStage<Void> handleBoundSessionClose(
             RoutingId receivingNodeRid,
             systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
@@ -1042,11 +1067,17 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                             ? null
                             : state.ownerNode.localSessionOwner().orElse(null);
             if (owner == null
-                    || !owner.identifies(
+                    || !state.ownerNode.matchesLocalSessionOwner(
                             retired.sessionOwnerNodeRid(),
                             retired.sessionOwnerNodeGeneration(),
                             retired.sessionOwnerId(),
-                            retired.sessionOwnerLeaseGeneration())) {
+                            retired.sessionOwnerLeaseGeneration())
+                    || owner.ownerLeaseGeneration() != retired.sessionOwnerLeaseGeneration()
+                            && (state.actorRuntime() == null
+                                    || state.actorRuntime()
+                                                    .boundBindingGeneration(actor.actorId())
+                                                    .orElse(0)
+                                            != retired.retiredBindingGeneration())) {
                 flow.traceBindingControlDrop(
                         transportSource,
                         actor.actorId(),
@@ -1819,7 +1850,11 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     }
 
     private static String sessionKey(StreamNodeRegistration streamNode, RoutingId routingId) {
-        return streamNode.name() + ":" + routingId.toString();
+        return sessionKey(streamNode.name(), routingId);
+    }
+
+    private static String sessionKey(String streamName, RoutingId routingId) {
+        return streamName + ":" + routingId.toString();
     }
 
     @Override
@@ -2226,16 +2261,9 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                         retired) {
             // Session-Actor binding §4: compare with the owner host's current identity.
             return ownerNode != null
-                    && ownerNode
-                            .localSessionOwner()
-                            .filter(
-                                    owner ->
-                                            owner.identifies(
-                                                    retired.sessionOwnerNodeRid(),
-                                                    retired.sessionOwnerNodeGeneration(),
-                                                    retired.sessionOwnerId(),
-                                                    retired.sessionOwnerLeaseGeneration()))
-                            .isPresent();
+                    && ownerNode.matchesLocalSessionOwner(
+                            retired.sessionOwnerNodeRid(), retired.sessionOwnerNodeGeneration(),
+                            retired.sessionOwnerId(), retired.sessionOwnerLeaseGeneration());
         }
 
         boolean beginReplacement(ReplacementIdentity identity) {
