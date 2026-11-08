@@ -646,7 +646,12 @@ async function lostResult(h, f, badReplay = false, killLeader = true) {
       const other = new EtcdClient(h.options(f.namespace, [next.endpoint]));
       sends++;
       try {
-        return await other.rpc('KV', 'txn', request, other.operation(operation.signal));
+        return await other.rpc(
+          'KV',
+          'txn',
+          request,
+          other.operation(operation.signal, operation.cancelsSent)
+        );
       } finally {
         other.close();
       }

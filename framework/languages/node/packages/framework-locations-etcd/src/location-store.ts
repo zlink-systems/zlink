@@ -256,7 +256,7 @@ export class ZLinkEtcdLocationStore implements ZLinkLocationStore {
   ): Promise<T> {
     if (this.disposal !== undefined) throw new Error('Location Store is disposed');
     if (signal?.aborted === true) throw new Error('Store operation stopped');
-    const pending = action(this.client.operation(signal));
+    const pending = action(this.client.operation(signal, true));
     this.pending.add(pending);
     try {
       return await pending;

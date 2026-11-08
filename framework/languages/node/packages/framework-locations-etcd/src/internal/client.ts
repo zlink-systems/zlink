@@ -57,6 +57,8 @@ export function protoDefinition(): loader.PackageDefinition {
 export interface Operation {
   readonly deadline: Date;
   readonly signal?: AbortSignal;
+  /** An abort also cancels the RPC already sent; otherwise it only stops new RPCs (§4.4). */
+  readonly cancelsSent?: boolean;
 }
 export interface KeyValue {
   key: Buffer;
@@ -115,12 +117,13 @@ export class EtcdClient {
     }));
   }
 
-  operation(signal?: AbortSignal): Operation {
+  operation(signal?: AbortSignal, cancelsSent = false): Operation {
     return {
       deadline: new Date(
         Date.now() + (this.options.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS)
       ),
-      signal
+      signal,
+      cancelsSent
     };
   }
 
@@ -209,8 +212,10 @@ export class EtcdClient {
           else accept(response);
         }
       );
-      operation.signal?.addEventListener('abort', cancel, { once: true });
-      if (operation.signal?.aborted === true) cancel();
+      if (operation.cancelsSent === true) {
+        operation.signal?.addEventListener('abort', cancel, { once: true });
+        if (operation.signal?.aborted === true) cancel();
+      }
     });
   }
 
