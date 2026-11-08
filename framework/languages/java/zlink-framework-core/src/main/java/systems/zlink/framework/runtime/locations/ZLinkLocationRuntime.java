@@ -103,7 +103,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     private String lastError;
     private Instant ownerLeaseRenewedAt;
     private volatile ZLinkLocationOwnerToken ownerToken;
-    private ZLinkLocationOwnerToken recoveryPreviousOwnerToken;
+    private volatile ZLinkLocationOwnerToken recoveryPreviousOwnerToken;
     private long ownerLeaseOperationStartedNanos;
     private Function<Boolean, CompletionStage<Void>> ownerLeaseRecoveryListener;
     private CompletableFuture<Void> ownerLeaseRecoveryOperation;
@@ -711,6 +711,28 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
      */
     public Optional<ZLinkLocationOwnerToken> admittedOwnerToken() {
         return inStateLane(this::admittedOwnerTokenCore);
+    }
+
+    public boolean acceptsSessionOwnerLease(
+            String ownerId, long currentGeneration, long generation) {
+        var current = ownerToken;
+        var previous = recoveryPreviousOwnerToken;
+        return started
+                && current != null
+                && !ownerAdmissionRevoked
+                && ownerAdmissionDeadlineNanos != 0L
+                && current.ownerId().equals(ownerId)
+                && current.leaseGeneration() == currentGeneration
+                && (currentGeneration == generation
+                        || previous != null
+                                && previous.ownerId().equals(ownerId)
+                                && previous.leaseGeneration() == generation)
+                && monotonicNow.getAsLong()
+                                - saturatingAdd(
+                                        ownerAdmissionDeadlineNanos,
+                                        ownerLeaseFencingMargin.toNanos())
+                        < 0L
+                && current == ownerToken;
     }
 
     public ZLinkLocationOwnerToken recoveryPreviousOwnerToken() {
@@ -1759,13 +1781,13 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                     }
                     ownerLeaseOperationStartedNanos = operationStartedNanos;
                     if (failure != null) throw new CompletionException(unwrap(failure));
-                    recoveryPreviousOwnerToken = ownerToken;
                     installOwnerLeaseCore(claimed, operationStartedNanos);
                     return null;
                 });
     }
 
     private void installOwnerLeaseCore(ZLinkOwnerLeaseClaimed claimed, long operationStartedNanos) {
+        recoveryPreviousOwnerToken = ownerToken;
         ownerToken = claimed.token();
         recordSuccessfulRenewalCore(
                 claimed.leaseExpiresAt(), claimed.storeNow(), operationStartedNanos);

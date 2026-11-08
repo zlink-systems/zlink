@@ -629,6 +629,28 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 .thenApply(value -> (ZLinkSessionActor) value);
     }
 
+    public CompletionStage<java.util.OptionalLong> refreshActorLease(
+            ZLinkBackendActorRef actor,
+            long bindingGeneration,
+            long leaseGeneration,
+            java.util.function.BooleanSupplier publishBinding) {
+        return onStateLane(
+                () -> {
+                    var route = bindingRoutes.get(actor.actorId());
+                    if (relocationStopped
+                            || route == null
+                            || route.objectGeneration() != actor.generation()
+                            || !route.nodeRid().equals(actor.nodeRid())
+                            || route.bindingGeneration() != bindingGeneration)
+                        return java.util.OptionalLong.empty();
+                    if (publishBinding.getAsBoolean()) {
+                        bindingRoutes.put(actor.actorId(), route.withOwnerLease(leaseGeneration));
+                        return java.util.OptionalLong.of(leaseGeneration);
+                    }
+                    return java.util.OptionalLong.of(route.ownerLeaseGeneration());
+                });
+    }
+
     void recordNativeRebind(ZLinkBoundActor actor, ZLinkBackendActorRef targetActor) {
         actor.rebindNativeActor(targetActor);
         inStateLane(
@@ -1659,6 +1681,16 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             RoutingId nodeRid,
             long bindingGeneration,
             long ownerLeaseGeneration) {
+        StoredBindingRoute withOwnerLease(long leaseGeneration) {
+            return new StoredBindingRoute(
+                    actorId,
+                    objectGeneration,
+                    meshName,
+                    nodeRid,
+                    bindingGeneration,
+                    leaseGeneration);
+        }
+
         boolean matchesSource(RelocationRouteUpdate update) {
             return actorId.equals(update.actorId())
                     && objectGeneration == update.objectGeneration()
