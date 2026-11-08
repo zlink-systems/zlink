@@ -452,6 +452,7 @@ final class LocationContractTest {
                         javaRoot.resolve("zlink-framework-core"),
                         javaRoot.resolve("zlink-framework-kotlin"),
                         javaRoot.resolve("zlink-framework-locations-redis"),
+                        javaRoot.resolve("zlink-framework-locations-etcd"),
                         javaRoot.resolve("zlink-framework-spring-boot-starter"),
                         javaRoot.resolve("samples"));
         List<String> forbidden =

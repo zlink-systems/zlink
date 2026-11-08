@@ -247,7 +247,7 @@ bundle="zlink-framework-java-$version-central-bundle.zip"
 EOF
     for package in zlink-framework-binding-internal zlink-framework-codec-msgpack \
         zlink-framework-codec-protobuf zlink-framework-core zlink-framework-json-internal \
-        zlink-framework-kotlin zlink-framework-locations-redis \
+        zlink-framework-kotlin zlink-framework-locations-redis zlink-framework-locations-etcd \
         zlink-framework-provider-abstractions zlink-framework-spring-boot-starter \
         zlink-framework-testkit zlink-http-client zlink-http-client-kotlin \
         zlink-stream-connector; do
