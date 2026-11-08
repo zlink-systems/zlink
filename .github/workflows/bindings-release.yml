@@ -260,6 +260,7 @@ jobs:
         id: node-core
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           ZLINK_CORE_RELEASE_VERSION: ${{ needs.resolve.outputs.core_version }}
           ZLINK_CORE_CACHE_DIR: ${{ runner.temp }}/zlink-core
         run: |
@@ -407,6 +408,7 @@ jobs:
         id: python-core
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           ZLINK_CORE_RELEASE_VERSION: ${{ needs.resolve.outputs.core_version }}
           ZLINK_CORE_CACHE_DIR: ${{ runner.temp }}/zlink-core
         run: |
@@ -529,6 +531,7 @@ jobs:
         id: java-core
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           ZLINK_CORE_RELEASE_VERSION: ${{ needs.resolve.outputs.core_version }}
           ZLINK_CORE_CACHE_DIR: ${{ runner.temp }}/zlink-core
         run: |
