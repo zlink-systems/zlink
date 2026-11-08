@@ -14,6 +14,16 @@ common spec 내부 설계 장을 같은 변경 단위에서 갱신해야 한다.
 FIFO, source key 수명과 서로 분리된 loss counter를 정의한다. Source 사이의 공개 sequence
 비교를 만들지 않으며, fixture의 terminal 배열은 terminal FIFO 안의 순서만 고정한다.
 
+`location-store-provider-v1.json`은 etcd provider의 공개 검증 항목과 provider 공통 SPI
+항목을 case ID, spec 위치, 필요한 인프라와 기대 관찰로 등록한다. Store 시각을 진행하거나
+만료를 관찰하는 항목은 `requiresStoreManager`로 Store 관리 process가 필요함을 표시한다.
+Redis 전용 항목은 `excludedRequirements`에 적용 제외 근거를 기록한다. Byte 형식은
+`../protocol/golden/location-store-etcd-v1.json`이 소유한다.
+각 언어 시험은 `{ "language": "cpp|dotnet|jvm|node", "cases": [{ "id": "etcd.…", "status": "passed" }] }`
+형식으로 실제 결과를 제출한다. `node scripts/etcd/check-conformance-coverage.mjs cpp.json dotnet.json jvm.json node.json`은
+모든 ID의 통과를 요구하며, 누락·skip·실패·중복·알 수 없는 ID를 거부한다. 한 언어의 시험에서는
+`--language cpp`처럼 대상 언어를 지정한다. 인프라 사용법은 `scripts/etcd/README.ko.md`에 있다.
+
 `message-follow-suppression-v1.json`은 exact source·target route fence별 single-flight와
 route lifetime에 묶인 suppression 상태를 정의한다. Payload, reply completion과 별도 timer는
 이 registry의 책임에 넣지 않는다.
