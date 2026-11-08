@@ -3,6 +3,8 @@ package systems.zlink.framework.runtime.binding;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
+import systems.zlink.contracts.errors.CloseResult;
+import systems.zlink.contracts.errors.ZlinkCloseException;
 import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
@@ -27,6 +29,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.locks.LockSupport;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -41,6 +44,7 @@ import java.util.function.Supplier;
  * until the framework record is terminal.
  */
 final class ZLinkJavaRawServicePort implements AutoCloseable {
+    static final int CLOSE_BUSY_MAX_ATTEMPTS = 8;
     static final BiFunction<RouterSocket, Boolean, ZLinkJavaSocketReceivePoller>
             DEFAULT_RECEIVE_POLLER =
                     (socket, observesRoutes) ->
@@ -54,7 +58,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             new LinkedHashMap<>();
     private final ZLinkStateLane stateLane;
     final ZLinkServiceOperationRegistry operations;
-    private CloseAttempt closeAttempt;
+    private volatile CloseAttempt closeAttempt;
 
     private Function<
                     RoutingId,
@@ -528,21 +532,18 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             List<Message> replyMessages) {
         List<Message> messages = claimMessages(replyMessages);
         try {
-            inStateLane(
-                    () -> {
-                        ensureOwnedOnLane(router);
-                        if (requestSequence == null || messages.isEmpty()) {
-                            throw new IllegalArgumentException(
-                                    "service reply requires request sequence and frames");
-                        }
-                        var submit =
-                                router.reply(target, requestSequence).message(messages.getFirst());
-                        for (int index = 1; index < messages.size(); index++) {
-                            submit.message(messages.get(index));
-                        }
-                        submit.submit();
-                        return null;
-                    });
+            if (closeAttempt != null) {
+                throw new IllegalStateException("service port is closed");
+            }
+            if (requestSequence == null || messages.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "service reply requires request sequence and frames");
+            }
+            var submit = router.reply(target, requestSequence).message(messages.getFirst());
+            for (int index = 1; index < messages.size(); index++) {
+                submit.message(messages.get(index));
+            }
+            submit.submit();
         } finally {
             Message.closeAll(messages);
         }
@@ -668,13 +669,13 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         if (completion == attempt) {
             try {
                 operations.close();
-                // Claim close after every started native submission has left the state turn.
-                // Pending operation completion and resource disposal remain outside the turn.
+                // State-lane submissions leave their admission turn before socket disposal.
+                // Retry binding-reported BUSY while direct replies leave the same handle.
                 var remaining =
                         inStateLane(() -> List.copyOf(receivePollers.reversed().entrySet()));
                 for (var entry : remaining) {
                     entry.getValue().close();
-                    entry.getKey().close();
+                    closeRouterAfterInFlightCalls(entry.getKey());
                     inStateLane(() -> receivePollers.remove(entry.getKey()));
                 }
                 if (ownsContext) context.close();
@@ -709,6 +710,21 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         private void completeExceptionally(Throwable failure) {
             owner = null;
             completed.completeExceptionally(failure);
+        }
+    }
+
+    private static void closeRouterAfterInFlightCalls(RouterSocket router) {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                router.close();
+                return;
+            } catch (ZlinkCloseException failure) {
+                if (failure.getResult() != CloseResult.BUSY || attempt >= CLOSE_BUSY_MAX_ATTEMPTS) {
+                    throw failure;
+                }
+                // Give the in-flight native call a millisecond to leave before retrying.
+                LockSupport.parkNanos(1_000_000L);
+            }
         }
     }
 

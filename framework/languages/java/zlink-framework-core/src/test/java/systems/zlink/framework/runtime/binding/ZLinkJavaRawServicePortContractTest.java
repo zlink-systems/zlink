@@ -14,30 +14,49 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
+import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.core.Zlink;
+import systems.zlink.contracts.errors.CloseResult;
+import systems.zlink.contracts.errors.ZlinkCloseException;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.contracts.eventing.Poller;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.messaging.ReplyOperation;
+import systems.zlink.contracts.messaging.ReplySubmitOperation;
+import systems.zlink.contracts.messaging.ReplyToken;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 final class ZLinkJavaRawServicePortContractTest {
     @Test
     void tokenlessRequestCapacityFailureRetainsItsKindAndCauseThroughMeshCompletion()
             throws Exception {
         var refusal =
-                new systems.zlink.contracts.errors.ZlinkSubmitException(
+                new ZlinkSubmitException(
                         systems.zlink.contracts.sockets.SubmitResult.BACKPRESSURED, 11);
         var submit =
                 (systems.zlink.contracts.messaging.RequestSubmitOperation)
@@ -111,7 +130,7 @@ final class ZLinkJavaRawServicePortContractTest {
                     ZLinkJavaRawMeshNode.backendResult(
                                     ZLinkJavaRawMeshNode.requestTerminal(sourceError))
                             .toFrameworkErrorKind());
-            java.util.function.Function<
+            Function<
                             Throwable,
                             systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived>
                     decodeFailure =
@@ -126,7 +145,7 @@ final class ZLinkJavaRawServicePortContractTest {
                                             List.of());
             // The mesh completion path reports the terminal with the same failure projection.
             var mapped =
-                    new java.util.concurrent.CompletableFuture<
+                    new CompletableFuture<
                             systems.zlink.framework.runtime.internal.backend
                                     .ZLinkBackendReceived>();
             port.requestMessagesTo(
@@ -182,10 +201,8 @@ final class ZLinkJavaRawServicePortContractTest {
 
     @Test
     void failedPollerCloseCanBeRetriedByItsOwner() throws Exception {
-        var attempts = new java.util.concurrent.atomic.AtomicInteger();
-        var failure =
-                new systems.zlink.contracts.errors.ZlinkCloseException(
-                        systems.zlink.contracts.errors.CloseResult.BUSY, 16);
+        var attempts = new AtomicInteger();
+        var failure = new ZlinkCloseException(CloseResult.BUSY, 16);
         try (var context = systems.zlink.contracts.core.Zlink.createContext();
                 var router = context.createRouterSocket()) {
             var poller =
@@ -211,10 +228,8 @@ final class ZLinkJavaRawServicePortContractTest {
 
     @Test
     void failedSocketCloseRetainsOwnershipUntilLaterCleanupSucceeds() throws Exception {
-        var attempts = new java.util.concurrent.atomic.AtomicInteger();
-        var failure =
-                new systems.zlink.contracts.errors.ZlinkCloseException(
-                        systems.zlink.contracts.errors.CloseResult.BUSY, 16);
+        var attempts = new AtomicInteger();
+        var failure = new ZlinkCloseException(CloseResult.BUSY, 16);
         RouterSocket router =
                 (RouterSocket)
                         java.lang.reflect.Proxy.newProxyInstance(
@@ -229,7 +244,9 @@ final class ZLinkJavaRawServicePortContractTest {
                                             org.junit.jupiter.api.Assertions.assertNull(
                                                     systems.zlink.framework.runtime.internal
                                                             .execution.ZLinkStateLane.current());
-                                            if (attempts.incrementAndGet() == 1) {
+                                            if (attempts.incrementAndGet()
+                                                    <= ZLinkJavaRawServicePort
+                                                            .CLOSE_BUSY_MAX_ATTEMPTS) {
                                                 throw failure;
                                             }
                                             yield null;
@@ -250,9 +267,46 @@ final class ZLinkJavaRawServicePortContractTest {
             port.openRouter(RoutingId.from("close-busy"));
             assertSame(failure, assertThrows(failure.getClass(), port::close));
             port.close();
-            assertEquals(2, attempts.get());
+            assertEquals(ZLinkJavaRawServicePort.CLOSE_BUSY_MAX_ATTEMPTS + 1, attempts.get());
             port.close();
-            assertEquals(2, attempts.get());
+            assertEquals(ZLinkJavaRawServicePort.CLOSE_BUSY_MAX_ATTEMPTS + 1, attempts.get());
+        }
+    }
+
+    @Test
+    void busySocketCloseSucceedsWhenBusyClearsWithinTheCurrentCloseAttempt() throws Exception {
+        var attempts = new AtomicInteger();
+        var failure = new ZlinkCloseException(CloseResult.BUSY, 16);
+        RouterSocket router =
+                (RouterSocket)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                RouterSocket.class.getClassLoader(),
+                                new Class<?>[] {RouterSocket.class},
+                                (proxy, method, args) -> {
+                                    return switch (method.getName()) {
+                                        case "hashCode" -> System.identityHashCode(proxy);
+                                        case "equals" -> proxy == args[0];
+                                        case "setRoutingId" -> null;
+                                        case "close" -> {
+                                            if (attempts.incrementAndGet() < 3) throw failure;
+                                            yield null;
+                                        }
+                                        default -> throw new AssertionError(method.getName());
+                                    };
+                                });
+        var context =
+                (Context)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                Context.class.getClassLoader(),
+                                new Class<?>[] {Context.class},
+                                (proxy, method, args) -> {
+                                    assertEquals("createRouterSocket", method.getName());
+                                    return router;
+                                });
+        try (var port = new ZLinkJavaRawServicePort(context)) {
+            port.openRouter(RoutingId.from("close-busy-clears"));
+            port.close();
+            assertEquals(3, attempts.get());
         }
     }
 
@@ -273,26 +327,27 @@ final class ZLinkJavaRawServicePortContractTest {
                     systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState.STOPPED,
                     fixture.mesh().status().state());
             assertThrows(IllegalStateException.class, fixture.mesh()::start);
-            assertEquals(1, fixture.attempts().get());
+            assertEquals(ZLinkJavaRawServicePort.CLOSE_BUSY_MAX_ATTEMPTS, fixture.attempts().get());
             assertEquals(1, reentrantCalls.get());
 
             lastClose = closeOnDaemon(fixture.mesh());
             assertNull(lastClose.get(2, TimeUnit.SECONDS));
-            assertEquals(2, fixture.attempts().get());
-            assertEquals(2, reentrantCalls.get());
+            assertEquals(
+                    ZLinkJavaRawServicePort.CLOSE_BUSY_MAX_ATTEMPTS + 1, fixture.attempts().get());
+            assertEquals(1, reentrantCalls.get());
             lastClose = closeOnDaemon(fixture.mesh());
             assertNull(lastClose.get(2, TimeUnit.SECONDS));
-            assertEquals(2, fixture.attempts().get());
-            assertEquals(2, reentrantCalls.get());
+            assertEquals(
+                    ZLinkJavaRawServicePort.CLOSE_BUSY_MAX_ATTEMPTS + 1, fixture.attempts().get());
+            assertEquals(1, reentrantCalls.get());
         } finally {
             // A timed-out daemon is still inside close; avoid joining its in-flight port attempt.
             if (lastClose.isDone()) fixture.port().close();
         }
     }
 
-    private static java.util.concurrent.CompletableFuture<Throwable> closeOnDaemon(
-            ZLinkJavaRawMeshNode mesh) {
-        var result = new java.util.concurrent.CompletableFuture<Throwable>();
+    private static CompletableFuture<Throwable> closeOnDaemon(ZLinkJavaRawMeshNode mesh) {
+        var result = new CompletableFuture<Throwable>();
         Thread.ofPlatform()
                 .daemon()
                 .start(
@@ -337,9 +392,7 @@ final class ZLinkJavaRawServicePortContractTest {
                                 });
                 assertTrue(secondStarted.await(2, TimeUnit.SECONDS));
                 assertEquals(0, fixture.attempts().get());
-                assertThrows(
-                        java.util.concurrent.TimeoutException.class,
-                        () -> second.get(100, TimeUnit.MILLISECONDS));
+                assertThrows(TimeoutException.class, () -> second.get(100, TimeUnit.MILLISECONDS));
                 releaseCleanup.countDown();
                 first.get(2, TimeUnit.SECONDS);
                 second.get(2, TimeUnit.SECONDS);
@@ -360,7 +413,7 @@ final class ZLinkJavaRawServicePortContractTest {
                             fixture.mesh().close();
                             callbackReturned.countDown();
                         });
-        var outerClose = new java.util.concurrent.CompletableFuture<Void>();
+        var outerClose = new CompletableFuture<Void>();
         try (var port = fixture.port()) {
             Thread.ofPlatform()
                     .daemon()
@@ -383,9 +436,7 @@ final class ZLinkJavaRawServicePortContractTest {
         var attempts = new AtomicInteger();
         var onSocketClose = new AtomicReference<Runnable>();
         var afterLogicalCleanupTurn = new AtomicReference<Runnable>();
-        var failure =
-                new systems.zlink.contracts.errors.ZlinkCloseException(
-                        systems.zlink.contracts.errors.CloseResult.BUSY, 16);
+        var failure = new ZlinkCloseException(CloseResult.BUSY, 16);
         RouterSocket router =
                 (RouterSocket)
                         java.lang.reflect.Proxy.newProxyInstance(
@@ -398,9 +449,14 @@ final class ZLinkJavaRawServicePortContractTest {
                                             case "setRoutingId" -> null;
                                             case "close" -> {
                                                 int attempt = attempts.incrementAndGet();
-                                                var callback = onSocketClose.get();
+                                                var callback =
+                                                        attempt == 1 ? onSocketClose.get() : null;
                                                 if (callback != null) callback.run();
-                                                if (attempt == 1 && failFirst) throw failure;
+                                                if (failFirst
+                                                        && attempt
+                                                                <= ZLinkJavaRawServicePort
+                                                                        .CLOSE_BUSY_MAX_ATTEMPTS)
+                                                    throw failure;
                                                 yield null;
                                             }
                                             default -> throw new AssertionError(method.getName());
@@ -446,7 +502,7 @@ final class ZLinkJavaRawServicePortContractTest {
             ZLinkJavaRawServicePort port,
             ZLinkJavaRawMeshNode mesh,
             AtomicInteger attempts,
-            systems.zlink.contracts.errors.ZlinkCloseException failure,
+            ZlinkCloseException failure,
             AtomicReference<Runnable> onSocketClose,
             AtomicReference<Runnable> afterLogicalCleanupTurn) {}
 
@@ -460,7 +516,7 @@ final class ZLinkJavaRawServicePortContractTest {
             var registry = owner.receivePollers;
             assertEquals(List.of(second, first), List.copyOf(registry.reversed().keySet()));
             assertFalse(
-                    java.util.Arrays.stream(ZLinkJavaRawServicePort.class.getDeclaredFields())
+                    Arrays.stream(ZLinkJavaRawServicePort.class.getDeclaredFields())
                             .anyMatch(field -> List.class.isAssignableFrom(field.getType())),
                     "socket ownership must not also be kept in a linear list");
             assertThrows(IllegalArgumentException.class, () -> owner.receiveNow(other));
@@ -530,15 +586,13 @@ final class ZLinkJavaRawServicePortContractTest {
     })
     void durableLogicalTerminalRetainsTheNativeReplyReceiver(
             boolean cancel, boolean codecThrows, boolean initiallyReady) throws Exception {
-        var decoded = new java.util.concurrent.atomic.AtomicInteger();
-        var attempts = new java.util.concurrent.atomic.AtomicInteger();
-        var observerClosed = new java.util.concurrent.CompletableFuture<Void>();
-        var ready = new java.util.concurrent.atomic.AtomicBoolean(initiallyReady);
-        var observations = new java.util.concurrent.atomic.AtomicInteger();
-        var physical =
-                new java.util.concurrent.atomic.AtomicReference<
-                        java.util.concurrent.CompletionStage<?>>();
-        var payload = new java.util.concurrent.atomic.AtomicReference<Message>();
+        var decoded = new AtomicInteger();
+        var attempts = new AtomicInteger();
+        var observerClosed = new CompletableFuture<Void>();
+        var ready = new AtomicBoolean(initiallyReady);
+        var observations = new AtomicInteger();
+        var physical = new AtomicReference<CompletionStage<?>>();
+        var payload = new AtomicReference<Message>();
         var codecFailure = new IllegalStateException("controlled codec failure");
         try (var port = new ZLinkJavaRawServicePort();
                 var operations =
@@ -590,8 +644,7 @@ final class ZLinkJavaRawServicePortContractTest {
                                     action -> {
                                         if (port.stateLane().isOnLane()) {
                                             action.run();
-                                            return java.util.concurrent.CompletableFuture
-                                                    .completedStage(null);
+                                            return CompletableFuture.completedStage(null);
                                         }
                                         return port.stateLane()
                                                 .runNowOrQueue(
@@ -613,8 +666,7 @@ final class ZLinkJavaRawServicePortContractTest {
                 if (cancel) {
                     assertTrue(result.cancel(false));
                     cancellation = result.handle((reply, failure) -> failure).join();
-                    assertInstanceOf(
-                            java.util.concurrent.CancellationException.class, cancellation);
+                    assertInstanceOf(CancellationException.class, cancellation);
                     if (!initiallyReady) observerClosed.get(2, TimeUnit.SECONDS);
                     port.stateLane().awaitTurn(() -> null);
                     assertEquals(0, operations.pendingCount());
@@ -663,9 +715,9 @@ final class ZLinkJavaRawServicePortContractTest {
     })
     void registryLogicalTerminalRetainsTheNativeReplyReceiver(boolean cancel, boolean codecThrows)
             throws Exception {
-        var decoded = new java.util.concurrent.atomic.AtomicInteger();
-        var payload = new java.util.concurrent.atomic.AtomicReference<Message>();
-        var codecObserved = new java.util.concurrent.CompletableFuture<Void>();
+        var decoded = new AtomicInteger();
+        var payload = new AtomicReference<Message>();
+        var codecObserved = new CompletableFuture<Void>();
         var codecFailure = new IllegalStateException("controlled registry codec failure");
         try (var port = new ZLinkJavaRawServicePort()) {
             var targetId = RoutingId.from("registry-native-target");
@@ -705,8 +757,7 @@ final class ZLinkJavaRawServicePortContractTest {
                     assertTrue(result.cancel(false));
                     cancellation =
                             result.handle((reply, failure) -> failure).get(2, TimeUnit.SECONDS);
-                    assertInstanceOf(
-                            java.util.concurrent.CancellationException.class, cancellation);
+                    assertInstanceOf(CancellationException.class, cancellation);
                     port.stateLane().awaitTurn(() -> null);
                     assertTrue(result.isCancelled());
                     assertEquals(0, port.operationRegistry().pendingCount());
@@ -748,26 +799,20 @@ final class ZLinkJavaRawServicePortContractTest {
     })
     void startedLocalCanonicalProducerSurvivesLogicalCancellation(
             boolean cancel, boolean invalidReply) throws Exception {
-        var physical = new java.util.concurrent.CompletableFuture<byte[]>();
-        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var physical = new CompletableFuture<byte[]>();
+        var calls = new AtomicInteger();
         var local = RoutingId.from("registry-local-canonical");
         var port = new ZLinkJavaRawServicePort();
         try (var node =
                 ZLinkJavaRawMeshNodeTesting.create(
-                        "registry-local",
-                        port,
-                        null,
-                        null,
-                        null,
-                        java.util.Map.of(),
-                        Runnable::run)) {
+                        "registry-local", port, null, null, null, Map.of(), Runnable::run)) {
             node.setRoutingId(local);
             node.setCanonicalRelocationControlHandler(
                     (source, sequence, command) -> {
                         calls.incrementAndGet();
                         return physical;
                     });
-            var admitted = new java.util.concurrent.CompletableFuture<Void>();
+            var admitted = new CompletableFuture<Void>();
             var caller =
                     node.requestCanonicalRelocationPrepare(
                                     local, canonicalCommand(40), Duration.ofSeconds(5), admitted)
@@ -780,7 +825,7 @@ final class ZLinkJavaRawServicePortContractTest {
             if (cancel) {
                 assertTrue(caller.cancel(false));
                 cancellation = caller.handle((value, failure) -> failure).get(2, TimeUnit.SECONDS);
-                assertInstanceOf(java.util.concurrent.CancellationException.class, cancellation);
+                assertInstanceOf(CancellationException.class, cancellation);
                 assertEquals(0, node.operationRegistry().pendingCount());
                 assertFalse(physical.isDone());
             }
@@ -823,7 +868,7 @@ final class ZLinkJavaRawServicePortContractTest {
                                 .readTree(java.nio.file.Files.readString(file))
                                 .path("canonical")) {
                     if (entry.path("command").asInt() == command)
-                        return java.util.HexFormat.of().parseHex(entry.path("hex").asText());
+                        return HexFormat.of().parseHex(entry.path("hex").asText());
                 }
             }
         }
@@ -856,8 +901,10 @@ final class ZLinkJavaRawServicePortContractTest {
                                     null)
                             .toCompletableFuture();
             assertTrue(port.waitForReadable(target, Duration.ofSeconds(2)));
+            ReplyToken lateToken;
             try (var incoming = port.receiveNow(target)) {
                 assertNotNull(incoming);
+                lateToken = incoming.requestSequence();
                 Message rejected = Message.from(expected);
                 assertThrows(
                         IllegalArgumentException.class,
@@ -895,10 +942,347 @@ final class ZLinkJavaRawServicePortContractTest {
 
             port.close();
             Message closed = Message.from(expected);
-            assertThrows(
-                    IllegalStateException.class,
-                    () -> port.replyMessages(target, callerId, null, List.of(closed)));
+            IllegalStateException closedFailure =
+                    assertThrows(
+                            IllegalStateException.class,
+                            () -> port.replyMessages(target, callerId, lateToken, List.of(closed)));
+            assertEquals("service port is closed", closedFailure.getMessage());
             assertConsumed(closed);
+        }
+    }
+
+    @Test
+    void concurrentRepliesFromDifferentThreadsKeepTheirRequestTokens() throws Exception {
+        RoutingId targetId = RoutingId.from("parallel-reply-target");
+        String endpoint = "inproc://parallel-replies-" + System.nanoTime();
+        int count = 8;
+
+        try (ZLinkJavaRawServicePort port = new ZLinkJavaRawServicePort();
+                var workers = Executors.newFixedThreadPool(count)) {
+            var target = port.openRouter(targetId);
+            target.bind(endpoint);
+
+            List<RouterSocket> callers = new ArrayList<>(count);
+            List<CompletableFuture<List<byte[]>>> replies = new ArrayList<>(count);
+            for (int index = 0; index < count; index++) {
+                var caller = port.openRouter(RoutingId.from("parallel-reply-caller-" + index));
+                port.ensureReceivePollerRegistered(caller);
+                caller.connect(endpoint);
+                callers.add(caller);
+                replies.add(
+                        port.request(
+                                        caller,
+                                        targetId,
+                                        List.of(new byte[] {(byte) index}),
+                                        Duration.ofSeconds(3),
+                                        null)
+                                .toCompletableFuture());
+            }
+
+            List<Future<?>> submissions = new ArrayList<>(count);
+            for (int index = 0; index < count; index++) {
+                assertTrue(port.waitForReadable(target, Duration.ofSeconds(3)));
+                var inbound = port.receiveNow(target);
+                assertNotNull(inbound);
+                int requestId = Byte.toUnsignedInt(inbound.frames().getFirst()[0]);
+                RoutingId source = inbound.source();
+                var token = inbound.requestSequence();
+                submissions.add(
+                        workers.submit(
+                                () -> {
+                                    try {
+                                        port.reply(
+                                                target,
+                                                source,
+                                                token,
+                                                List.of(new byte[] {(byte) (requestId + 64)}));
+                                    } finally {
+                                        inbound.close();
+                                    }
+                                }));
+            }
+
+            for (var submission : submissions) submission.get(3, TimeUnit.SECONDS);
+            for (var caller : callers) {
+                port.waitForReadable(caller, Duration.ofSeconds(3));
+            }
+            for (int index = 0; index < count; index++) {
+                List<byte[]> result = replies.get(index).get(3, TimeUnit.SECONDS);
+                assertEquals(1, result.size());
+                assertEquals(index + 64, Byte.toUnsignedInt(result.getFirst()[0]));
+            }
+        }
+    }
+
+    @RepeatedTest(100)
+    void repliesRacingRuntimeCloseAreRejectedAfterCloseStartsAndCloseSucceeds() throws Exception {
+        Context context = Zlink.createContext();
+        var runtime = new ZLinkJavaRawMeshNode(context, "reply-close-race");
+        try {
+            assertReplyRacingClose(runtime.port, runtime::close, "runtime");
+        } finally {
+            runtime.close();
+            context.close();
+        }
+    }
+
+    @RepeatedTest(100)
+    void repliesRacingPortCloseAreRejectedAfterCloseStartsAndCloseSucceeds() throws Exception {
+        var port = new ZLinkJavaRawServicePort();
+        try {
+            assertReplyRacingClose(port, port::close, "port");
+        } finally {
+            port.close();
+        }
+    }
+
+    @Test
+    void replyAlreadySubmittingLeavesAfterOneBusyAndCloseRetrySucceeds() throws Exception {
+        var submitEntered = new CountDownLatch(1);
+        var allowSubmitToLeave = new CountDownLatch(1);
+        var submitLeft = new CountDownLatch(1);
+        var closeSawBusy = new CountDownLatch(1);
+        var closeAttempts = new AtomicInteger();
+        var busyAttempts = new AtomicInteger();
+        var busy = new ZlinkCloseException(CloseResult.BUSY, 16);
+
+        ReplySubmitOperation submitOperation =
+                (ReplySubmitOperation)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                ReplySubmitOperation.class.getClassLoader(),
+                                new Class<?>[] {ReplySubmitOperation.class},
+                                (proxy, method, args) -> {
+                                    if (method.getName().equals("message")) return proxy;
+                                    if (method.getName().equals("submit")) {
+                                        submitEntered.countDown();
+                                        try {
+                                            assertTrue(
+                                                    allowSubmitToLeave.await(2, TimeUnit.SECONDS));
+                                        } finally {
+                                            submitLeft.countDown();
+                                        }
+                                        return null;
+                                    }
+                                    throw new AssertionError(method.getName());
+                                });
+        ReplyOperation replyOperation =
+                (ReplyOperation)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                ReplyOperation.class.getClassLoader(),
+                                new Class<?>[] {ReplyOperation.class},
+                                (proxy, method, args) -> {
+                                    if (method.getName().equals("message")) return submitOperation;
+                                    throw new AssertionError(method.getName());
+                                });
+        RouterSocket router =
+                (RouterSocket)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                RouterSocket.class.getClassLoader(),
+                                new Class<?>[] {RouterSocket.class},
+                                (proxy, method, args) -> {
+                                    switch (method.getName()) {
+                                        case "hashCode":
+                                            return System.identityHashCode(proxy);
+                                        case "equals":
+                                            return proxy == args[0];
+                                        case "setRoutingId":
+                                            return null;
+                                        case "reply":
+                                            return replyOperation;
+                                        case "close":
+                                            if (closeAttempts.incrementAndGet() == 1) {
+                                                busyAttempts.incrementAndGet();
+                                                closeSawBusy.countDown();
+                                                throw busy;
+                                            }
+                                            assertTrue(submitLeft.await(2, TimeUnit.SECONDS));
+                                            return null;
+                                        default:
+                                            throw new AssertionError(method.getName());
+                                    }
+                                });
+        Context context =
+                (Context)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                Context.class.getClassLoader(),
+                                new Class<?>[] {Context.class},
+                                (proxy, method, args) -> {
+                                    assertEquals("createRouterSocket", method.getName());
+                                    return router;
+                                });
+        Poller poller =
+                (Poller)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                Poller.class.getClassLoader(),
+                                new Class<?>[] {Poller.class},
+                                (proxy, method, args) -> null);
+        var port =
+                new ZLinkJavaRawServicePort(
+                        context,
+                        new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane(),
+                        (socket, observesRoutes) ->
+                                new ZLinkJavaSocketReceivePoller(
+                                        socket, true, observesRoutes, () -> poller, () -> null));
+        var workers = Executors.newFixedThreadPool(2);
+        Message message = Message.from(new byte[] {1});
+        try {
+            port.openRouter(RoutingId.from("ordered-close"));
+            var reply =
+                    workers.submit(
+                            () ->
+                                    port.replyMessages(
+                                            router,
+                                            RoutingId.from("caller"),
+                                            systems.zlink.contracts.messaging.ReceivedTesting
+                                                    .replyToken(router, 1L),
+                                            List.of(message)));
+            assertTrue(submitEntered.await(2, TimeUnit.SECONDS));
+            var close = workers.submit(port::close);
+            assertTrue(closeSawBusy.await(2, TimeUnit.SECONDS));
+            allowSubmitToLeave.countDown();
+            reply.get(2, TimeUnit.SECONDS);
+            close.get(2, TimeUnit.SECONDS);
+            assertEquals(1, busyAttempts.get());
+            assertEquals(2, closeAttempts.get());
+            assertConsumed(message);
+        } finally {
+            allowSubmitToLeave.countDown();
+            workers.shutdownNow();
+            port.close();
+        }
+    }
+
+    private static void assertReplyRacingClose(
+            ZLinkJavaRawServicePort port, Runnable close, String closeName) throws Exception {
+        int count = 8;
+        int threadCount = 4;
+        RoutingId targetId = RoutingId.from("reply-close-target-" + closeName);
+        String endpoint = "inproc://reply-close-race-" + closeName + "-" + System.nanoTime();
+        var target = port.openRouter(targetId);
+        target.bind(endpoint);
+        List<CompletableFuture<List<byte[]>>> requests = new ArrayList<>(count);
+        List<ZLinkJavaRawServicePort.Inbound> inbounds = new ArrayList<>(count);
+        for (int index = 0; index < count; index++) {
+            var caller = port.openRouter(RoutingId.from("reply-close-caller-" + closeName + index));
+            port.ensureReceivePollerRegistered(caller);
+            caller.connect(endpoint);
+            requests.add(
+                    port.request(
+                                    caller,
+                                    targetId,
+                                    List.of(new byte[] {(byte) index}),
+                                    Duration.ofSeconds(5),
+                                    null)
+                            .toCompletableFuture());
+        }
+        for (int index = 0; index < count; index++) {
+            assertTrue(port.waitForReadable(target, Duration.ofSeconds(3)));
+            var inbound = port.receiveNow(target);
+            assertNotNull(inbound);
+            inbounds.add(inbound);
+        }
+
+        var start = new CountDownLatch(1);
+        List<CompletableFuture<Throwable>> replyResults = new ArrayList<>(count);
+        List<Message> responses = new ArrayList<>(count);
+        for (int index = 0; index < count; index++) {
+            replyResults.add(new CompletableFuture<>());
+            responses.add(Message.from(new byte[] {(byte) (index + 32)}));
+        }
+        var workers = Executors.newFixedThreadPool(threadCount);
+        List<Future<?>> replyThreads = new ArrayList<>(threadCount);
+        for (int workerIndex = 0; workerIndex < threadCount; workerIndex++) {
+            final int firstReplyIndex = workerIndex;
+            replyThreads.add(
+                    workers.submit(
+                            () -> {
+                                try {
+                                    start.await();
+                                    for (int replyIndex = firstReplyIndex;
+                                            replyIndex < count;
+                                            replyIndex += threadCount) {
+                                        try {
+                                            var inbound = inbounds.get(replyIndex);
+                                            port.replyMessages(
+                                                    target,
+                                                    inbound.source(),
+                                                    inbound.requestSequence(),
+                                                    List.of(responses.get(replyIndex)));
+                                            replyResults.get(replyIndex).complete(null);
+                                        } catch (Throwable failure) {
+                                            replyResults.get(replyIndex).complete(failure);
+                                        }
+                                    }
+                                } catch (InterruptedException interrupted) {
+                                    Thread.currentThread().interrupt();
+                                    for (int replyIndex = firstReplyIndex;
+                                            replyIndex < count;
+                                            replyIndex += threadCount) {
+                                        replyResults.get(replyIndex).complete(interrupted);
+                                    }
+                                }
+                            }));
+        }
+        var closeResult = new CompletableFuture<Void>();
+        Thread closeThread =
+                Thread.ofPlatform()
+                        .daemon()
+                        .start(
+                                () -> {
+                                    try {
+                                        start.await();
+                                        close.run();
+                                        closeResult.complete(null);
+                                    } catch (Throwable failure) {
+                                        closeResult.completeExceptionally(failure);
+                                    }
+                                });
+        start.countDown();
+        try {
+            closeResult.get(3, TimeUnit.SECONDS);
+            for (var replyThread : replyThreads) replyThread.get(3, TimeUnit.SECONDS);
+            workers.shutdown();
+            assertTrue(workers.awaitTermination(3, TimeUnit.SECONDS));
+            closeThread.join(3000);
+            assertFalse(closeThread.isAlive());
+            for (int index = 0; index < count; index++) {
+                Throwable result = replyResults.get(index).get(3, TimeUnit.SECONDS);
+                // A reply that passed the closed check before close started can reach the
+                // binding after its socket closed; the binding then rejects it as closed.
+                assertTrue(
+                        result == null
+                                || (result instanceof IllegalStateException
+                                        && ("service port is closed".equals(result.getMessage())
+                                                || "socket is closed"
+                                                        .equals(result.getMessage())))
+                                || (result instanceof ZlinkSubmitException submitFailure
+                                        && submitFailure.getResult()
+                                                == systems.zlink.contracts.sockets.SubmitResult
+                                                        .TERMINATED),
+                        String.valueOf(result));
+                assertConsumed(responses.get(index));
+                try {
+                    requests.get(index).get(3, TimeUnit.SECONDS);
+                } catch (ExecutionException expected) {
+                    // Closing either socket or rejecting the late reply ends the request as
+                    // failure.
+                }
+            }
+            Message afterClose = Message.from(new byte[] {99});
+            IllegalStateException rejected =
+                    assertThrows(
+                            IllegalStateException.class,
+                            () ->
+                                    port.replyMessages(
+                                            target,
+                                            inbounds.getFirst().source(),
+                                            inbounds.getFirst().requestSequence(),
+                                            List.of(afterClose)));
+            assertEquals("service port is closed", rejected.getMessage());
+            assertConsumed(afterClose);
+        } finally {
+            workers.shutdownNow();
+            for (var inbound : inbounds) inbound.close();
         }
     }
 
