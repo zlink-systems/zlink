@@ -749,7 +749,8 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         throw error;
       });
       const renewCompletedAtMs = this.monotonicNowMs();
-      if (result.kind === 'stale' && this.storeOutage !== undefined) {
+      const outage = this.storeOutage;
+      if (result.kind !== 'renewed' && outage !== undefined) {
         const current = await withTimeout(
           (readSignal) =>
             this.stores.ownerLeaseStore.readOwnerLease(renewingOwner.ownerId, readSignal),
@@ -759,14 +760,30 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
           this.observeStoreOutage(error, signal);
           throw error;
         });
-        if (current.kind === 'found') {
-          this.ownerLeaseDeadlineMs = undefined;
-          if (current.token.leaseGeneration !== renewingOwner.leaseGeneration) {
-            for (const reference of this.storeOutage.retained.keys()) {
-              const execution = reference.deref();
-              if (execution !== undefined) this.discardExecution(execution);
-            }
+        if (this.ownerToken !== renewingOwner || this.storeOutage !== outage) return false;
+        const changedOwner =
+          current.kind === 'found' &&
+          (current.token.ownerId !== renewingOwner.ownerId ||
+            current.token.leaseGeneration !== renewingOwner.leaseGeneration);
+        if (changedOwner) {
+          outage.discarded = true;
+          for (const reference of outage.retained.keys()) {
+            const execution = reference.deref();
+            if (execution !== undefined) this.discardExecution(execution);
           }
+        }
+        // Admission ends at lifetime - margin; an outage claim needs lifetime + margin
+        // and an exact read confirming normal expiry (Location runtime §5.1, §10).
+        if (
+          changedOwner ||
+          this.lastSuccessfulLease === undefined ||
+          this.monotonicNowMs() <
+            this.lastSuccessfulLease.admissionDeadlineMs +
+              2 * this.options.ownerLeaseFencingMarginMs ||
+          (current.kind === 'found' &&
+            !(current.leaseExpiresAt.getTime() <= current.storeNow.getTime()))
+        ) {
+          this.ownerLeaseDeadlineMs = undefined;
           this.recordOwnerLeaseRenewFailure();
           this.recordFailure('Owner lease token cannot be renewed.');
           for (const handler of this.ownerLeaseRenewalFailedHandlers) handler();
@@ -780,9 +797,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         this.ownerLeaseDeadlineMs = undefined;
         this.recordFailure('Owner lease token is stale.');
         for (const handler of this.ownerLeaseRenewalFailedHandlers) handler();
-        // The store has already told us that this owner token cannot be
-        // renewed. Claim immediately so descriptor recovery does not wait for
-        // another heartbeat interval.
+        // Claim after the outage eligibility check, or immediately outside an episode.
         return await this.claimFreshOwnerLease(signal, shutdownSignal);
       }
       if (this.ownerToken !== renewingOwner) {
