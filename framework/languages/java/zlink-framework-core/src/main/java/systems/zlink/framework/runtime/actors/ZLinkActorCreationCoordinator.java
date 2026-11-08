@@ -640,7 +640,13 @@ public final class ZLinkActorCreationCoordinator
                         status -> {
                             if (status == ZLinkObjectCommitResult.COMMITTED
                                     || status == ZLinkObjectCommitResult.ALREADY_COMMITTED) {
-                                return actors.confirmReady(actor.actorId())
+                                return actors.locations
+                                        .setActorRef(
+                                                request.intent().stableType(),
+                                                actor.actorId(),
+                                                published)
+                                        .thenCompose(
+                                                ignored -> actors.confirmReady(actor.actorId()))
                                         .thenCompose(ignored -> response(envelope));
                             }
                             return actors.discardReservedActor(actor.actorId())

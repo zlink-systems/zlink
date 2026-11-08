@@ -865,8 +865,8 @@ export class ZLinkSpotNodeRuntimeManager {
     return activation?.notifyJoinActor(actor, signal) ?? Promise.resolve();
   }
 
-  discardActorActivation(actor: ZLinkActor): void {
-    this.entryActivations.get(actor.context.meshName)?.discardActor(actor.context.actorId);
+  discardActorActivation(actor: ZLinkActor, error: unknown): void {
+    this.entryActivations.get(actor.context.meshName)?.discardActor(actor.context.actorId, error);
   }
 
   terminateActorActivation(actor: ZLinkActor, terminal: () => Promise<void>): Promise<void> {
