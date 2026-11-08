@@ -10,6 +10,8 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.TestSupport;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.Zlink;
+import systems.zlink.contracts.errors.CloseResult;
+import systems.zlink.contracts.errors.ZlinkCloseException;
 import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.RequestResult;
@@ -19,7 +21,7 @@ import systems.zlink.runtime.nativeapi.NativeErrno;
 
 class RequestRetryCloseContractTest {
     @Test
-    void closeDuringRequestRetryKeepsStagedPartsUntilSubmitReturns()
+    void closeDuringRequestRetryKeepsSocketUntilSubmitReturns()
         throws Exception {
         CompletionNativeFixture.runProbe(getClass());
     }
@@ -37,13 +39,15 @@ class RequestRetryCloseContractTest {
                 .toCompletableFuture();
             core.writable(core.submissions.getLast(), 0, 0);
             core.attempts.add(new CompletionNativeFixture.Attempt(
-                SubmitResult.TERMINATED, NativeErrno.ESHUTDOWN, 0, true));
+                SubmitResult.OK, 0, 42, true));
             FutureTask<Integer> drain = new FutureTask<>(owner::drain);
             Thread drainer = Thread.ofPlatform().start(drain);
             try {
                 assertTrue(core.admissionEntered.await(
                     TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS));
-                dealer.close();
+                assertEquals(CloseResult.BUSY,
+                    assertThrows(ZlinkCloseException.class, dealer::close)
+                        .getResult());
                 assertFalse(drain.isDone());
             } finally {
                 core.releaseAdmission.countDown();
@@ -51,6 +55,7 @@ class RequestRetryCloseContractTest {
             }
             assertEquals(1, drain.get(TestSupport.DEFAULT_TIMEOUT_MS,
                 TimeUnit.MILLISECONDS));
+            dealer.close();
             assertEquals(RequestResult.TERMINATED,
                 assertInstanceOf(ZlinkRequestException.class,
                     CompletionNativeFixture.failure(reply)).getResult());
