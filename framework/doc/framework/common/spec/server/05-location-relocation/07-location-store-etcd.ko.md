@@ -396,9 +396,10 @@ metadata key와 payload key를 revision `R`로 읽고, `StoreNow = c0`를 반환
 
 ## 8. 만료 record 정리
 
-만료된 record는 Store 시각 기준으로 이미 `Missing`이지만 etcd에는 남아 있다. Store 관리 process가
-60초마다 metadata를 한 번에 최대 1,000개씩 읽고, `expiresAtMs ≤ Store 시각`인 record의 metadata key와 payload key를 함께
-지운다. 지울 때는 읽은 metadata의 `mod_revision`이 그대로인 조건을 건다. 그 사이 lease가 다시
+만료된 record는 Store 시각 기준으로 이미 `Missing`이지만 etcd에는 남아 있다. Store 관리 process는 정리를
+회차 단위로 수행한다. 한 회차는 namespace의 metadata를 최대 1,000개씩 page로 나눠 끝까지 읽고,
+`expiresAtMs ≤ Store 시각`인 record의 metadata key와 payload key를 함께 지운다. 한 회차가 끝나고 60초가
+지나면 다음 회차를 시작한다. 지울 때는 읽은 metadata의 `mod_revision`이 그대로인 조건을 건다. 그 사이 lease가 다시
 기록됐다면 지우지 않는다. 만료 시각이 없는 record(counter와 durable record)는 정리 대상이 아니다.
 
 정리가 늦어도 결과는 바뀌지 않는다. 지우지 않은 만료 record는 read와 commit에서 계속 `Missing`이다.

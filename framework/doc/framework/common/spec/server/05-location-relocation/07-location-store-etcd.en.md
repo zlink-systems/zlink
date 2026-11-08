@@ -458,8 +458,9 @@ returns `StoreNow = c0`, and also decides expiry by `c0`
 ## 8. Cleaning Up Expired Records
 
 An expired record is already `Missing` by Store time but remains in etcd. The Store maintenance
-process reads metadata every 60 seconds, at most 1,000 at a time, and deletes both the metadata key and the payload key of
-records with `expiresAtMs ≤ Store time`. The deletion is conditioned on the read metadata's
+process cleans up in rounds. One round reads the namespace's metadata to the end in pages of at most
+1,000, and deletes both the metadata key and the payload key of records with
+`expiresAtMs ≤ Store time`. The next round starts 60 seconds after the previous round finishes. The deletion is conditioned on the read metadata's
 `mod_revision` being unchanged; if the lease was written again in the meantime, it isn't deleted.
 Records without an expiry time (counters and durable records) aren't cleaned up.
 
