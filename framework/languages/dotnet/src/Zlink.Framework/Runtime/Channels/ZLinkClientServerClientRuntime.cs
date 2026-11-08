@@ -524,8 +524,10 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         {
             _connections.Clear();
             _retired.Clear();
+            _readySelectionPlan = null;
         });
-        await _lane.DisposeAsync().ConfigureAwait(false);
+        // The lane owns no external resources. Late readiness waiters and
+        // callbacks must still observe shutdown on this owner after disposal.
     }
 
     private async ValueTask AddOrReplaceAsync(
@@ -574,22 +576,17 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             try
             {
                 created.Prepare(_monitoring, _socketConfig);
-                var committed = false;
-                try
+                var committed = RunState(() =>
                 {
-                    committed = RunState(() =>
-                    {
-                        if (IsDisposing)
-                            return false;
-                        _connections.TryGetValue(key, out var current);
-                        if (!ReferenceEquals(current, previous))
-                            return false;
-                        _connections[key] = created;
-                        ScheduleStateChanged(selectionChanged: true);
-                        return true;
-                    });
-                }
-                catch (ObjectDisposedException) { }
+                    if (IsDisposing)
+                        return false;
+                    _connections.TryGetValue(key, out var current);
+                    if (!ReferenceEquals(current, previous))
+                        return false;
+                    _connections[key] = created;
+                    ScheduleStateChanged(selectionChanged: true);
+                    return true;
+                });
                 if (!committed)
                 {
                     await created.DisposeAsync().ConfigureAwait(false);
@@ -603,32 +600,23 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 ValueTask previousDisposal = ValueTask.CompletedTask;
                 failures.Capture(() =>
                 {
-                    try
+                    previousDisposal = RunState(() =>
                     {
-                        previousDisposal = RunState(() =>
+                        if (
+                            _connections.TryGetValue(key, out var current)
+                            && ReferenceEquals(current, created)
+                        )
                         {
-                            if (
-                                _connections.TryGetValue(key, out var current)
-                                && ReferenceEquals(current, created)
-                            )
-                            {
-                                if (previous is null)
-                                    _connections.Remove(key);
-                                else
-                                    _connections[key] = previous;
-                                ScheduleStateChanged(selectionChanged: true);
-                            }
-                            return previous is not null && !IsReferenced(previous)
-                                ? new ValueTask(RegisterRetirement(previous))
-                                : ValueTask.CompletedTask;
-                        });
-                    }
-                    catch (ObjectDisposedException)
-                    {
-                        previousDisposal = previous is null
-                            ? ValueTask.CompletedTask
-                            : new ValueTask(RegisterRetirement(previous));
-                    }
+                            if (previous is null)
+                                _connections.Remove(key);
+                            else
+                                _connections[key] = previous;
+                            ScheduleStateChanged(selectionChanged: true);
+                        }
+                        return previous is not null && !IsReferenced(previous)
+                            ? new ValueTask(RegisterRetirement(previous))
+                            : ValueTask.CompletedTask;
+                    });
                 });
                 await failures.CaptureAsync(created.DisposeAsync).ConfigureAwait(false);
                 await failures.CaptureAsync(() => previousDisposal).ConfigureAwait(false);
@@ -639,19 +627,11 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             }
             if (previous is not null)
             {
-                ValueTask previousDisposal;
-                try
-                {
-                    previousDisposal = RunState(() =>
-                        !IsReferenced(previous)
-                            ? new ValueTask(RegisterRetirement(previous))
-                            : ValueTask.CompletedTask
-                    );
-                }
-                catch (ObjectDisposedException)
-                {
-                    previousDisposal = new ValueTask(RegisterRetirement(previous));
-                }
+                var previousDisposal = RunState(() =>
+                    !IsReferenced(previous)
+                        ? new ValueTask(RegisterRetirement(previous))
+                        : ValueTask.CompletedTask
+                );
                 await previousDisposal.ConfigureAwait(false);
             }
         }
@@ -696,6 +676,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             _lane.RunAsync(
                 static owner =>
                 {
+                    if (owner.IsDisposing || owner._stopToken.IsCancellationRequested)
+                        return new ReadyWaitResult(null, ZLinkOneWaySubmitStatus.Shutdown);
                     if (owner._readySelectionPlan?.Select() is { } ready)
                         return new ReadyWaitResult(ready, ZLinkOneWaySubmitStatus.Submitted);
                     return new ReadyWaitResult(
@@ -806,14 +788,10 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _stopToken.ThrowIfCancellationRequested();
             if (terminal?.IsCompleted == true)
                 await terminal.ConfigureAwait(false);
             var readiness = SelectReady();
-            if (
-                readiness.Target is not null
-                || readiness.Status == ZLinkOneWaySubmitStatus.RouteNotConnected
-            )
+            if (readiness.Status != ZLinkOneWaySubmitStatus.Backpressured)
                 return readiness;
             var changed = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously
@@ -823,10 +801,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             try
             {
                 readiness = SelectReady();
-                if (
-                    readiness.Target is not null
-                    || readiness.Status == ZLinkOneWaySubmitStatus.RouteNotConnected
-                )
+                if (readiness.Status != ZLinkOneWaySubmitStatus.Backpressured)
                     return readiness;
                 var wait = changed.Task.WaitAsync(_stopToken).WaitAsync(cancellationToken);
                 if (terminal is null)
@@ -1167,7 +1142,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             if (_admissionStop is not null)
                 _admissionStop.Dispose();
             _receiveStop.Dispose();
-            await _lane.DisposeAsync().ConfigureAwait(false);
+            // Retired connection snapshots and late owner callbacks still use this lane.
         }
 
         private ValueTask CloseMonitorAsync() =>
