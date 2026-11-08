@@ -1,6 +1,8 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { ClockEngine } = require('../../packages/framework-locations-etcd/dist/internal/admin-engine');
+const {
+  ClockEngine
+} = require('../../packages/framework-locations-etcd/dist/internal/admin-engine');
 
 class Scheduler {
   now = 0n;
@@ -9,22 +11,33 @@ class Scheduler {
 
   sleep(milliseconds) {
     return new Promise((resolve) => {
-      this.pending.push({ at: this.now + BigInt(milliseconds), sequence: this.sequence++, resolve });
+      this.pending.push({
+        at: this.now + BigInt(milliseconds),
+        sequence: this.sequence++,
+        resolve
+      });
     });
   }
 
   async run(work) {
     let settled = false;
     let failure;
-    Promise.resolve().then(work).then(
-      () => { settled = true; },
-      (error) => { failure = error; settled = true; }
-    );
+    Promise.resolve()
+      .then(work)
+      .then(
+        () => {
+          settled = true;
+        },
+        (error) => {
+          failure = error;
+          settled = true;
+        }
+      );
     for (let event = 0; !settled; event++) {
       assert.ok(event < 10000, 'virtual execution must finish');
       await new Promise(setImmediate);
       if (settled) break;
-      this.pending.sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : a.sequence - b.sequence);
+      this.pending.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.sequence - b.sequence));
       const next = this.pending.shift();
       assert.ok(next, 'pending operation must have a scheduled response');
       this.now = next.at;
@@ -51,15 +64,26 @@ class ClockModel {
     this.observations.push({ at: this.scheduler.now, value: this.value });
   }
 
-  process({ responseDelay = () => 0, suspendFirstSleep = 0, wall = () => 9000000000000n, operationTimeoutMs } = {}, Engine = ClockEngine) {
+  process(
+    {
+      responseDelay = () => 0,
+      suspendFirstSleep = 0,
+      wall = () => 9000000000000n,
+      operationTimeoutMs
+    } = {},
+    Engine = ClockEngine
+  ) {
     let reads = 0;
     let sleeps = 0;
     // With an operation timeout, every call fails once virtual time passes its operation's deadline.
     const expired = (operation) => {
-      if (operation !== undefined && this.scheduler.now > operation.deadline) throw new Error('DEADLINE_EXCEEDED');
+      if (operation !== undefined && this.scheduler.now > operation.deadline)
+        throw new Error('DEADLINE_EXCEEDED');
     };
     const store = {
-      ...(operationTimeoutMs === undefined ? {} : { operation: () => ({ deadline: this.scheduler.now + BigInt(operationTimeoutMs) }) }),
+      ...(operationTimeoutMs === undefined
+        ? {}
+        : { operation: () => ({ deadline: this.scheduler.now + BigInt(operationTimeoutMs) }) }),
       readClock: async (operation) => {
         expired(operation);
         this.observe();
@@ -84,7 +108,7 @@ class ClockModel {
       }
     };
     const time = {
-      monotonicMs: () => this.scheduler.now * 2001n / 2000n,
+      monotonicMs: () => (this.scheduler.now * 2001n) / 2000n,
       wallMs: () => wall(this.scheduler.now),
       sleep: async (milliseconds) => {
         const suspension = sleeps++ === 0 ? suspendFirstSleep : 0;
@@ -96,9 +120,13 @@ class ClockModel {
   }
 
   async steps(engines, count) {
-    await this.scheduler.run(() => Promise.all(engines.map(async (engine) => {
-      for (let i = 0; i < count; i++) await engine.step();
-    })));
+    await this.scheduler.run(() =>
+      Promise.all(
+        engines.map(async (engine) => {
+          for (let i = 0; i < count; i++) await engine.step();
+        })
+      )
+    );
   }
 
   checkBounds() {
@@ -110,8 +138,10 @@ class ClockModel {
         const increase = last.value - first.value;
         assert.ok(increase >= 0n, `Store clock decreased between observations ${i} and ${j}`);
         // 1.01 * 1.0005 = 202101 / 200000; all quantities are integer milliseconds.
-        assert.ok(increase * 200000n <= 202101n * elapsed + 202000000n,
-          `Store clock exceeded bound: interval=${elapsed}ms increase=${increase}ms`);
+        assert.ok(
+          increase * 200000n <= 202101n * elapsed + 202000000n,
+          `Store clock exceeded bound: interval=${elapsed}ms increase=${increase}ms`
+        );
       }
     }
   }
@@ -130,7 +160,10 @@ test('etcd clock: three processes share revision CAS and respect every observed 
 
 test('etcd clock: response delay starts elapsed measurement at the first response', async () => {
   const model = new ClockModel();
-  await model.steps([model.process({ responseDelay: (read) => read === 1 ? 20000 : read === 2 ? 3500 : 17 })], 5);
+  await model.steps(
+    [model.process({ responseDelay: (read) => (read === 1 ? 20000 : read === 2 ? 3500 : 17) })],
+    5
+  );
   assert.equal(model.writes[0].value - 1700000000000n, 1010n);
   model.checkBounds();
 });
@@ -162,11 +195,26 @@ test('etcd clock: all processes stopped for 60 seconds do not recover the missin
 test('etcd clock: wall clock changes only affect the bounded catch-up correction', async () => {
   const model = new ClockModel();
   const initial = model.value;
-  await model.steps([model.process({ wall: (at) => at < 3000n ? initial + 100000000n :
-    at < 6000n ? 0n : initial + 100000000000n })], 10);
-  const increments = model.writes.map((write, index) => write.value - (index ? model.writes[index - 1].value : initial));
-  assert.ok(increments.some((value) => value === 1000n), 'wall clock retreat must remove catch-up');
-  assert.ok(increments.some((value) => value === 1010n), 'wall clock advance must exercise catch-up');
+  await model.steps(
+    [
+      model.process({
+        wall: (at) =>
+          at < 3000n ? initial + 100000000n : at < 6000n ? 0n : initial + 100000000000n
+      })
+    ],
+    10
+  );
+  const increments = model.writes.map(
+    (write, index) => write.value - (index ? model.writes[index - 1].value : initial)
+  );
+  assert.ok(
+    increments.some((value) => value === 1000n),
+    'wall clock retreat must remove catch-up'
+  );
+  assert.ok(
+    increments.some((value) => value === 1010n),
+    'wall clock advance must exercise catch-up'
+  );
   model.checkBounds();
 });
 
@@ -184,7 +232,10 @@ test('etcd clock: an operation timeout shorter than the one-second check still a
   await model.scheduler.run(async () => {
     for (let i = 0; i < 4; i++) await engine.step();
   });
-  assert.ok(model.writes.length >= 1, 'the confirming read and the write must not share the first read deadline');
+  assert.ok(
+    model.writes.length >= 1,
+    'the confirming read and the write must not share the first read deadline'
+  );
   model.checkBounds();
 });
 
@@ -203,7 +254,8 @@ test('etcd clock: the interval check rejects an engine with the elapsed-time cap
       if (first.revision !== second.revision) return;
       let elapsed = this.time.monotonicMs() - a;
       const wall = this.time.wallMs();
-      if (wall > first.value + elapsed) elapsed = elapsed + 10n < wall - first.value ? elapsed + 10n : wall - first.value;
+      if (wall > first.value + elapsed)
+        elapsed = elapsed + 10n < wall - first.value ? elapsed + 10n : wall - first.value;
       await this.store.compareClock(first.revision, first.value + elapsed);
     }
   }

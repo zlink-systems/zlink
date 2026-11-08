@@ -3,11 +3,14 @@ const MAX_PAYLOAD_BYTES = 1_048_576;
 const MAX_REVISION = 9_223_372_036_854_775_807n;
 
 export class StoreFormatError extends Error {
-  constructor() { super('Invalid etcd Store encoding'); }
+  constructor() {
+    super('Invalid etcd Store encoding');
+  }
 }
 
 export function validateNamespace(namespace: string): void {
-  if (typeof namespace !== 'string' || namespace.includes('\0')) throw new TypeError('Invalid namespace');
+  if (typeof namespace !== 'string' || namespace.includes('\0'))
+    throw new TypeError('Invalid namespace');
   const length = Buffer.byteLength(namespace, 'utf8');
   if (length < 1 || length > 64) throw new RangeError('Namespace must contain 1..64 UTF-8 bytes');
 }
@@ -18,7 +21,9 @@ export function keys(namespace: string) {
   const metadataPrefix = Buffer.concat([namespacePrefix, Buffer.from('m\0')]);
   const payloadPrefix = Buffer.concat([namespacePrefix, Buffer.from('p\0')]);
   return {
-    namespacePrefix, metadataPrefix, payloadPrefix,
+    namespacePrefix,
+    metadataPrefix,
+    payloadPrefix,
     clock: Buffer.concat([namespacePrefix, Buffer.from('c')]),
     metadata: (key: Uint8Array) => Buffer.concat([metadataPrefix, key]),
     payload: (key: Uint8Array) => Buffer.concat([payloadPrefix, key])
@@ -28,13 +33,17 @@ export function keys(namespace: string) {
 export function prefixEnd(prefix: Buffer): Buffer {
   const end = Buffer.from(prefix);
   for (let i = end.length - 1; i >= 0; i--) {
-    if (end[i] < 255) { end[i]++; return end.subarray(0, i + 1); }
+    if (end[i] < 255) {
+      end[i]++;
+      return end.subarray(0, i + 1);
+    }
   }
   return Buffer.from([0]);
 }
 
 export function encodeClock(value: bigint): Buffer {
-  if (value < 0n || value > MAX_TIME_MS) throw new RangeError('Store time exceeds its encoding range');
+  if (value < 0n || value > MAX_TIME_MS)
+    throw new RangeError('Store time exceeds its encoding range');
   const bytes = Buffer.alloc(8);
   bytes.writeBigUInt64BE(value);
   return bytes;
@@ -54,8 +63,13 @@ export interface Metadata {
 }
 
 export function encodeMetadata(value: Metadata): Buffer {
-  if (!Number.isInteger(value.payloadLength) || value.payloadLength < 0 || value.payloadLength > MAX_PAYLOAD_BYTES ||
-      (!value.hasExpiry && value.expiresAtMs !== 0n)) throw new RangeError('Invalid metadata');
+  if (
+    !Number.isInteger(value.payloadLength) ||
+    value.payloadLength < 0 ||
+    value.payloadLength > MAX_PAYLOAD_BYTES ||
+    (!value.hasExpiry && value.expiresAtMs !== 0n)
+  )
+    throw new RangeError('Invalid metadata');
   const bytes = Buffer.alloc(14);
   bytes[0] = 1;
   bytes[1] = value.hasExpiry ? 1 : 0;
@@ -66,14 +80,25 @@ export function encodeMetadata(value: Metadata): Buffer {
 
 export function decodeMetadata(bytes: Buffer): Metadata {
   if (bytes.length !== 14 || bytes[0] !== 1 || bytes[1] > 1) throw new StoreFormatError();
-  const value = { hasExpiry: bytes[1] === 1, expiresAtMs: decodeClock(bytes.subarray(2, 10)), payloadLength: bytes.readUInt32BE(10) };
-  if ((!value.hasExpiry && value.expiresAtMs !== 0n) || value.payloadLength > MAX_PAYLOAD_BYTES) throw new StoreFormatError();
+  const value = {
+    hasExpiry: bytes[1] === 1,
+    expiresAtMs: decodeClock(bytes.subarray(2, 10)),
+    payloadLength: bytes.readUInt32BE(10)
+  };
+  if ((!value.hasExpiry && value.expiresAtMs !== 0n) || value.payloadLength > MAX_PAYLOAD_BYTES)
+    throw new StoreFormatError();
   return value;
 }
 
-export function validateRecord(metadata: Buffer | null, payload: Buffer | null, metadataRevision: string, payloadRevision: string): Metadata | null {
+export function validateRecord(
+  metadata: Buffer | null,
+  payload: Buffer | null,
+  metadataRevision: string,
+  payloadRevision: string
+): Metadata | null {
   if (metadata === null && payload === null) return null;
-  if (metadata === null || payload === null || metadataRevision !== payloadRevision) throw new StoreFormatError();
+  if (metadata === null || payload === null || metadataRevision !== payloadRevision)
+    throw new StoreFormatError();
   const value = decodeMetadata(metadata);
   if (value.payloadLength !== payload.length) throw new StoreFormatError();
   return value;
@@ -81,8 +106,14 @@ export function validateRecord(metadata: Buffer | null, payload: Buffer | null, 
 
 export function encodeVersion(clusterId: string, revision: string): string {
   const cluster = BigInt(clusterId);
-  if (cluster < 0n || cluster > 0xffffffffffffffffn || !/^[1-9][0-9]*$/.test(revision) ||
-      BigInt(revision).toString() !== revision || BigInt(revision) > MAX_REVISION) throw new RangeError('Invalid version');
+  if (
+    cluster < 0n ||
+    cluster > 0xffffffffffffffffn ||
+    !/^[1-9][0-9]*$/.test(revision) ||
+    BigInt(revision).toString() !== revision ||
+    BigInt(revision) > MAX_REVISION
+  )
+    throw new RangeError('Invalid version');
   return `e1:${cluster.toString(16).padStart(16, '0')}:${revision}`;
 }
 
