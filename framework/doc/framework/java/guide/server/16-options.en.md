@@ -161,11 +161,12 @@ limit belongs to the STREAM node and the ClientServer listener
 | Option | What it sets | Default |
 | --- | --- | --- |
 | `ownerLeaseRenewInterval` | How often ownership is renewed | 5 seconds |
-| `ownerLeaseTtl` | When ownership without renewal expires | 15 seconds |
+| `ownerLeaseTtl` | When ownership without renewal expires | 30 seconds |
 | `ownerLeaseRenewTimeout` | Limit for one renewal attempt | 3 seconds |
 | `ownerLeaseFencingMargin` | Margin for releasing authority before expiry | 5 seconds |
 | `pollingInterval` | How often a store without change notification is re-read | 1 second |
 | `storeFailureGrace` | How long a store failure is tolerated | 30 seconds |
+| `storeOutageRetention` | Whether objects that were ready before a store outage keep running for a bounded time after their lease expires. Turn it on only when every host in the domain runs 0.33.0 or later | `false` |
 | `routeCacheMaxAge` | How long a resolved location is reused | 15 seconds |
 | `messageFollowDuration` | How long the former owner forwards messages to the new owner | 30 seconds |
 | `sessionRelocationSealTimeout` | Limit for waiting on a session route update | 3 seconds |
@@ -176,7 +177,7 @@ limit belongs to the STREAM node and the ClientServer listener
 
 **The lease values move together.** `max(OwnerLeaseRenewInterval, OwnerLeaseRenewTimeout) + OwnerLeaseRenewTimeout` must be
 smaller than `OwnerLeaseTtl - OwnerLeaseFencingMargin`. The defaults satisfy this at 8 seconds
-against 10 seconds. `routeCacheMaxAge` must be at
+against 25 seconds. `routeCacheMaxAge` must be at
 least five seconds shorter than `messageFollowDuration`, and `0` for either turns off the route
 cache and message forwarding respectively. Placement and transfer behavior are covered by
 [Location](25-location.en.md) and [Relocation](37-relocation.en.md).
