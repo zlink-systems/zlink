@@ -1,5 +1,7 @@
 package systems.zlink.framework.runtime.binding;
 
+import static systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime.DEFAULT_TERMINATION_DEADLINE;
+
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
@@ -44,7 +46,6 @@ import java.util.function.Supplier;
  * until the framework record is terminal.
  */
 final class ZLinkJavaRawServicePort implements AutoCloseable {
-    static final int CLOSE_BUSY_MAX_ATTEMPTS = 8;
     static final BiFunction<RouterSocket, Boolean, ZLinkJavaSocketReceivePoller>
             DEFAULT_RECEIVE_POLLER =
                     (socket, observesRoutes) ->
@@ -54,6 +55,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     private static final Duration INFINITE_WAIT = Duration.ofMillis(-1);
     private final Context context;
     private final boolean ownsContext;
+    private final Duration closeDeadline;
     final LinkedHashMap<RouterSocket, ZLinkJavaSocketReceivePoller> receivePollers =
             new LinkedHashMap<>();
     private final ZLinkStateLane stateLane;
@@ -99,6 +101,10 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         this(context, false, stateLane);
     }
 
+    ZLinkJavaRawServicePort(Context context, ZLinkStateLane stateLane, Duration closeDeadline) {
+        this(context, false, stateLane, DEFAULT_RECEIVE_POLLER, closeDeadline);
+    }
+
     ZLinkJavaRawServicePort(
             Context context,
             ZLinkStateLane stateLane,
@@ -116,6 +122,15 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             boolean ownsContext,
             ZLinkStateLane stateLane,
             BiFunction<RouterSocket, Boolean, ZLinkJavaSocketReceivePoller> receivePollerFactory) {
+        this(context, ownsContext, stateLane, receivePollerFactory, DEFAULT_TERMINATION_DEADLINE);
+    }
+
+    private ZLinkJavaRawServicePort(
+            Context context,
+            boolean ownsContext,
+            ZLinkStateLane stateLane,
+            BiFunction<RouterSocket, Boolean, ZLinkJavaSocketReceivePoller> receivePollerFactory,
+            Duration closeDeadline) {
         this(
                 context,
                 ownsContext,
@@ -125,7 +140,8 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                         ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN),
                         ZLinkJavaSocketSupport::requestTimeout,
                         System::nanoTime),
-                receivePollerFactory);
+                receivePollerFactory,
+                closeDeadline);
     }
 
     ZLinkJavaRawServicePort(
@@ -155,11 +171,28 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             ZLinkStateLane stateLane,
             ZLinkServiceOperationRegistry operations,
             BiFunction<RouterSocket, Boolean, ZLinkJavaSocketReceivePoller> receivePollerFactory) {
+        this(
+                context,
+                ownsContext,
+                stateLane,
+                operations,
+                receivePollerFactory,
+                DEFAULT_TERMINATION_DEADLINE);
+    }
+
+    private ZLinkJavaRawServicePort(
+            Context context,
+            boolean ownsContext,
+            ZLinkStateLane stateLane,
+            ZLinkServiceOperationRegistry operations,
+            BiFunction<RouterSocket, Boolean, ZLinkJavaSocketReceivePoller> receivePollerFactory,
+            Duration closeDeadline) {
         this.receivePollerFactory =
                 Objects.requireNonNull(receivePollerFactory, "receivePollerFactory");
         this.operations = Objects.requireNonNull(operations, "operations");
         this.context = Objects.requireNonNull(context, "context");
         this.ownsContext = ownsContext;
+        this.closeDeadline = Objects.requireNonNull(closeDeadline, "closeDeadline");
         this.stateLane = Objects.requireNonNull(stateLane, "stateLane");
     }
 
@@ -667,6 +700,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                             return closeAttempt;
                         });
         if (completion == attempt) {
+            long deadline = System.nanoTime() + closeDeadline.toNanos();
             try {
                 operations.close();
                 // State-lane submissions leave their admission turn before socket disposal.
@@ -675,7 +709,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                         inStateLane(() -> List.copyOf(receivePollers.reversed().entrySet()));
                 for (var entry : remaining) {
                     entry.getValue().close();
-                    closeRouterAfterInFlightCalls(entry.getKey());
+                    closeRouterAfterInFlightCalls(entry.getKey(), deadline);
                     inStateLane(() -> receivePollers.remove(entry.getKey()));
                 }
                 if (ownsContext) context.close();
@@ -713,17 +747,20 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         }
     }
 
-    private static void closeRouterAfterInFlightCalls(RouterSocket router) {
-        for (int attempt = 1; ; attempt++) {
+    private static void closeRouterAfterInFlightCalls(RouterSocket router, long deadline) {
+        while (true) {
             try {
                 router.close();
                 return;
             } catch (ZlinkCloseException failure) {
-                if (failure.getResult() != CloseResult.BUSY || attempt >= CLOSE_BUSY_MAX_ATTEMPTS) {
+                if (failure.getResult() != CloseResult.BUSY) {
                     throw failure;
                 }
-                // Give the in-flight native call a millisecond to leave before retrying.
-                LockSupport.parkNanos(1_000_000L);
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0) throw failure;
+                // Core alone decides when admitted calls have left the handle. All routers
+                // share this port close's deadline from the existing shutdown policy.
+                LockSupport.parkNanos(Math.min(1_000_000L, remaining));
             }
         }
     }
