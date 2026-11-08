@@ -98,7 +98,7 @@ class in_memory_location_repository_t : public location_repository_t
                       location_write_result_t{location_write_status_t::waiting, 0, {}});
             } else if (intent == location_write_intent_t::renew) {
                 if (found == _mesh_nodes.end () || found->second.owner_id != descriptor.owner_id
-                    || found->second.lease_generation != descriptor.lease_generation
+                    || found->second.lease_generation > descriptor.lease_generation
                     || descriptor.descriptor_revision < found->second.descriptor_revision)
                     return completed (
                       location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
