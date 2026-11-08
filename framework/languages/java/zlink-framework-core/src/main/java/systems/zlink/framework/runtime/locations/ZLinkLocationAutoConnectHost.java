@@ -14,8 +14,10 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkPeerIntentClosePendingException;
 import systems.zlink.framework.runtime.internal.channels.ZLinkClientServerRuntimeConfiguration;
 import systems.zlink.framework.runtime.internal.channels.ZLinkFanoutRuntimeConfiguration;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeer;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeerResolver;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
@@ -136,7 +138,8 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
                             mesh.routingId(),
                             endpoint,
                             100,
-                            new MeshNodeExecutor(node, manual, manualExpectedRids),
+                            new MeshNodeExecutor(
+                                    node, manual, manualExpectedRids, runtime.locationStore()),
                             null,
                             null,
                             mesh.objectServer()
@@ -435,14 +438,24 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
         private final Set<String> manualEndpoints;
         private final Map<String, RoutingId> manualExpectedRids;
         private final Map<String, ConnectionIntent> connectionIntents = new HashMap<>();
+        private final ZLinkLocationRepository repository;
 
         MeshNodeExecutor(
                 ZLinkInternalMeshNode node,
                 Set<String> manualEndpoints,
                 Map<String, RoutingId> manualExpectedRids) {
+            this(node, manualEndpoints, manualExpectedRids, null);
+        }
+
+        MeshNodeExecutor(
+                ZLinkInternalMeshNode node,
+                Set<String> manualEndpoints,
+                Map<String, RoutingId> manualExpectedRids,
+                ZLinkLocationRepository repository) {
             this.node = node;
             this.manualEndpoints = manualEndpoints;
             this.manualExpectedRids = manualExpectedRids;
+            this.repository = repository;
         }
 
         @Override
@@ -520,6 +533,13 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
             if (ZLinkAutoConnectPlanner.hasRid(target.nodeRid())) {
                 node.clearPeerConnectionNotRequired(target.nodeRid());
             }
+        }
+
+        @Override
+        public CompletionStage<Void> refreshSessionFences(List<ZLinkAutoConnectPeer> descriptors) {
+            return repository == null
+                    ? CompletableFuture.completedFuture(null)
+                    : node.refreshSessionFences(descriptors, repository);
         }
 
         private record ConnectionIntent(String targetKey, long intentId) {}

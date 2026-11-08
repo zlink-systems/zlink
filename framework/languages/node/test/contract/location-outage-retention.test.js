@@ -170,15 +170,16 @@ for (const provider of [false, true]) {
     s.setNow(200);
     s.fail();
     await s.runtime.renewOwnerLeaseOnce();
-    s.setNow(300);
+    s.setNow(1200);
     s.lease.renewOwnerLease = async () => ({ kind: 'missing', storeNow: new Date(0) });
+    s.lease.readOwnerLease = async () => ({ kind: 'missing' });
     s.lease.claimOwnerLease = async () => ({
       kind: 'claimed',
       token: { ownerId: 'owner', leaseGeneration: 2n },
       storeNow: new Date(0),
       leaseExpiresAt: new Date(1000)
     });
-    await s.runtime.renewOwnerLeaseOnce();
+    assert.equal(await s.runtime.renewOwnerLeaseOnce(), true);
     assert.equal(s.snapshot().storeOutage.cutoffMs, 1300);
     s.setNow(1300);
     await complete();
@@ -369,11 +370,19 @@ for (const provider of [false, true]) {
       assert.equal(s.runtime.executionAllowed(owner), false);
     s.advance(1300);
     assert.deepEqual(discarded, [ready]);
-    assert.equal(s.runtime.executionAllowed(ready), false);
+    assert.throws(() => s.runtime.executionAllowed(ready), {
+      kind: internal.ZLinkFrameworkErrorKind.NotFound
+    });
   });
 }
 
 async function objectScenario(t, provider, mode, providerResolver, statefulAdmissionOpen) {
+  t.after(async () => {
+    for (const active of spots.activations.activeActivations())
+      s.runtime.discardExecution(active.spot);
+    for (const actor of [a, b]) s.runtime.discardExecution(actor);
+    await Promise.all(tasks);
+  });
   const s = await scenario(t, provider, true);
   const tasks = [];
   const detachedTaskRunner = {
@@ -444,7 +453,7 @@ async function objectScenario(t, provider, mode, providerResolver, statefulAdmis
       actorCreatedNodeRidProvider: () => 'node',
       locationLifecycle: lifecycle,
       admission,
-      discardActorActivation: (actor) => spots.discardActorActivation(actor)
+      discardActorActivation: (actor, error) => spots.discardActorActivation(actor, error)
     },
     detachedTaskRunner
   );
@@ -457,12 +466,6 @@ async function objectScenario(t, provider, mode, providerResolver, statefulAdmis
   activation.commitActorJoin(b);
   for (const id of ['a', 'b'])
     actors.getState(id).setJoinedSpot(activation.spotId, activation.spot, 1n, 1n);
-  t.after(async () => {
-    for (const active of spots.activations.activeActivations())
-      s.runtime.discardExecution(active.spot);
-    for (const actor of [a, b]) s.runtime.discardExecution(actor);
-    await Promise.all(tasks);
-  });
   return { ...s, spots, actors, lifecycle, admission, activation, a, b, tasks, Room };
 }
 
@@ -648,7 +651,9 @@ for (const provider of [false, true]) {
         () => true,
         () => assert.fail('old object registered twice')
       );
-      assert.equal(s.runtime.executionAllowed(s.a), false);
+      assert.throws(() => s.runtime.executionAllowed(s.a), {
+        kind: internal.ZLinkFrameworkErrorKind.NotFound
+      });
       await assert.rejects(async () =>
         s.activation.executeActor('a', (serial) =>
           serial.execute(() => {
@@ -665,7 +670,9 @@ for (const provider of [false, true]) {
         leaseExpiresAt: new Date(1000)
       });
       await s.runtime.renewOwnerLeaseOnce();
-      assert.equal(s.runtime.executionAllowed(s.a), false);
+      assert.throws(() => s.runtime.executionAllowed(s.a), {
+        kind: internal.ZLinkFrameworkErrorKind.NotFound
+      });
     });
   }
 }
@@ -689,7 +696,9 @@ for (const provider of [false, true]) {
         ZLinkLocationKeyCodec.encodeActorKey({ meshName: 'mesh', actorId: 'a' })
       );
       assert.equal(s.actors.getState('a'), undefined);
-      assert.equal(s.runtime.executionAllowed(s.a), false);
+      assert.throws(() => s.runtime.executionAllowed(s.a), {
+        kind: internal.ZLinkFrameworkErrorKind.NotFound
+      });
       assert.equal(s.runtime.executionAllowed(s.b), true);
       assert.equal(s.runtime.executionAllowed(s.activation.spot), true);
       s.runtime.notifyIfStale(
@@ -698,7 +707,9 @@ for (const provider of [false, true]) {
         ZLinkLocationKeyCodec.encodeSpotKey({ meshName: 'mesh', spotId: s.activation.spotId })
       );
       assert.equal(s.actors.getState('b'), undefined);
-      assert.equal(s.runtime.executionAllowed(s.activation.spot), false);
+      assert.throws(() => s.runtime.executionAllowed(s.activation.spot), {
+        kind: internal.ZLinkFrameworkErrorKind.NotFound
+      });
       assert.equal(
         s.snapshot().storeOutage.discarded,
         false,
@@ -867,9 +878,9 @@ for (const provider of [false, true]) {
     s.fail();
     await s.runtime.renewOwnerLeaseOnce();
     s.advance(1299);
-    assert.equal(
-      s.runtime.executionAllowed(s.a),
-      false,
+    assert.throws(
+      () => s.runtime.executionAllowed(s.a),
+      { kind: internal.ZLinkFrameworkErrorKind.NotFound },
       'retired object must not keep its execution registration'
     );
     assert.equal(s.runtime.executionAllowed(replacement.actor), true);
@@ -895,7 +906,9 @@ for (const provider of [false, true]) {
           internal.ZLinkLocationKind.Spot,
           ZLinkLocationKeyCodec.encodeSpotKey({ meshName: 'mesh', spotId: s.activation.spotId })
         );
-        assert.equal(s.runtime.executionAllowed(s.activation.spot), false);
+        assert.throws(() => s.runtime.executionAllowed(s.activation.spot), {
+          kind: internal.ZLinkFrameworkErrorKind.NotFound
+        });
         assert.equal(
           s.spots.activations.activationForClose('mesh', s.activation.spotId),
           s.activation
@@ -1284,7 +1297,9 @@ for (const mode of [
     state.markLocationOwned();
     s.activation.commitActorJoin(replacement.actor);
     state.setJoinedSpot(s.activation.spotId, s.activation.spot, 1n, 1n);
-    assert.equal(s.runtime.executionAllowed(s.a), false);
+    assert.throws(() => s.runtime.executionAllowed(s.a), {
+      kind: internal.ZLinkFrameworkErrorKind.NotFound
+    });
     await s.activation.executeActor('a', (serial) => serial.execute(() => undefined));
     s.runtime.discardExecution(replacement.actor);
   });
@@ -1307,7 +1322,9 @@ test('a discarded owner query still applies the existing T latch', async (t) => 
   s.fail();
   await s.runtime.renewOwnerLeaseOnce();
   s.setNow(1300);
-  assert.equal(s.runtime.executionAllowed(retired), false);
+  assert.throws(() => s.runtime.executionAllowed(retired), {
+    kind: internal.ZLinkFrameworkErrorKind.NotFound
+  });
   assert.equal(s.snapshot().storeOutage.discarded, true);
   assert.equal(discarded, 1);
 });
@@ -1348,4 +1365,200 @@ test('timer keeps its existing fallback when no Location execution policy exists
   } finally {
     await timer.cancel();
   }
+});
+
+for (const provider of [false, true]) {
+  for (const terminal of ['T', 'ownership', 'close', 'shutdown']) {
+    test(`queued terminal kinds (${provider}/${terminal}) repeated 100 times`, async (t) => {
+      for (let iteration = 0; iteration < 100; iteration++) {
+        await t.test(String(iteration), async (t) => {
+          const s = await objectScenario(t, provider, internal.ZLinkUserSpotExecutionMode.SpotWide);
+          const serial = s.activation.serial;
+          let closingCalls = 0;
+          s.activation.spot.onClosing = () => {
+            closingCalls++;
+          };
+          let completeSource, signalYielded;
+          const source = new Promise((resolve) => {
+            completeSource = resolve;
+          });
+          const yielded = new Promise((resolve) => {
+            signalYielded = resolve;
+          });
+          const continuation = serial.execute(async () => {
+            signalYielded();
+            await serial.yieldPromise(source);
+            assert.fail('continuation must not run');
+          });
+          let finish, signalStarted;
+          const started = new Promise((resolve) => {
+            signalStarted = resolve;
+          });
+          const continuationOutcome = Promise.allSettled([continuation]);
+          await yielded;
+          const running = serial.execute(
+            () =>
+              new Promise((resolve) => {
+                finish = resolve;
+                signalStarted();
+              })
+          );
+          await started;
+          let signalQueued;
+          const allQueued = new Promise((resolve) => {
+            signalQueued = resolve;
+          });
+          let admitted = 0;
+          const onAdmitted = () => {
+            if (++admitted === 3) signalQueued();
+          };
+          const execute = serial.execute;
+          serial.execute = function (operation, options, ...rest) {
+            return execute.call(
+              this,
+              operation,
+              {
+                ...options,
+                onAdmitted() {
+                  options?.onAdmitted?.();
+                  onAdmitted();
+                }
+              },
+              ...rest
+            );
+          };
+          const prototype = internal.ZLinkSerialExecutionQueue.prototype;
+          const submitContinuation = prototype.submitContinuation;
+          prototype.submitContinuation = function (...args) {
+            const result = submitContinuation.apply(this, args);
+            onAdmitted();
+            return result;
+          };
+          t.after(() => {
+            prototype.submitContinuation = submitContinuation;
+          });
+          const application = serial.execute(() => assert.fail('application must not run'));
+          const request = s.spots.dispatchRoutedSpotRequest(
+            s.activation.spotId,
+            'Ping',
+            {},
+            { channelName: 'mesh' }
+          );
+          const outcomes = Promise.allSettled([application, request]);
+          completeSource();
+          await allQueued;
+          serial.execute = execute;
+          prototype.submitContinuation = submitContinuation;
+          s.setNow(200);
+          s.fail();
+          await s.runtime.renewOwnerLeaseOnce();
+          try {
+            if (terminal === 'T') s.advance(1300);
+            else if (terminal === 'ownership') {
+              const {
+                ZLinkLocationKeyCodec
+              } = require('../../packages/framework/dist/runtime/locations/key-codec');
+              s.runtime.notifyIfStale(
+                { status: internal.ZLinkLocationWriteStatus.IgnoredStale },
+                internal.ZLinkLocationKind.Spot,
+                ZLinkLocationKeyCodec.encodeSpotKey({
+                  meshName: 'mesh',
+                  spotId: s.activation.spotId
+                })
+              );
+            } else {
+              if (terminal === 'shutdown') s.admission.close();
+              await s.runtime.stop();
+              s.advance(1300);
+              assert.throws(() => s.runtime.executionAllowed(s.activation.spot), {
+                kind: internal.ZLinkFrameworkErrorKind.ShuttingDown
+              });
+              assert.equal(closingCalls, 0, 'Location stop must not call object closing');
+              assert.equal(
+                s.spots.activations.activationForClose('mesh', s.activation.spotId),
+                s.activation,
+                'Host owns object cleanup after Location stop'
+              );
+              assert.equal(s.actors.getState('a').actor, s.a);
+              assert.equal(s.actors.getState('b').actor, s.b);
+            }
+          } finally {
+            finish();
+          }
+          await running;
+          const settled = [...(await outcomes), ...(await continuationOutcome)];
+          for (const result of settled) {
+            assert.equal(result.status, 'rejected');
+            assert.equal(
+              result.reason?.kind,
+              terminal === 'T' || terminal === 'ownership'
+                ? internal.ZLinkFrameworkErrorKind.NotFound
+                : internal.ZLinkFrameworkErrorKind.ShuttingDown
+            );
+          }
+          await Promise.all(s.tasks);
+        });
+      }
+    });
+  }
+}
+
+for (const provider of [false, true]) {
+  test(`yield completion after T cleanup remains NotFound (${provider}) repeated 100 times`, async (t) => {
+    for (let iteration = 0; iteration < 100; iteration++) {
+      await t.test(String(iteration), async (t) => {
+        const s = await objectScenario(t, provider, internal.ZLinkUserSpotExecutionMode.SpotWide);
+        let complete, signalYielded;
+        const source = new Promise((resolve) => {
+          complete = resolve;
+        });
+        const yielded = new Promise((resolve) => {
+          signalYielded = resolve;
+        });
+        const pending = s.activation.serial.execute(async () => {
+          signalYielded();
+          await s.activation.serial.yieldPromise(source);
+          assert.fail('discarded continuation must not run');
+        });
+        const outcome = Promise.allSettled([pending]);
+        await yielded;
+        s.setNow(200);
+        s.fail();
+        await s.runtime.renewOwnerLeaseOnce();
+        s.advance(1300);
+        await Promise.all(s.tasks);
+        complete();
+        const [result] = await outcome;
+        assert.equal(result.status, 'rejected');
+        assert.equal(result.reason?.kind, internal.ZLinkFrameworkErrorKind.NotFound);
+      });
+    }
+  });
+}
+
+test('nonterminal execution pause preserves the existing yielded-turn result', async () => {
+  let allowed = true,
+    complete,
+    signalYielded;
+  const source = new Promise((resolve) => {
+    complete = resolve;
+  });
+  const yielded = new Promise((resolve) => {
+    signalYielded = resolve;
+  });
+  const barrier = new internal.ZLinkExecutionBarrier();
+  barrier.setExecutionPolicy(() => () => allowed);
+  const serial = new internal.ZLinkSpotSerialTurnExecutor();
+  serial.setExecutionBarrier(barrier);
+  const pending = serial.execute(async () => {
+    signalYielded();
+    await serial.yieldPromise(source);
+    assert.fail('paused continuation must not run');
+  });
+  const rejected = assert.rejects(pending, { kind: internal.ZLinkFrameworkErrorKind.Unavailable });
+  await yielded;
+  allowed = false;
+  complete();
+  await rejected;
+  await serial.whenIdle();
 });

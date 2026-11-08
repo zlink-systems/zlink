@@ -3439,6 +3439,7 @@ class outage_provider_t final : public location_store_t
 {
   public:
     in_memory_location_store_t inner;
+    std::vector<store_read_result_t> injected_owner_reads;
     bool fail = false;
     std::atomic_int forbidden_calls{0};
     bool forbid_io = false;
@@ -3447,6 +3448,12 @@ class outage_provider_t final : public location_store_t
     task_completion_source_t<void> resume;
     task_t<store_read_result_t> read (store_key_t key) override
     {
+        if (key.value.starts_with ("owner-lease") && !injected_owner_reads.empty ()) {
+            auto read = std::move (injected_owner_reads.front ());
+            injected_owner_reads.erase (injected_owner_reads.begin ());
+            return task_t<store_read_result_t> (
+              result_t<store_read_result_t>::success (std::move (read)));
+        }
         if (forbid_io)
             ++forbidden_calls;
         if (fail || forbid_io || std::exchange (fail_next_read, false))
@@ -3487,6 +3494,7 @@ class outage_memory_t final : public in_memory_location_repository_t
     bool fail_renew = false;
     bool hold_read = false;
     bool hold_renew = false;
+    std::vector<owner_lease_read_result_t> injected_owner_reads;
     task_completion_source_t<void> resume;
     task_t<authority_read_result_t> read_authority_core (authority_key_t key,
                                                          std::stop_token cancellation = {}) override
@@ -3579,6 +3587,12 @@ class outage_memory_t final : public in_memory_location_repository_t
     }
     task_t<owner_lease_read_result_t> read_owner_lease (std::string owner) override
     {
+        if (!injected_owner_reads.empty ()) {
+            auto read = std::move (injected_owner_reads.front ());
+            injected_owner_reads.erase (injected_owner_reads.begin ());
+            return task_t<owner_lease_read_result_t> (
+              result_t<owner_lease_read_result_t>::success (std::move (read)));
+        }
         if (fail)
             return task_t<owner_lease_read_result_t> (result_t<owner_lease_read_result_t>::failure (
               framework_error_kind_t::internal_failure, "injected outage read"));
@@ -4670,6 +4684,10 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
         provider.forbid_io = memory.forbid_io = false;
         const auto token_before_claim = *lease_access::snapshot (runtime)->token;
         store ().release_owner_lease (token_before_claim).result ().value ();
+        // Object discard does not authorize an owner claim before normal expiry.
+        move_to (std::max (clock_now.load (),
+                           lease_access::snapshot (runtime)->last_successful_lease->started_at
+                             + options.owner_lease_ttl + options.owner_lease_fencing_margin));
         lease_access::heartbeat (runtime, clock_now.load ());
         ASSERT_TRUE (lease_access::snapshot (runtime)->token);
         EXPECT_NE (token_before_claim.lease_generation,
@@ -5299,6 +5317,231 @@ TEST_P (StoreOutageRetention, TerminalCauseSurvivesParentDiscardAndLaterPolicy)
         }
 }
 
+TEST_P (StoreOutageRetention, RecoveryMustWaitForNormalExpiryBeforeNewClaim)
+{
+    options.store_outage_retention = true;
+    location_runtime_t runtime (store (), options, "normal-expiry-owner");
+    lease_access::clock (runtime, [&] { return clock_now.load (); });
+    claim (runtime);
+    const auto initial = lease_access::snapshot (runtime);
+    const auto old_token = *initial->token;
+    advance (5s);
+    lease_access::communication_failure (runtime);
+    ASSERT_LT (clock_now.load (), initial->last_successful_lease->started_at
+                                    + options.owner_lease_ttl + options.owner_lease_fencing_margin);
+    store ().release_owner_lease (old_token).result ().value ();
+    ASSERT_TRUE (std::holds_alternative<owner_lease_missing_t> (
+      store ().read_owner_lease (old_token.owner_id).result ().value ()));
+    lease_access::heartbeat (runtime, clock_now.load ());
+    // Approved D17: Missing alone cannot authorize a claim before lifetime + margin.
+    const auto after = lease_access::snapshot (runtime)->token;
+    ASSERT_TRUE (after);
+    EXPECT_EQ (old_token.lease_generation, after->lease_generation);
+    EXPECT_TRUE (std::holds_alternative<owner_lease_missing_t> (
+      store ().read_owner_lease (old_token.owner_id).result ().value ()));
+}
+
+TEST_P (StoreOutageRetention, RecoveryCanClaimAfterNormalExpiryAndExactMissing)
+{
+    options.store_outage_retention = true;
+    location_runtime_t runtime (store (), options, "expired-owner");
+    lease_access::clock (runtime, [&] { return clock_now.load (); });
+    claim (runtime);
+    const auto initial = lease_access::snapshot (runtime);
+    const auto old_token = *initial->token;
+    advance (5s);
+    lease_access::communication_failure (runtime);
+    move_to (initial->last_successful_lease->started_at + options.owner_lease_ttl
+             + options.owner_lease_fencing_margin);
+    store ().release_owner_lease (old_token).result ().value ();
+    ASSERT_TRUE (std::holds_alternative<owner_lease_missing_t> (
+      store ().read_owner_lease (old_token.owner_id).result ().value ()));
+    lease_access::heartbeat (runtime, clock_now.load ());
+    const auto after = lease_access::snapshot (runtime)->token;
+    ASSERT_TRUE (after);
+    EXPECT_NE (after->lease_generation, old_token.lease_generation);
+}
+
+
+TEST_P (StoreOutageRetention, RecoveryMissingBeforeExpiryBoundaryKeepsOriginalToken)
+{
+    options.store_outage_retention = true;
+    location_runtime_t runtime (store (), options, "boundary-owner");
+    lease_access::clock (runtime, [&] { return clock_now.load (); });
+    claim (runtime);
+    const auto initial = lease_access::snapshot (runtime);
+    const auto token = *initial->token;
+    advance (5s);
+    lease_access::communication_failure (runtime);
+    const auto episode = lease_access::snapshot (runtime)->outage;
+    store ().release_owner_lease (token).result ().value ();
+    move_to (initial->last_successful_lease->started_at + options.owner_lease_ttl
+             + options.owner_lease_fencing_margin - 1ms);
+    lease_access::heartbeat (runtime, clock_now.load ());
+    ASSERT_TRUE (lease_access::snapshot (runtime)->token);
+    EXPECT_EQ (token.lease_generation, lease_access::snapshot (runtime)->token->lease_generation);
+    EXPECT_EQ (episode, lease_access::snapshot (runtime)->outage);
+    EXPECT_FALSE (episode->discarded.load ());
+    EXPECT_TRUE (std::holds_alternative<owner_lease_missing_t> (
+      store ().read_owner_lease (token.owner_id).result ().value ()));
+}
+
+TEST_P (StoreOutageRetention, RecoveryDifferentTokenDiscardsWithoutAdoptingIt)
+{
+    options.store_outage_retention = true;
+    location_runtime_t runtime (store (), options, "changed-owner");
+    lease_access::clock (runtime, [&] { return clock_now.load (); });
+    claim (runtime);
+    const auto initial = lease_access::snapshot (runtime);
+    const auto token = *initial->token;
+    advance (5s);
+    lease_access::communication_failure (runtime);
+    const auto episode = lease_access::snapshot (runtime)->outage;
+    store ().release_owner_lease (token).result ().value ();
+    const auto replacement = std::get<owner_lease_claimed_t> (
+      store ().claim_owner_lease (token.owner_id, options.owner_lease_ttl).result ().value ());
+    ASSERT_NE (token.lease_generation, replacement.token.lease_generation);
+    lease_access::heartbeat (runtime, clock_now.load ());
+    ASSERT_TRUE (lease_access::snapshot (runtime)->token);
+    EXPECT_EQ (token.lease_generation, lease_access::snapshot (runtime)->token->lease_generation);
+    EXPECT_TRUE (episode->discarded.load ());
+    EXPECT_FALSE (lease_access::snapshot (runtime)->healthy);
+    const auto exact =
+      std::get<owner_lease_found_t> (store ().read_owner_lease (token.owner_id).result ().value ());
+    EXPECT_EQ (replacement.token.lease_generation, exact.token.lease_generation);
+}
+
+TEST_P (StoreOutageRetention, RecoveryFirstCommunicationFailureDiscardsExactDifferentToken)
+{
+    options.store_outage_retention = true;
+    location_runtime_t runtime (store (), options, "changed-owner");
+    lease_access::clock (runtime, [&] { return clock_now.load (); });
+    claim (runtime);
+    const auto initial = lease_access::snapshot (runtime);
+    const auto token = *initial->token;
+    advance (5s);
+    store ().release_owner_lease (token).result ().value ();
+    const auto replacement = std::get<owner_lease_claimed_t> (
+      store ().claim_owner_lease (token.owner_id, options.owner_lease_ttl).result ().value ());
+    ASSERT_NE (token.lease_generation, replacement.token.lease_generation);
+    provider.fail_next_read = memory.fail_renew = true;
+    lease_access::heartbeat (runtime, clock_now.load ());
+    provider.fail_next_read = memory.fail_renew = false;
+    const auto episode = lease_access::snapshot (runtime)->outage;
+    ASSERT_TRUE (episode);
+    ASSERT_TRUE (lease_access::snapshot (runtime)->token);
+    EXPECT_EQ (token.lease_generation, lease_access::snapshot (runtime)->token->lease_generation);
+    EXPECT_TRUE (episode->discarded.load ());
+    EXPECT_FALSE (lease_access::snapshot (runtime)->healthy);
+    const auto exact =
+      std::get<owner_lease_found_t> (store ().read_owner_lease (token.owner_id).result ().value ());
+    EXPECT_EQ (replacement.token.lease_generation, exact.token.lease_generation);
+}
+
+TEST_P (StoreOutageRetention, RecoveryFailedExactReadDoesNotAuthorizeClaim)
+{
+    options.store_outage_retention = true;
+    location_runtime_t runtime (store (), options, "read-failure-owner");
+    lease_access::clock (runtime, [&] { return clock_now.load (); });
+    claim (runtime);
+    const auto initial = lease_access::snapshot (runtime);
+    const auto token = *initial->token;
+    advance (5s);
+    lease_access::communication_failure (runtime);
+    store ().release_owner_lease (token).result ().value ();
+    move_to (initial->last_successful_lease->started_at + options.owner_lease_ttl
+             + options.owner_lease_fencing_margin);
+    provider.fail = memory.fail = true;
+    lease_access::heartbeat (runtime, clock_now.load ());
+    provider.fail = memory.fail = false;
+    ASSERT_TRUE (lease_access::snapshot (runtime)->token);
+    EXPECT_EQ (token.lease_generation, lease_access::snapshot (runtime)->token->lease_generation);
+    EXPECT_TRUE (std::holds_alternative<owner_lease_missing_t> (
+      store ().read_owner_lease (token.owner_id).result ().value ()));
+    lease_access::heartbeat (runtime, clock_now.load ());
+    ASSERT_TRUE (lease_access::snapshot (runtime)->token);
+    EXPECT_NE (token.lease_generation, lease_access::snapshot (runtime)->token->lease_generation);
+}
+
+TEST_P (StoreOutageRetention, StaleOutsideEpisodeStillClaimsImmediately)
+{
+    location_runtime_t runtime (store (), options, "outside-episode-owner");
+    lease_access::clock (runtime, [&] { return clock_now.load (); });
+    claim (runtime);
+    const auto token = *lease_access::snapshot (runtime)->token;
+    advance (5s);
+    store ().release_owner_lease (token).result ().value ();
+    lease_access::heartbeat (runtime, clock_now.load ());
+    ASSERT_TRUE (lease_access::snapshot (runtime)->token);
+    EXPECT_NE (token.lease_generation, lease_access::snapshot (runtime)->token->lease_generation);
+    EXPECT_FALSE (lease_access::snapshot (runtime)->outage);
+}
+
+TEST_P (StoreOutageRetention, StaleRenewStartedBeforeOutageCannotClaimEarly)
+{
+    options.store_outage_retention = true;
+    location_runtime_t runtime (store (), options, "pending-stale-owner");
+    lease_access::clock (runtime, [&] { return clock_now.load (); });
+    claim (runtime);
+    const auto token = *lease_access::snapshot (runtime)->token;
+    store ().release_owner_lease (token).result ().value ();
+    advance (5s);
+    provider.hold_read = memory.hold_renew = true;
+    lease_access::heartbeat (runtime, clock_now.load (), [&] {
+        lease_access::communication_failure (runtime);
+        provider.hold_read = memory.hold_renew = false;
+        provider.resume.complete (result_t<void>::success ());
+        memory.resume.complete (result_t<void>::success ());
+    });
+    ASSERT_TRUE (lease_access::snapshot (runtime)->token);
+    EXPECT_EQ (token.lease_generation, lease_access::snapshot (runtime)->token->lease_generation);
+    ASSERT_TRUE (lease_access::snapshot (runtime)->outage);
+    EXPECT_FALSE (lease_access::snapshot (runtime)->outage->discarded.load ());
+    EXPECT_TRUE (std::holds_alternative<owner_lease_missing_t> (
+      store ().read_owner_lease (token.owner_id).result ().value ()));
+}
+
+TEST_P (StoreOutageRetention, RecoveryExactLeaseMustBeExpiredAsWellAsNormalLifetimeElapsed)
+{
+    for (bool expired : {false, true}) {
+        options.store_outage_retention = true;
+        location_runtime_t runtime (store (), options, expired ? "expired-exact" : "live-exact");
+        lease_access::clock (runtime, [&] { return clock_now.load (); });
+        claim (runtime);
+        const auto initial = lease_access::snapshot (runtime);
+        const auto token = *initial->token;
+        auto exact = std::get<owner_lease_found_t> (
+          store ().read_owner_lease (token.owner_id).result ().value ());
+        const auto lifetime = expired ? 0ms : 1ms;
+        exact.lease_expires_at = exact.store_now + lifetime;
+        std::optional<store_found_t> raw;
+        if (GetParam ()) {
+            raw = std::get<store_found_t> (
+              provider.inner.read ({std::string ("owner-lease") + '\0' + token.owner_id})
+                .result ()
+                .value ());
+            raw->value.expires_at = raw->value.store_now + lifetime;
+        }
+        advance (5s);
+        lease_access::communication_failure (runtime);
+        store ().release_owner_lease (token).result ().value ();
+        move_to (initial->last_successful_lease->started_at + options.owner_lease_ttl
+                 + options.owner_lease_fencing_margin);
+        if (GetParam ())
+            provider.injected_owner_reads = {store_missing_t{exact.store_now}, *raw};
+        else
+            memory.injected_owner_reads = {exact};
+        lease_access::heartbeat (runtime, clock_now.load ());
+        ASSERT_TRUE (lease_access::snapshot (runtime)->token);
+        EXPECT_EQ (expired, token.lease_generation
+                              != lease_access::snapshot (runtime)->token->lease_generation);
+        EXPECT_TRUE (provider.injected_owner_reads.empty ());
+        EXPECT_TRUE (memory.injected_owner_reads.empty ());
+        const auto actual = store ().read_owner_lease (token.owner_id).result ().value ();
+        EXPECT_EQ (!expired, std::holds_alternative<owner_lease_missing_t> (actual));
+    }
+}
+
 TEST_P (StoreOutageRetention, StaleLeaseKeepsObjectsAndOriginalEpisodeUntilCutoff)
 {
     for (bool retained : {false, true}) {
@@ -5329,15 +5572,39 @@ TEST_P (StoreOutageRetention, StaleLeaseKeepsObjectsAndOriginalEpisodeUntilCutof
         store ().release_owner_lease (old_token).result ().value ();
         lease_access::heartbeat (runtime, clock_now.load ());
         ASSERT_TRUE (lease_access::snapshot (runtime)->token);
-        EXPECT_NE (old_token.lease_generation,
+        EXPECT_EQ (old_token.lease_generation,
                    lease_access::snapshot (runtime)->token->lease_generation);
+        EXPECT_TRUE (std::holds_alternative<owner_lease_missing_t> (
+          store ().read_owner_lease (old_token.owner_id).result ().value ()));
         EXPECT_EQ (episode, lease_access::snapshot (runtime)->outage);
         EXPECT_EQ (0, discarded);
         int handlers = 0;
-        ASSERT_TRUE (gate->try_post ("after-stale-and-claim", [&] { ++handlers; }));
+        ASSERT_TRUE (gate->try_post ("after-stale-before-expiry", [&] { ++handlers; }));
         scheduler.run_all ();
         EXPECT_EQ (1, handlers);
-        move_to (episode->cutoff);
+        const auto normal_expiry =
+          lease_access::snapshot (runtime)->last_successful_lease->started_at
+          + options.owner_lease_ttl + options.owner_lease_fencing_margin;
+        // The default cutoff precedes normal expiry; retained execution lasts until T.
+        if (episode->cutoff <= normal_expiry) {
+            move_to (episode->cutoff);
+            detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+            scheduler.run_all ();
+            EXPECT_EQ (1, discarded);
+        }
+        move_to (normal_expiry);
+        lease_access::heartbeat (runtime, clock_now.load ());
+        ASSERT_TRUE (lease_access::snapshot (runtime)->token);
+        EXPECT_NE (old_token.lease_generation,
+                   lease_access::snapshot (runtime)->token->lease_generation);
+        EXPECT_EQ (episode, lease_access::snapshot (runtime)->outage);
+        EXPECT_EQ (retained ? 0 : 1, discarded);
+        // A renew of the newly claimed token cannot extend the old episode.
+        advance (1ms);
+        lease_access::heartbeat (runtime, clock_now.load ());
+        EXPECT_EQ (episode, lease_access::snapshot (runtime)->outage);
+        if (clock_now.load () < episode->cutoff)
+            move_to (episode->cutoff);
         detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
         scheduler.run_all ();
         EXPECT_EQ (1, discarded);

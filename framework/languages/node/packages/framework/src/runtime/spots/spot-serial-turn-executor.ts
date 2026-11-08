@@ -427,16 +427,13 @@ export class ZLinkSpotSerialTurnExecutor {
     resume: () => void,
     reject: (reason: unknown) => void
   ): boolean {
-    if (!turn.resumeExecutionClaim()) {
-      reject(
-        createInternalFrameworkException(
+    void this.enqueueContinuationTurn(async () => {
+      if (!turn.resumeExecutionClaim()) {
+        throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.SpotMoving,
           'The yielded Spot turn cannot resume after its execution unit was sealed.'
-        )
-      );
-      return true;
-    }
-    void this.enqueueContinuationTurn(async () => {
+        );
+      }
       this.resumedOwnerTurn = turn;
       try {
         turn.resetSuspension();
@@ -446,8 +443,14 @@ export class ZLinkSpotSerialTurnExecutor {
         if (this.resumedOwnerTurn === turn) this.resumedOwnerTurn = undefined;
       }
     }).catch((error) => {
-      turn.releaseBoundExecutionClaim();
-      reject(error);
+      try {
+        turn.executionAllowed();
+        reject(error);
+      } catch (failure) {
+        reject(failure);
+      } finally {
+        turn.releaseBoundExecutionClaim();
+      }
     });
     return true;
   }

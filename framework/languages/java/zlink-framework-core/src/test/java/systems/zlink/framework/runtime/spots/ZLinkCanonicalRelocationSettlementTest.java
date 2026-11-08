@@ -129,10 +129,13 @@ final class ZLinkCanonicalRelocationSettlementTest {
             fixture.connected.set(true);
             fixture.nextManagementTurn();
         }
+        fixture.endpoint.publishedEvent.get(3, TimeUnit.SECONDS);
         assertEquals(1, fixture.commits.get(), "the replay must deliver the verified boundary");
         // Resubmission and the source's later Store confirmation are distinct observations
         // (relocation §4.4). Advance that authority observation explicitly as well.
         if (!settlement.isDone()) fixture.nextManagementTurn();
+        // The turn submits the Store read; its completion may arrive on another thread.
+        settlement.get(3, TimeUnit.SECONDS);
         assertTrue(settlement.isDone(), "the source must observe the target's committed authority");
         assertEquals(
                 ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED,

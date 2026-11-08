@@ -447,17 +447,20 @@ class provider_location_repository_t final : public location_repository_t
                 ? decode_direct_actor_authority_payload (snapshot.payload)
                 : std::nullopt;
             const auto *retarget = std::get_if<authority_retarget_t> (&mutation);
-            const auto qualification_owner = retarget ? retarget->target.owner : snapshot.owner;
+            const auto qualification_owner = retarget                   ? retarget->target.owner
+                                             : put && put->preservation ? put->preservation->second
+                                                                        : snapshot.owner;
             store_write_request_t write_request;
             if (std::holds_alternative<authority_delete_t> (mutation)) {
                 if (snapshot.allocation.state != placement_allocation_state_t::active)
                     co_return co_await authority_conflict (std::move (current));
                 if (!co_await owner_is_live_async (snapshot.owner))
                     co_return co_await authority_conflict (std::move (current));
-                auto target =
-                  co_await read_target_descriptor_async (snapshot.allocation.target, false);
-                if (!target)
-                    co_return co_await authority_conflict (std::move (current));
+                const auto descriptor_key =
+                  key_mesh (snapshot.allocation.target.mesh_name,
+                            zlink::routing_id_t::from (
+                              std::string (snapshot.allocation.target.node_rid.value ())));
+                const auto descriptor = co_await _store.read (descriptor_key);
                 auto capacity = co_await read_capacity_async (snapshot.allocation.target);
                 if (!adjust_capacity (capacity.record, snapshot.allocation.capacity_bundle, 0, -1))
                     co_return co_await authority_conflict (std::move (current));
@@ -465,14 +468,35 @@ class provider_location_repository_t final : public location_repository_t
                   authority_key_codec_detail::decode_authority_key (key.value);
                 if (!decoded_key)
                     co_return co_await authority_conflict (std::move (current));
-                write_request.conditions = {
-                  version_condition (row_key, found->value.version),
-                  owner_condition (snapshot.owner),
-                  version_condition (target->key, target->provider_version), capacity.condition};
+                write_request.conditions = {version_condition (row_key, found->value.version),
+                                            owner_condition (snapshot.owner),
+                                            condition_for (descriptor_key, descriptor),
+                                            capacity.condition};
                 write_request.mutations = {store_delete_t{row_key},
                                            store_put_t{capacity.key,
                                                        encode_capacity_record (capacity.record),
                                                        std::nullopt}};
+            } else if (put && put->preservation) {
+                if (!put->matches_preserved (snapshot))
+                    co_return co_await authority_conflict (std::move (current));
+                if (!co_await owner_is_live_async (qualification_owner))
+                    co_return co_await authority_conflict (std::move (current));
+                auto target = snapshot.allocation.target;
+                target.owner = qualification_owner;
+                const auto descriptor =
+                  co_await read_target_descriptor_async (target, false, false);
+                if (!descriptor || descriptor->descriptor.owner_id != qualification_owner.owner_id
+                    || descriptor->descriptor.lifecycle_generation
+                         != target.node_lifecycle_generation)
+                    co_return co_await authority_conflict (std::move (current));
+                snapshot.owner = qualification_owner;
+                snapshot.allocation.target.owner = qualification_owner;
+                snapshot.payload = put->payload;
+                write_request = {
+                  {version_condition (row_key, found->value.version),
+                   owner_condition (qualification_owner),
+                   version_condition (descriptor->key, descriptor->provider_version)},
+                  {store_put_t{row_key, encode_authority (snapshot), std::nullopt}}};
             } else if (const auto *restore = std::get_if<authority_restore_t> (&mutation)) {
                 if (!same_owner (snapshot.owner, restore->expected_owner))
                     co_return co_await authority_conflict (std::move (current));
@@ -952,10 +976,13 @@ class provider_location_repository_t final : public location_repository_t
                                           std::uint64_t read_sequence,
                                           const object_reserve_request_t *request = nullptr,
                                           std::stop_token cancellation = {},
-                                          const location_owner_token_t *required_owner = nullptr)
+                                          const location_owner_token_t *required_owner = nullptr,
+                                          const authority_snapshot_t *discarded = nullptr)
     {
         const bool active = current.allocation.state == placement_allocation_state_t::active;
-        if (active && !request)
+        if (discarded && (!active || !discarded->same_incarnation (current)))
+            co_return stale_authority_reclaim_result_t::recovery_required;
+        if (active && !request && !discarded)
             co_return stale_authority_reclaim_result_t::recovery_required;
         // Relocation authority retains its own recovery protocol.
         const auto actor = decode_direct_actor_authority_payload (current.payload);
@@ -984,20 +1011,24 @@ class provider_location_repository_t final : public location_repository_t
                 co_return stale_authority_reclaim_result_t::owner_live;
             }
             const auto mutation_locked = co_await authority_mutation_locked_async (
-              object_key (request->key), &authority_lock_condition.emplace ());
+              (request ? object_key (request->key)
+                       : authority_from_store_key (authority_key)->value),
+              &authority_lock_condition.emplace ());
             if ((actor && actor->has_relocation_state) || mutation_locked)
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Object authority requires relocation recovery");
-            if (request->relocation_policy != detail::factory_relocation_kind_t::disabled)
+            if (!discarded
+                && request->relocation_policy != detail::factory_relocation_kind_t::disabled)
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Object owner lease is unavailable");
-            if (current.allocation.object_kind == placement_object_kind_t::actor
+            if (!discarded && current.allocation.object_kind == placement_object_kind_t::actor
                 && (!actor || actor->state != actor_authority_state_t::ready
                     || actor->actor_id != request->key.global_id
                     || actor->stable_type != request->intent.stable_type))
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Actor is not steady Ready");
-            if (current.allocation.object_kind == placement_object_kind_t::user_spot) {
+            if (!discarded
+                && current.allocation.object_kind == placement_object_kind_t::user_spot) {
                 const auto spot =
                   stateful::authority_relocation_payload_codec_t::decode_ready_user_spot (current);
                 if (!spot || spot->spot_id != request->key.global_id
@@ -1049,7 +1080,9 @@ class provider_location_repository_t final : public location_repository_t
                     if (!cursor)
                         break;
                 } while (true);
-            } else if (current.allocation.object_kind == placement_object_kind_t::instance_spot) {
+            } else if (!discarded
+                       && current.allocation.object_kind
+                            == placement_object_kind_t::instance_spot) {
                 const auto spot = decode_instance_spot_authority_payload (current.payload);
                 if (!spot || spot->state != instance_spot_authority_state_t::ready
                     || spot->activation_recovery || spot->spot_id != request->key.global_id
@@ -1136,6 +1169,8 @@ class provider_location_repository_t final : public location_repository_t
               version_condition (member_key, store_version_t{member.snapshot.store_version}));
             write_request.mutations.push_back (store_delete_t{member_key});
         }
+        if (discarded && !wait_elapsed)
+            co_return stale_authority_reclaim_result_t::recovery_required;
         if (!wait_elapsed || !members_wait_elapsed)
             throw framework_exception_t (framework_error_kind_t::unavailable,
                                          "Owner lease release observation is still waiting");
@@ -1236,18 +1271,22 @@ class provider_location_repository_t final : public location_repository_t
       authority_key_t key,
       std::string expected_store_version,
       std::stop_token cancellation = {},
-      std::optional<object_reserve_request_t> request = std::nullopt) override
+      std::optional<object_reserve_request_t> request = std::nullopt,
+      std::optional<authority_snapshot_t> discarded = std::nullopt) override
     {
         return release_ended_reservation (std::move (key), std::move (expected_store_version),
-                                          cancellation, std::move (request), std::nullopt);
+                                          cancellation, std::move (request), std::nullopt,
+                                          std::move (discarded));
     }
 
   private:
-    task_t<bool> release_ended_reservation (authority_key_t key,
-                                            std::string expected_store_version,
-                                            std::stop_token cancellation,
-                                            std::optional<object_reserve_request_t> request,
-                                            std::optional<location_owner_token_t> required_owner)
+    task_t<bool>
+    release_ended_reservation (authority_key_t key,
+                               std::string expected_store_version,
+                               std::stop_token cancellation,
+                               std::optional<object_reserve_request_t> request,
+                               std::optional<location_owner_token_t> required_owner,
+                               std::optional<authority_snapshot_t> discarded = std::nullopt)
     {
         const auto row_key = key_authority (key.value);
         for (;;) {
@@ -1274,7 +1313,7 @@ class provider_location_repository_t final : public location_repository_t
             }
             const auto reclaimed = co_await try_reclaim_reserved_authority_async (
               row_key, *found, current, read_sequence, request ? &*request : nullptr, cancellation,
-              required_owner ? &*required_owner : nullptr);
+              required_owner ? &*required_owner : nullptr, discarded ? &*discarded : nullptr);
             if (reclaimed == stale_authority_reclaim_result_t::conflict)
                 continue;
             co_return reclaimed == stale_authority_reclaim_result_t::reclaimed;
@@ -3239,7 +3278,8 @@ class provider_location_repository_t final : public location_repository_t
             if (intent == location_write_intent_t::takeover && previous_owner_live)
                 co_return location_write_result_t{location_write_status_t::ignored_stale, 0, {}};
             if (intent == location_write_intent_t::renew) {
-                if (stored_owner != owner_id || stored_lease != lease_generation
+                if (stored_owner != owner_id
+                    || (mesh ? stored_lease > lease_generation : stored_lease != lease_generation)
                     || record_lifecycle_generation (stored) != lifecycle_generation
                     || descriptor_revision <= record_descriptor_revision (stored)
                     || !immutable_fields_equal (stored))

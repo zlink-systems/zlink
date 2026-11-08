@@ -1,11 +1,23 @@
 package systems.zlink.framework.runtime.locations;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
+import systems.zlink.framework.runtime.internal.execution.ZLinkExecutionAvailability;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityStored;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationStoreFailure;
+import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
+import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectServerDescriptorPublisher;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectServerDescriptorPublisher.UnconfirmedPublicationException;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimed;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseFound;
@@ -17,6 +29,9 @@ import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -25,6 +40,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -32,6 +48,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
@@ -40,10 +58,10 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     static final LongSupplier SYSTEM_MONOTONIC_NANOS = System::nanoTime;
     private final ZLinkRegisteredLocationStores stores;
     private final String ownerId;
-    private java.util.List<Map<String, String>> metricScopes = java.util.List.of();
+    private List<Map<String, String>> metricScopes = List.of();
 
-    public void metricScopes(java.util.List<Map<String, String>> scopes) {
-        metricScopes = java.util.List.copyOf(scopes);
+    public void metricScopes(List<Map<String, String>> scopes) {
+        metricScopes = List.copyOf(scopes);
     }
 
     private void recordLeaseLateness(Duration lateness) {
@@ -74,18 +92,18 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     private volatile StoreOutage outage;
     // Lane-published fast path; deadlines remain owned by the lease/outage policy below.
     private volatile boolean executionOpen;
-    private final java.util.Set<Execution> executions = new java.util.HashSet<>();
+    private final Map<Object, Execution> executions = new HashMap<>();
     private ScheduledFuture<?> outageDeadlineTask;
     private StartupLifecycle startupLifecycle;
     private RoutingId nodeRid;
-    private boolean started;
+    private volatile boolean started;
     private volatile long ownerAdmissionDeadlineNanos;
     // Revocation used to erase the deadline with a zero sentinel. Keep the time for outage capture.
     private volatile boolean ownerAdmissionRevoked = true;
     private String lastError;
     private Instant ownerLeaseRenewedAt;
     private volatile ZLinkLocationOwnerToken ownerToken;
-    private ZLinkLocationOwnerToken recoveryPreviousOwnerToken;
+    private volatile ZLinkLocationOwnerToken recoveryPreviousOwnerToken;
     private long ownerLeaseOperationStartedNanos;
     private Function<Boolean, CompletionStage<Void>> ownerLeaseRecoveryListener;
     private CompletableFuture<Void> ownerLeaseRecoveryOperation;
@@ -341,39 +359,100 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     /** Incarnation execution policy; only this owner interprets the outage and lease deadlines. */
     public final class Execution
             implements AutoCloseable,
-                    systems.zlink.framework.execution.ZLinkSerialExecutionQueue.ExecutionPolicy {
-        private final java.util.function.BooleanSupplier steady;
-        private final java.util.concurrent.atomic.AtomicReference<Runnable> cleanup;
-        private volatile StoreOutage retained;
+                    systems.zlink.framework.execution.ZLinkSerialExecutionQueue.ExecutionPolicy,
+                    ZLinkExecutionAvailability {
+        private final BooleanSupplier steady;
+        private final AtomicReference<Runnable> cleanup;
+        private final Supplier<String> authorityKey;
+        private volatile String key;
+        private final Function<ZLinkAuthoritySnapshot, CompletionStage<Void>> apply;
+        private final Supplier<String> parent;
+        private ZLinkAuthoritySnapshot confirmed;
+        private volatile Runnable resume;
 
-        private Execution(java.util.function.BooleanSupplier steady, Runnable cleanup) {
+        private Execution(
+                Supplier<String> authorityKey,
+                BooleanSupplier steady,
+                Function<ZLinkAuthoritySnapshot, CompletionStage<Void>> apply,
+                Supplier<String> parent,
+                Runnable cleanup) {
+            this.authorityKey = authorityKey;
             this.steady = steady;
-            this.cleanup = new java.util.concurrent.atomic.AtomicReference<>(cleanup);
+            this.apply = apply;
+            this.parent = parent;
+            this.cleanup = new AtomicReference<>(cleanup);
         }
 
         public CompletionStage<Void> ready() {
-            return stateLane.runAsync(
-                    () -> {
-                        if (cleanup.get() != null) executions.add(this);
-                        return null;
-                    });
+            String registeredKey = authorityKey.get();
+            return stateLane
+                    .runAsync(
+                            () -> {
+                                if (cleanup.get() != null) {
+                                    executions.remove(key == null ? this : key, this);
+                                    key = registeredKey;
+                                    executions.put(key == null ? this : key, this);
+                                }
+                                return null;
+                            })
+                    .thenCompose(
+                            ignored ->
+                                    registeredKey == null
+                                            ? CompletableFuture
+                                                    .<ZLinkAuthorityReadResult>completedFuture(null)
+                                            : locationStore().read(registeredKey, () -> false))
+                    .thenCompose(
+                            read ->
+                                    stateLane.runAsync(
+                                            () -> {
+                                                if (cleanup.get() != null
+                                                        && read
+                                                                instanceof
+                                                                ZLinkAuthoritySnapshot snapshot)
+                                                    confirmed = snapshot;
+                                                return null;
+                                            }));
+        }
+
+        @Override
+        public boolean paused() {
+            StoreOutage episode = outage;
+            return cleanup.get() != null
+                    && episode != null
+                    && episode.records.containsKey(this)
+                    && (episode.publication != null || !Objects.equals(episode.token, ownerToken));
+        }
+
+        @Override
+        public void onResume(Runnable action) {
+            resume = action;
+        }
+
+        private void resumeCore() {
+            Runnable action = resume;
+            if (action != null) action.run();
         }
 
         @Override
         public void check(boolean application) {
-            if (executionOpen && cleanup.get() != null) return;
             StoreOutage episode = outage;
+            boolean retained = episode != null && episode.records.containsKey(this);
+            if (executionOpen && !retained && cleanup.get() != null) return;
+            if (!started)
+                throw systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin.framework(
+                        ZLinkFrameworkErrorKind.SHUTTING_DOWN, "Location runtime is stopped.");
             if (cleanup.get() == null
-                    || (episode != null
-                            && retained == episode
-                            && (episode.discarded || cutoffReached(episode)))) {
+                    || (retained && (episode.discarded || cutoffReached(episode)))) {
                 discard();
                 throw systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin.framework(
-                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.NOT_FOUND,
+                        ZLinkFrameworkErrorKind.NOT_FOUND,
                         "The resolved owner no longer owns this incarnation.");
             }
-            if (!application || isOwnerAdmissionOpenCore()) return;
-            if (episode != null && retained == episode && storeOutageRetention) return;
+            if (!application) return;
+            if (paused()) throw new OwnerLeaseAdmissionClosedException();
+            if (isOwnerAdmissionOpenCore()) return;
+            if (episode != null && episode.records.containsKey(this) && storeOutageRetention)
+                return;
             throw new OwnerLeaseAdmissionClosedException();
         }
 
@@ -383,27 +462,98 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         }
 
         private void discardCore() {
+            // After stop or close, host shutdown owns the remaining object cleanup; check() keeps
+            // answering SHUTTING_DOWN and the cleanup record stays untouched.
+            if (!started) return;
             Runnable action = cleanup.getAndSet(null);
             if (action == null) return;
-            close();
+            StoreOutage episode = outage;
+            Preservation record = episode == null ? null : episode.records.get(this);
+            if (record == null) close();
+            else
+                record.resumed.completeExceptionally(
+                        new CancellationException("preserved incarnation discarded"));
+            resumeCore();
             action.run();
         }
 
         @Override
         public void close() {
-            retained = null;
-            if (ZLinkStateLane.current() == stateLane) executions.remove(this);
+            if (ZLinkStateLane.current() == stateLane) closeCore();
             else
                 stateLane.runAsync(
                         () -> {
-                            executions.remove(this);
+                            closeCore();
                             return null;
                         });
         }
+
+        private void closeCore() {
+            executions.remove(key == null ? this : key, this);
+            StoreOutage episode = outage;
+            if (cleanup.get() != null && episode != null) {
+                Preservation record = episode.records.remove(this);
+                if (record != null)
+                    record.resumed.completeExceptionally(
+                            new CancellationException("incarnation closed"));
+            }
+        }
     }
 
-    public Execution execution(java.util.function.BooleanSupplier steady, Runnable cleanup) {
-        return new Execution(Objects.requireNonNull(steady), Objects.requireNonNull(cleanup));
+    public Execution execution(BooleanSupplier steady, Runnable cleanup) {
+        return execution(
+                (String) null,
+                steady,
+                ignored -> CompletableFuture.completedFuture(null),
+                () -> null,
+                cleanup);
+    }
+
+    public Execution execution(
+            String key,
+            BooleanSupplier steady,
+            Function<ZLinkAuthoritySnapshot, CompletionStage<Void>> apply,
+            Supplier<String> parent,
+            Runnable cleanup) {
+        return execution(() -> key, steady, apply, parent, cleanup);
+    }
+
+    public Execution execution(
+            Supplier<String> authorityKey,
+            BooleanSupplier steady,
+            Function<ZLinkAuthoritySnapshot, CompletionStage<Void>> apply,
+            Supplier<String> parent,
+            Runnable cleanup) {
+        return new Execution(
+                Objects.requireNonNull(authorityKey),
+                Objects.requireNonNull(steady),
+                Objects.requireNonNull(apply),
+                Objects.requireNonNull(parent),
+                Objects.requireNonNull(cleanup));
+    }
+
+    public CompletionStage<Void> confirmAuthority(String key, ZLinkAuthorityStored stored) {
+        return stateLane.runAsync(
+                () -> {
+                    Execution execution = executions.get(key);
+                    if (execution != null
+                            && execution.cleanup.get() != null
+                            && (outage == null || !outage.records.containsKey(execution)))
+                        execution.confirmed = snapshot(stored);
+                    return null;
+                });
+    }
+
+    private static final class Preservation {
+        final Execution execution;
+        final ZLinkAuthoritySnapshot authority;
+        final CompletableFuture<Void> resumed = new CompletableFuture<>();
+        CompletionStage<Void> operation;
+
+        Preservation(Execution execution) {
+            this.execution = execution;
+            authority = execution.confirmed;
+        }
     }
 
     private static final class StoreOutage {
@@ -411,6 +561,12 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         final long observedAtNanos;
         final long cutoffNanos;
         volatile boolean discarded;
+        // This owner index is the sole retention/recovery decision record read by each gate.
+        final java.util.Map<Execution, Preservation> records = new ConcurrentHashMap<>();
+        volatile CompletionStage<Void> publication;
+        CompletableFuture<Void> recovery;
+        final Map<ZLinkMeshNodeDescriptorKey, DescriptorPublication> descriptors =
+                new ConcurrentHashMap<>();
 
         StoreOutage(ZLinkLocationOwnerToken token, long observedAtNanos, long cutoffNanos) {
             this.token = token;
@@ -432,8 +588,9 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                         .toNanos())
                         : ownerAdmissionDeadlineNanos;
         StoreOutage episode = new StoreOutage(ownerToken, monotonicNow.getAsLong(), cutoff);
-        for (Execution execution : java.util.List.copyOf(executions)) {
-            if (execution.steady.getAsBoolean()) execution.retained = episode;
+        for (Execution execution : executions.values()) {
+            if (execution.steady.getAsBoolean())
+                episode.records.put(execution, new Preservation(execution));
         }
         outage = episode;
         if (latchOutageCore(episode)) return;
@@ -457,15 +614,26 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         if (!episode.discarded && cutoffReached(episode)) {
             discardOutageCore(episode);
         }
+        if (episode.discarded) executionOpen = isOwnerAdmissionOpenCore();
         return episode.discarded;
     }
 
     private void discardOutageCore(StoreOutage episode) {
         if (episode.discarded) return;
         episode.discarded = true;
-        for (Execution execution : java.util.List.copyOf(executions)) {
-            if (execution.retained == episode) execution.discardCore();
-        }
+        for (Preservation record : episode.records.values()) record.execution.discardCore();
+    }
+
+    private void cancelOutageCore() {
+        StoreOutage episode = outage;
+        cancel(outageDeadlineTask);
+        outageDeadlineTask = null;
+        if (episode == null) return;
+        executionOpen = false;
+        outage = null;
+        episode.discarded = true;
+        for (Preservation record : episode.records.values()) record.resumed.cancel(false);
+        episode.records.clear();
     }
 
     private boolean discardChangedOwnerLeaseCore(
@@ -488,13 +656,10 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                     || outage != requestedOutage
                     || !Objects.equals(outage.token, ownerToken)
                     || operationStartedNanos < outage.observedAtNanos) return;
+            if (!outage.records.isEmpty()) return;
             cancel(outageDeadlineTask);
             outageDeadlineTask = null;
             outage = null;
-        }
-        if (lastSuccessfulLeaseRequestStartedNanos == null
-                || operationStartedNanos - lastSuccessfulLeaseRequestStartedNanos >= 0L) {
-            lastSuccessfulLeaseRequestStartedNanos = operationStartedNanos;
         }
         executionOpen = isOwnerAdmissionOpenCore();
     }
@@ -548,13 +713,35 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         return inStateLane(this::admittedOwnerTokenCore);
     }
 
+    public boolean acceptsSessionOwnerLease(
+            String ownerId, long currentGeneration, long generation) {
+        var current = ownerToken;
+        var previous = recoveryPreviousOwnerToken;
+        return started
+                && current != null
+                && !ownerAdmissionRevoked
+                && ownerAdmissionDeadlineNanos != 0L
+                && current.ownerId().equals(ownerId)
+                && current.leaseGeneration() == currentGeneration
+                && (currentGeneration == generation
+                        || previous != null
+                                && previous.ownerId().equals(ownerId)
+                                && previous.leaseGeneration() == generation)
+                && monotonicNow.getAsLong()
+                                - saturatingAdd(
+                                        ownerAdmissionDeadlineNanos,
+                                        ownerLeaseFencingMargin.toNanos())
+                        < 0L
+                && current == ownerToken;
+    }
+
     public ZLinkLocationOwnerToken recoveryPreviousOwnerToken() {
         return inStateLane(() -> recoveryPreviousOwnerToken);
     }
 
     /**
-     * Registers owner-scoped work after each successful renewal. The argument says whether
-     * admission was open before the renewed lease was installed.
+     * Registers owner-scoped work after each successful renewal. True permits skipping publication
+     * when admission was already open; false starts or continues unfinished owner recovery.
      */
     public void setOwnerLeaseRecoveryListener(Function<Boolean, CompletionStage<Void>> listener) {
         inStateLane(
@@ -633,7 +820,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                         () -> {
                             boolean shouldStop = started;
                             started = false;
-                            cancel(outageDeadlineTask);
+                            cancelOutageCore();
                             ScheduledFuture<?> heartbeat = heartbeatTask;
                             heartbeatTask = null;
                             StartupLifecycle lifecycle = startupLifecycle;
@@ -837,10 +1024,12 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                                 operationStartedNanos,
                                                                 true,
                                                                 state.outage());
+                                                        var recovery =
+                                                                prepareRecoveryCore(
+                                                                        lifecycle,
+                                                                        admissionWasOpen);
                                                         return () ->
-                                                                republishAfterOwnerLeaseRecovery(
-                                                                                lifecycle,
-                                                                                admissionWasOpen)
+                                                                recovery.get()
                                                                         .thenApply(ignored -> true);
                                                     }
                                                     recordRenewalFailureCore(
@@ -928,12 +1117,566 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                     claimOwnerLease(lifecycle, deadline)
                                                             .thenCompose(
                                                                     ignored ->
-                                                                            republishAfterOwnerLeaseRecovery(
+                                                                            recoverAfterOwnerLease(
                                                                                     lifecycle,
                                                                                     false))
                                                             .thenApply(ignored -> true);
                                         }))
                 .thenCompose(Supplier::get);
+    }
+
+    private CompletionStage<Void> recoverAfterOwnerLease(
+            CompletableFuture<Void> lifecycle, boolean admissionWasOpen) {
+        return stateLane
+                .runAsync(() -> prepareRecoveryCore(lifecycle, admissionWasOpen))
+                .thenCompose(Supplier::get);
+    }
+
+    private Supplier<CompletionStage<Void>> prepareRecoveryCore(
+            CompletableFuture<Void> lifecycle, boolean admissionWasOpen) {
+        StoreOutage episode = outage;
+        if (episode == null)
+            return () -> republishAfterOwnerLeaseRecovery(lifecycle, admissionWasOpen);
+        if (episode.recovery != null) {
+            var running = episode.recovery;
+            return () -> running;
+        }
+        var completion = new CompletableFuture<Void>();
+        episode.recovery = completion;
+        // Publish the pause before leaving the lane that installed the recovered lease.
+        episode.publication = CompletableFuture.completedFuture(null);
+        var pending = List.copyOf(episode.records.values());
+        ZLinkLocationOwnerToken owner = ownerToken;
+        boolean sameToken = owner.equals(episode.token);
+        return () -> {
+            var publication = new CompletableFuture<Void>();
+            episode.publication = publication;
+            republishAfterOwnerLeaseRecovery(
+                            lifecycle,
+                            sameToken && admissionWasOpen,
+                            () ->
+                                    launchRecovery(
+                                            episode,
+                                            pending,
+                                            owner,
+                                            sameToken,
+                                            publication,
+                                            completion))
+                    .whenComplete(
+                            (ignored, failure) -> {
+                                if (failure == null) publication.complete(null);
+                                else publication.completeExceptionally(unwrap(failure));
+                            });
+            return completion;
+        };
+    }
+
+    private void launchRecovery(
+            StoreOutage episode,
+            List<Preservation> pending,
+            ZLinkLocationOwnerToken owner,
+            boolean sameToken,
+            CompletionStage<Void> publication,
+            CompletableFuture<Void> completion) {
+        var descriptors =
+                new HashMap<String, CompletionStage<Map<RoutingId, ZLinkMeshNodeDescriptor>>>();
+        if (sameToken) {
+            for (Preservation record : pending) {
+                if (record.authority == null) continue;
+                String mesh = record.authority.allocation().descriptor().meshName();
+                descriptors.computeIfAbsent(
+                        mesh,
+                        ignored ->
+                                withinDeadline(
+                                                () ->
+                                                        ZLinkStoreLocationResolvers.listMeshNodes(
+                                                                locationStore(), mesh),
+                                                saturatingAdd(
+                                                        monotonicNow.getAsLong(),
+                                                        ownerLeaseRenewTimeout.toNanos()))
+                                        .thenApply(
+                                                nodes -> {
+                                                    var byRid =
+                                                            new HashMap<
+                                                                    RoutingId,
+                                                                    ZLinkMeshNodeDescriptor>();
+                                                    for (var node : nodes)
+                                                        byRid.put(node.rid(), node);
+                                                    return byRid;
+                                                }));
+            }
+        }
+        var attempts = new ArrayList<CompletableFuture<Void>>();
+        for (Preservation record : pending) {
+            CompletionStage<Void> descriptor = publication;
+            CompletionStage<Void> submitted = CompletableFuture.completedFuture(null);
+            if (!sameToken && record.authority != null) {
+                DescriptorPublication own =
+                        episode.descriptors.get(record.authority.allocation().descriptor());
+                if (own != null) {
+                    descriptor = own.confirmed();
+                    submitted = own.submitted();
+                }
+            }
+            if (sameToken && record.authority != null) {
+                var preserved = record.authority;
+                descriptor =
+                        descriptors
+                                .get(preserved.allocation().descriptor().meshName())
+                                .thenAccept(
+                                        nodes -> {
+                                            var node =
+                                                    nodes.get(
+                                                            preserved
+                                                                    .allocation()
+                                                                    .descriptor()
+                                                                    .rid());
+                                            if (node == null
+                                                    || node.lifecycleGeneration()
+                                                            != preserved
+                                                                    .allocation()
+                                                                    .descriptorLifecycleGeneration()
+                                                    || !node.ownerId().equals(owner.ownerId())
+                                                    || node.leaseGeneration()
+                                                            != owner.leaseGeneration())
+                                                throw new RecoveryRejectedException(
+                                                        "Preserved descriptor changed");
+                                        });
+            }
+            CompletionStage<Void> confirmation = descriptor;
+            attempts.add(
+                    submitted
+                            .handle(
+                                    (ignored, failure) -> {
+                                        if (failure == null)
+                                            return recoverRecord(
+                                                    episode, record, owner, confirmation);
+                                        return stateLane
+                                                .runAsync(
+                                                        () -> {
+                                                            if (!unconfirmedRecovery(failure))
+                                                                record.execution.discardCore();
+                                                            return null;
+                                                        })
+                                                .thenCompose(
+                                                        done ->
+                                                                cleanupRecord(
+                                                                        episode, record, owner));
+                                    })
+                            .thenCompose(Function.identity())
+                            .toCompletableFuture());
+        }
+        CompletableFuture.allOf(attempts.toArray(CompletableFuture[]::new))
+                .handle(
+                        (ignored, failure) ->
+                                stateLane.runAsync(
+                                        () -> {
+                                            if (episode.recovery == completion)
+                                                episode.recovery = null;
+                                            finishRecoveryCore(episode);
+                                            if (failure != null)
+                                                throw new CompletionException(unwrap(failure));
+                                            return null;
+                                        }))
+                .thenCompose(Function.identity())
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure == null) completion.complete(null);
+                            else completion.completeExceptionally(unwrap(failure));
+                        });
+    }
+
+    private CompletionStage<Void> recoverRecord(
+            StoreOutage episode,
+            Preservation record,
+            ZLinkLocationOwnerToken owner,
+            CompletionStage<Void> descriptor) {
+        return stateLane
+                .<Supplier<CompletionStage<Void>>>runAsync(
+                        () -> {
+                            if (record.operation != null
+                                    || record.execution.key == null && !owner.equals(episode.token))
+                                return () -> CompletableFuture.completedFuture(null);
+                            var completion = new CompletableFuture<Void>();
+                            record.operation = completion;
+                            return () ->
+                                    confirmRecovery(episode, record, owner, descriptor)
+                                            .handle(
+                                                    (snapshot, failure) ->
+                                                            stateLane.runAsync(
+                                                                    () ->
+                                                                            settleRecoveryCore(
+                                                                                    episode,
+                                                                                    record,
+                                                                                    owner,
+                                                                                    snapshot,
+                                                                                    failure,
+                                                                                    completion)))
+                                            .thenCompose(Function.identity())
+                                            .thenCompose(Supplier::get)
+                                            .whenComplete(
+                                                    (ignored, failure) -> {
+                                                        if (failure != null)
+                                                            completeRecord(
+                                                                    record, completion, failure);
+                                                    });
+                        })
+                .thenCompose(Supplier::get);
+    }
+
+    private CompletionStage<ZLinkAuthoritySnapshot> confirmRecovery(
+            StoreOutage episode,
+            Preservation record,
+            ZLinkLocationOwnerToken owner,
+            CompletionStage<Void> descriptor) {
+        return CompletableFuture.completedFuture(null)
+                .thenCompose(
+                        ignored ->
+                                record.execution.cleanup.get() == null
+                                        ? CompletableFuture.<ZLinkAuthoritySnapshot>completedFuture(
+                                                null)
+                                        : recoverAuthority(episode, record, owner))
+                .thenCompose(
+                        snapshot ->
+                                stateLane
+                                        .runAsync(
+                                                () -> {
+                                                    // Late Store success is evidence for cleanup,
+                                                    // never permission to reopen.
+                                                    if (episode.discarded || cutoffReached(episode))
+                                                        record.execution.discardCore();
+                                                    return record.execution.cleanup.get() != null;
+                                                })
+                                        .thenCompose(
+                                                alive ->
+                                                        !alive
+                                                                ? CompletableFuture.completedFuture(
+                                                                        snapshot)
+                                                                : descriptor.thenApply(
+                                                                        ignored -> snapshot)));
+    }
+
+    private Supplier<CompletionStage<Void>> settleRecoveryCore(
+            StoreOutage episode,
+            Preservation record,
+            ZLinkLocationOwnerToken owner,
+            ZLinkAuthoritySnapshot snapshot,
+            Throwable failure,
+            CompletableFuture<Void> completion) {
+        if (failure != null && !unconfirmedRecovery(failure)) record.execution.discardCore();
+        Supplier<CompletionStage<Void>> continuation = () -> cleanupRecord(episode, record, owner);
+        if (failure == null && record.execution.cleanup.get() != null) {
+            if (record.execution.key != null && snapshot == null) record.execution.discardCore();
+            else {
+                String parentKey = record.execution.parent.get();
+                Execution parent = parentKey == null ? null : executions.get(parentKey);
+                Preservation parentRecord = parent == null ? null : episode.records.get(parent);
+                if (parentKey != null && (parent == null || parent.cleanup.get() == null))
+                    record.execution.discardCore();
+                else if (parentRecord != null && !parentRecord.resumed.isDone()) {
+                    // Parent confirmation must leave the renew heartbeat free to advance.
+                    ZLinkStateLane.publishOutsideLane(
+                            parentRecord.resumed,
+                            (ignored, error) -> {
+                                if (error != null) record.execution.discard();
+                                finishRecoveredRecord(episode, record, snapshot, owner)
+                                        .whenComplete(
+                                                (done, terminal) ->
+                                                        completeRecord(
+                                                                record, completion, terminal));
+                            });
+                    return () -> CompletableFuture.completedFuture(null);
+                } else continuation = () -> finishRecoveredRecord(episode, record, snapshot, owner);
+            }
+        }
+        Supplier<CompletionStage<Void>> work = continuation;
+        return () ->
+                work.get()
+                        .whenComplete(
+                                (done, terminal) -> completeRecord(record, completion, terminal));
+    }
+
+    private void completeRecord(
+            Preservation record, CompletableFuture<Void> completion, Throwable failure) {
+        stateLane
+                .runAsync(
+                        () -> {
+                            if (record.operation == completion) record.operation = null;
+                            return null;
+                        })
+                .whenComplete(
+                        (ignored, laneFailure) -> {
+                            Throwable terminal = laneFailure == null ? failure : laneFailure;
+                            if (terminal == null) completion.complete(null);
+                            else completion.completeExceptionally(unwrap(terminal));
+                        });
+    }
+
+    private CompletionStage<Void> finishRecoveredRecord(
+            StoreOutage episode,
+            Preservation record,
+            ZLinkAuthoritySnapshot snapshot,
+            ZLinkLocationOwnerToken owner) {
+        return stateLane
+                .runAsync(
+                        () -> {
+                            if (!started
+                                    || !owner.equals(ownerToken)
+                                    || outage != episode
+                                    || episode.discarded
+                                    || cutoffReached(episode)
+                                    || record.execution.cleanup.get() == null
+                                    || record.resumed.isCompletedExceptionally()) {
+                                record.execution.discardCore();
+                                return false;
+                            }
+                            return true;
+                        })
+                .thenCompose(
+                        allowed ->
+                                !allowed || snapshot == null
+                                        ? CompletableFuture.completedFuture(null)
+                                        : record.execution.apply.apply(snapshot))
+                .thenCompose(
+                        ignored ->
+                                stateLane.runAsync(
+                                        () -> {
+                                            if (started
+                                                    && owner.equals(ownerToken)
+                                                    && outage == episode
+                                                    && !episode.discarded
+                                                    && !cutoffReached(episode)
+                                                    && record.execution.cleanup.get() != null
+                                                    && !record.resumed.isCompletedExceptionally()) {
+                                                if (snapshot != null)
+                                                    record.execution.confirmed = snapshot;
+                                                episode.records.remove(record.execution, record);
+                                                record.resumed.complete(null);
+                                                finishRecoveryCore(episode);
+                                                return (Runnable) record.execution::resumeCore;
+                                            }
+                                            record.execution.discardCore();
+                                            return (Runnable) () -> {};
+                                        }))
+                .thenAccept(Runnable::run)
+                .thenCompose(ignored -> cleanupRecord(episode, record, owner));
+    }
+
+    private void finishRecoveryCore(StoreOutage episode) {
+        if (outage != episode
+                || episode.discarded
+                || !episode.records.isEmpty()
+                || cutoffReached(episode)) return;
+        cancel(outageDeadlineTask);
+        outageDeadlineTask = null;
+        outage = null;
+        executionOpen = isOwnerAdmissionOpenCore();
+    }
+
+    private CompletionStage<ZLinkAuthoritySnapshot> recoverAuthority(
+            StoreOutage episode, Preservation record, ZLinkLocationOwnerToken owner) {
+        if (record.execution.key == null) return CompletableFuture.completedFuture(null);
+        ZLinkAuthoritySnapshot preserved = record.authority;
+        if (preserved == null)
+            return CompletableFuture.failedFuture(
+                    new RecoveryRejectedException("No confirmed authority before the outage"));
+        ZLinkAuthorityPut put = ZLinkAuthorityPut.preserve(preserved, owner);
+        long deadline = saturatingAdd(monotonicNow.getAsLong(), ownerLeaseRenewTimeout.toNanos());
+        return CompletableFuture.completedFuture(null)
+                .thenCompose(
+                        ignored ->
+                                withinDeadline(
+                                        () ->
+                                                locationStore()
+                                                        .read(record.execution.key, () -> false),
+                                        deadline))
+                .thenCompose(
+                        read -> {
+                            if (!(read instanceof ZLinkAuthoritySnapshot current)
+                                    || !preserved.sameIncarnation(current)
+                                    || !preserved.allocation().equals(current.allocation())
+                                    || !current.steadyReady())
+                                return CompletableFuture.failedFuture(
+                                        new RecoveryRejectedException(
+                                                "Preserved authority changed"));
+                            if (owner.equals(episode.token)) {
+                                if (!preserved.storeVersion().equals(current.storeVersion())
+                                        || current.ownerLeaseGeneration()
+                                                != owner.leaseGeneration())
+                                    return CompletableFuture.failedFuture(
+                                            new RecoveryRejectedException(
+                                                    "Preserved authority fence changed"));
+                                return CompletableFuture.completedFuture(current);
+                            }
+                            // §10: exact intended bytes confirm a previous indeterminate Preserve.
+                            if (matchesRecovery(preserved, current, owner, put))
+                                return CompletableFuture.completedFuture(current);
+                            long started = monotonicNow.getAsLong();
+                            if (record.execution.cleanup.get() == null
+                                    || record.resumed.isCompletedExceptionally()
+                                    || episode.discarded)
+                                return CompletableFuture.failedFuture(
+                                        new RecoveryRejectedException(
+                                                "Preserved incarnation discarded"));
+                            if (saturatingAdd(started, ownerLeaseRenewTimeout.toNanos())
+                                            - episode.cutoffNanos
+                                    > 0L)
+                                return CompletableFuture.failedFuture(
+                                        new RecoveryUnconfirmedException(
+                                                new TimeoutException(
+                                                        "Preserve cannot be submitted before the original cutoff")));
+                            if (!put.matchesPreserved(current))
+                                return CompletableFuture.failedFuture(
+                                        new RecoveryRejectedException(
+                                                "Preserve lost its expected version"));
+                            long writeDeadline =
+                                    saturatingAdd(started, ownerLeaseRenewTimeout.toNanos());
+                            return withinDeadline(
+                                            () ->
+                                                    locationStore()
+                                                            .compareExchange(
+                                                                    record.execution.key,
+                                                                    new ZLinkAuthorityExpectFound(
+                                                                            preserved
+                                                                                    .storeVersion()),
+                                                                    put,
+                                                                    () -> false),
+                                            writeDeadline)
+                                    .handle(
+                                            (result, failure) -> {
+                                                if (failure == null)
+                                                    return result
+                                                                    instanceof
+                                                                    ZLinkAuthorityStored stored
+                                                            ? CompletableFuture.completedFuture(
+                                                                    snapshot(stored))
+                                                            : CompletableFuture
+                                                                    .<ZLinkAuthoritySnapshot>
+                                                                            failedFuture(
+                                                                                    new RecoveryRejectedException(
+                                                                                            "Preserve conflicted"));
+                                                return withinDeadline(
+                                                                () ->
+                                                                        locationStore()
+                                                                                .read(
+                                                                                        record.execution
+                                                                                                .key,
+                                                                                        () ->
+                                                                                                false),
+                                                                saturatingAdd(
+                                                                        monotonicNow.getAsLong(),
+                                                                        ownerLeaseRenewTimeout
+                                                                                .toNanos()))
+                                                        .thenCompose(
+                                                                exact -> {
+                                                                    if (exact
+                                                                            instanceof
+                                                                            ZLinkAuthoritySnapshot
+                                                                                    found) {
+                                                                        if (matchesRecovery(
+                                                                                preserved, found,
+                                                                                owner, put))
+                                                                            return CompletableFuture
+                                                                                    .completedFuture(
+                                                                                            found);
+                                                                        if (put.matchesPreserved(
+                                                                                found))
+                                                                            return CompletableFuture
+                                                                                    .failedFuture(
+                                                                                            new RecoveryUnconfirmedException(
+                                                                                                    unwrap(
+                                                                                                            failure)));
+                                                                    }
+                                                                    return CompletableFuture
+                                                                            .failedFuture(
+                                                                                    new RecoveryRejectedException(
+                                                                                            "Preserve confirmation differs"));
+                                                                });
+                                            })
+                                    .thenCompose(Function.identity());
+                        })
+                .exceptionallyCompose(
+                        failure -> {
+                            Throwable error = unwrap(failure);
+                            return CompletableFuture.failedFuture(
+                                    error instanceof RecoveryRejectedException
+                                            ? error
+                                            : new RecoveryUnconfirmedException(error));
+                        });
+    }
+
+    private static boolean matchesRecovery(
+            ZLinkAuthoritySnapshot preserved,
+            ZLinkAuthoritySnapshot current,
+            ZLinkLocationOwnerToken owner,
+            ZLinkAuthorityPut put) {
+        return preserved.sameIncarnation(current)
+                && preserved.allocation().equals(current.allocation())
+                && current.ownerLeaseGeneration() == owner.leaseGeneration()
+                && java.util.Arrays.equals(current.payload(), put.payload());
+    }
+
+    private CompletionStage<Void> cleanupRecord(
+            StoreOutage episode, Preservation record, ZLinkLocationOwnerToken owner) {
+        if (record.execution.cleanup.get() != null) return CompletableFuture.completedFuture(null);
+        CompletionStage<Boolean> cleanup =
+                record.authority == null
+                        ? CompletableFuture.completedFuture(true)
+                        : locationStore()
+                                .cleanupDiscarded(
+                                        record.execution.key, record.authority, owner, () -> false);
+        return cleanup.thenCompose(
+                done ->
+                        stateLane.runAsync(
+                                () -> {
+                                    if (done) {
+                                        episode.records.remove(record.execution, record);
+                                        executions.remove(
+                                                record.execution.key == null
+                                                        ? record.execution
+                                                        : record.execution.key,
+                                                record.execution);
+                                        finishRecoveryCore(episode);
+                                    }
+                                    return null;
+                                }));
+    }
+
+    private static boolean unconfirmedRecovery(Throwable failure) {
+        Throwable error = unwrap(failure);
+        if (error instanceof ZLinkFrameworkException frameworkFailure)
+            return frameworkFailure.kind() == ZLinkFrameworkErrorKind.UNAVAILABLE;
+        return error instanceof TimeoutException
+                || error instanceof CancellationException
+                || error instanceof RecoveryUnconfirmedException
+                || error
+                        instanceof
+                        ZLinkObjectServerDescriptorPublisher.UnconfirmedPublicationException
+                || error instanceof ZLinkLocationStoreFailure;
+    }
+
+    private static ZLinkAuthoritySnapshot snapshot(ZLinkAuthorityStored stored) {
+        return new ZLinkAuthoritySnapshot(
+                stored.storeVersion(),
+                stored.payload(),
+                stored.objectGeneration(),
+                stored.authorityOwnerGeneration(),
+                stored.ownerId(),
+                stored.ownerLeaseGeneration(),
+                stored.allocation(),
+                stored.storeNow());
+    }
+
+    private static final class RecoveryUnconfirmedException extends RuntimeException {
+        RecoveryUnconfirmedException(Throwable cause) {
+            super(cause);
+        }
+    }
+
+    private static final class RecoveryRejectedException extends IllegalStateException {
+        RecoveryRejectedException(String message) {
+            super(message);
+        }
     }
 
     /** Records renewal failures only for the lifecycle that requested them. */
@@ -1038,13 +1781,13 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                     }
                     ownerLeaseOperationStartedNanos = operationStartedNanos;
                     if (failure != null) throw new CompletionException(unwrap(failure));
-                    recoveryPreviousOwnerToken = ownerToken;
                     installOwnerLeaseCore(claimed, operationStartedNanos);
                     return null;
                 });
     }
 
     private void installOwnerLeaseCore(ZLinkOwnerLeaseClaimed claimed, long operationStartedNanos) {
+        recoveryPreviousOwnerToken = ownerToken;
         ownerToken = claimed.token();
         recordSuccessfulRenewalCore(
                 claimed.leaseExpiresAt(), claimed.storeNow(), operationStartedNanos);
@@ -1110,6 +1853,38 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
      * existing renew timeout. The Store stage and its input remain alive after the caller's
      * deadline; only this wait completes, so late Store results can finish normally.
      */
+    private record DescriptorPublication(
+            CompletableFuture<Void> submitted, CompletableFuture<Void> confirmed) {}
+
+    public <T> CompletionStage<T> writeDescriptor(
+            ZLinkMeshNodeDescriptorKey key, Supplier<CompletionStage<T>> write) {
+        StoreOutage episode = outage;
+        if (episode == null) return writeDescriptor(write);
+        var publication =
+                new DescriptorPublication(new CompletableFuture<>(), new CompletableFuture<>());
+        episode.descriptors.put(key, publication);
+        var operation =
+                writeDescriptor(
+                        () -> {
+                            try {
+                                var request = write.get();
+                                publication.submitted().complete(null);
+                                return request;
+                            } catch (RuntimeException failure) {
+                                publication.submitted().completeExceptionally(failure);
+                                throw failure;
+                            }
+                        });
+        operation.whenComplete(
+                (result, failure) -> {
+                    if (failure != null) {
+                        publication.submitted().completeExceptionally(unwrap(failure));
+                        publication.confirmed().completeExceptionally(unwrap(failure));
+                    } else publication.confirmed().complete(null);
+                });
+        return operation;
+    }
+
     public <T> CompletionStage<T> writeDescriptor(Supplier<CompletionStage<T>> write) {
         long deadlineNanos =
                 saturatingAdd(monotonicNow.getAsLong(), ownerLeaseRenewTimeout.toNanos());
@@ -1179,28 +1954,46 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
 
     private CompletionStage<Void> republishAfterOwnerLeaseRecovery(
             CompletableFuture<Void> lifecycle, boolean admissionWasOpen) {
+        return republishAfterOwnerLeaseRecovery(lifecycle, admissionWasOpen, () -> {});
+    }
+
+    private CompletionStage<Void> republishAfterOwnerLeaseRecovery(
+            CompletableFuture<Void> lifecycle, boolean admissionWasOpen, Runnable submitted) {
         return stateLane
                 .<Supplier<CompletionStage<Void>>>runAsync(
                         () -> {
                             if (!started
                                     || !ownsStartupCore(lifecycle)
                                     || ownerLeaseRecoveryListener == null) {
-                                return () -> CompletableFuture.completedFuture(null);
+                                return () -> {
+                                    submitted.run();
+                                    return CompletableFuture.completedFuture(null);
+                                };
                             }
                             if (ownerLeaseRecoveryOperation != null) {
                                 var running = ownerLeaseRecoveryOperation;
-                                return () -> running;
+                                return () -> {
+                                    running.whenComplete((ignored, failure) -> submitted.run());
+                                    return running;
+                                };
                             }
                             var completion = new CompletableFuture<Void>();
                             ownerLeaseRecoveryOperation = completion;
                             var listener = ownerLeaseRecoveryListener;
+                            StoreOutage recoveryEpisode = outage;
                             return () -> {
                                 if (completion.isDone()) return completion;
                                 var publication =
                                         CompletableFuture.<Void>completedFuture(null)
                                                 .thenCompose(
-                                                        ignored ->
-                                                                listener.apply(admissionWasOpen));
+                                                        ignored -> {
+                                                            try {
+                                                                return listener.apply(
+                                                                        admissionWasOpen);
+                                                            } finally {
+                                                                submitted.run();
+                                                            }
+                                                        });
                                 completion.whenComplete(
                                         (ignored, failure) -> {
                                             if (completion.isCancelled()) publication.cancel(false);
@@ -1214,9 +2007,15 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                                             && started
                                                                             && ownsStartupCore(
                                                                                     lifecycle)) {
-                                                                        executionOpen = false;
-                                                                        ownerAdmissionRevoked =
-                                                                                true;
+                                                                        if (recoveryEpisode
+                                                                                == null) {
+                                                                            executionOpen = false;
+                                                                            ownerAdmissionRevoked =
+                                                                                    true;
+                                                                        } else
+                                                                            executionOpen =
+                                                                                    outage == null
+                                                                                            && isOwnerAdmissionOpenCore();
                                                                     }
                                                                     if (ownerLeaseRecoveryOperation
                                                                             == completion) {
@@ -1234,9 +2033,24 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                                     : laneFailure;
                                                     if (terminalFailure == null)
                                                         completion.complete(null);
-                                                    else
-                                                        completion.completeExceptionally(
-                                                                unwrap(terminalFailure));
+                                                    else {
+                                                        Throwable cause = unwrap(terminalFailure);
+                                                        if (!(cause
+                                                                instanceof
+                                                                UnconfirmedPublicationException)) {
+                                                            Supplier<Instant> cleanup =
+                                                                    inStateLane(
+                                                                            () ->
+                                                                                    started
+                                                                                                    && ownsStartupCore(
+                                                                                                            lifecycle)
+                                                                                            ? startupLifecycle
+                                                                                                    .cleanupDeadline()
+                                                                                            : null);
+                                                            if (cleanup != null) cleanup.get();
+                                                        }
+                                                        completion.completeExceptionally(cause);
+                                                    }
                                                 });
                                 return completion;
                             };
@@ -1391,7 +2205,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                 return null;
                             }
                             started = false;
-                            cancel(outageDeadlineTask);
+                            cancelOutageCore();
                             executionOpen = false;
                             ownerToken = null;
                             ownerAdmissionRevoked = true;
@@ -1439,7 +2253,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                 inStateLane(
                         () -> {
                             started = false;
-                            cancel(outageDeadlineTask);
+                            cancelOutageCore();
                             ScheduledFuture<?> heartbeat = heartbeatTask;
                             heartbeatTask = null;
                             return new StopState(
@@ -1492,6 +2306,10 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         if (admissionLifetime.isZero() || admissionLifetime.isNegative()) {
             throw new IllegalStateException(
                     "The owner lease does not leave a positive admission lifetime.");
+        }
+        if (lastSuccessfulLeaseRequestStartedNanos == null
+                || operationStartedNanos - lastSuccessfulLeaseRequestStartedNanos >= 0L) {
+            lastSuccessfulLeaseRequestStartedNanos = operationStartedNanos;
         }
         ownerAdmissionDeadlineNanos =
                 saturatingAdd(operationStartedNanos, admissionLifetime.toNanos());

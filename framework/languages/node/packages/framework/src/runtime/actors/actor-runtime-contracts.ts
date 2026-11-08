@@ -50,7 +50,7 @@ export interface ZLinkActorManagerOptions {
     createRequest: ZLinkMessage,
     signal?: AbortSignal
   ) => Promise<ZLinkActorCreateResponse | undefined>;
-  readonly discardActorActivation?: (actor: ZLinkActor) => void;
+  readonly discardActorActivation?: (actor: ZLinkActor, error: unknown) => void;
   readonly actorDestroyedCleanup?: (actorId: string) => void;
   readonly terminateActorActivation?: (
     actor: ZLinkActor,

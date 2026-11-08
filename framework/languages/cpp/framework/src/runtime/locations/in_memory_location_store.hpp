@@ -98,7 +98,7 @@ class in_memory_location_repository_t : public location_repository_t
                       location_write_result_t{location_write_status_t::waiting, 0, {}});
             } else if (intent == location_write_intent_t::renew) {
                 if (found == _mesh_nodes.end () || found->second.owner_id != descriptor.owner_id
-                    || found->second.lease_generation != descriptor.lease_generation
+                    || found->second.lease_generation > descriptor.lease_generation
                     || descriptor.descriptor_revision < found->second.descriptor_revision)
                     return completed (
                       location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
@@ -618,6 +618,33 @@ class in_memory_location_repository_t : public location_repository_t
                   authority_compare_exchange_result_t{authority_stored_t{std::move (snapshot)}});
             }
 
+            if (const auto *put = std::get_if<authority_put_t> (&mutation);
+                put && put->preservation) {
+                const auto &replacement = put->preservation->second;
+                auto target = found->second.allocation.target;
+                target.owner = replacement;
+                const auto descriptor = _mesh_nodes.find (
+                  mesh_node_key (target.mesh_name, std::string (target.node_rid.value ())));
+                if (!put->matches_preserved (found->second)
+                    || !owner_token_is_live (replacement, now) || descriptor == _mesh_nodes.end ()
+                    || descriptor->second.lifecycle_generation != target.node_lifecycle_generation
+                    || descriptor->second.owner_id != replacement.owner_id)
+                    return completed (
+                      authority_compare_exchange_result_t{authority_conflict_t{found->second}});
+                if (!store_revisions_available ())
+                    return completed (
+                      authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
+                auto snapshot = found->second;
+                snapshot.owner = replacement;
+                snapshot.allocation.target.owner = replacement;
+                snapshot.payload = put->payload;
+                snapshot.store_version = next_store_version ();
+                snapshot.store_now = now;
+                found->second = snapshot;
+                return completed (
+                  authority_compare_exchange_result_t{authority_stored_t{std::move (snapshot)}});
+            }
+
             if (found->second.allocation.state != placement_allocation_state_t::active)
                 return completed (
                   authority_compare_exchange_result_t{authority_conflict_t{found->second}});
@@ -805,7 +832,6 @@ class in_memory_location_repository_t : public location_repository_t
                   ready = authority->second;
               } else {
                   _authorities.erase (authority);
-                  _object_types.erase (key);
                   release_pending (reservation->second);
                   reservation->second.status = reservation_status_t::aborted;
               }
@@ -820,13 +846,14 @@ class in_memory_location_repository_t : public location_repository_t
       authority_key_t key,
       std::string expected_store_version,
       std::stop_token cancellation = {},
-      std::optional<object_reserve_request_t> request = std::nullopt) override
+      std::optional<object_reserve_request_t> request = std::nullopt,
+      std::optional<authority_snapshot_t> discarded = std::nullopt) override
     {
         if (cancellation.stop_requested ())
             co_return co_await cancelled<bool> ();
         co_return co_await _lane.run_task (
           [this, key = std::move (key), expected_store_version = std::move (expected_store_version),
-           request = std::move (request)] () mutable {
+           request = std::move (request), discarded = std::move (discarded)] () mutable {
               const auto current = _authorities.find (key.value);
               if (current == _authorities.end ()
                   || current->second.store_version != expected_store_version)
@@ -835,7 +862,8 @@ class in_memory_location_repository_t : public location_repository_t
                   throw framework_exception_t (framework_error_kind_t::type_mismatch,
                                                "Object type does not match the current authority");
               return completed (release_ended_reservation_on_lane (
-                key.value, current->second, clock_t::now (), request ? &*request : nullptr));
+                key.value, current->second, clock_t::now (), request ? &*request : nullptr,
+                discarded ? &*discarded : nullptr));
           });
     }
 
@@ -919,7 +947,6 @@ class in_memory_location_repository_t : public location_repository_t
                 reservation_state_t reservation{request, fence, creating,
                                                 reservation_status_t::prepared};
                 _authorities[key] = creating;
-                _object_types[key] = request.intent.stable_type;
                 _reservations[key] = std::move (reservation);
                 apply_capacity_bundle (_pending_by_placement, request.target,
                                        request.capacity_bundle, true);
@@ -1025,7 +1052,6 @@ class in_memory_location_repository_t : public location_repository_t
                     ? authority_read_result_t{authority_missing_t{clock_t::now ()}}
                     : authority_read_result_t{authority->second}}});
             _authorities.erase (authority);
-            _object_types.erase (key);
             release_pending (reservation->second);
             reservation->second.status = reservation_status_t::aborted;
             return completed (object_abort_result_t{object_aborted_t{}});
@@ -1386,10 +1412,13 @@ class in_memory_location_repository_t : public location_repository_t
     bool release_ended_reservation_on_lane (const std::string &key,
                                             const authority_snapshot_t &snapshot,
                                             clock_t::time_point now,
-                                            const object_reserve_request_t *request = nullptr)
+                                            const object_reserve_request_t *request = nullptr,
+                                            const authority_snapshot_t *discarded = nullptr)
     {
         const bool active = snapshot.allocation.state == placement_allocation_state_t::active;
-        if (active ? !request : !snapshot.pending_creation)
+        if (discarded && (!active || !discarded->same_incarnation (snapshot)))
+            return false;
+        if (active ? !request && !discarded : !snapshot.pending_creation)
             return false;
         const auto &target = snapshot.allocation.target;
         const bool owner_live = owner_token_is_live (snapshot.owner, now);
@@ -1409,23 +1438,27 @@ class in_memory_location_repository_t : public location_repository_t
             if (actor && actor->has_relocation_state)
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Object authority requires relocation recovery");
-            if (request->relocation_policy != detail::factory_relocation_kind_t::disabled)
+            if (!discarded
+                && request->relocation_policy != detail::factory_relocation_kind_t::disabled)
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Object owner lease is unavailable");
-            if (snapshot.allocation.object_kind == placement_object_kind_t::actor
+            if (!discarded && snapshot.allocation.object_kind == placement_object_kind_t::actor
                 && (!actor || actor->state != actor_authority_state_t::ready
                     || actor->actor_id != request->key.global_id
                     || actor->stable_type != request->intent.stable_type))
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Actor is not steady Ready");
-            if (snapshot.allocation.object_kind == placement_object_kind_t::user_spot) {
+            if (!discarded
+                && snapshot.allocation.object_kind == placement_object_kind_t::user_spot) {
                 const auto spot =
                   stateful::authority_relocation_payload_codec_t::decode_ready_user_spot (snapshot);
                 if (!spot || spot->spot_id != request->key.global_id
                     || spot->stable_type != request->intent.stable_type)
                     throw framework_exception_t (framework_error_kind_t::unavailable,
                                                  "User Spot is not steady Ready");
-            } else if (snapshot.allocation.object_kind == placement_object_kind_t::instance_spot) {
+            } else if (!discarded
+                       && snapshot.allocation.object_kind
+                            == placement_object_kind_t::instance_spot) {
                 const auto spot = decode_instance_spot_authority_payload (snapshot.payload);
                 if (!spot || spot->state != instance_spot_authority_state_t::ready
                     || spot->activation_recovery || spot->spot_id != request->key.global_id
@@ -1435,8 +1468,11 @@ class in_memory_location_repository_t : public location_repository_t
             }
         }
         const bool wait_elapsed = !active || reclaim_wait_elapsed (key, snapshot.owner, false);
-        if (active && snapshot.allocation.object_kind == placement_object_kind_t::user_spot)
+        if (!discarded && active
+            && snapshot.allocation.object_kind == placement_object_kind_t::user_spot)
             members = ended_spot_members_on_lane (key, snapshot, request->key.global_id, now);
+        if (discarded && !wait_elapsed)
+            return false;
         if (!wait_elapsed)
             throw framework_exception_t (framework_error_kind_t::unavailable,
                                          "Owner lease release observation is still waiting");
@@ -1457,14 +1493,12 @@ class in_memory_location_repository_t : public location_repository_t
         }
         _authorities.erase (key);
         retain_reclaim_observation (key);
-        _object_types.erase (key);
         for (const auto &member_key : members) {
             const auto member = _authorities.find (member_key);
             apply_capacity_bundle (_active_by_placement, member->second.allocation.target,
                                    member->second.allocation.capacity_bundle, false);
             _authorities.erase (member);
             retain_reclaim_observation (member_key);
-            _object_types.erase (member_key);
         }
         return true;
     }
@@ -2168,7 +2202,6 @@ class in_memory_location_repository_t : public location_repository_t
     std::map<std::string, std::int64_t> _active_lease_generations;
     std::uint64_t _lease_generation = 0;
     std::map<std::string, authority_snapshot_t> _authorities;
-    std::map<std::string, std::string> _object_types;
     std::map<std::string, reservation_state_t> _reservations;
     std::map<std::string, creation_terminal_record_t> _creation_terminals;
     std::map<std::string, aggregate_state_t> _aggregates;
