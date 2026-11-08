@@ -152,11 +152,12 @@ ClientServer listener가 소유한다([Backpressure](33-backpressure.ko.md)).
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
 | `owner_lease_renew_interval` | 소유권을 갱신하는 주기 | 5초 |
-| `owner_lease_ttl` | 갱신이 끊긴 소유권이 만료되는 시간 | 15초 |
+| `owner_lease_ttl` | 갱신이 끊긴 소유권이 만료되는 시간 | 30초 |
 | `owner_lease_renew_timeout` | 갱신 시도 하나의 상한 | 3초 |
 | `owner_lease_fencing_margin` | 만료 전에 권한을 반납하는 여유 | 5초 |
 | `polling_interval` | 변경 알림이 없는 store를 다시 읽는 주기 | 1초 |
 | `store_failure_grace` | store 장애를 견디는 기간 | 30초 |
+| `store_outage_retention` | store 장애 중 장애 전에 준비된 객체를 lease 만료 뒤에도 일정 시간 계속 실행할지. domain의 모든 host가 0.33.0 이상일 때만 켠다 | `false` |
 | `route_cache_max_age` | 조회한 위치를 재사용하는 기간 | 15초 |
 | `message_follow_duration` | 이전 owner가 새 owner로 message를 전달하는 기간 | 30초 |
 | `session_relocation_seal_timeout` | session 경로 갱신을 기다리는 상한 | 3초 |
@@ -166,7 +167,7 @@ ClientServer listener가 소유한다([Backpressure](33-backpressure.ko.md)).
 | `relocation_cutover_wait_timeout` | cutover를 기다리는 시간 | 1초 |
 
 **lease 값은 함께 움직인다.** `max(OwnerLeaseRenewInterval, OwnerLeaseRenewTimeout) + OwnerLeaseRenewTimeout`이
-`OwnerLeaseTtl - OwnerLeaseFencingMargin`보다 작아야 한다. 기본값은 8초와 10초로 이 관계를
+`OwnerLeaseTtl - OwnerLeaseFencingMargin`보다 작아야 한다. 기본값은 8초와 25초로 이 관계를
 만족한다. `route_cache_max_age`는 `message_follow_duration`
 보다 5초 이상 작아야 하고, 각각 `0`이면 경로 캐시와 message 전달을 끈다. 위치 결정과 이전
 동작은 [Location](25-location.ko.md)과 [Relocation](37-relocation.ko.md)이 다룬다.
