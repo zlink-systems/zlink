@@ -39,6 +39,8 @@ that Redis providers in different languages must be able to read from each
 other — the counter-issuance key, and the opaque storage format for the six
 records — is a **MUST-level public contract**, and if the code disagrees, the
 code is fixed; a non-Redis provider doesn't need to follow this part. The
+storage format of the official etcd provider is owned by
+[07. Location Store (etcd)](07-location-store-etcd.en.md). The
 rest — implementation detail the Redis provider chooses internally, such as
 Lua script splitting or connection management — is called out explicitly at
 the end of §9, and that part is updated in the document, not the code, if the
@@ -48,7 +50,11 @@ implementation changes.
 or equivalent measures must preserve successful mutations and generation-counter continuity
 across failover, pricing-plan changes, and Store node replacement. Configuration names alone
 do not establish this guarantee. Operators must ensure that recovery or promotion loses no
-successful writes and fences writes from the previous primary. On detected rollback, the
+successful writes and fences writes from the previous primary. Restoring the same namespace
+from a backup that lacks writes made after the last successful mutation is also a rollback. A
+Redis or Valkey deployment that combines asynchronous replication with automatic promotion
+doesn't meet this requirement. The official provider that meets it through consensus (Raft)
+is defined by [07. Location Store (etcd)](07-location-store-etcd.en.md). On detected rollback, the
 Framework discards all local objects without retention and rejoins empty
 ([Location runtime §5.1](01-location-runtime.en.md#51-retention-and-rejoining-after-a-short-outage)).
 A node detects rollback only when an observation of an issuing counter's current value,
@@ -147,8 +153,8 @@ doesn't interpret a domain counter or provide a separate generation API.
 A write request consists of a condition set and a mutation set.
 
 - `Missing(key)` is true only if the key doesn't exist or has expired.
-- `Version(key, expected)` is true only if the current version equals
-  `expected`.
+- `Version(key, expected)` is true only if the key exists, hasn't expired,
+  and its current version equals `expected`.
 - `Value(key, expected)` is true only if the key exists, hasn't expired, and
   its current bytes equal `expected` byte for byte.
 - `Put(key, bytes, optional retention)` issues a new opaque version.
@@ -192,6 +198,10 @@ size bounds.
   snapshot and returns an opaque cursor if there's a next page.
 - The next page for the same cursor reads only the snapshot fixed by the
   first-page request.
+- When the snapshot is fixed, the `StoreNow` of that observation is fixed with
+  it. Every page returns this time as `StoreNow` and uses only this time for
+  expiry decisions. The local clock of the host running the provider instance
+  is not used in its place.
 - Page limit is `1..1000`, and encoded page size is at most 4 MiB.
 - Cursor is opaque UTF-8 `1..4096` bytes.
 - If the snapshot no longer exists or the cursor is invalid, `Expired` is
@@ -392,6 +402,8 @@ record golden fixture. Each item maps to one test.
 - An expired value is `Missing` by the provider clock, and a durable value is
   kept until explicit delete.
 - If one condition fails, every mutation and version increment is zero.
+- A `Version` condition on an expired key, using the version read earlier, is
+  `Conflict`, and the mutation is zero.
 - `Value` stays true when a `Put` of the same bytes changes the version and
   expiry, and is false when the bytes change or the key is deleted or expires;
   the batch mutation is then zero.
@@ -399,6 +411,10 @@ record golden fixture. Each item maps to one test.
   commit.
 - Scan pages use the same snapshot, and `Expired` is returned if the
   snapshot or cursor is invalid.
+- Every page of the same snapshot returns the same `StoreNow` as the first
+  page, and an item whose expiry passes after the first page still appears in
+  that snapshot's pages. The result is the same even if the provider host's
+  local clock is set differently from the Store time.
 - The cursor round-trips opaquely up to 4,096 bytes, and pages respect the
   1,000-item/4 MiB bound.
 - After cancellation or result loss, whether it committed can be

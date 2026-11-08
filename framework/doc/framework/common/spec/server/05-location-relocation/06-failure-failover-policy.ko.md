@@ -4,7 +4,7 @@ title: "장애 대응과 failover 범위"
 
 # 장애 대응과 failover 범위
 
-[Location·Relocation 주제 목차](README.ko.md) · [스펙 목차](../README.ko.md) · [이전: 05. Host relocation 전체 흐름](05-host-relocation-flow.ko.md)
+[Location·Relocation 주제 목차](README.ko.md) · [스펙 목차](../README.ko.md) · [이전: 05. Host relocation 전체 흐름](05-host-relocation-flow.ko.md) · [다음: 07. Location Store (etcd)](07-location-store-etcd.ko.md)
 
 > **이 문서가 정의하는 것** — connection·message operation·object 생성과 relocation
 > 도중 장애가 났을 때 Framework가 같은 작업을 자동으로 계속하는 범위.
@@ -305,4 +305,4 @@ Spot 하나의 global ID를 지정해 해당 Spot에 send 또는 request를 전�
 
 ---
 
-[Location·Relocation 주제 목차](README.ko.md) · [스펙 목차](../README.ko.md) · [이전: 05. Host relocation 전체 흐름](05-host-relocation-flow.ko.md)
+[Location·Relocation 주제 목차](README.ko.md) · [스펙 목차](../README.ko.md) · [이전: 05. Host relocation 전체 흐름](05-host-relocation-flow.ko.md) · [다음: 07. Location Store (etcd)](07-location-store-etcd.ko.md)

@@ -4,7 +4,7 @@ title: "Failure Handling and Failover Scope"
 
 # Failure Handling and Failover Scope
 
-[Location·Relocation Topic Table of Contents](README.en.md) · [Spec Table of Contents](../README.en.md) · [Previous: 05. Complete Host Relocation Flow](05-host-relocation-flow.en.md)
+[Location·Relocation Topic Table of Contents](README.en.md) · [Spec Table of Contents](../README.en.md) · [Previous: 05. Complete Host Relocation Flow](05-host-relocation-flow.en.md) · [Next: 07. Location Store (etcd)](07-location-store-etcd.en.md)
 
 > **What this document defines** — the extent to which the Framework
 > automatically continues the same work when a failure occurs during a
@@ -337,4 +337,4 @@ Delivering a send or request to one Spot by specifying its global ID is called
 
 ---
 
-[Location·Relocation Topic Table of Contents](README.en.md) · [Spec Table of Contents](../README.en.md) · [Previous: 05. Complete Host Relocation Flow](05-host-relocation-flow.en.md)
+[Location·Relocation Topic Table of Contents](README.en.md) · [Spec Table of Contents](../README.en.md) · [Previous: 05. Complete Host Relocation Flow](05-host-relocation-flow.en.md) · [Next: 07. Location Store (etcd)](07-location-store-etcd.en.md)
