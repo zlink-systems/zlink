@@ -84,5 +84,7 @@ test('etcd encoding rejects every corrupt golden record as storeFailure', () => 
   );
   assert.equal(codec.decodeVersion('e1:0000000000000000:9223372036854775808'), null);
   assert.throws(() => codec.encodeVersion('0', '1\n'), RangeError);
-  assert.deepEqual(Object.keys(require('../../packages/framework-locations-etcd/dist')), []);
+  assert.deepEqual(Object.keys(require('../../packages/framework-locations-etcd/dist')), [
+    'ZLinkEtcdLocationStore'
+  ]);
 });

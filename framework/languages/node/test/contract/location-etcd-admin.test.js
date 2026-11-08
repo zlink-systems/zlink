@@ -297,6 +297,10 @@ test(
       encodeClock,
       keys
     } = require('../../packages/framework-locations-etcd/dist/internal/encoding');
+    // The round takes about 1,008 x 20 ms = 20 s, far beyond one 1 s operation deadline, while each RPC
+    // keeps a wide margin under load. A shared deadline would fail; a per-RPC deadline completes.
+    const RPC_DELAY_MS = 20;
+    const OPERATION_TIMEOUT_MS = 1000;
     const key = keys('cleanup-deadlines');
     const records = Array.from({ length: 1005 }, (_, index) => ({
       key: key.metadata(Buffer.from(String(index).padStart(4, '0'))),
@@ -317,18 +321,18 @@ test(
           );
           const kvs = remaining.slice(0, 1000);
           pageSizes.push(kvs.length);
-          setTimeout(() => callback(null, { kvs, more: remaining.length > 1000 }), 100);
+          setTimeout(() => callback(null, { kvs, more: remaining.length > 1000 }), RPC_DELAY_MS);
         },
         txn(_call, callback) {
           deletes++;
-          setTimeout(() => callback(null, { succeeded: true }), 100);
+          setTimeout(() => callback(null, { succeeded: true }), RPC_DELAY_MS);
         }
       }
     });
     const client = new EtcdClient({
       endpoints: [server.endpoint],
       namespace: 'cleanup-deadlines',
-      operationTimeoutMs: 200
+      operationTimeoutMs: OPERATION_TIMEOUT_MS
     });
     const stop = new AbortController();
     const operation = client.operation.bind(client);
