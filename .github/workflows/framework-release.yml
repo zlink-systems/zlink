@@ -188,6 +188,7 @@ jobs:
             framework-codec-protobuf \
             framework-codec-msgpack \
             framework-locations-redis \
+            framework-locations-etcd \
             http-client \
             nestjs; do
             npm pack "./packages/${package_dir}" \
@@ -205,6 +206,7 @@ jobs:
             framework-codec-protobuf \
             framework-codec-msgpack \
             framework-locations-redis \
+            framework-locations-etcd \
             http-client \
             nestjs; do
             name=$(node -p "require('./packages/${package_dir}/package.json').name")
@@ -259,7 +261,7 @@ jobs:
         run: |
           set -euo pipefail
           deadline=$(( $(date +%s) + 45 * 60 ))
-          for package_dir in             stream-wire             stream-connector             framework             framework-codec-protobuf             framework-codec-msgpack             framework-locations-redis             http-client             nestjs; do
+          for package_dir in             stream-wire             stream-connector             framework             framework-codec-protobuf             framework-codec-msgpack             framework-locations-redis             framework-locations-etcd             http-client             nestjs; do
             name=$(node -p "require('./framework/languages/node/packages/${package_dir}/package.json').name")
             url="https://registry.npmjs.org/${name}/-/${name#*/}-${VERSION}.tgz"
             until curl -sfI -o /dev/null "${url}"; do
