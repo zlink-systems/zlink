@@ -1,0 +1,239 @@
+{
+  "format": "location-store-etcd-v1",
+  "version": 1,
+  "consumers": [
+    "cpp",
+    "dotnet",
+    "jvm",
+    "node"
+  ],
+  "spec": {
+    "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+    "section": "3"
+  },
+  "keyVectors": [
+    {
+      "name": "mesh-node-descriptor",
+      "namespace": "app1",
+      "frameworkKeyHex": "6d6573682d6e6f6465006d61696e003031303230333034",
+      "inputRef": "store-record-v1.json#/keyDerivation/0/preimageHex",
+      "metadataKeyHex": "61707031006d006d6573682d6e6f6465006d61696e003031303230333034",
+      "payloadKeyHex": "617070310070006d6573682d6e6f6465006d61696e003031303230333034",
+      "clockKeyHex": "617070310063"
+    },
+    {
+      "name": "owner-lease",
+      "namespace": "app1",
+      "frameworkKeyHex": "6f776e65722d6c65617365006f776e65722d61",
+      "inputRef": "store-record-v1.json#/keyDerivation/1/preimageHex",
+      "metadataKeyHex": "61707031006d006f776e65722d6c65617365006f776e65722d61",
+      "payloadKeyHex": "617070310070006f776e65722d6c65617365006f776e65722d61",
+      "clockKeyHex": "617070310063"
+    },
+    {
+      "name": "client-server-descriptor",
+      "namespace": "app1",
+      "frameworkKeyHex": "636c69656e742d73657276657200636861742d6368616e6e656c003031303230333034",
+      "inputRef": "store-record-v1.json#/keyDerivation/2/preimageHex",
+      "metadataKeyHex": "61707031006d00636c69656e742d73657276657200636861742d6368616e6e656c003031303230333034",
+      "payloadKeyHex": "61707031007000636c69656e742d73657276657200636861742d6368616e6e656c003031303230333034",
+      "clockKeyHex": "617070310063"
+    },
+    {
+      "name": "fanout-publisher-descriptor",
+      "namespace": "app1",
+      "frameworkKeyHex": "66616e6f75742d7075626c697368657200636861742d6368616e6e656c003031303230333034",
+      "inputRef": "store-record-v1.json#/keyDerivation/3/preimageHex",
+      "metadataKeyHex": "61707031006d0066616e6f75742d7075626c697368657200636861742d6368616e6e656c003031303230333034",
+      "payloadKeyHex": "6170703100700066616e6f75742d7075626c697368657200636861742d6368616e6e656c003031303230333034",
+      "clockKeyHex": "617070310063"
+    },
+    {
+      "name": "authority-actor",
+      "namespace": "app1",
+      "frameworkKeyHex": "617574686f72697479006163746f7200757365723a3432",
+      "inputRef": "store-record-v1.json#/keyDerivation/4/preimageHex",
+      "metadataKeyHex": "61707031006d00617574686f72697479006163746f7200757365723a3432",
+      "payloadKeyHex": "61707031007000617574686f72697479006163746f7200757365723a3432",
+      "clockKeyHex": "617070310063"
+    },
+    {
+      "name": "authority-spot",
+      "namespace": "app1",
+      "frameworkKeyHex": "617574686f726974790073706f7400726f6f6d3a31",
+      "inputRef": "store-record-v1.json#/keyDerivation/5/preimageHex",
+      "metadataKeyHex": "61707031006d00617574686f726974790073706f7400726f6f6d3a31",
+      "payloadKeyHex": "61707031007000617574686f726974790073706f7400726f6f6d3a31",
+      "clockKeyHex": "617070310063"
+    },
+    {
+      "name": "creation-terminal",
+      "namespace": "app1",
+      "frameworkKeyHex": "6372656174696f6e2d7465726d696e616c0030313032303330340037003030303030303030303030303030326130303030303030303030303030303031",
+      "inputRef": "store-record-v1.json#/keyDerivation/6/preimageHex",
+      "metadataKeyHex": "61707031006d006372656174696f6e2d7465726d696e616c0030313032303330340037003030303030303030303030303030326130303030303030303030303030303031",
+      "payloadKeyHex": "617070310070006372656174696f6e2d7465726d696e616c0030313032303330340037003030303030303030303030303030326130303030303030303030303030303031",
+      "clockKeyHex": "617070310063"
+    },
+    {
+      "name": "unicode-and-nul",
+      "namespace": "시험😀",
+      "frameworkKeyHex": "ed82a400f09f988000eb819d",
+      "metadataKeyHex": "ec8b9ced9798f09f9880006d00ed82a400f09f988000eb819d",
+      "payloadKeyHex": "ec8b9ced9798f09f9880007000ed82a400f09f988000eb819d",
+      "clockKeyHex": "ec8b9ced9798f09f98800063"
+    },
+    {
+      "name": "maximum-ascii-lengths",
+      "namespace": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn",
+      "frameworkKeyHex": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+      "metadataKeyHex": "6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e006d00abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+      "payloadKeyHex": "6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e007000abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+      "clockKeyHex": "6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e0063"
+    },
+    {
+      "name": "maximum-utf8-namespace",
+      "namespace": "한한한한한한한한한한한한한한한한한한한한한a",
+      "frameworkKeyHex": "00",
+      "metadataKeyHex": "ed959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959c61006d0000",
+      "payloadKeyHex": "ed959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959c6100700000",
+      "clockKeyHex": "ed959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959ced959c610063"
+    }
+  ],
+  "metadataVectors": [
+    {
+      "name": "durable-0",
+      "expiresAtMs": "0",
+      "hasExpiry": false,
+      "payloadLength": 0,
+      "metadataHex": "0100000000000000000000000000"
+    },
+    {
+      "name": "durable-1048576",
+      "expiresAtMs": "0",
+      "hasExpiry": false,
+      "payloadLength": 1048576,
+      "metadataHex": "0100000000000000000000100000"
+    },
+    {
+      "name": "expiring-0",
+      "expiresAtMs": "9223372036854",
+      "hasExpiry": true,
+      "payloadLength": 0,
+      "metadataHex": "0101000008637bd05af600000000"
+    },
+    {
+      "name": "expiring-1048576",
+      "expiresAtMs": "9223372036854",
+      "hasExpiry": true,
+      "payloadLength": 1048576,
+      "metadataHex": "0101000008637bd05af600100000"
+    }
+  ],
+  "clockVectors": [
+    {
+      "value": "0",
+      "hex": "0000000000000000"
+    },
+    {
+      "value": "1",
+      "hex": "0000000000000001"
+    },
+    {
+      "value": "9223372036854",
+      "hex": "000008637bd05af6"
+    }
+  ],
+  "storeVersions": {
+    "accepted": [
+      {
+        "clusterIdDecimal": "0",
+        "modRevision": "1",
+        "value": "e1:0000000000000000:1"
+      },
+      {
+        "clusterIdDecimal": "18364758544493064720",
+        "modRevision": "9223372036854775807",
+        "value": "e1:fedcba9876543210:9223372036854775807"
+      }
+    ],
+    "rejected": [
+      "e2:fedcba9876543210:1",
+      "e1:FEDCBA9876543210:1",
+      "e1:fedcba987654321:1",
+      "e1:0xfedcba9876543210:1",
+      "e1:fedcba9876543210:01",
+      "e1:fedcba9876543210:-1",
+      "e1:fedcba9876543210:1.0",
+      "e1:fedcba9876543210:1e3",
+      "e1:fedcba9876543210:1\n"
+    ]
+  },
+  "corruptRecords": [
+    {
+      "name": "expiry-above-cap",
+      "metadataHex": "0101000008637bd05af700000000",
+      "payloadHex": "",
+      "expected": "storeFailure"
+    },
+    {
+      "name": "expiry-uint64-max",
+      "metadataHex": "0101ffffffffffffffff00000000",
+      "payloadHex": "",
+      "expected": "storeFailure"
+    },
+    {
+      "name": "clock-above-cap",
+      "clockHex": "000008637bd05af7",
+      "expected": "storeFailure"
+    },
+    {
+      "name": "clock-uint64-max",
+      "clockHex": "ffffffffffffffff",
+      "expected": "storeFailure"
+    },
+    {
+      "name": "clock-wrong-length",
+      "clockHex": "00000000000000",
+      "expected": "storeFailure"
+    },
+    {
+      "name": "unknown-format-tag",
+      "metadataHex": "0200000000000000000000000000",
+      "payloadHex": "",
+      "expected": "storeFailure"
+    },
+    {
+      "name": "unused-flag-bit",
+      "metadataHex": "0102000000000000000000000000",
+      "payloadHex": "",
+      "expected": "storeFailure"
+    },
+    {
+      "name": "payload-length-mismatch",
+      "metadataHex": "0100000000000000000000000001",
+      "payloadHex": "",
+      "expected": "storeFailure"
+    },
+    {
+      "name": "metadata-only",
+      "metadataHex": "0100000000000000000000000000",
+      "payloadHex": null,
+      "expected": "storeFailure"
+    },
+    {
+      "name": "payload-only",
+      "metadataHex": null,
+      "payloadHex": "",
+      "expected": "storeFailure"
+    },
+    {
+      "name": "different-mod-revisions",
+      "metadataHex": "0100000000000000000000000000",
+      "payloadHex": "",
+      "metadataModRevision": "2",
+      "payloadModRevision": "3",
+      "expected": "storeFailure"
+    }
+  ]
+}
