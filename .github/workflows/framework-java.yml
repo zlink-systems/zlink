@@ -145,6 +145,8 @@ jobs:
       - name: Fetch Core and build the checkout Java binding package on Linux
         if: ${{ !inputs.skip_tests && (startsWith(matrix.target.name, 'linux-')) }}
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)"

@@ -289,6 +289,7 @@ jobs:
         id: inputs
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           CC: ${{ steps.tools.outputs.c_compiler }}
           CXX: ${{ steps.tools.outputs.cxx_compiler }}
         run: |
