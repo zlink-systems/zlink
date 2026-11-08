@@ -579,6 +579,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                                         () -> host.runWithOutbound(outbound, operation)));
         execution = instanceSpot ? null : host.execution(this);
         serials.spotQueue.executionPolicy(execution);
+        if (execution != null) execution.onResume(serials::resumeExecution);
     }
 
     ZLinkSpot<?> spot() {
