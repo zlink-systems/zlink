@@ -301,7 +301,49 @@ deployment and client, or be physically separate. Even when using the
 same deployment, they use different `keyPrefix`es, and a cross-store
 transaction isn't required.
 
-## 5. Types Not Made Public
+## 5. etcd Extension
+
+```ts
+export interface ZLinkEtcdClientIdentity {
+ readonly certificatePem: string;
+ readonly keyPem: string;
+}
+
+export interface ZLinkEtcdTlsOptions {
+ readonly trustedCaPem?: string;
+ readonly clientIdentity?: ZLinkEtcdClientIdentity;
+}
+
+export interface ZLinkEtcdCredentials {
+ readonly user: string;
+ readonly password: string;
+}
+
+export interface ZLinkEtcdLocationOptions {
+ readonly endpoints: readonly string[];
+ readonly tls?: ZLinkEtcdTlsOptions;
+ readonly credentials?: ZLinkEtcdCredentials;
+ readonly namespace: string;
+ readonly operationTimeoutMs?: number;    // Default 5000
+}
+
+export class ZLinkEtcdLocationStore implements ZLinkLocationStore {
+ constructor(options: ZLinkEtcdLocationOptions);
+ dispose(): Promise<void>;
+}
+```
+
+These declarations are exported from the `@zlink-systems/framework-locations-etcd` package root. The
+public provider surface is the options and one Location Store implementation class; no Relocation
+Store is provided. The meaning and conditions of each option are defined by the
+[common options](../../../05-location-relocation/07-location-store-etcd.en.md#11-public-options), and the constructor throws `TypeError` or `RangeError` before
+connecting to etcd if those conditions are violated. The same package provides the Store maintenance
+tool command, whose form is defined by
+[common spec §4.4](../../../05-location-relocation/07-location-store-etcd.en.md#44-store-maintenance-tool-commands). The tool's update engine
+isn't exported from the package root. The
+[official etcd Location Store provider](../../../05-location-relocation/07-location-store-etcd.en.md) owns the rest of the behavior.
+
+## 6. Types Not Made Public
 
 The following types and operations are Framework-private records or
 Redis implementation details.
