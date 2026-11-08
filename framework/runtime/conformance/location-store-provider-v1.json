@@ -1,0 +1,618 @@
+{
+  "fixture": "zlink.framework.location-store-provider",
+  "version": 1,
+  "languages": [
+    "cpp",
+    "dotnet",
+    "jvm",
+    "node"
+  ],
+  "resultSchema": {
+    "language": "cpp|dotnet|jvm|node",
+    "cases": [
+      {
+        "id": "exact fixture case id",
+        "status": "passed|failed|skipped"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "id": "etcd.cross-language-record",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "한 언어 provider가 쓴 record를 다른 세 언어 provider가 같은 bytes, version, expiry로 읽는다(4×4).",
+      "level": "cross-language",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "store-manager-process",
+        "four-language-adapters"
+      ],
+      "requiresStoreManager": true
+    },
+    {
+      "id": "etcd.cross-language-version-condition",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "한 언어가 읽은 version으로 다른 언어가 건 `Version` 조건이 참이고, 그 record를 바꾼 뒤에는 거짓이다.",
+      "level": "cross-language",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "four-language-adapters"
+      ],
+      "requiresStoreManager": false
+    },
+    {
+      "id": "etcd.corrupt-record",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "알 수 없는 `formatTag`, 한쪽만 있는 key, `payloadLength` 불일치를 저장해 두면 그 key의 exact read가 Store failure를 반환한다. Metadata는 있고 payload가 없거나 길이·`mod_revision`이 다른 key는 그 key가 page에 들어갈 때 snapshot scan도 Store failure를 반환한다. 알 수 없는 `formatTag`는 그 key를 condition으로 건 write도 Store failure를 반환한다.",
+      "level": "contract",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv"
+      ],
+      "requiresStoreManager": false
+    },
+    {
+      "id": "etcd.provider-clock-independent",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "Provider host의 clock을 Store 시각과 다르게 맞춰도 read·commit·scan의 `StoreNow`와 만료 결과가 같다.",
+      "level": "contract",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "store-manager-process",
+        "host-clock-control"
+      ],
+      "requiresStoreManager": true
+    },
+    {
+      "id": "etcd.manager-stop-restart-bound",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "Store 관리 process를 모두 60초 멈췄다가 다시 시작해도, 멈춘 동안 읽은 Store 시각과 재시작 뒤 어느 시점의 Store 시각의 차이가 그 사이 실제 경과 시간 `L`에 대해 `1.01 × ρ × L + 1.01초`를 넘지 않는다.",
+      "level": "fault-injection",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "store-manager-process"
+      ],
+      "requiresStoreManager": true
+    },
+    {
+      "id": "etcd.manager-delayed-write-bound",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "Store 관리 process가 Store 시각을 읽은 직후 20초 멈췄다가 기록하게 해도, Store 시각은 한 번에 1.01초보다 많이 늘지 않는다.",
+      "level": "fault-injection",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "store-manager-process",
+        "hold-proxy"
+      ],
+      "requiresStoreManager": true
+    },
+    {
+      "id": "etcd.manager-wall-clock-jumps",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "Store 관리 process host의 wall clock을 뒤로 돌리거나 크게 앞으로 돌려도 Store 시각이 줄어들지 않고, 어느 구간 `L`에서도 `1.01 × ρ × L + 1.01초`보다 많이 늘지 않는다.",
+      "level": "fault-injection",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "store-manager-process",
+        "host-clock-control"
+      ],
+      "requiresStoreManager": true
+    },
+    {
+      "id": "etcd.manager-three-process-frequency",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "Store 관리 process를 세 개 실행해도 Store 시각 key의 기록 빈도가 1초에 약 한 번이다.",
+      "level": "contract",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "store-manager-process"
+      ],
+      "requiresStoreManager": true
+    },
+    {
+      "id": "etcd.namespace-initialization",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "초기화 명령은 빈 namespace에서만 Store 시각 key를 만들고, key가 있는 namespace에서는 실패한다.",
+      "level": "contract",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "store-manager-process"
+      ],
+      "requiresStoreManager": true
+    },
+    {
+      "id": "etcd.clock-key-loss",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "Store 시각 key를 지운 namespace에서 provider operation이 Store failure를 반환하고 Store 관리 process가 key를 다시 만들지 않는다.",
+      "level": "fault-injection",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "store-manager-process"
+      ],
+      "requiresStoreManager": true
+    },
+    {
+      "id": "etcd.value-condition-mismatch",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "`Value` 조건의 bytes가 저장된 값과 다르면 `Conflict`이며 mutation은 0이다. 길이가 같고 내용이 다른 경우와 길이가 다른 경우 모두 그렇다.",
+      "level": "contract",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv"
+      ],
+      "requiresStoreManager": false
+    },
+    {
+      "id": "etcd.expired-version-condition",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "만료된 key에 읽기 때의 version으로 `Version` 조건을 걸면 `Conflict`다.",
+      "level": "contract",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "store-manager-process"
+      ],
+      "requiresStoreManager": true
+    },
+    {
+      "id": "etcd.expiry-before-apply",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "읽기 때는 만료되지 않았던 key가 적용 전에 Store 시각 갱신으로 만료되면, 그 key에 건 `Version` 조건은 `Conflict`가 된다.",
+      "level": "fault-injection",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "store-manager-process",
+        "hold-proxy"
+      ],
+      "requiresStoreManager": true
+    },
+    {
+      "id": "etcd.condition-change-before-apply",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "Condition key가 읽기와 적용 사이에 바뀌면 결과는 다시 판정한 condition에 따라 `Applied` 또는 `Conflict`이며, `Conflict`이면 mutation은 0이다.",
+      "level": "fault-injection",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "hold-proxy"
+      ],
+      "requiresStoreManager": false
+    },
+    {
+      "id": "etcd.maximum-batch-renew-latency",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "2,048 unique key와 encoded 4 MiB인 batch가 §9.2 설정과 Store 관리 process 세 개가 정상 갱신하는 상태에서 하나의 commit으로 적용되고, 그동안 다른 provider의 owner lease 갱신이 3초 안에 끝난다.",
+      "level": "contract",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "store-manager-process"
+      ],
+      "requiresStoreManager": true
+    },
+    {
+      "id": "etcd.clock-updates-during-commit",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "읽기와 적용 사이에 Store 시각이 여러 번 갱신돼도, condition key가 그대로이고 만료되지 않았으면 commit은 `Applied`이며 반환된 `StoreNow`는 읽기 때의 Store 시각이다.",
+      "level": "fault-injection",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "store-manager-process",
+        "hold-proxy"
+      ],
+      "requiresStoreManager": true
+    },
+    {
+      "id": "etcd.leader-loss-after-applied",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "Leader를 commit 직후 종료해도 `Applied`를 받은 변경이 새 leader에서 같은 version으로 읽힌다.",
+      "level": "fault-injection",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "member-kill-resume"
+      ],
+      "requiresStoreManager": false
+    },
+    {
+      "id": "etcd.leader-loss-before-result",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "결과를 받기 전에 leader를 종료하면 commit 여부 불명으로 끝나고, 직접 읽기와 version으로 적용 여부를 판정할 수 있다.",
+      "level": "fault-injection",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "hold-proxy",
+        "member-kill-resume"
+      ],
+      "requiresStoreManager": false
+    },
+    {
+      "id": "etcd.minority-isolation",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "Provider가 과반수에서 떨어진 member에만 닿으면 read와 commit이 Store failure를 반환하고 오래된 값을 성공으로 반환하지 않는다.",
+      "level": "fault-injection",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "peer-partition-heal"
+      ],
+      "requiresStoreManager": false
+    },
+    {
+      "id": "etcd.quota-exhaustion",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "Quota를 채운 cluster에서 쓰기가 Store failure로 끝나고 `Conflict`나 `Applied`로 반환되지 않는다.",
+      "level": "fault-injection",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "quota-bytes"
+      ],
+      "requiresStoreManager": false
+    },
+    {
+      "id": "etcd.snapshot-stability",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "첫 page 뒤의 변경·삭제·만료와 leader 교체에도 같은 snapshot의 page가 같은 item과 `StoreNow`를 반환한다.",
+      "level": "fault-injection",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "store-manager-process",
+        "member-kill-resume"
+      ],
+      "requiresStoreManager": true
+    },
+    {
+      "id": "etcd.expired-prefix-pagination",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "만료 key가 1,000개 넘게 연속된 prefix도 page마다 bound를 지키며 끝까지 읽힌다.",
+      "level": "contract",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "store-manager-process"
+      ],
+      "requiresStoreManager": true
+    },
+    {
+      "id": "etcd.maximum-cursor",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "가장 긴 prefix와 key에서 cursor가 4,096 bytes를 넘지 않는다.",
+      "level": "contract",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv"
+      ],
+      "requiresStoreManager": false
+    },
+    {
+      "id": "etcd.compacted-snapshot",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "Snapshot revision이 compaction된 뒤의 page 요청은 `Expired`다.",
+      "level": "fault-injection",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "compact"
+      ],
+      "requiresStoreManager": false
+    },
+    {
+      "id": "etcd.expiry-cleanup-race",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/07-location-store-etcd.ko.md",
+        "section": "12"
+      },
+      "expectedObservation": "만료된 record는 정리 뒤 etcd에서 사라지고, 정리 직전에 다시 기록된 record는 남는다.",
+      "level": "fault-injection",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "store-manager-process",
+        "hold-proxy"
+      ],
+      "requiresStoreManager": true
+    },
+    {
+      "id": "spi.exact-read-observation",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "section": "10"
+      },
+      "expectedObservation": "Exact read가 bytes, version, optional expiry와 `StoreNow`를 같은 관측으로 반환한다.",
+      "level": "contract",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "store-manager-process"
+      ],
+      "requiresStoreManager": true
+    },
+    {
+      "id": "spi.expired-and-durable",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "section": "10"
+      },
+      "expectedObservation": "만료된 value는 provider clock 기준 `Missing`이고 durable value는 explicit delete 전까지 유지된다.",
+      "level": "contract",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "store-manager-process"
+      ],
+      "requiresStoreManager": true
+    },
+    {
+      "id": "spi.atomic-conflict",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "section": "10"
+      },
+      "expectedObservation": "Condition 하나가 실패하면 모든 mutation과 version 증가가 0이다.",
+      "level": "contract",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv"
+      ],
+      "requiresStoreManager": false
+    },
+    {
+      "id": "spi.expired-version-conflict",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "section": "10"
+      },
+      "expectedObservation": "만료된 key에 읽기 때 받은 version으로 `Version` 조건을 걸면 `Conflict`이고 mutation은 0이다.",
+      "level": "contract",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "store-manager-process"
+      ],
+      "requiresStoreManager": true
+    },
+    {
+      "id": "spi.value-condition-identity",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "section": "10"
+      },
+      "expectedObservation": "`Value`는 같은 bytes로 `Put`해 version과 expiry가 바뀌어도 참이고, bytes 변경·삭제·만료 시 거짓이며 그때 batch mutation은 0이다.",
+      "level": "contract",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "store-manager-process"
+      ],
+      "requiresStoreManager": true
+    },
+    {
+      "id": "spi.maximum-atomic-batch",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "section": "10"
+      },
+      "expectedObservation": "최대 2,048 unique key와 encoded 4 MiB request가 하나의 atomic commit으로 적용된다.",
+      "level": "contract",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv"
+      ],
+      "requiresStoreManager": false
+    },
+    {
+      "id": "spi.snapshot-validity",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "section": "10"
+      },
+      "expectedObservation": "Scan page가 같은 snapshot을 사용하며 snapshot 또는 cursor가 유효하지 않으면 `Expired`를 반환한다.",
+      "level": "contract",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv"
+      ],
+      "requiresStoreManager": false
+    },
+    {
+      "id": "spi.snapshot-clock",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "section": "10"
+      },
+      "expectedObservation": "같은 snapshot의 모든 page가 첫 page와 같은 `StoreNow`를 반환하고, 첫 page 뒤에 만료 시각이 지난 item도 그 snapshot의 page에는 그대로 나온다. Provider host의 local clock을 Store 시각과 다르게 맞춰도 결과가 같다.",
+      "level": "contract",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "store-manager-process",
+        "host-clock-control"
+      ],
+      "requiresStoreManager": true
+    },
+    {
+      "id": "spi.cursor-page-bounds",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "section": "10"
+      },
+      "expectedObservation": "Cursor는 4,096 bytes까지 opaque하게 왕복하고 page는 1,000 item·4 MiB bound를 지킨다.",
+      "level": "contract",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv"
+      ],
+      "requiresStoreManager": false
+    },
+    {
+      "id": "spi.unknown-commit-reconstruction",
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "section": "10"
+      },
+      "expectedObservation": "Cancellation이나 결과 유실 뒤 직접 읽기와 version으로 commit 여부를 재구성할 수 있다.",
+      "level": "fault-injection",
+      "infrastructure": [
+        "etcd-cluster",
+        "provider-adapter",
+        "raw-kv",
+        "hold-proxy"
+      ],
+      "requiresStoreManager": false
+    }
+  ],
+  "excludedRequirements": [
+    {
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "section": "10"
+      },
+      "expectedObservation": "Redis provider public declaration에 authority·reservation·aggregate DTO, script와 key layout type이 없다.",
+      "reason": "이 항목은 Redis provider 또는 Redis 배치만 지정하며 etcd provider에는 적용하지 않는다."
+    },
+    {
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "section": "10"
+      },
+      "expectedObservation": "같은 Redis와 분리 Redis 구성에서 Location Store와 Relocation Store를 각각 등록해 사용할 수 있다.",
+      "reason": "이 항목은 Redis provider 또는 Redis 배치만 지정하며 etcd provider에는 적용하지 않는다."
+    },
+    {
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "section": "10"
+      },
+      "expectedObservation": "§9의 여섯 record는 store record golden fixture(`framework/runtime/protocol/golden/store-record-v1.json`)의 key 파생 벡터(preimage → SHA-256 → 전체 key 문자열)를, 그중 canonical JSON value를 갖는 다섯 record는 value byte 벡터(tombstone·만료 variant 포함)도 그대로 소비하는 conformance test로 검증한다. Creation terminal의 value byte 형식은 service-wire schema가 소유한다.",
+      "reason": "이 항목은 Redis provider 또는 Redis 배치만 지정하며 etcd provider에는 적용하지 않는다."
+    },
+    {
+      "spec": {
+        "file": "framework/doc/framework/common/spec/server/05-location-relocation/02-location-store-redis.ko.md",
+        "section": "10"
+      },
+      "expectedObservation": "인식하지 못하는 format tag나 `recordVersion`은 명시적으로 실패하며, 옛 key·value 형식을 읽어 새 opaque record로 변환하는 하위 호환 경로가 없다.",
+      "reason": "이 항목은 Redis provider 또는 Redis 배치만 지정하며 etcd provider에는 적용하지 않는다."
+    }
+  ]
+}

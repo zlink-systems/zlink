@@ -73,6 +73,7 @@ timeouts are defined by the documents in §4.
 | [04. Complete Actor And Spot Relocation Flow](04-relocation-flow.en.md) | The single handoff protocol for moving one Actor/Spot — owner switch, message processing order, and failure rules | Contract + Implementation Spec |
 | [05. Complete Host Relocation Flow](05-host-relocation-flow.en.md) | How Host `Relocate`/`Shutdown` applies the flow from 04 to multiple units, coordinated at the host level | Contract |
 | [06. Failure Handling And Failover Scope](06-failure-failover-policy.en.md) | The scope in which the framework automatically continues the same work on failure | Contract |
+| [07. Location Store (etcd)](07-location-store-etcd.en.md) | The official etcd provider that replicates by consensus and doesn't roll back after failover — deployment, storage format, Store time | Contract + implementation spec |
 
 ## 5. Find by Question
 
@@ -81,6 +82,7 @@ timeouts are defined by the documents in §4.
 | How does the framework find an object's current location | [01. Location Runtime](01-location-runtime.en.md)'s overview |
 | What do the Location Store and Relocation Store each own | [01. Location Runtime](01-location-runtime.en.md)'s roles and responsibilities section |
 | What must a direct implementation of the Location Store/Relocation Store guarantee | [02. Location Store (Redis)](02-location-store-redis.en.md) · [03. Relocation Store (Redis)](03-relocation-store-redis.en.md) |
+| What should be used so that the Location Store doesn't roll back after failover | [07. Location Store (etcd)](07-location-store-etcd.en.md) |
 | How is an object re-created with the same ID distinguished from an object with a changed owner | [01. Location Runtime](01-location-runtime.en.md)'s re-creation vs. owner-change section |
 | What is the normal order for moving an Actor/Spot to another node | [04. Complete Actor And Spot Relocation Flow "4. Normal Processing Order"](04-relocation-flow.en.md#4-normal-processing-order) |
 | Where do messages go during the move, and when does completion occur after the move | [04. Complete Actor And Spot Relocation Flow "5. Message Order And Completion Meaning"](04-relocation-flow.en.md#5-message-order-and-completion-meaning) · ["6. Location Store Transition Contract"](04-relocation-flow.en.md#6-location-store-transition-contract) |

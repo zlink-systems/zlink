@@ -651,6 +651,7 @@ jobs:
         id: inputs
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           ZLINK_PLATFORM: ${{ matrix.platform }}
           CC: ${{ matrix.c_compiler }}
           CXX: ${{ matrix.cxx_compiler }}

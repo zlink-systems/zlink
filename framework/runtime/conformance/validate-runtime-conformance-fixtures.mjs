@@ -3921,4 +3921,5 @@ for (const scenario of placement.scenarios) {
   }
 }
 
+await (await import('../../../scripts/etcd/validate-fixtures.mjs')).validateEtcdFixtures();
 console.log('runtime conformance fixtures: PASS');

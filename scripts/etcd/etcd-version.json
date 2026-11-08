@@ -1,0 +1,9 @@
+{
+  "version": "3.6.16",
+  "release": "https://github.com/etcd-io/etcd/releases/tag/v3.6.16",
+  "image": "gcr.io/etcd-development/etcd@sha256:b29d816b546a1966fe7034a33b34e231fa98c47ce4d2883f70b0555020b22132",
+  "archives": {
+    "x64": { "platform": "linux-amd64", "sha256": "c8c0d96d8292ef085deabbf735e9561d3d396768e4d606df005aa25964f21911" },
+    "arm64": { "platform": "linux-arm64", "sha256": "ad756ff27ba21e3488cfb84d00f3f4ad8d9b60a93e20f5be5b230a4aab1dc053" }
+  }
+}

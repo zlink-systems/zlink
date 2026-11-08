@@ -71,6 +71,7 @@ sequenceDiagram
 | [04. Actor와 Spot relocation 전체 흐름](04-relocation-flow.ko.md) | Actor·Spot 하나를 옮기는 단일 handoff 프로토콜 — owner 전환, message 처리 순서와 실패 규칙 | 계약 + 구현 스펙 |
 | [05. Host relocation 전체 흐름](05-host-relocation-flow.ko.md) | Host `Relocate`·`Shutdown`이 여러 unit에 04의 흐름을 적용하는 host 단위 조율 | 계약 |
 | [06. 장애 대응과 failover 범위](06-failure-failover-policy.ko.md) | 장애 시 Framework가 같은 작업을 자동으로 계속하는 범위 | 계약 |
+| [07. Location Store (etcd)](07-location-store-etcd.ko.md) | 합의로 복제해 장애 전환 뒤에도 되돌아가지 않는 공식 etcd provider — 운영 구성, 저장 형식, Store 시각 | 계약 + 구현 스펙 |
 
 ## 5. 질문으로 찾기
 
@@ -79,6 +80,7 @@ sequenceDiagram
 | Framework는 object의 현재 위치를 어떻게 찾는가 | [01. Location runtime](01-location-runtime.ko.md)의 개요 |
 | Location Store와 Relocation Store는 각각 무엇을 책임지는가 | [01. Location runtime](01-location-runtime.ko.md)의 역할과 책임 절 |
 | Location Store·Relocation Store를 직접 구현하려면 무엇을 보장해야 하는가 | [02. Location Store (Redis)](02-location-store-redis.ko.md) · [03. Relocation Store (Redis)](03-relocation-store-redis.ko.md) |
+| 장애 전환 뒤에도 Location Store가 되돌아가지 않게 운영하려면 무엇을 써야 하는가 | [07. Location Store (etcd)](07-location-store-etcd.ko.md) |
 | 같은 ID로 다시 만든 object와 owner가 바뀐 object는 어떻게 구분하는가 | [01. Location runtime](01-location-runtime.ko.md)의 재생성·owner 변경 구분 절 |
 | Actor·Spot을 다른 node로 옮기는 정상 순서는 무엇인가 | [04. Actor와 Spot relocation 전체 흐름 「4. 정상 처리 순서」](04-relocation-flow.ko.md#4-정상-처리-순서) |
 | 이동 중 message는 어디로 가는가, 이동 뒤 완료는 언제인가 | [04. Actor와 Spot relocation 전체 흐름 「5. Message 순서와 완료 의미」](04-relocation-flow.ko.md#5-message-순서와-완료-의미) · [「6. Location Store 전환 계약」](04-relocation-flow.ko.md#6-location-store-전환-계약) |
