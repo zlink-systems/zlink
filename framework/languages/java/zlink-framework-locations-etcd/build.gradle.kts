@@ -1,7 +1,36 @@
+import org.gradle.jvm.application.tasks.CreateStartScripts
+
 plugins {
     `java-library`
     `maven-publish`
     id("com.google.protobuf") version "0.9.4"
+}
+
+val providerAdapter by sourceSets.creating {
+    compileClasspath += sourceSets.main.get().output
+    runtimeClasspath += sourceSets.main.get().output
+}
+configurations[providerAdapter.implementationConfigurationName].extendsFrom(configurations.implementation.get())
+configurations[providerAdapter.runtimeOnlyConfigurationName].extendsFrom(configurations.runtimeOnly.get())
+dependencies {
+    add(providerAdapter.implementationConfigurationName, "com.fasterxml.jackson.core:jackson-databind:2.17.2")
+}
+val providerAdapterJar by tasks.registering(Jar::class) {
+    archiveClassifier.set("provider-adapter")
+    from(providerAdapter.output)
+}
+val providerAdapterStartScripts by tasks.registering(CreateStartScripts::class) {
+    applicationName = "location-store-provider-adapter"
+    mainClass.set("systems.zlink.framework.locations.etcd.adapter.ProviderAdapter")
+    classpath = files(providerAdapterJar, tasks.named("jar"), configurations[providerAdapter.runtimeClasspathConfigurationName])
+    outputDir = layout.buildDirectory.dir("provider-adapter-scripts").get().asFile
+}
+tasks.register<Sync>("installProviderAdapterDist") {
+    description = "Installs the public Location Store JSONL adapter."
+    group = "distribution"
+    into(layout.buildDirectory.dir("install/provider-adapter"))
+    from(providerAdapterStartScripts) { into("bin"); filePermissions { unix("rwxr-xr-x") } }
+    from(files(providerAdapterJar, tasks.named("jar"), configurations[providerAdapter.runtimeClasspathConfigurationName])) { into("lib") }
 }
 
 description = "ZLink Java etcd location store extension"

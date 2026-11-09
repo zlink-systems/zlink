@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import assert from "node:assert/strict";
 import path from "node:path";
+import os from "node:os";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -15,6 +16,7 @@ const {
   packageProviderDist,
   buildMutationProvider,
 } = require("./build-node-provider.cjs");
+const { buildManagedProvider } = require("./build-managed-provider.cjs");
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const mutationCases = {
   "split-record-transaction": "spi.exact-read-observation",
@@ -40,7 +42,7 @@ export async function runConformance({
     .filter(Boolean)
     .join(path.delimiter);
   const buildDirectory = fs.mkdtempSync(
-    path.join(root, "scripts/etcd/.provider-build-"),
+    path.join(os.tmpdir(), "zlink-etcd-provider-build-"),
   );
   let h;
   const reports = [],
@@ -60,10 +62,26 @@ export async function runConformance({
       env: { ZLINK_ETCD_PROVIDER_DIST: baseline },
     };
     adapters ??= { node: nodeConfig };
+    for (const language of ["dotnet", "jvm"]) {
+      const config = adapters[language];
+      if (!config) continue;
+      const artifact =
+        language === "dotnet" ? config.args?.[0] : config.command;
+      if (
+        !artifact ||
+        !fs.existsSync(path.resolve(config.cwd || process.cwd(), artifact))
+      )
+        throw new Error(
+          `${language} baseline adapter is missing: ${artifact}. Build the adapter outside the runner before execution.`,
+        );
+    }
     const { Harness, logRoot } = require("./conformance-harness.cjs");
     const { cases, Unverified, inventory } = require("./conformance-cases.cjs");
     require("./conformance-oracle.cjs").verifyGolden();
     const languages = Object.keys(adapters);
+    const mutationLanguages = languages.filter((language) =>
+      ["node", "dotnet", "jvm"].includes(language),
+    );
     if (
       !languages.length ||
       languages.some((l) => !inventory.languages.includes(l))
@@ -172,54 +190,76 @@ export async function runConformance({
       save();
       if (firstFailure) break;
     }
-    if (mutations && !firstFailure && adapters.node) {
+    async function mutationAdapter(language, directory, mutation) {
+      if (language !== "node")
+        return buildManagedProvider(
+          language,
+          directory,
+          mutation,
+          adapters[language],
+        );
       const dist = buildMutationProvider(
-        path.join(buildDirectory, "control/dist"),
+        path.join(directory, "dist"),
+        mutation,
       );
-      const original = h.adapters.node;
-      h.adapters.node = {
+      return {
         ...nodeConfig,
         env: { ...nodeConfig.env, ZLINK_ETCD_PROVIDER_DIST: dist },
       };
+    }
+    for (const language of mutationLanguages.filter(
+      () => mutations && !firstFailure,
+    )) {
+      const original = h.adapters[language];
+      const controls = [];
       try {
+        h.adapters[language] = await mutationAdapter(
+          language,
+          path.join(buildDirectory, language, "control"),
+        );
         for (const caseId of mutationCaseIds) {
-          const { error, ...outcome } = await execute(caseId, "node");
-          controlResults.push(outcome);
+          const { error, ...outcome } = await execute(caseId, language);
+          controls.push(outcome);
+          controlResults.push({ language, ...outcome });
           console.log(
-            `mutation control ${caseId}: ${outcome.status}${outcome.reason ? `: ${outcome.reason}` : ""}`,
+            `mutation control ${language} ${caseId}: ${outcome.status}${outcome.reason ? `: ${outcome.reason}` : ""}`,
           );
           save();
           if (outcome.status !== "passed") break;
         }
+      } catch (error) {
+        controlResults.push({
+          language,
+          status: "not-built",
+          reason: error.message,
+        });
+        firstFailure ??= error;
+        save();
       } finally {
-        h.adapters.node = original;
+        h.adapters[language] = original;
       }
       if (
-        controlResults.length !== mutationCaseIds.length ||
-        controlResults.some((r) => r.status !== "passed")
-      )
+        controls.length !== mutationCaseIds.length ||
+        controls.some((r) => r.status !== "passed")
+      ) {
         firstFailure ??= new Error(
-          "mutation transformation control did not pass every target case",
+          `${language}: mutation transformation control did not pass every target case`,
         );
-    }
-    if (mutations && !firstFailure && adapters.node)
+        break;
+      }
       for (const [id, caseId] of Object.entries(mutationCases)) {
         let r;
         try {
-          const dist = buildMutationProvider(
-            path.join(buildDirectory, id, "dist"),
+          h.adapters[language] = await mutationAdapter(
+            language,
+            path.join(buildDirectory, language, id),
             id,
           );
-          const original = h.adapters.node;
-          h.adapters.node = {
-            ...nodeConfig,
-            env: { ...nodeConfig.env, ZLINK_ETCD_PROVIDER_DIST: dist },
-          };
           let outcome;
           try {
-            outcome = await execute(caseId, "node");
+            outcome = await execute(caseId, language);
           } finally {
-            h.adapters.node = original;
+            h.adapters[language] = original;
           }
           // AssertionError is the only evidence of detection. Runtime/conversion failures stay failures.
           r = {
@@ -236,12 +276,13 @@ export async function runConformance({
         } catch (error) {
           r = { id, caseId, status: "not-built", reason: error.message };
         }
-        mutationResults.push(r);
+        mutationResults.push({ language, ...r });
         console.log(
-          `mutation ${id}: ${r.status}${r.reason ? `: ${r.reason}` : ""}`,
+          `mutation ${language} ${id}: ${r.status}${r.reason ? `: ${r.reason}` : ""}`,
         );
         save();
       }
+    }
     const coverage = checkCoverage(inventory, reports, languages, {
       allowUnverified,
     });
@@ -261,10 +302,10 @@ export async function runConformance({
       `coverage: ${coverage.length ? "FAIL" : "PASS"}; unverified=${unverified.length}`,
     );
     console.log(
-      `mutation control summary: ${controlResults.filter((r) => r.status === "passed").length}/${mutations && adapters.node ? mutationCaseIds.length : 0} passed`,
+      `mutation control summary: ${controlResults.filter((r) => r.status === "passed").length}/${mutations ? mutationLanguages.length * mutationCaseIds.length : 0} passed`,
     );
     console.log(
-      `conformance summary: ${reports.reduce((n, r) => n + r.cases.filter((c) => c.status === "passed").length, 0)}/${inventory.cases.length * languages.length} passed; mutations ${mutationResults.filter((r) => r.status === "detected").length}/${mutations && adapters.node ? 6 : 0} detected`,
+      `conformance summary: ${reports.reduce((n, r) => n + r.cases.filter((c) => c.status === "passed").length, 0)}/${inventory.cases.length * languages.length} passed; mutations ${mutationResults.filter((r) => r.status === "detected").length}/${mutations ? mutationLanguages.length * mutationCaseIds.length : 0} detected`,
     );
     if (coverage.length || failedMutations.length || firstFailure)
       throw new Error(
