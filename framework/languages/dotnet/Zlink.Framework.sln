@@ -177,6 +177,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Zlink.Framework.Locations.E
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Zlink.Framework.Locations.Etcd.Tests", "tests\Zlink.Framework.Locations.Etcd.Tests\Zlink.Framework.Locations.Etcd.Tests.csproj", "{0C95BB37-CC2E-48DE-8D69-2B49A0E70762}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Zlink.Framework.LocationStore.ProviderAdapter", "tests\Zlink.Framework.LocationStore.ProviderAdapter\Zlink.Framework.LocationStore.ProviderAdapter.csproj", "{640D9709-C976-48B7-AC51-C1842CB67703}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -1063,6 +1065,18 @@ Global
 		{0C95BB37-CC2E-48DE-8D69-2B49A0E70762}.Release|x64.Build.0 = Release|Any CPU
 		{0C95BB37-CC2E-48DE-8D69-2B49A0E70762}.Release|x86.ActiveCfg = Release|Any CPU
 		{0C95BB37-CC2E-48DE-8D69-2B49A0E70762}.Release|x86.Build.0 = Release|Any CPU
+		{640D9709-C976-48B7-AC51-C1842CB67703}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{640D9709-C976-48B7-AC51-C1842CB67703}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{640D9709-C976-48B7-AC51-C1842CB67703}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{640D9709-C976-48B7-AC51-C1842CB67703}.Debug|x64.Build.0 = Debug|Any CPU
+		{640D9709-C976-48B7-AC51-C1842CB67703}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{640D9709-C976-48B7-AC51-C1842CB67703}.Debug|x86.Build.0 = Debug|Any CPU
+		{640D9709-C976-48B7-AC51-C1842CB67703}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{640D9709-C976-48B7-AC51-C1842CB67703}.Release|Any CPU.Build.0 = Release|Any CPU
+		{640D9709-C976-48B7-AC51-C1842CB67703}.Release|x64.ActiveCfg = Release|Any CPU
+		{640D9709-C976-48B7-AC51-C1842CB67703}.Release|x64.Build.0 = Release|Any CPU
+		{640D9709-C976-48B7-AC51-C1842CB67703}.Release|x86.ActiveCfg = Release|Any CPU
+		{640D9709-C976-48B7-AC51-C1842CB67703}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -1150,5 +1164,6 @@ Global
 		{EA20F8F6-3C58-4849-8190-CB314ADAC7B1} = {0B3E0AF0-D120-4D56-A635-4C084D6C0A17}
 		{D1E0F823-77A9-4CD2-B660-7F6568C4261E} = {25834A3B-01B0-47D5-B891-58DD52896532}
 		{0C95BB37-CC2E-48DE-8D69-2B49A0E70762} = {F3E5F8A1-DEF5-4540-A4B0-73ABB7129801}
+		{640D9709-C976-48B7-AC51-C1842CB67703} = {F3E5F8A1-DEF5-4540-A4B0-73ABB7129801}
 	EndGlobalSection
 EndGlobal

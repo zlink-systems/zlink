@@ -7,7 +7,7 @@ SPI를 호출하고 언어별 타입을 이 문서의 표현으로 변환한다.
 ## Process와 메시지
 
 실행기는 언어 ID `node`, `dotnet`, `jvm`, `cpp`마다 명령과 인자를 설정한다. 현재 등록된
-adapter는 Node다. 각 process는 UTF-8 JSONL을 stdin으로 읽고 stdout으로 응답한다. Stderr는
+adapter는 Node, .NET, Java다. 각 process는 UTF-8 JSONL을 stdin으로 읽고 stdout으로 응답한다. Stderr는
 진단 전용이다. 한 줄은 메시지 하나이며, bytes나 문자열 안의 줄바꿈은 JSON escape로 쓴다.
 
 요청과 응답은 `v: 1`과 문자열 `id`를 포함한다. 요청 ID는 process 안에서 유일하다. 응답은
