@@ -469,7 +469,50 @@ layout, Lua script, private record encoding, retry와 connection lease는 implem
 Store는 같은 Redis deployment를 사용하거나 물리적으로 분리할 수 있다. 같은 deployment를 사용해도
 서로 다른 `key_prefix`를 사용하며 cross-store transaction은 요구하지 않는다.
 
-## 7. 공개하지 않는 타입
+## 7. etcd extension
+
+```cpp
+namespace zlink::framework::etcd {
+
+struct etcd_client_identity_t {
+    std::string certificate_pem;
+    std::string key_pem;
+};
+
+struct etcd_tls_options_t {
+    std::string trusted_ca_pem;                          // 비어 있으면 운영체제 신뢰 저장소
+    std::optional<etcd_client_identity_t> client_identity;
+};
+
+struct etcd_credentials_t {
+    std::string user;
+    std::string password;
+};
+
+struct etcd_location_options_t {
+    std::vector<std::string> endpoints;
+    std::optional<etcd_tls_options_t> tls;
+    std::optional<etcd_credentials_t> credentials;
+    std::string key_namespace;
+    std::chrono::milliseconds operation_timeout{5000};
+};
+
+class etcd_location_store_t final : public location_store_t {
+public:
+    explicit etcd_location_store_t(etcd_location_options_t options);
+    ~etcd_location_store_t() override;
+};
+
+} // namespace zlink::framework::etcd
+```
+
+공식 etcd package가 공개하는 provider 표면은 options와 Location Store 구현 class 하나다. Relocation
+Store는 제공하지 않는다. 각 option의 뜻과 조건은 [공통 option](../../../05-location-relocation/07-location-store-etcd.ko.md#11-공개-option)이 정하며,
+`key_namespace`는 공통 option의 `namespace`다. 생성자는 그 조건에 어긋나면 etcd에 접속하기 전에
+`std::invalid_argument`를 던진다. 공개 header는 gRPC와 etcd client type을 노출하지 않는다. 나머지
+동작은 [공식 etcd Location Store provider](../../../05-location-relocation/07-location-store-etcd.ko.md)가 소유한다.
+
+## 8. 공개하지 않는 타입
 
 다음 타입과 operation은 Framework private record 또는 Redis implementation detail이다.
 

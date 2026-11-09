@@ -39,9 +39,10 @@ class ZlinkFrameworkConan(ConanFile):
     homepage = "https://github.com/zlink-systems/zlink"
     description = "C++ framework, HTTP client and stream connector for zlink"
     settings = "os", "arch", "compiler", "build_type"
-    options = {"fPIC": [True, False]}
+    options = {"fPIC": [True, False], "with_etcd": [True, False]}
     default_options = {
         "fPIC": True,
+        "with_etcd": False,
         "boost/*:header_only": True,
         # Mirrors vcpkg.json's redis-plus-plus async-std feature.
         "redis-plus-plus/*:build_async": True,
@@ -54,11 +55,19 @@ class ZlinkFrameworkConan(ConanFile):
     def layout(self):
         cmake_layout(self)
 
+    def configure(self):
+        if self.options.with_etcd:
+            self.options["grpc/*"].secure = True
+            for plugin in ("csharp", "node", "objective_c", "php", "python", "ruby"):
+                setattr(self.options["grpc/*"], plugin + "_plugin", False)
+
     def requirements(self):
         self.requires("zlink-cpp/1.23.0", transitive_headers=True,
                       transitive_libs=True)
         for dependency in ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS:
             self.requires(dependency, transitive_headers=True, transitive_libs=True)
+        if self.options.with_etcd:
+            self.requires("grpc/1.69.0", transitive_headers=False, transitive_libs=True)
 
     def validate(self):
         if self.settings.compiler.get_safe("cppstd"):
@@ -85,6 +94,7 @@ class ZlinkFrameworkConan(ConanFile):
         tc.variables["CMAKE_INSTALL_LIBDIR"] = "lib"
         tc.variables["ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST"] = True
         tc.variables["ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK"] = True
+        tc.variables["ZLINK_FRAMEWORK_CPP_WITH_ETCD"] = bool(self.options.with_etcd)
         tc.variables["ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES"] = False
         for suffix in ("TESTS", "FOUNDATION_TESTS", "SAMPLES", "E2E", "CROSS_LANGUAGE"):
             tc.variables["ZLINK_FRAMEWORK_CPP_BUILD_" + suffix] = False

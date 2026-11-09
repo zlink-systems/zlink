@@ -18,6 +18,12 @@
     }
   ],
   "features": {
+    "etcd": {
+      "description": "gRPC transport for the etcd location store extension",
+      "dependencies": [
+        "grpc"
+      ]
+    },
     "bench": {
       "description": "gRPC for the with-grpc bench (framework/bench/grpc/cpp)",
       "dependencies": [
