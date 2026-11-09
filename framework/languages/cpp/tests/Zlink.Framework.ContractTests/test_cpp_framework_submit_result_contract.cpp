@@ -97,8 +97,11 @@ int main ()
          static_cast<std::uint32_t> (
            zlink::framework::runtime::protocol::framework_error_code::none)},
         true);
-    if (user_spot_kind != framework_error_kind_t::invalid_operation) {
-        std::cerr << "User Spot lost Core caller failure: kind="
+    // A closed socket refuses new submits as TERMINATED (binding README
+    // "close 된 후"); the Framework reports that as ShuttingDown.
+    if (invalid_completion.failure->submit_result != zlink::submit_result_t::terminated
+        || user_spot_kind != framework_error_kind_t::shutting_down) {
+        std::cerr << "User Spot lost closed-socket shutdown failure: kind="
                   << static_cast<int> (user_spot_kind) << '\n';
         return 1;
     }
