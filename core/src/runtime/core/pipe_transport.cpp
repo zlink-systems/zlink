@@ -794,7 +794,7 @@ void zlink::pipe_t::send_disconnect_msg ()
         // Rollback any incomplete message in the pipe, and push the disconnect message.
         rollback_unlocked (false);
 
-        const bool written = write_message_unlocked (&_disconnect_msg, false);
+        const bool written = write_message_unlocked (&_disconnect_msg, pipe_write_unchecked);
         zlink_assert (written);
         flush_unlocked ();
         _disconnect_msg.init ();
@@ -816,7 +816,7 @@ void zlink::pipe_t::send_hiccup_msg (const std::vector<unsigned char> &hiccup_)
         const int rc = msg.init_buffer (&hiccup_[0], hiccup_.size ());
         errno_assert (rc == 0);
 
-        const bool written = write_message_unlocked (&msg, false);
+        const bool written = write_message_unlocked (&msg, pipe_write_unchecked);
         zlink_assert (written);
         flush_unlocked ();
     }

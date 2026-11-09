@@ -41,8 +41,10 @@ int zlink::sub_t::xsetsockopt (int option_, const void *optval_, size_t optvalle
 }
 
 int zlink::sub_t::xsend (
-  msg_t *, pipe_message_admission_t *admission_out_)
+  msg_t *, pipe_message_admission_t *admission_out_,
+  pipe_write_mode_t write_mode_)
 {
+    LIBZLINK_UNUSED (write_mode_);
     if (admission_out_)
         *admission_out_ = pipe_message_admission_invalid;
     //  Override the XSUB's send.

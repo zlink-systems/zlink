@@ -57,7 +57,8 @@ class lb_t
     int sendpipe_to (pipe_t *pipe_, msg_t *msg_,
                      pipe_message_admission_t *admission_out_ = NULL,
                      pipe_write_observer_fn observer_ = NULL,
-                     void *observer_userdata_ = NULL);
+                     void *observer_userdata_ = NULL,
+                     pipe_write_mode_t write_mode_ = pipe_write_incremental);
 
     //  Sends a message and stores the pipe that was used in pipe_.
     //  It is possible for this function to return success but keep pipe_
@@ -66,7 +67,8 @@ class lb_t
     int sendpipe (msg_t *msg_, pipe_t **pipe_,
                   pipe_message_admission_t *admission_out_ = NULL,
                   pipe_write_observer_fn observer_ = NULL,
-                  void *observer_userdata_ = NULL);
+                  void *observer_userdata_ = NULL,
+                  pipe_write_mode_t write_mode_ = pipe_write_incremental);
 
     //  Removes an unfinished multipart message and resets send sequencing.
     void rollback ();

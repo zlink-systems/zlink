@@ -840,6 +840,11 @@ class socket_public_send_scope_t
     ~socket_public_send_scope_t ();
 
     bool acquired () const { return _entered; }
+    pipe_write_mode_t write_mode () const
+    {
+        return _admission_mode == socket_send_admission_complete
+                 ? pipe_write_complete_record : pipe_write_incremental;
+    }
     bool multipart_active () const { return _multipart_active; }
     bool sync_locked () const { return _sync_locked; }
     bool multipart_marker_owned () const { return _multipart_marker_owned; }

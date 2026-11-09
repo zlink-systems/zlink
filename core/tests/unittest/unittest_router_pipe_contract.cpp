@@ -9,6 +9,7 @@
 #include "sockets/internal/dist.hpp"
 #include "sockets/internal/lb.hpp"
 #include "sockets/dealer/dealer.hpp"
+#include "sockets/common/socket_runtime.hpp"
 
 #include <unity.h>
 #include <chrono>
@@ -902,6 +903,121 @@ void test_empty_pipe_oversize_exception_applies_only_to_complete_message ()
     size_t events_size = sizeof (events);
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_get_option (owner_handle, ZLINK_OPT_EVENTS, &events, &events_size));
+    TEST_ASSERT_EQUAL_INT (2, cleanup_sink.terminated_count);
+    close_sync_socket (owner_handle);
+}
+
+void test_owner_held_complete_record_uses_one_empty_pipe_exception ()
+{
+    void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
+    zlink::socket_base_t *socket = as_socket_handle (owner_handle).socket;
+    zlink::object_t *owner = static_cast<zlink::object_t *> (socket);
+    zlink::object_t *parents[] = {owner, owner};
+    const uint64_t hwms[] = {16, 16};
+    const bool conflate[] = {false, false};
+    zlink::pipe_t *pipes[2];
+    TEST_ASSERT_SUCCESS_ERRNO (zlink::pipepair (parents, pipes, hwms, conflate));
+    pipe_cleanup_sink_t cleanup_sink;
+    pipes[0]->set_event_sink (&cleanup_sink);
+    pipes[1]->set_event_sink (&cleanup_sink);
+
+    {
+        std::optional<zlink::socket_public_send_scope_t> scope;
+        TEST_ASSERT_TRUE (socket->begin_complete_send_scope (&scope));
+        TEST_ASSERT_TRUE (scope->acquired ());
+        const size_t sizes[] = {6, 512, 512};
+        zlink::msg_t parts[3];
+        for (size_t i = 0; i < 3; ++i) {
+            TEST_ASSERT_SUCCESS_ERRNO (parts[i].init_size (sizes[i]));
+            memset (parts[i].data (), 'a' + static_cast<int> (i), sizes[i]);
+            if (i != 2)
+                parts[i].set_flags (zlink::msg_t::more);
+        }
+        // PAIR's prechecked subset still delegates oversize admission to
+        // the generic path, which retains the complete-record scope.
+        TEST_ASSERT_FALSE (pipes[0]->try_write_complete_record_and_flush (parts, 3));
+        for (size_t i = 0; i < 3; ++i) {
+            if (i != 2) {
+                TEST_ASSERT_TRUE (
+                  pipes[0]->write (&parts[i], NULL, zlink::pipe_write_complete_record));
+                pipes[0]->flush ();
+                TEST_ASSERT_FALSE (pipes[1]->check_read ());
+            } else
+                TEST_ASSERT_TRUE (
+                  pipes[0]->write_and_flush (&parts[i], NULL, zlink::pipe_write_complete_record));
+            TEST_ASSERT_SUCCESS_ERRNO (parts[i].init ());
+        }
+        zlink::msg_t second;
+        TEST_ASSERT_SUCCESS_ERRNO (second.init_size (1024));
+        second.set_flags (zlink::msg_t::more);
+        TEST_ASSERT_FALSE (pipes[0]->write (&second, NULL, zlink::pipe_write_complete_record));
+        TEST_ASSERT_SUCCESS_ERRNO (second.close ());
+        for (size_t i = 0; i < 3; ++i) {
+            zlink::msg_t received;
+            TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+            TEST_ASSERT_TRUE (pipes[1]->read (&received));
+            TEST_ASSERT_EQUAL_UINT64 (sizes[i], received.size ());
+            TEST_ASSERT_EQUAL_INT (i != 2, (received.flags () & zlink::msg_t::more) != 0);
+            TEST_ASSERT_EQUAL_INT ('a' + static_cast<int> (i),
+                                   *static_cast<char *> (received.data ()));
+            TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+        }
+        TEST_ASSERT_FALSE (pipes[1]->check_read ());
+    }
+
+    pipes[0]->terminate (false);
+    pipes[1]->terminate (false);
+    process_socket_control_commands (owner_handle);
+    TEST_ASSERT_EQUAL_INT (2, cleanup_sink.terminated_count);
+    close_sync_socket (owner_handle);
+}
+
+void test_complete_record_empty_eligibility_is_fixed_before_first_frame ()
+{
+    void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
+    zlink::socket_base_t *socket = as_socket_handle (owner_handle).socket;
+    zlink::object_t *owner = static_cast<zlink::object_t *> (socket);
+    zlink::object_t *parents[] = {owner, owner};
+    const uint64_t hwms[] = {512, 512};
+    const bool conflate[] = {false, false};
+    zlink::pipe_t *pipes[2];
+    TEST_ASSERT_SUCCESS_ERRNO (zlink::pipepair (parents, pipes, hwms, conflate));
+    pipe_cleanup_sink_t cleanup_sink;
+    pipes[0]->set_event_sink (&cleanup_sink);
+    pipes[1]->set_event_sink (&cleanup_sink);
+    {
+        std::optional<zlink::socket_public_send_scope_t> scope;
+        TEST_ASSERT_TRUE (socket->begin_complete_send_scope (&scope));
+        TEST_ASSERT_TRUE (scope->acquired ());
+        zlink::msg_t queued;
+        TEST_ASSERT_SUCCESS_ERRNO (queued.init_size (1));
+        TEST_ASSERT_TRUE (
+          pipes[0]->write_and_flush (&queued, NULL, zlink::pipe_write_complete_record));
+        TEST_ASSERT_SUCCESS_ERRNO (queued.init ());
+        zlink::msg_t prefix;
+        TEST_ASSERT_SUCCESS_ERRNO (prefix.init_size (6));
+        prefix.set_flags (zlink::msg_t::more);
+        TEST_ASSERT_TRUE (pipes[0]->write (&prefix, NULL, zlink::pipe_write_complete_record));
+        TEST_ASSERT_SUCCESS_ERRNO (prefix.init ());
+
+        // The reader drains the previous record after this record started.
+        zlink::msg_t received;
+        TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+        TEST_ASSERT_TRUE (pipes[1]->read (&received));
+        TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+        zlink::msg_t middle;
+        TEST_ASSERT_SUCCESS_ERRNO (middle.init_size (1024));
+        middle.set_flags (zlink::msg_t::more);
+        TEST_ASSERT_FALSE (pipes[0]->write (&middle, NULL, zlink::pipe_write_complete_record));
+        TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
+        TEST_ASSERT_SUCCESS_ERRNO (middle.close ());
+        pipes[0]->rollback ();
+        pipes[0]->flush ();
+        TEST_ASSERT_FALSE (pipes[1]->check_read ());
+    }
+    pipes[0]->terminate (false);
+    pipes[1]->terminate (false);
+    process_socket_control_commands (owner_handle);
     TEST_ASSERT_EQUAL_INT (2, cleanup_sink.terminated_count);
     close_sync_socket (owner_handle);
 }
@@ -1918,6 +2034,8 @@ int main ()
     RUN_TEST (test_pipe_rejects_multipart_before_partial_bytes_exceed_hwm);
     RUN_TEST (test_empty_pipe_incomplete_multipart_stops_at_max_message_size);
     RUN_TEST (test_empty_pipe_oversize_exception_applies_only_to_complete_message);
+    RUN_TEST (test_owner_held_complete_record_uses_one_empty_pipe_exception);
+    RUN_TEST (test_complete_record_empty_eligibility_is_fixed_before_first_frame);
     RUN_TEST (test_drained_pipe_oversize_multipart_uses_fresh_peer_credit);
     RUN_TEST (test_physical_queue_snapshot_accounts_multipart_once);
     RUN_TEST (test_physical_queue_deferred_shrink_applies_on_drain);
