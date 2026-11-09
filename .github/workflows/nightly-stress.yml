@@ -51,6 +51,21 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Report initial sanitizer disk usage
+        run: df -h / "${GITHUB_WORKSPACE}"
+
+      - name: Free unused hosted runner tools
+        if: ${{ runner.environment == 'github-hosted' }}
+        run: |
+          set -euo pipefail
+          echo 'DISK before hosted cleanup'
+          df -h / "${GITHUB_WORKSPACE}"
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet \
+            /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          echo 'DISK after hosted cleanup'
+          df -h / "${GITHUB_WORKSPACE}"
+
       - name: Cache apt packages
         uses: ./.github/actions/main-cache
         with:
@@ -129,6 +144,26 @@ jobs:
             -DWITH_DOCS=OFF
           cmake --build "${core_build}" --parallel "${BUILD_PARALLEL}"
           cmake --install "${core_build}"
+          echo 'DISK after Core build and install'
+          df -h / "${GITHUB_WORKSPACE}"
+          du -sh "${core_build}" "${core_build}/bin"
+
+      # Core has small test translation units and shares libzlink. Measure its
+      # tree and binaries above; release the tree before Framework starts.
+      - name: Run Core sanitizer tests and release the Core build tree
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          status=0
+          core_build="${GITHUB_WORKSPACE}/.artifacts/nightly-stress/core-asan-ubsan"
+          python3 scripts/ci/sanitizer-summary.py \
+            --suite core "${core_build}" \
+            --output "${RUNNER_TEMP}/sanitizer-logs/core.results.json" \
+            --log-dir "${RUNNER_TEMP}/sanitizer-logs" || status=$?
+          rm -rf "${core_build}"
+          echo 'DISK after Core tests and cleanup'
+          df -h / "${GITHUB_WORKSPACE}"
+          exit "${status}"
 
       - name: Build the checkout C++ binding with sanitizers
         env:
@@ -145,8 +180,10 @@ jobs:
           CONFIGURATION=Debug bash scripts/local-package/cpp/build-wsl.sh \
             --core-prefix \
             "${ZLINK_LOCAL_PACKAGE_ROOT}/install/zlink-core/${core_version}"
+          echo 'DISK after binding build'
+          df -h / "${GITHUB_WORKSPACE}"
 
-      - name: Configure and build Framework C++ with sanitizers
+      - name: Configure Framework C++ with sanitizers
         working-directory: framework/languages/cpp
         env:
           CC: gcc
@@ -156,21 +193,33 @@ jobs:
           LDFLAGS: -fsanitize=address,undefined -fno-sanitize=null
         run: |
           set -euo pipefail
+          mkdir -p build/linux-ninja-release/.cmake/api/v1/query
+          touch build/linux-ninja-release/.cmake/api/v1/query/codemodel-v2
           cmake --preset linux-ninja-release \
             -DZLINK_FRAMEWORK_CPP_TEST_PROBES=ON \
             -DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF \
             -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/.github/workflows/framework-cpp-system-toolchain.cmake" \
             -DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF \
             -DZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=OFF
-          # Keep going so one run lists every target that fails under the sanitizers.
-          cmake --build --preset linux-ninja-release --parallel "${BUILD_PARALLEL}" -- -k 0
+          echo 'DISK after Framework configure'
+          df -h / "${GITHUB_WORKSPACE}"
 
-      - name: Run CTest suites and create sanitizer summary
+      - name: Build and test Framework sanitizer shards
+        continue-on-error: true
+        run: |
+          python3 scripts/ci/sanitizer-shards.py \
+            --suite framework \
+            --build-dir "${GITHUB_WORKSPACE}/framework/languages/cpp/build/linux-ninja-release" \
+            --label '^(unit|contract)$' --shard-size 10 --parallel "${BUILD_PARALLEL}" \
+            --output "${RUNNER_TEMP}/sanitizer-logs/framework.results.json" \
+            --log-dir "${RUNNER_TEMP}/sanitizer-logs"
+
+      - name: Create combined sanitizer summary
+        if: always()
         run: |
           python3 scripts/ci/sanitizer-summary.py \
-            --suite core "${GITHUB_WORKSPACE}/.artifacts/nightly-stress/core-asan-ubsan" \
-            --suite framework "${GITHUB_WORKSPACE}/framework/languages/cpp/build/linux-ninja-release" \
-            --label framework '^(unit|contract)$' \
+            --results "${RUNNER_TEMP}/sanitizer-logs/core.results.json" \
+            --results "${RUNNER_TEMP}/sanitizer-logs/framework.results.json" \
             --output "${RUNNER_TEMP}/sanitizer-summary.json" \
             --log-dir "${RUNNER_TEMP}/sanitizer-logs"
 
@@ -193,11 +242,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      # A self-hosted runner keeps its workspace between jobs, and these
-      # sanitizer builds take about 140 GB of it.
+      # A self-hosted runner keeps its workspace between jobs. The previous
+      # unsharded sanitizer trees occupied about 140 GB.
       - name: Remove sanitizer build trees
         if: always()
         run: |
           rm -rf \
             "${GITHUB_WORKSPACE}/.artifacts/nightly-stress" \
             "${GITHUB_WORKSPACE}/framework/languages/cpp/build/linux-ninja-release"
+          echo 'DISK after sanitizer build tree cleanup'
+          df -h / "${GITHUB_WORKSPACE}"
