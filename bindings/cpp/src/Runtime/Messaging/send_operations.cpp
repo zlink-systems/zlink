@@ -38,11 +38,14 @@ send_submission_t submit_send_awaitable (
         }
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
     }
-    const auto runtime = detail::share_runtime_state (state_->raw);
-    if (!runtime) {
+    std::shared_ptr<detail::socket_runtime_state_t> runtime;
+    try {
+        runtime = detail::share_runtime_state (state_->raw);
+    }
+    catch (...) {
         detail::restore_async_send_sources (*state_);
         detail::release_state (std::move (state_));
-        throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
+        throw;
     }
 
     // Most DONTWAIT sends are admitted immediately. Make that one attempt here,

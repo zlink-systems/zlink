@@ -4,15 +4,18 @@
 
 #include <Runtime/Messaging/completion_owner.hpp>
 
+#include <Runtime/Native/socket_handle.hpp>
+
 #include <memory>
+#include <utility>
 
 namespace zlink::detail
 {
 
 struct socket_runtime_state_t : public std::enable_shared_from_this<socket_runtime_state_t>
 {
-    explicit socket_runtime_state_t (void *socket_) :
-        completion (std::make_shared<completion_owner_t> (socket_))
+    explicit socket_runtime_state_t (std::shared_ptr<socket_handle_t> socket_) :
+        completion (std::make_shared<completion_owner_t> (std::move (socket_)))
     {
     }
 
