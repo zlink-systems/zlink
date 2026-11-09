@@ -1,4 +1,8 @@
-const { ZLinkEtcdLocationStore } = require('../../../packages/framework-locations-etcd/dist');
+const path = require('node:path');
+const { ZLinkEtcdLocationStore } = require(
+  process.env.ZLINK_ETCD_PROVIDER_DIST ||
+    path.resolve(__dirname, '../../../packages/framework-locations-etcd/dist')
+);
 function plain(value) {
   if (value instanceof Date) return value.toISOString();
   if (value instanceof Uint8Array) return Array.from(value);
@@ -11,6 +15,7 @@ function plain(value) {
     );
   return value;
 }
+process.channel?.ref();
 process.once('message', async ({ options, subject, prefix }) => {
   const store = new ZLinkEtcdLocationStore(options);
   try {
