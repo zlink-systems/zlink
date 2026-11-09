@@ -7,7 +7,7 @@ SPI를 호출하고 언어별 타입을 이 문서의 표현으로 변환한다.
 ## Process와 메시지
 
 실행기는 언어 ID `node`, `dotnet`, `jvm`, `cpp`마다 명령과 인자를 설정한다. 현재 등록된
-adapter는 Node, .NET, Java다. 각 process는 UTF-8 JSONL을 stdin으로 읽고 stdout으로 응답한다. Stderr는
+adapter는 Node, .NET, Java, C++이다. 각 process는 UTF-8 JSONL을 stdin으로 읽고 stdout으로 응답한다. Stderr는
 진단 전용이다. 한 줄은 메시지 하나이며, bytes나 문자열 안의 줄바꿈은 JSON escape로 쓴다.
 
 요청과 응답은 `v: 1`과 문자열 `id`를 포함한다. 요청 ID는 process 안에서 유일하다. 응답은
@@ -95,12 +95,12 @@ Read와 scan의 실패는 `none`이다. I/O 전 취소는 `store-failure`이며 
 실패로 기록하며 `store-failure`로 바꾸지 않는다. 파싱하지 못한 요청의 응답 ID는 `null`이며
 실행기는 해당 process를 실패로 종료한다.
 
-| 언어 ID  | 공개 취소 표현                                                                                             |
-| -------- | ---------------------------------------------------------------------------------------------------------- |
-| `node`   | 요청별 `AbortController`와 `AbortSignal`                                                                   |
-| `dotnet` | 요청별 `CancellationToken`                                                                                 |
-| `jvm`    | 요청별 `ZLinkStoreCancellation`                                                                            |
-| `cpp`    | SPI token이 없다. 시작 전 취소는 호출을 막으며, I/O 뒤 결과 불명은 timeout 또는 transport 단절로 검증한다. |
+| 언어 ID  | 공개 취소 표현                                                                                                                                                                                             |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `node`   | 요청별 `AbortController`와 `AbortSignal`                                                                                                                                                                   |
+| `dotnet` | 요청별 `CancellationToken`                                                                                                                                                                                 |
+| `jvm`    | 요청별 `ZLinkStoreCancellation`                                                                                                                                                                            |
+| `cpp`    | SPI token이 없다. 시작 전 취소는 provider를 호출하지 않는다. 이미 시작한 operation의 `cancel`은 `active: true`만 응답하고 원래 결과를 유지한다. I/O 뒤 결과 불명은 timeout 또는 transport 단절로 검증한다. |
 
 ## Pair와 실행 결과
 
