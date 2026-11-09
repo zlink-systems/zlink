@@ -31,6 +31,7 @@ the provider-neutral payload the handler receives.
 | [Location configuration and operations](08-location-maintenance.en.md) | Defines application-facing Location options, readiness, and operational queries. |
 | [Location/Relocation provider](08-authority-relocation.en.md) | Defines the generic atomic Location Store and immutable Relocation Store provider SPI. |
 | [Official Redis Store](08-location-provider-redis.en.md) | Defines the minimal constructor and options of the two Redis Store classes. |
+| [Official etcd Location Store](08-location-provider-etcd.en.md) | Defines the constructor and options of the etcd Location Store class. |
 | [Host and topology monitoring](10-topology-monitoring.en.md) | Defines host state, termination, topology snapshot, and metrics. |
 | [Monitoring and errors](10-monitoring-errors.en.md) | Defines monitoring sources and Framework errors. |
 | [Codec extension](11-serialization.en.md) | Defines the codec registration API and the external codec provider SPI. |
