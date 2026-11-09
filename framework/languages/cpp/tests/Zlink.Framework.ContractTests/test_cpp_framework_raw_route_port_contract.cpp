@@ -18,6 +18,7 @@
 #include <zlink/framework/contracts/errors/result.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstdio>
 #include <atomic>
@@ -1018,6 +1019,86 @@ void verify_pending_send_route_removal_and_shutdown ()
     }
 }
 
+void verify_stack_parts_survive_backpressured_submission (std::size_t hwm_bytes)
+{
+    zlink::context_t context;
+    context.options ().auto_hwm_enabled (false);
+    zlink::router_socket_t source (context), target (context);
+    const auto rid = zlink::routing_id_t::from ("stack-parts-target");
+    target.set_routing_id (rid);
+    source.options ().linger (0ms);
+    target.options ().linger (0ms);
+    source.options ().send_hwm (zlink::byte_count_t::bytes (hwm_bytes));
+    target.options ().recv_hwm (zlink::byte_count_t::bytes (hwm_bytes));
+    target.set_receive_flow_state (zlink::receive_flow_state_t::paused);
+    target.bind ("inproc://framework-stack-parts");
+    auto monitor = source.monitor_open (zlink::monitor_event::connection_ready);
+    source.connect ("inproc://framework-stack-parts");
+    assert (wait_for_monitor_event (monitor, zlink::monitor_event::connection_ready, 2s));
+    backend::raw_route_port_t source_port (source), target_port (target);
+    const auto paused_by = std::chrono::steady_clock::now () + 2s;
+    while (monitor.status ().flow_paused_connections == 0
+           && std::chrono::steady_clock::now () < paused_by) {
+        (void) target_port.poll (10ms);
+        (void) source_port.poll (10ms);
+    }
+    assert (monitor.status ().flow_paused_connections == 1);
+    const auto target_bytes = rid.to_bytes ();
+    const std::string body (1024, 's');
+    std::shared_ptr<zlink::framework::task_t<zlink::submit_result_t>> pending;
+    std::size_t submitted = 0;
+    while (!pending && submitted < raw_route_backpressure_attempt_limit) {
+        // Every array and message wrapper is gone before completion is driven.
+        std::array parts{zlink::message_t::from (std::string ("header")),
+                         zlink::message_t::from (body)};
+        auto borrowed_target = target_bytes;
+        auto submission = source_port.submit_send (
+          std::span (borrowed_target), std::span (parts), [] (auto stage, auto result) {
+              std::fprintf (stderr, "stack parts %.*s %.*s\n", static_cast<int> (stage.size ()),
+                            stage.data (), static_cast<int> (result.size ()), result.data ());
+          });
+        std::fill (borrowed_target.begin (), borrowed_target.end (), 0);
+        ++submitted;
+        if (submission.state == backend::raw_send_submission_state_t::pending_backpressure)
+            pending = std::move (submission.pending_completion);
+        else
+            assert (submission.immediate_result->value () == zlink::submit_result_t::ok);
+    }
+    assert (pending && !pending->await_ready ());
+    target.set_receive_flow_state (zlink::receive_flow_state_t::running);
+    std::size_t received = 0;
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    while ((received != submitted || !pending->await_ready ())
+           && std::chrono::steady_clock::now () < deadline) {
+        (void) source_port.poll (0ms);
+        auto message = target_port.receive_if_ready (
+          target_port.poll (10ms).value_or (zlink::poll_event_flag_t::none));
+        if (message) {
+            assert (message->parts.size () == 2);
+            assert (message->parts[0].to_string () == "header");
+            assert (message->parts[1].to_string () == body);
+            ++received;
+        }
+    }
+    if (received != submitted) {
+        std::fprintf (
+          stderr, "stack parts hwm=%zu submitted=%zu received=%zu pending_ready=%d paused=%llu\n",
+          hwm_bytes, submitted, received, pending->await_ready (),
+          static_cast<unsigned long long> (monitor.status ().flow_paused_connections));
+        if (pending->await_ready ())
+            std::fprintf (stderr, "pending success=%d result=%d\n",
+                          static_cast<bool> (pending->result ()),
+                          pending->result () ? static_cast<int> (pending->result ().value ()) : -1);
+    }
+    assert (received == submitted);
+    assert (pending->await_ready () && pending->result ().value () == zlink::submit_result_t::ok);
+    std::fprintf (stderr, "stack parts hwm=%zu submitted=%zu received=%zu terminal=ok\n", hwm_bytes,
+                  submitted, received);
+    source_port.close ();
+    target_port.close ();
+    monitor.close ();
+}
+
 }
 
 static void verify_request_deadline_preserves_timeout_boundary ()
@@ -1135,5 +1216,7 @@ int main ()
     verify_handover_request_completion_is_replayable ();
     verify_missing_rid_is_initial_not_connected_without_wait_token ();
     verify_disconnect_rid_ends_issued_wait_token_with_enoent ();
+    // #4118: the HWM-16 multipart case remains backpressured in Core/binding.
+    verify_stack_parts_survive_backpressured_submission (2048);
     return 0;
 }

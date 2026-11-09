@@ -2601,21 +2601,55 @@ void app_t::_apply_zlink_framework ()
         struct send_mesh_node_t
         {
             static task_t<result_t<void>>
+            submit (std::decay_t<decltype (mesh)> mesh,
+                    std::decay_t<decltype (mesh_node_service)> mesh_node_service,
+                    zlink::routing_id_t target,
+                    runtime::messaging::message_parts_t parts,
+                    const std::optional<zlink::routing_id_t> &local_rid)
+            {
+                auto submitted = local_rid && *local_rid == target
+                                   ? mesh_node_service->submit_local_node_send (
+                                       mesh, std::move (parts).take_items ())
+                                   : mesh->send_to_node (target, std::move (parts).take_items ());
+                return detail::project_task_terminal<result_t<void>> (
+                  submitted,
+                  [mesh = std::move (mesh), mesh_node_service = std::move (mesh_node_service)] (
+                    const result_t<zlink::submit_result_t> &result) {
+                      return result_t<result_t<void>>::success (
+                        one_way_native_submit_result (result.value (), "MeshNode send"));
+                  });
+            }
+
+            static task_t<result_t<void>>
+            resume (std::decay_t<decltype (mesh)> mesh,
+                    std::decay_t<decltype (mesh_node_service)> mesh_node_service,
+                    zlink::routing_id_t target,
+                    runtime::messaging::message_parts_t parts,
+                    task_t<std::optional<zlink::routing_id_t>> identity)
+            {
+                const auto local_rid = co_await identity;
+                co_return co_await submit (std::move (mesh), mesh_node_service, target,
+                                           std::move (parts), local_rid);
+            }
+
+            static task_t<result_t<void>>
             run (std::decay_t<decltype (mesh)> mesh,
                  std::decay_t<decltype (mesh_node_service)> mesh_node_service,
                  zlink::routing_id_t target,
                  runtime::messaging::message_parts_t parts)
             {
-                const auto local_rid = co_await mesh->routing_id_async ();
-                if (local_rid && *local_rid == target) {
-                    co_return one_way_native_submit_result (
-                      co_await mesh_node_service->submit_local_node_send (
-                        mesh, std::move (parts).take_items ()),
-                      "MeshNode send");
+                try {
+                    auto identity = mesh->routing_id_async ();
+                    if (!identity.await_ready ())
+                        return resume (std::move (mesh), mesh_node_service, target,
+                                       std::move (parts), std::move (identity));
+                    return submit (std::move (mesh), mesh_node_service, target, std::move (parts),
+                                   identity.await_resume ());
                 }
-                co_return one_way_native_submit_result (
-                  co_await mesh->send_to_node (target, std::move (parts).take_items ()),
-                  "MeshNode send");
+                catch (...) {
+                    return task_t<result_t<void>> (
+                      detail::current_exception_result<result_t<void>> ());
+                }
             }
         };
         channel_runtime.bind_mesh_node_transport (
