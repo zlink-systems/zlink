@@ -179,7 +179,6 @@ send_operation_t received_t::send ()
         throw submit_error_t (submit_result_t::invalid_state, EINVAL);
     auto state_ptr = detail::acquire_state ();
     state_ptr->kind = detail::operation_kind_t::raw_routed_send;
-    state_ptr->raw.socket = detail::received_access_t::send_handle (*this);
     detail::bind_runtime_state (state_ptr->raw,
                                 detail::received_access_t::runtime (*this));
     detail::cache_first_rid_native (state_ptr->raw.target, *_routing_id);
@@ -192,7 +191,6 @@ reply_operation_t received_t::reply ()
         throw submit_error_t (submit_result_t::invalid_state, EINVAL);
     auto state_ptr = detail::acquire_state ();
     state_ptr->kind = detail::operation_kind_t::raw_reply;
-    state_ptr->raw.socket = detail::received_access_t::send_handle (*this);
     detail::bind_runtime_state (state_ptr->raw,
                                 detail::received_access_t::runtime (*this));
     state_ptr->raw.target.first_rid = *_routing_id;

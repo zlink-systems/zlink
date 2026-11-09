@@ -137,7 +137,6 @@ class received_t
     detail::lazy_message_parts_t _parts;
     // Send/reply context captured from the receiving socket. The runtime tag
     // keeps completion ownership and reply-token validation socket-local.
-    std::uintptr_t _send_context_handle = 0;
     send_context_kind_t _send_context_kind = send_context_kind_t::none;
     std::weak_ptr<detail::socket_runtime_state_t> _send_context_runtime;
 };

@@ -161,7 +161,9 @@ class socket_t
   private:
     friend struct detail::socket_access_t;
 
-    std::unique_ptr<detail::socket_handle_t> _socket;
+    int close_native () noexcept;
+
+    std::shared_ptr<detail::socket_handle_t> _socket;
     std::shared_ptr<detail::socket_runtime_state_t> _runtime;
     std::unique_ptr<detail::recv_envelope_t> _receive_envelope;
     socket_type _type;

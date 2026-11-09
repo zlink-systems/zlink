@@ -23,7 +23,6 @@ send_operation_t router_socket_t::send (const routing_id_t &target_rid_)
 {
     auto state_ptr = detail::acquire_state ();
     state_ptr->kind = detail::operation_kind_t::raw_routed_send;
-    state_ptr->raw.socket = detail::native_handle (*this);
     detail::bind_runtime_state (state_ptr->raw, detail::runtime_state (*this));
     detail::cache_first_rid_native (state_ptr->raw.target, target_rid_);
     return send_operation_t (std::move (state_ptr));
@@ -38,9 +37,8 @@ int router_socket_t::recv (received_t &out_, recv_flags_t flags_)
     // sequence already stored on `out_`) is enough to reconstruct the native
     // call lazily at submit time, so no per-receive closures are built here.
     if (out_.routing_id ().has_value ()) {
-        void *router_handle_ = detail::native_handle (*this);
         detail::received_access_t::set_socket_rid_send_context (
-          out_, router_handle_, detail::runtime_state (*this));
+          out_, detail::runtime_state (*this));
     }
     return 0;
 }
@@ -86,7 +84,6 @@ request_operation_t router_socket_t::request (const routing_id_t &routing_id_)
 {
     auto state_ptr = detail::acquire_state ();
     state_ptr->kind = detail::operation_kind_t::raw_routed_request;
-    state_ptr->raw.socket = detail::native_handle (*this);
     detail::bind_runtime_state (state_ptr->raw, detail::runtime_state (*this));
     // HOT PATH: routed request submission needs the native routing id only.
     // Keep the same cached representation as routed send instead of copying
@@ -100,7 +97,6 @@ reply_operation_t router_socket_t::reply (const routing_id_t &routing_id_,
 {
     auto state_ptr = detail::acquire_state ();
     state_ptr->kind = detail::operation_kind_t::raw_reply;
-    state_ptr->raw.socket = detail::native_handle (*this);
     const auto runtime = detail::runtime_state (*this);
     if (!detail::received_access_t::token_owner_matches (
           reply_token_, runtime->reply_owner))

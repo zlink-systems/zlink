@@ -15,12 +15,19 @@ namespace
 
 void submit_raw_reply (detail::operation_state_t &state_)
 {
-    if (!state_.raw.socket || !state_.raw.target.first_rid
+    if (!state_.raw.target.first_rid
         || !state_.reply.token.has_value ())
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
-    const auto runtime = detail::share_runtime_state (state_.raw);
-    if (!runtime)
-        throw submit_error_t (submit_result_t::invalid_state, EINVAL);
+    std::shared_ptr<detail::socket_runtime_state_t> runtime;
+    std::optional<detail::socket_call_t> call;
+    try {
+        runtime = detail::share_runtime_state (state_.raw);
+        call.emplace (detail::submit_handle (state_.raw.socket));
+    }
+    catch (...) {
+        detail::restore_async_send_sources (state_);
+        throw;
+    }
     if (!detail::received_access_t::token_owner_matches (
           *state_.reply.token, runtime->reply_owner))
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
@@ -31,7 +38,7 @@ void submit_raw_reply (detail::operation_state_t &state_)
       *state_.reply.token);
     const int rc = detail::submit_message_parts (
       state_.message.parts, [&] (zlink_msg_t *parts_, size_t part_count_) {
-          return zlink_reply (state_.raw.socket, &first_rid, token, parts_, part_count_);
+          return zlink_reply (call->handle (), &first_rid, token, parts_, part_count_);
       });
     if (rc == -1) {
         detail::restore_send_parts_to_sources (state_, state_.message.parts);

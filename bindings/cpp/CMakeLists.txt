@@ -548,6 +548,14 @@ if(ZLINK_CPP_BUILD_TESTS)
   )
 
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_cpp_contract_test(test_cpp_contract_submit_close_admission
+      "tests/contract/test_cpp_contract_submit_close_admission.cpp")
+    target_include_directories(test_cpp_contract_submit_close_admission PRIVATE
+      ${CMAKE_CURRENT_LIST_DIR}/src)
+    target_link_options(test_cpp_contract_submit_close_admission PRIVATE
+      "LINKER:--wrap=zlink_send" "LINKER:--wrap=zlink_request"
+      "LINKER:--wrap=zlink_reply" "LINKER:--wrap=zlink_publish"
+      "LINKER:--wrap=zlink_close" "LINKER:--wrap=zlink_completion_recv")
     foreach(test_name IN ITEMS
         test_cpp_contract_writable_token_delivery
         test_cpp_contract_completion_drain_order)
@@ -586,6 +594,14 @@ if(ZLINK_CPP_BUILD_TESTS)
       TIMEOUT 300
     )
     configure_cpp_binding_runtime(test_cpp_send_close_stress)
+  endif()
+
+  add_cpp_binding_executable(test_cpp_submit_close_race
+    tests/stress/test_cpp_submit_close_race.cpp)
+  if(ZLINK_CPP_REGISTER_CTEST)
+    add_test(NAME test_cpp_submit_close_race COMMAND test_cpp_submit_close_race)
+    set_tests_properties(test_cpp_submit_close_race PROPERTIES LABELS "stress" TIMEOUT 300)
+    configure_cpp_binding_runtime(test_cpp_submit_close_race)
   endif()
 
   add_executable(

@@ -18,10 +18,6 @@ namespace
 // only in socket type, not in how a publish operation is set up, so the
 // sequence lives here once instead of being repeated per socket class.
 //
-// The callback state is supplied as a callable, not as an already-evaluated
-// reference: callback_state() allocates lazily, so the observable step order of
-// the pre-dedup code (topic validation first, then socket handle, then callback
-// state, then topic assignment) must be preserved exactly.
 std::unique_ptr<detail::operation_state_t>
 make_publish_state (socket_t &socket_,
                     const std::string &topic_id_)
@@ -29,7 +25,6 @@ make_publish_state (socket_t &socket_,
     detail::validate_no_embedded_null (topic_id_, "topic");
     auto state_ptr = detail::acquire_state ();
     state_ptr->kind = detail::operation_kind_t::raw_publish;
-    state_ptr->raw.socket = detail::native_handle (socket_);
     detail::bind_runtime_state (state_ptr->raw, detail::runtime_state (socket_));
     state_ptr->raw.topic = topic_id_;
     return state_ptr;

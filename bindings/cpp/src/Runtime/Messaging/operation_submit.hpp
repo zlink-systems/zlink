@@ -36,12 +36,14 @@ inline bool submit_raw_send_state (operation_state_t &state_,
             restore_single_send_part_to_source (state_);
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
     };
-    if (!state_.raw.socket)
-        throw_invalid_argument ();
-    if (!share_runtime_state (state_.raw)) {
+    std::optional<socket_call_t> call;
+    try {
+        call.emplace (submit_handle (state_.raw.socket));
+    }
+    catch (...) {
         if (restore_sources_on_failure_)
             restore_async_send_sources (state_);
-        throw submit_error_t (submit_result_t::invalid_state, EINVAL);
+        throw;
     }
     const zlink_routing_id_t *first_rid = target_first_rid_native (state_.raw.target);
 
@@ -57,17 +59,17 @@ inline bool submit_raw_send_state (operation_state_t &state_,
               switch (state_.kind) {
                   case operation_kind_t::raw_send:
                       return zlink_send (
-                        state_.raw.socket, parts_, part_count_,
+                        call->handle (), parts_, part_count_,
                         static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
                         user_context_, completion_id_out_);
                   case operation_kind_t::raw_routed_send:
                       return zlink_send_rid (
-                        state_.raw.socket, first_rid, parts_, part_count_,
+                        call->handle (), first_rid, parts_, part_count_,
                         static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
                         user_context_, completion_id_out_);
                   case operation_kind_t::raw_publish:
                       return zlink_publish (
-                        state_.raw.socket, state_.raw.topic.c_str (), parts_, part_count_,
+                        call->handle (), state_.raw.topic.c_str (), parts_, part_count_,
                         static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)));
                   default:
                       return ZLINK_SUBMIT_INVALID_ARGUMENT;
@@ -96,17 +98,17 @@ inline bool submit_raw_send_state (operation_state_t &state_,
           switch (state_.kind) {
               case operation_kind_t::raw_send:
                   return zlink_send (
-                    state_.raw.socket, native_parts_, part_count_,
+                    call->handle (), native_parts_, part_count_,
                     static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
                     user_context_, completion_id_out_);
               case operation_kind_t::raw_routed_send:
                   return zlink_send_rid (
-                    state_.raw.socket, first_rid, native_parts_, part_count_,
+                    call->handle (), first_rid, native_parts_, part_count_,
                     static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
                     user_context_, completion_id_out_);
               case operation_kind_t::raw_publish:
                   return zlink_publish (
-                    state_.raw.socket, state_.raw.topic.c_str (), native_parts_, part_count_,
+                    call->handle (), state_.raw.topic.c_str (), native_parts_, part_count_,
                     static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)));
               default:
                   return ZLINK_SUBMIT_INVALID_ARGUMENT;
@@ -139,14 +141,17 @@ inline bool submit_raw_request_state (
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
     };
 
-    if (!state_.raw.socket
-        || (state_.kind != operation_kind_t::raw_request
+    if ((state_.kind != operation_kind_t::raw_request
             && state_.kind != operation_kind_t::raw_routed_request)
         || !completion_id_out_)
         throw_invalid_argument ();
-    if (!share_runtime_state (state_.raw)) {
+    std::optional<socket_call_t> call;
+    try {
+        call.emplace (submit_handle (state_.raw.socket));
+    }
+    catch (...) {
         restore_sources ();
-        throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
+        throw;
     }
 
     const zlink_routing_id_t *const target =
@@ -162,8 +167,7 @@ inline bool submit_raw_request_state (
         : 0u;
     *completion_id_out_ = 0;
     auto submit_record = [&] (zlink_msg_t *parts_, size_t part_count_) {
-        return zlink_request (
-          state_.raw.socket, target, parts_, part_count_,
+        return zlink_request (call->handle (), target, parts_, part_count_,
           static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
           timeout, user_context_, completion_id_out_);
     };
