@@ -11,6 +11,7 @@ using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Workers;
 using Zlink.Framework.ContractTests.Support;
+using Zlink.Framework.Locations.Etcd;
 using Zlink.Framework.Locations.Redis;
 using Zlink.HttpClient;
 
@@ -168,6 +169,31 @@ public sealed class ContractSurfaceCoverage
     }
 
     [Fact]
+    public void Etcd_Extension_Remains_A_Separate_Package_Without_A_Backend_Specific_Registration_API()
+    {
+        var framework = typeof(IZLinkFrameworkOptions).Assembly;
+        var etcd = typeof(ZLinkEtcdLocationStore).Assembly;
+
+        Assert.NotSame(framework, etcd);
+        Assert.DoesNotContain(
+            etcd.GetReferencedAssemblies(),
+            reference => reference.Name == "Zlink.Framework"
+        );
+        Assert.DoesNotContain(
+            framework.GetReferencedAssemblies(),
+            reference => reference.Name is "Grpc.Net.Client" or "Zlink.Framework.Locations.Etcd"
+        );
+        Assert.DoesNotContain(
+            framework.GetExportedTypes(),
+            type => type.Namespace?.Contains("Etcd", StringComparison.Ordinal) == true
+        );
+        Assert.DoesNotContain(
+            framework.GetExportedTypes().SelectMany(static type => type.GetMethods()),
+            method => method.Name.Contains("Etcd", StringComparison.Ordinal)
+        );
+    }
+
+    [Fact]
     public void Every_public_contract_interface_has_a_scenario_example()
     {
         var exportedContractTypes = new[]
@@ -296,6 +322,7 @@ public sealed class ContractSurfaceCoverage
             typeof(ZLinkMessagePackCodec).Assembly,
             typeof(ZLinkProtobufCodec).Assembly,
             typeof(ZLinkRedisLocationStore).Assembly,
+            typeof(ZLinkEtcdLocationStore).Assembly,
             typeof(Zlink.Framework.LocationProvider.IZLinkLocationStore).Assembly,
             typeof(ZLinkHttpClient).Assembly,
             typeof(IZlinkStreamConnector).Assembly,
@@ -762,6 +789,7 @@ public sealed class ContractSurfaceCoverage
             typeof(ZLinkMessagePackCodec).Assembly,
             typeof(ZLinkProtobufCodec).Assembly,
             typeof(ZLinkRedisLocationStore).Assembly,
+            typeof(ZLinkEtcdLocationStore).Assembly,
             typeof(Zlink.Framework.LocationProvider.IZLinkLocationStore).Assembly,
             typeof(ZLinkHttpClient).Assembly,
             typeof(IZlinkStreamConnector).Assembly,
@@ -1027,6 +1055,7 @@ public sealed class ContractSurfaceCoverage
             ["08-authority-relocation.ko.md"] = "Zlink.Framework.Provider.Abstractions",
             ["08-location-maintenance.ko.md"] = "Zlink.Framework",
             ["08-location-provider-redis.ko.md"] = "Zlink.Framework.Locations.Redis",
+            ["08-location-provider-etcd.ko.md"] = "Zlink.Framework.Locations.Etcd",
             ["10-monitoring-errors.ko.md"] = "Zlink.Framework.Contracts",
             ["10-topology-monitoring.ko.md"] = "Zlink.Framework",
             ["11-serialization.ko.md"] = "Zlink.Framework.Contracts",
@@ -2094,6 +2123,7 @@ using Zlink.Framework.Contracts.Streams;
 using Zlink.Framework.Contracts.Timers;
 using Zlink.Framework.Contracts.Workers;
 using Zlink.Framework.LocationProvider;
+using Zlink.Framework.Locations.Etcd;
 using Zlink.Framework.Locations.Redis;
 using Zlink.HttpClient;
 """;

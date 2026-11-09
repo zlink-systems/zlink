@@ -264,6 +264,10 @@ routing id 자동 할당의 `.NET` public 입력 규칙은
 | location monitoring runtime 누락 | `unit` | location source를 등록했지만 location runtime이 없으면 startup validation 예외 |
 | registry polling diff | `integration-multi-process` | topology, status, service summary event가 발생한다 |
 | spot polling diff | `integration-multi-process` | status, peers, subjects event가 발생한다 |
+| etcd 저장 형식 | `unit` | `EtcdGoldenTests.All_key_clock_metadata_and_version_vectors_match_the_common_format`와 `EtcdGoldenTests.Every_corrupt_record_vector_is_a_store_failure_through_exact_read`가 공통 golden의 정상·손상 형식을 확인한다. |
+| etcd 호출과 수명 | `integration-single-process` | `EtcdProviderTests.A_write_applied_before_an_error_is_not_replayed`와 `EtcdProviderTests.Dispose_rejects_new_work_and_waits_for_existing_work`가 결과 불명 쓰기의 미재전송과 dispose의 진행 중 operation 대기를 확인한다. |
+| etcd TLS | `integration-single-process` | `EtcdTlsTests.Custom_trusted_CA_and_client_certificate_chain_complete_mutual_TLS`와 `EtcdTlsTests.Untrusted_server_certificate_fails_before_the_RPC_is_received`가 인증서 chain의 성공과 신뢰하지 않는 CA의 거부를 확인한다. |
+| 실제 etcd provider | `integration-multi-process` | `EtcdIntegrationTests.Real_cluster_supports_conditions_expiry_maximum_batch_and_snapshot_pages`가 `ZLINK_ETCD_ENDPOINTS`로 지정한 cluster와 Node 관리 도구를 사용해 조건·만료·최대 batch·snapshot을 확인한다. |
 
 ## 8. Release Gate
 
@@ -322,6 +326,7 @@ backend gate 와 별도로 유지한다.
 | `08-authority-relocation.ko.md` | `ContractSurfaceCoverage.DotNetExactInterfaceDeclarations_Match_Source_And_Package_Exports` |
 | `08-location-maintenance.ko.md` | `ContractSurfaceCoverage.DotNetExactInterfaceDeclarations_Match_Source_And_Package_Exports` |
 | `08-location-provider-redis.ko.md` | `ContractSurfaceCoverage.DotNetExactInterfaceDeclarations_Match_Source_And_Package_Exports` |
+| `08-location-provider-etcd.ko.md` | `ContractSurfaceCoverage.DotNetExactInterfaceDeclarations_Match_Source_And_Package_Exports` |
 | `10-monitoring-errors.ko.md` | `ContractSurfaceCoverage.DotNetExactInterfaceDeclarations_Match_Source_And_Package_Exports` |
 | `10-topology-monitoring.ko.md` | `ContractSurfaceCoverage.DotNetExactInterfaceDeclarations_Match_Source_And_Package_Exports` |
 | `11-serialization.ko.md` | `ContractSurfaceCoverage.DotNetExactInterfaceDeclarations_Match_Source_And_Package_Exports` |

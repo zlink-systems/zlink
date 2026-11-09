@@ -259,6 +259,10 @@ Descriptor claim and startup order are described in
 | missing location monitoring runtime | `unit` | startup validation exception if a location source is registered but there's no location runtime |
 | registry polling diff | `integration-multi-process` | topology, status, service summary events occur |
 | spot polling diff | `integration-multi-process` | status, peers, subjects events occur |
+| etcd storage format | `unit` | `EtcdGoldenTests.All_key_clock_metadata_and_version_vectors_match_the_common_format` and `EtcdGoldenTests.Every_corrupt_record_vector_is_a_store_failure_through_exact_read` verify valid and corrupt encodings from the common golden. |
+| etcd calls and lifetime | `integration-single-process` | `EtcdProviderTests.A_write_applied_before_an_error_is_not_replayed` and `EtcdProviderTests.Dispose_rejects_new_work_and_waits_for_existing_work` verify that uncertain writes are not replayed and disposal waits for operations in progress. |
+| etcd TLS | `integration-single-process` | `EtcdTlsTests.Custom_trusted_CA_and_client_certificate_chain_complete_mutual_TLS` and `EtcdTlsTests.Untrusted_server_certificate_fails_before_the_RPC_is_received` verify certificate chain acceptance and rejection of an untrusted CA. |
+| real etcd provider | `integration-multi-process` | `EtcdIntegrationTests.Real_cluster_supports_conditions_expiry_maximum_batch_and_snapshot_pages` uses the cluster specified by `ZLINK_ETCD_ENDPOINTS` and the Node maintenance tool to verify conditions, expiry, maximum batches and snapshots. |
 
 ## 8. Release Gate
 
@@ -317,6 +321,7 @@ keeps it from dropping out of the verification denominator when a document is ad
 | `08-authority-relocation.ko.md` | `ContractSurfaceCoverage.DotNetExactInterfaceDeclarations_Match_Source_And_Package_Exports` |
 | `08-location-maintenance.ko.md` | `ContractSurfaceCoverage.DotNetExactInterfaceDeclarations_Match_Source_And_Package_Exports` |
 | `08-location-provider-redis.ko.md` | `ContractSurfaceCoverage.DotNetExactInterfaceDeclarations_Match_Source_And_Package_Exports` |
+| `08-location-provider-etcd.ko.md` | `ContractSurfaceCoverage.DotNetExactInterfaceDeclarations_Match_Source_And_Package_Exports` |
 | `10-monitoring-errors.ko.md` | `ContractSurfaceCoverage.DotNetExactInterfaceDeclarations_Match_Source_And_Package_Exports` |
 | `10-topology-monitoring.ko.md` | `ContractSurfaceCoverage.DotNetExactInterfaceDeclarations_Match_Source_And_Package_Exports` |
 | `11-serialization.ko.md` | `ContractSurfaceCoverage.DotNetExactInterfaceDeclarations_Match_Source_And_Package_Exports` |

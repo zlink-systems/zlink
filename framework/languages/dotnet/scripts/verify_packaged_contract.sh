@@ -41,6 +41,7 @@ PROJECTS=(
   src/Zlink.Framework.Codecs.MessagePack/Zlink.Framework.Codecs.MessagePack.csproj
   src/Zlink.Framework.Codecs.Protobuf/Zlink.Framework.Codecs.Protobuf.csproj
   src/Zlink.Framework.Locations.Redis/Zlink.Framework.Locations.Redis.csproj
+  src/Zlink.Framework.Locations.Etcd/Zlink.Framework.Locations.Etcd.csproj
   src/Zlink.HttpClient/Zlink.HttpClient.csproj
   src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj
 )
@@ -52,6 +53,7 @@ PACKAGE_IDS=(
   Zlink.Framework.Codecs.MessagePack
   Zlink.Framework.Codecs.Protobuf
   Zlink.Framework.Locations.Redis
+  Zlink.Framework.Locations.Etcd
   Zlink.HttpClient
   Zlink.Stream.Connector
 )
@@ -63,6 +65,7 @@ ASSEMBLY_NAMES=(
   Zlink.Framework.Codecs.MessagePack
   Zlink.Framework.Codecs.Protobuf
   Zlink.Framework.Locations.Redis
+  Zlink.Framework.Locations.Etcd
   Zlink.HttpClient
   Systems.Zlink.Stream.Connector
 )
@@ -197,12 +200,10 @@ dotnet run --project "$INSPECTOR_DIR/PackageInspector.csproj" \
 
 framework_snapshot="$WORK_DIR/package-snapshots/Zlink.Framework.package.txt"
 contracts_snapshot="$WORK_DIR/package-snapshots/Zlink.Framework.Contracts.package.txt"
-redis_snapshot="$WORK_DIR/package-snapshots/Zlink.Framework.Locations.Redis.package.txt"
 http_client_snapshot="$WORK_DIR/package-snapshots/Zlink.HttpClient.package.txt"
 exact_connector_dependency="dependency targetFramework=$PACKAGE_TARGET_FRAMEWORK exclude=Build,Analyzers id=Zlink.Stream.Connector version=[{VERSION}]"
 exact_framework_contracts_dependency="dependency targetFramework=$PACKAGE_TARGET_FRAMEWORK exclude=Build,Analyzers id=Zlink.Framework.Contracts version=[{VERSION}]"
-exact_framework_provider_dependency="dependency targetFramework=$PACKAGE_TARGET_FRAMEWORK exclude=Build,Analyzers id=Zlink.Framework.Provider.Abstractions version=[{VERSION}]"
-exact_redis_provider_dependency="dependency targetFramework=$PACKAGE_TARGET_FRAMEWORK exclude=Build,Analyzers id=Zlink.Framework.Provider.Abstractions version=[{VERSION}]"
+exact_provider_dependency="dependency targetFramework=$PACKAGE_TARGET_FRAMEWORK exclude=Build,Analyzers id=Zlink.Framework.Provider.Abstractions version=[{VERSION}]"
 exact_http_contracts_dependency="dependency targetFramework=$PACKAGE_TARGET_FRAMEWORK exclude=Build,Analyzers id=Zlink.Framework.Contracts version={VERSION}"
 grep -Fxq "$exact_connector_dependency" "$framework_snapshot" || {
   echo "Zlink.Framework must pin the connector package to the exact framework package version." >&2
@@ -212,18 +213,22 @@ grep -Fxq "$exact_framework_contracts_dependency" "$framework_snapshot" || {
   echo "Zlink.Framework must pin the contracts package to the exact framework package version." >&2
   exit 1
 }
-grep -Fxq "$exact_framework_provider_dependency" "$framework_snapshot" || {
+grep -Fxq "$exact_provider_dependency" "$framework_snapshot" || {
   echo "Zlink.Framework must pin the provider abstractions package to the exact framework package version." >&2
   exit 1
 }
-grep -Fxq "$exact_redis_provider_dependency" "$redis_snapshot" || {
-  echo "Zlink.Framework.Locations.Redis must depend on the exact provider abstractions package." >&2
-  exit 1
-}
-if grep -Fq "id=Zlink.Framework version=" "$redis_snapshot"; then
-  echo "Zlink.Framework.Locations.Redis must not depend on the Framework runtime package." >&2
-  exit 1
-fi
+for provider in Redis Etcd; do
+  provider_package="Zlink.Framework.Locations.$provider"
+  provider_snapshot="$WORK_DIR/package-snapshots/$provider_package.package.txt"
+  grep -Fxq "$exact_provider_dependency" "$provider_snapshot" || {
+    echo "$provider_package must depend on the exact provider abstractions package." >&2
+    exit 1
+  }
+  if grep -Fq "id=Zlink.Framework version=" "$provider_snapshot"; then
+    echo "$provider_package must not depend on the Framework runtime package." >&2
+    exit 1
+  fi
+done
 grep -Fxq "$exact_http_contracts_dependency" "$http_client_snapshot" || {
   echo "Zlink.HttpClient must declare its Zlink.Framework.Contracts package dependency." >&2
   exit 1
@@ -279,6 +284,7 @@ cat >"$CONSUMER_DIR/NuGet.Config" <<EOF
       <package pattern="Zlink.Framework.Codecs.MessagePack" />
       <package pattern="Zlink.Framework.Codecs.Protobuf" />
       <package pattern="Zlink.Framework.Locations.Redis" />
+      <package pattern="Zlink.Framework.Locations.Etcd" />
       <package pattern="Zlink.HttpClient" />
       <package pattern="Zlink.Stream.Connector" />
     </packageSource>
@@ -287,6 +293,7 @@ cat >"$CONSUMER_DIR/NuGet.Config" <<EOF
     </packageSource>
     <packageSource key="nuget.org">
       <package pattern="Google.*" />
+      <package pattern="Grpc.*" />
       <package pattern="K4os.*" />
       <package pattern="MessagePack*" />
       <package pattern="Microsoft.*" />
@@ -318,6 +325,7 @@ cat >"$SOURCE_CONSUMER_DIR/SourceConsumer.csproj" <<EOF
     <ProjectReference Include="$DOTNET_ROOT/src/Zlink.Framework.Codecs.MessagePack/Zlink.Framework.Codecs.MessagePack.csproj" />
     <ProjectReference Include="$DOTNET_ROOT/src/Zlink.Framework.Codecs.Protobuf/Zlink.Framework.Codecs.Protobuf.csproj" />
     <ProjectReference Include="$DOTNET_ROOT/src/Zlink.Framework.Locations.Redis/Zlink.Framework.Locations.Redis.csproj" />
+    <ProjectReference Include="$DOTNET_ROOT/src/Zlink.Framework.Locations.Etcd/Zlink.Framework.Locations.Etcd.csproj" />
     <ProjectReference Include="$DOTNET_ROOT/src/Zlink.HttpClient/Zlink.HttpClient.csproj" />
     <ProjectReference Include="$DOTNET_ROOT/src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj" />
   </ItemGroup>
@@ -332,6 +340,7 @@ using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Contracts.Channels;
 using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Locations.Redis;
+using Zlink.Framework.Locations.Etcd;
 using Zlink.Framework.LocationProvider;
 using Zlink.HttpClient;
 
@@ -344,6 +353,7 @@ var assemblies = new[]
     typeof(ZLinkMessagePackCodec).Assembly,
     typeof(ZLinkProtobufCodec).Assembly,
     typeof(ZLinkRedisLocationStore).Assembly,
+    typeof(ZLinkEtcdLocationStore).Assembly,
     typeof(ZLinkHttpClient).Assembly,
     typeof(IZlinkStreamConnector).Assembly
 };
@@ -368,6 +378,7 @@ cat >"$CONSUMER_DIR/Consumer.csproj" <<EOF
     <PackageReference Include="Zlink.Framework.Codecs.MessagePack" Version="$VERSION" />
     <PackageReference Include="Zlink.Framework.Codecs.Protobuf" Version="$VERSION" />
     <PackageReference Include="Zlink.Framework.Locations.Redis" Version="$VERSION" />
+    <PackageReference Include="Zlink.Framework.Locations.Etcd" Version="$VERSION" />
     <PackageReference Include="Zlink.HttpClient" Version="$VERSION" />
     <PackageReference Include="Zlink.Stream.Connector" Version="$VERSION" />
   </ItemGroup>
@@ -409,6 +420,7 @@ using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Codecs.MessagePack;
 using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Locations.Redis;
+using Zlink.Framework.Locations.Etcd;
 using Zlink.Framework.LocationProvider;
 using Zlink.HttpClient;
 
@@ -446,14 +458,16 @@ var packagedAssemblies = new[]
     typeof(ZLinkMessagePackCodec).Assembly,
     typeof(ZLinkProtobufCodec).Assembly,
     typeof(ZLinkRedisLocationStore).Assembly,
+    typeof(ZLinkEtcdLocationStore).Assembly,
     typeof(ZLinkHttpClient).Assembly,
     typeof(IZlinkStreamConnector).Assembly
 };
-if (packagedAssemblies.Select(static item => item.GetName().Name).Distinct(StringComparer.Ordinal).Count() != 9)
+if (packagedAssemblies.Select(static item => item.GetName().Name).Distinct(StringComparer.Ordinal).Count() != 10)
     throw new InvalidOperationException("Every framework contract package must load its own public assembly.");
 if (typeof(ZLinkMessagePackCodec).GetProperty(nameof(ZLinkMessagePackCodec.Default)) is null
     || typeof(ZLinkProtobufCodec).GetProperty(nameof(ZLinkProtobufCodec.Default)) is null
     || typeof(ZLinkRedisLocationStore).GetConstructor([typeof(ZLinkRedisLocationOptions)]) is null
+    || typeof(ZLinkEtcdLocationStore).GetConstructor([typeof(ZLinkEtcdLocationOptions)]) is null
     || typeof(ZLinkHttpClient).GetMethod(nameof(ZLinkHttpClient.Create), Type.EmptyTypes) is null
     || typeof(ServiceCollectionExtensions).GetMethod(nameof(ServiceCollectionExtensions.AddZLinkFramework)) is null
     || typeof(ZlinkStreamConnectorFactory).GetMethod(nameof(ZlinkStreamConnectorFactory.Create)) is null)
