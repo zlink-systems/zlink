@@ -906,6 +906,20 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS OR ZLINK_FRAMEWORK_CPP_BUILD_TESTS
   include(${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.ContractTests/release_test_labels.cmake)
 endif()
 
+# Allocation-count tests print their stacks; on MSVC Release give them PDBs so DbgHelp can
+# name each frame. Optimization stays as in Release so the counted allocations do not change.
+function(zlink_framework_cpp_enable_allocation_symbols target)
+  get_target_property(sources "${target}" SOURCES)
+  if(NOT "${sources}" MATCHES "tests/support/allocation_counter\\.cpp")
+    return()
+  endif()
+  target_compile_options("${target}" PRIVATE "$<$<CONFIG:Release>:/Zi>")
+  target_link_options("${target}" PRIVATE
+    "$<$<CONFIG:Release>:/DEBUG>"
+    "$<$<CONFIG:Release>:/OPT:REF>"
+    "$<$<CONFIG:Release>:/OPT:ICF>")
+endfunction()
+
 function(zlink_framework_cpp_add_test)
   set(one_value_args NAME LABELS TIER TIMEOUT)
   set(multi_value_args COMMAND ENVIRONMENT PROPERTIES)
@@ -920,6 +934,10 @@ function(zlink_framework_cpp_add_test)
   if(TARGET "${command_target}")
     zlink_framework_cpp_enable_test_assertions("${command_target}")
     zlink_framework_cpp_enable_test_unused_result_errors("${command_target}")
+    if(MSVC)
+      # Some tests add allocation_counter.cpp after registration; check once sources are final.
+      cmake_language(DEFER CALL zlink_framework_cpp_enable_allocation_symbols "${command_target}")
+    endif()
   endif()
   add_test(NAME "${ZLINK_TEST_NAME}" COMMAND ${ZLINK_TEST_COMMAND})
   set(test_environment ${ZLINK_TEST_ENVIRONMENT})

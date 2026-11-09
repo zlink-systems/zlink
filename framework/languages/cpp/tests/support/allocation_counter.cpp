@@ -9,6 +9,9 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <dbghelp.h>
+#include <mutex>
+#pragma comment(lib, "dbghelp.lib")
 #elif defined(__linux__) || defined(__APPLE__)
 #include <execinfo.h>
 #endif
@@ -57,6 +60,7 @@ void record_allocation (const void *memory, std::size_t size) noexcept
 
 std::string describe_allocations (const allocation_event_log_t &log)
 {
+    // Keep symbol resolution out of record_allocation; this function runs outside its tracked window.
     std::ostringstream output;
     output << "allocation events=" << log.count << " overflow=" << log.overflow << '\n';
     for (std::size_t index = 0; index != log.count; ++index) {
@@ -70,6 +74,16 @@ std::string describe_allocations (const allocation_event_log_t &log)
             const auto address = event.stack[frame];
             output << "  " << address;
 #if defined(_WIN32)
+            static std::mutex dbghelp_mutex;
+            static bool dbghelp_initialized = false;
+            static bool dbghelp_initialization_attempted = false;
+            std::lock_guard<std::mutex> lock (dbghelp_mutex);
+            HANDLE process = GetCurrentProcess ();
+            if (!dbghelp_initialization_attempted) {
+                SymSetOptions (SYMOPT_UNDNAME | SYMOPT_LOAD_LINES | SYMOPT_DEFERRED_LOADS);
+                dbghelp_initialized = SymInitialize (process, nullptr, TRUE) != FALSE;
+                dbghelp_initialization_attempted = true;
+            }
             HMODULE module = nullptr;
             if (GetModuleHandleExA (GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
                                       | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -80,6 +94,25 @@ std::string describe_allocations (const allocation_event_log_t &log)
                        << reinterpret_cast<std::uintptr_t> (address)
                             - reinterpret_cast<std::uintptr_t> (module)
                        << std::dec;
+            }
+            if (dbghelp_initialized) {
+                const auto frame_address =
+                  static_cast<DWORD64> (reinterpret_cast<std::uintptr_t> (address));
+                alignas (SYMBOL_INFO) char symbol_buffer[sizeof (SYMBOL_INFO) + MAX_SYM_NAME]{};
+                auto *symbol = reinterpret_cast<SYMBOL_INFO *> (symbol_buffer);
+                symbol->SizeOfStruct = static_cast<ULONG> (sizeof (SYMBOL_INFO));
+                symbol->MaxNameLen = MAX_SYM_NAME;
+                DWORD64 symbol_displacement = 0;
+                if (SymFromAddr (process, frame_address, &symbol_displacement, symbol)) {
+                    output << ' ' << symbol->Name << "+0x" << std::hex << symbol_displacement
+                           << std::dec;
+                    IMAGEHLP_LINE64 source_line{};
+                    source_line.SizeOfStruct = static_cast<DWORD> (sizeof (IMAGEHLP_LINE64));
+                    DWORD line_displacement = 0;
+                    if (SymGetLineFromAddr64 (process, frame_address, &line_displacement,
+                                              &source_line))
+                        output << ' ' << source_line.FileName << ':' << source_line.LineNumber;
+                }
             }
 #elif defined(__linux__) || defined(__APPLE__)
             if (symbols)
