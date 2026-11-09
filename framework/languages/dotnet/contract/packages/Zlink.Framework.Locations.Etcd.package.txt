@@ -1,0 +1,21 @@
+package Zlink.Framework.Locations.Etcd
+entry LICENSE
+entry Zlink.Framework.Locations.Etcd.nuspec
+entry [Content_Types].xml
+entry _rels/.rels
+entry lib/net8.0/Zlink.Framework.Locations.Etcd.dll
+entry lib/net8.0/Zlink.Framework.Locations.Etcd.xml
+entry package/services/metadata/core-properties/{CORE_PROPERTIES}.psmdcp
+content-sha256 lib/net8.0/Zlink.Framework.Locations.Etcd.xml=e9d695c3f02886142cc6829438136d94d388ca4deda6076e4d0395afa117389f
+metadata authors=Zlink.Framework.Locations.Etcd
+metadata description=Official etcd Location Store provider for the ZLink .NET framework.
+metadata id=Zlink.Framework.Locations.Etcd
+metadata license=LICENSE type=file
+metadata licenseUrl=https://aka.ms/deprecateLicenseUrl
+metadata projectUrl=https://github.com/zlink-systems/zlink
+metadata version={VERSION}
+metadata repository commit={COMMIT} type=git
+dependency-group targetFramework=net8.0
+dependency targetFramework=net8.0 exclude=Build,Analyzers id=Google.Protobuf version=3.29.1
+dependency targetFramework=net8.0 exclude=Build,Analyzers id=Grpc.Net.Client version=2.62.0
+dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.Framework.Provider.Abstractions version=[{VERSION}]

@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>$(ZLinkFrameworkTargetFrameworks)</TargetFrameworks>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <EtcdProtoRoot>../../../../runtime/protocol/etcd/v3.6.16</EtcdProtoRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Grpc.AspNetCore" />
+    <PackageReference Include="Grpc.Net.Client" />
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Tools" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
+    <PackageReference Include="Xunit.SkippableFact" />
+    <ProjectReference Include="../../src/Zlink.Framework.Locations.Etcd/Zlink.Framework.Locations.Etcd.csproj" Aliases="etcdprovider" />
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="$(EtcdProtoRoot)/**/*.proto" ProtoRoot="$(EtcdProtoRoot)" GrpcServices="Both" />
+    <None Include="../../../../runtime/protocol/golden/location-store-etcd-v1.json" Link="location-store-etcd-v1.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

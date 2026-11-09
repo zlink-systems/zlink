@@ -1,0 +1,27 @@
+assembly Zlink.Framework.Locations.Etcd
+  type sealed-class Zlink.Framework.Locations.Etcd.ZLinkEtcdClientIdentity required-members
+    ctor ZLinkEtcdClientIdentity()
+    property required System.String CertificatePem { get; init; } [nullability=read:not-null,write:not-null]
+    property required System.String KeyPem { get; init; } [nullability=read:not-null,write:not-null]
+  type sealed-class Zlink.Framework.Locations.Etcd.ZLinkEtcdCredentials required-members
+    ctor ZLinkEtcdCredentials()
+    property required System.String Password { get; init; } [nullability=read:not-null,write:not-null]
+    property required System.String User { get; init; } [nullability=read:not-null,write:not-null]
+  type sealed-class Zlink.Framework.Locations.Etcd.ZLinkEtcdLocationOptions
+    ctor ZLinkEtcdLocationOptions()
+    property Zlink.Framework.Locations.Etcd.ZLinkEtcdCredentials? Credentials { get; set; } [nullability=read:nullable,write:nullable]
+    property System.Collections.Generic.IList<System.String> Endpoints { get; } [nullability=read:not-null,write:unknown]
+    property System.String Namespace { get; set; } [nullability=read:not-null,write:not-null]
+    property System.TimeSpan OperationTimeout { get; set; } [nullability=read:not-null,write:not-null]
+    property Zlink.Framework.Locations.Etcd.ZLinkEtcdTlsOptions? Tls { get; set; } [nullability=read:nullable,write:nullable]
+  type sealed-class Zlink.Framework.Locations.Etcd.ZLinkEtcdLocationStore : System.IAsyncDisposable, Zlink.Framework.LocationProvider.IZLinkLocationStore
+    ctor ZLinkEtcdLocationStore(System.Action<Zlink.Framework.Locations.Etcd.ZLinkEtcdLocationOptions> configure [nullability=read:not-null,write:not-null])
+    ctor ZLinkEtcdLocationStore(Zlink.Framework.Locations.Etcd.ZLinkEtcdLocationOptions options [nullability=read:not-null,write:not-null])
+    method virtual System.Threading.Tasks.ValueTask DisposeAsync() [return=read:not-null,write:not-null]
+    method virtual System.Threading.Tasks.ValueTask<Zlink.Framework.LocationProvider.ZLinkStoreReadResult> ReadAsync(Zlink.Framework.LocationProvider.ZLinkStoreKey key [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual System.Threading.Tasks.ValueTask<Zlink.Framework.LocationProvider.ZLinkStoreScanResult> ScanAsync(Zlink.Framework.LocationProvider.ZLinkStoreScanRequest request [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual System.Threading.Tasks.ValueTask<Zlink.Framework.LocationProvider.ZLinkStoreWriteResult> WriteAsync(Zlink.Framework.LocationProvider.ZLinkStoreWriteRequest request [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken = default [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+  type sealed-class Zlink.Framework.Locations.Etcd.ZLinkEtcdTlsOptions
+    ctor ZLinkEtcdTlsOptions()
+    property Zlink.Framework.Locations.Etcd.ZLinkEtcdClientIdentity? ClientIdentity { get; set; } [nullability=read:nullable,write:nullable]
+    property System.String? TrustedCaPem { get; set; } [nullability=read:nullable,write:nullable]
