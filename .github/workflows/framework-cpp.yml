@@ -81,6 +81,10 @@ concurrency:
 env:
   APT_CACHE_DIR: ${{ github.workspace }}/.cache/framework-cpp/apt
   VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.cache/framework-cpp/vcpkg-installed
+  # vcpkg binary archives live next to the installed tree in the same main-owned cache,
+  # so a vcpkg.json change rebuilds only the ports it touches.
+  VCPKG_ARCHIVE_DIR: ${{ github.workspace }}/.cache/framework-cpp/vcpkg-archives
+  ZLINK_VCPKG_TRIPLET: x64-linux-zlink-release
   ZLINK_LOCAL_PACKAGE_ROOT: ${{ github.workspace }}/.artifacts/framework-cpp-ci
   SCCACHE_DIR: ${{ github.workspace }}/.cache/framework-cpp/sccache
   SCCACHE_CACHE_SIZE: 2G
@@ -165,8 +169,12 @@ jobs:
         id: linux-vcpkg-cache
         uses: ./.github/actions/main-cache
         with:
-          path: ${{ env.VCPKG_INSTALLED_DIR }}
-          key: framework-cpp-vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ steps.vcpkg.outputs.revision }}-${{ hashFiles('framework/languages/cpp/vcpkg.json') }}-v2
+          path: |
+            ${{ env.VCPKG_INSTALLED_DIR }}
+            ${{ env.VCPKG_ARCHIVE_DIR }}
+          key: framework-cpp-vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ steps.vcpkg.outputs.revision }}-${{ hashFiles('framework/languages/cpp/vcpkg.json', 'framework/languages/cpp/cmake/vcpkg-triplets/x64-linux-zlink-release.cmake') }}-v3
+          # An older cache restores the binary archives; vcpkg then builds only changed ports.
+          restore-keys: framework-cpp-vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ steps.vcpkg.outputs.revision }}-
 
       - name: Install Framework C++ vcpkg dependencies
         if: ${{ !inputs.skip_tests && (steps.linux-vcpkg-cache.outputs.cache-hit != 'true') }}
@@ -179,10 +187,13 @@ jobs:
           for attempt in $(seq 1 60); do
             # The system toolchain disables manifest installation; install the
             # etcd feature's gRPC dependency explicitly for this test job.
-            if "${VCPKG_ROOT}/vcpkg" install \
-              opentelemetry-cpp:x64-linux \
-              'redis-plus-plus[async-std]:x64-linux' \
-              grpc:x64-linux \
+            mkdir -p "${VCPKG_ARCHIVE_DIR}"
+            if VCPKG_BINARY_SOURCES="clear;files,${VCPKG_ARCHIVE_DIR},readwrite" \
+              "${VCPKG_ROOT}/vcpkg" install \
+              "opentelemetry-cpp:${ZLINK_VCPKG_TRIPLET}" \
+              "redis-plus-plus[async-std]:${ZLINK_VCPKG_TRIPLET}" \
+              "grpc:${ZLINK_VCPKG_TRIPLET}" \
+              --overlay-triplets="${GITHUB_WORKSPACE}/framework/languages/cpp/cmake/vcpkg-triplets" \
               --x-install-root="${VCPKG_INSTALLED_DIR}" \
               --clean-after-build 2>&1 | tee "${log}"; then
               exit 0
@@ -255,6 +266,8 @@ jobs:
           set -euo pipefail
           cmake --preset linux-ninja-release \
             -DVCPKG_MANIFEST_FEATURES=etcd \
+            -DVCPKG_TARGET_TRIPLET="${ZLINK_VCPKG_TRIPLET}" \
+            -DVCPKG_OVERLAY_TRIPLETS="${GITHUB_WORKSPACE}/framework/languages/cpp/cmake/vcpkg-triplets" \
             -DZLINK_FRAMEWORK_CPP_WITH_ETCD=ON \
             -DZLINK_FRAMEWORK_CPP_TEST_PROBES=ON \
             -DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF \
