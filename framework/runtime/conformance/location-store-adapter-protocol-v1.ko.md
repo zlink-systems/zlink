@@ -89,8 +89,9 @@ key와 found의 `value` 모양을 사용한다. 마지막 page의 `nextCursor`�
 
 `argument-error`는 public 입력 검증 오류다. `store-failure`는 provider operation 실패이며 `commit`은
 `none` 또는 `unknown`이다. 쓰기를 시작한 뒤 실패해 commit을 확정할 수 없으면 `unknown`을 쓴다.
-Read와 scan의 실패는 `none`이다. Node adapter는 일반 쓰기 실패를 보수적으로 `unknown`으로
-표현한다. 변환 실패와 protocol 오류는 `adapter-error`다. Crash는 실행기가 같은 범주의 process
+Read와 scan의 실패는 `none`이다. I/O 전 취소는 `store-failure`이며 `commit`은 `none`이다(.NET
+`OperationCanceledException`, Java `CancellationException`). Node adapter는 일반 쓰기 실패를 보수적으로
+`unknown`으로 표현한다. 공개 오류에서 I/O 전 취소를 구분할 수 없기 때문이다. 변환 실패와 protocol 오류는 `adapter-error`다. Crash는 실행기가 같은 범주의 process
 실패로 기록하며 `store-failure`로 바꾸지 않는다. 파싱하지 못한 요청의 응답 ID는 `null`이며
 실행기는 해당 process를 실패로 종료한다.
 

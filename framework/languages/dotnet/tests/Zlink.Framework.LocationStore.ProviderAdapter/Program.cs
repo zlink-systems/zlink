@@ -149,7 +149,7 @@ sealed class ProviderAdapter
                 ? error switch
                 {
                     ArgumentException => "argument-error",
-                    IOException => "store-failure",
+                    IOException or OperationCanceledException => "store-failure",
                     _ => "adapter-error",
                 }
                 : "adapter-error";
@@ -162,7 +162,8 @@ sealed class ProviderAdapter
                         error,
                         category,
                         category == "store-failure"
-                            ? op == "write"
+                            // The provider cancels without I/O only before the first RPC.
+                            ? op == "write" && error is not OperationCanceledException
                                 ? "unknown"
                                 : "none"
                             : null

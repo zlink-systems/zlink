@@ -226,8 +226,13 @@ public final class ProviderAdapter {
                         .put("category", category)
                         .put("nativeType", error.getClass().getName())
                         .put("message", error.getMessage());
+        // The provider cancels without I/O only before the first RPC.
         if (category.equals("store-failure"))
-            detail.put("commit", op.equals("write") ? "unknown" : "none");
+            detail.put(
+                    "commit",
+                    op.equals("write") && !(error instanceof CancellationException)
+                            ? "unknown"
+                            : "none");
         reply(id, body);
     }
 
