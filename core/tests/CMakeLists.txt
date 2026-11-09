@@ -154,6 +154,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_router_handover
   ${INTEGRATION_TEST_ROOT}/test_connection_attempts
   ${INTEGRATION_TEST_ROOT}/test_router_selected_route_contract
+  ${INTEGRATION_TEST_ROOT}/test_router_complete_record_hwm
   ${INTEGRATION_TEST_ROOT}/test_router_reject_duplicate
   ${INTEGRATION_TEST_ROOT}/test_router_reject_disconnected_without_app_recv
   ${INTEGRATION_TEST_ROOT}/test_router_same_socket_reconnect_policy
@@ -1038,6 +1039,9 @@ endif()
 
 if(TARGET test_router_selected_route_contract)
   set_tests_properties(test_router_selected_route_contract PROPERTIES LABELS "contract")
+endif()
+if(TARGET test_router_complete_record_hwm)
+  set_property(TEST test_router_complete_record_hwm APPEND PROPERTY LABELS "contract")
 endif()
 if(TARGET test_option_events)
   set_property(TEST test_option_events APPEND PROPERTY LABELS "contract")

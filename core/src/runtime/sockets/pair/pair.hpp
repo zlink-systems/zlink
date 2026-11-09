@@ -23,7 +23,8 @@ class pair_t ZLINK_FINAL : public socket_base_t
     //  Overrides of functions from socket_base_t.
     void xattach_pipe (zlink::pipe_t *pipe_, bool subscribe_to_all_, bool locally_initiated_);
     int xsend (zlink::msg_t *msg_,
-               pipe_message_admission_t *admission_out_ = NULL);
+               pipe_message_admission_t *admission_out_ = NULL,
+               pipe_write_mode_t write_mode_ = pipe_write_incremental);
     bool xtry_send_complete_record (zlink::msg_t *parts_,
                                     size_t part_count_) ZLINK_OVERRIDE;
     int xrollback () ZLINK_OVERRIDE;

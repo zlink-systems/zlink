@@ -25,7 +25,8 @@ zlink::dealer_t::~dealer_t ()
 int zlink::dealer_t::sendpipe_to (
   pipe_t *pipe_, msg_t *msg_, int flags_,
   pipe_message_admission_t *admission_out_,
-  pipe_write_observer_fn observer_, void *observer_userdata_)
+  pipe_write_observer_fn observer_, void *observer_userdata_,
+  pipe_write_mode_t write_mode_)
 {
     if (!pipe_ || !msg_ || !msg_->check ()) {
         errno = EFAULT;
@@ -35,7 +36,7 @@ int zlink::dealer_t::sendpipe_to (
     if ((flags_ & ZLINK_SNDMORE) != 0)
         msg_->set_flags (msg_t::more);
     return _lb.sendpipe_to (pipe_, msg_, admission_out_, observer_,
-                            observer_userdata_);
+                            observer_userdata_, write_mode_);
 }
 
 bool zlink::dealer_t::active_submit_candidate (dealer_t *dealer_, pipe_t *pipe_)
@@ -140,18 +141,20 @@ int zlink::dealer_t::xgetsockopt (int option_, void *optval_, size_t *optvallen_
 }
 
 int zlink::dealer_t::xsend (
-  msg_t *msg_, pipe_message_admission_t *admission_out_)
+  msg_t *msg_, pipe_message_admission_t *admission_out_,
+  pipe_write_mode_t write_mode_)
 {
-    return _lb.sendpipe (msg_, NULL, admission_out_);
+    return _lb.sendpipe (msg_, NULL, admission_out_, NULL, NULL, write_mode_);
 }
 
 int zlink::dealer_t::xsend_pipe (
   msg_t *msg_, pipe_t **pipe_out_,
   pipe_message_admission_t *admission_out_,
-  pipe_write_observer_fn observer_, void *observer_userdata_)
+  pipe_write_observer_fn observer_, void *observer_userdata_,
+  pipe_write_mode_t write_mode_)
 {
     return _lb.sendpipe (msg_, pipe_out_, admission_out_, observer_,
-                         observer_userdata_);
+                         observer_userdata_, write_mode_);
 }
 
 int zlink::dealer_t::xsend_routed (
@@ -162,7 +165,8 @@ int zlink::dealer_t::xsend_routed (
   pipe_message_admission_t *admission_out_,
   pipe_write_observer_fn observer_, void *observer_userdata_,
   routed_send_attempt_identity_t *attempt_identity_out_,
-  uint64_t expected_route_incarnation_id_, bool request_only_)
+  uint64_t expected_route_incarnation_id_, bool request_only_,
+  pipe_write_mode_t write_mode_)
 {
     LIBZLINK_UNUSED (expected_route_incarnation_id_);
     LIBZLINK_UNUSED (request_only_);
@@ -208,7 +212,7 @@ int zlink::dealer_t::xsend_routed (
     return sendpipe_to (
       pipe, msg_,
       (msg_->flags () & msg_t::more) != 0 ? ZLINK_SNDMORE : 0,
-      admission_out_, observer_, observer_userdata_);
+      admission_out_, observer_, observer_userdata_, write_mode_);
 }
 
 int zlink::dealer_t::xselect_routed_submit_target (
@@ -273,16 +277,18 @@ int zlink::dealer_t::xcommit_request_submit_pipe (pipe_t *pipe_)
 int zlink::dealer_t::xsend_selected_pipe (
   pipe_t *pipe_, msg_t *msg_, int flags_, bool request_only_,
   pipe_message_admission_t *admission_out_, pipe_write_observer_fn observer_,
-  void *observer_userdata_)
+  void *observer_userdata_,
+  pipe_write_mode_t write_mode_)
 {
     return send_selected_pipe (pipe_, msg_, flags_, request_only_, NULL,
-                               admission_out_, observer_, observer_userdata_);
+                               admission_out_, observer_, observer_userdata_, write_mode_);
 }
 
 int zlink::dealer_t::send_selected_pipe (
   pipe_t *pipe_, msg_t *msg_, int flags_, bool request_only_,
   pipe_t **pipe_out_, pipe_message_admission_t *admission_out_,
-  pipe_write_observer_fn observer_, void *observer_userdata_)
+  pipe_write_observer_fn observer_, void *observer_userdata_,
+  pipe_write_mode_t write_mode_)
 {
     if (!pipe_) {
         errno = EAGAIN;
@@ -304,13 +310,14 @@ int zlink::dealer_t::send_selected_pipe (
     if (pipe_out_)
         *pipe_out_ = pipe_;
     return sendpipe_to (
-      pipe_, msg_, flags_, admission_out_, observer_, observer_userdata_);
+      pipe_, msg_, flags_, admission_out_, observer_, observer_userdata_, write_mode_);
 }
 
 int zlink::dealer_t::xsend_configured_endpoint (
   const std::string &endpoint_, msg_t *msg_, int flags_, bool request_only_,
   pipe_t **pipe_out_, pipe_message_admission_t *admission_out_,
-  pipe_write_observer_fn observer_, void *observer_userdata_)
+  pipe_write_observer_fn observer_, void *observer_userdata_,
+  pipe_write_mode_t write_mode_)
 {
     if (pipe_out_)
         *pipe_out_ = NULL;
@@ -323,7 +330,7 @@ int zlink::dealer_t::xsend_configured_endpoint (
         return -1;
     }
     return send_selected_pipe (pipe, msg_, flags_, request_only_, pipe_out_,
-                               admission_out_, observer_, observer_userdata_);
+                               admission_out_, observer_, observer_userdata_, write_mode_);
 }
 
 int zlink::dealer_t::xselect_request_submit_target (

@@ -384,13 +384,15 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
                          ? xsend_selected_pipe (
                              selected_pipe, msg, flags, request_admission_,
                              NULL, observe_commit ? observer_ : NULL,
-                             observe_commit ? observer_userdata_ : NULL)
+                             observe_commit ? observer_userdata_ : NULL,
+                             pipe_write_complete_record)
                        : configured_endpoint_start
                          ? xsend_configured_endpoint (
                              target_.logical_endpoint, msg, flags,
                              request_admission_, attempted_pipe_out_, NULL,
                              observe_commit ? observer_ : NULL,
-                             observe_commit ? observer_userdata_ : NULL)
+                             observe_commit ? observer_userdata_ : NULL,
+                             pipe_write_complete_record)
                        : routed_start
                          ? send_direct_with_retry (
                              &rid, msg, flags, scope, false,

@@ -42,7 +42,8 @@ class xsub_t : public socket_base_t
                        bool locally_initiated_) ZLINK_FINAL;
     int xsetsockopt (int option_, const void *optval_, size_t optvallen_) ZLINK_OVERRIDE;
     int xgetsockopt (int option_, void *optval_, size_t *optvallen_) ZLINK_FINAL;
-    int xsend (zlink::msg_t *msg_, pipe_message_admission_t *admission_out_ = NULL) ZLINK_OVERRIDE;
+    int xsend (zlink::msg_t *msg_, pipe_message_admission_t *admission_out_ = NULL,
+               pipe_write_mode_t write_mode_ = pipe_write_incremental) ZLINK_OVERRIDE;
     bool xhas_out () ZLINK_OVERRIDE;
     int xrecv (zlink::msg_t *msg_) ZLINK_FINAL;
     bool xhas_in () ZLINK_FINAL;
