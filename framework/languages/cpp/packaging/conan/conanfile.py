@@ -67,7 +67,7 @@ class ZlinkFrameworkConan(ConanFile):
         for dependency in ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS:
             self.requires(dependency, transitive_headers=True, transitive_libs=True)
         if self.options.with_etcd:
-            self.requires("grpc/1.69.0", transitive_headers=True, transitive_libs=True)
+            self.requires("grpc/1.69.0", transitive_headers=False, transitive_libs=True)
 
     def validate(self):
         if self.settings.compiler.get_safe("cppstd"):
