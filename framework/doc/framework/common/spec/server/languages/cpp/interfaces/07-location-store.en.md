@@ -507,7 +507,51 @@ deployment, or be physically separate. Even when using the same
 deployment, they use different `key_prefix`es, and don't require a
 cross-store transaction.
 
-## 7. Types Not Made Public
+## 7. etcd Extension
+
+```cpp
+namespace zlink::framework::etcd {
+
+struct etcd_client_identity_t {
+    std::string certificate_pem;
+    std::string key_pem;
+};
+
+struct etcd_tls_options_t {
+    std::string trusted_ca_pem;                          // If empty, the operating system trust store
+    std::optional<etcd_client_identity_t> client_identity;
+};
+
+struct etcd_credentials_t {
+    std::string user;
+    std::string password;
+};
+
+struct etcd_location_options_t {
+    std::vector<std::string> endpoints;
+    std::optional<etcd_tls_options_t> tls;
+    std::optional<etcd_credentials_t> credentials;
+    std::string key_namespace;
+    std::chrono::milliseconds operation_timeout{5000};
+};
+
+class etcd_location_store_t final : public location_store_t {
+public:
+    explicit etcd_location_store_t(etcd_location_options_t options);
+    ~etcd_location_store_t() override;
+};
+
+} // namespace zlink::framework::etcd
+```
+
+The provider surface the official etcd package makes public is the options and one Location Store
+implementation class. It doesn't provide a Relocation Store. The meaning and conditions of each
+option are defined by the [common options](../../../05-location-relocation/07-location-store-etcd.en.md#11-public-options), and `key_namespace` is the common
+option `namespace`. The constructor throws `std::invalid_argument` before connecting to etcd if
+those conditions are violated. Public headers don't expose gRPC or etcd client types. The
+[official etcd Location Store provider](../../../05-location-relocation/07-location-store-etcd.en.md) owns the rest of the behavior.
+
+## 8. Types Not Made Public
 
 The following types and operations are Framework-private records or
 Redis implementation details.

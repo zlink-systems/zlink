@@ -36,3 +36,4 @@ else()
   include("${CMAKE_CURRENT_LIST_DIR}/zlink_framework_cppCodecProtobufTargets.cmake")
 endif()
 include("${CMAKE_CURRENT_LIST_DIR}/zlink_framework_cppLocationsRedisTargets.cmake")
+@ZLINK_FRAMEWORK_ETCD_EXPORT_DEPENDENCIES@

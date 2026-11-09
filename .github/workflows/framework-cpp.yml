@@ -177,9 +177,12 @@ jobs:
           # any other failure still fails the step.
           log="${RUNNER_TEMP}/vcpkg-install.log"
           for attempt in $(seq 1 60); do
+            # The system toolchain disables manifest installation; install the
+            # etcd feature's gRPC dependency explicitly for this test job.
             if "${VCPKG_ROOT}/vcpkg" install \
               opentelemetry-cpp:x64-linux \
               'redis-plus-plus[async-std]:x64-linux' \
+              grpc:x64-linux \
               --x-install-root="${VCPKG_INSTALLED_DIR}" \
               --clean-after-build 2>&1 | tee "${log}"; then
               exit 0
@@ -251,6 +254,8 @@ jobs:
         run: |
           set -euo pipefail
           cmake --preset linux-ninja-release \
+            -DVCPKG_MANIFEST_FEATURES=etcd \
+            -DZLINK_FRAMEWORK_CPP_WITH_ETCD=ON \
             -DZLINK_FRAMEWORK_CPP_TEST_PROBES=ON \
             -DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER="${ZLINK_SCCACHE_LAUNCHER}" \

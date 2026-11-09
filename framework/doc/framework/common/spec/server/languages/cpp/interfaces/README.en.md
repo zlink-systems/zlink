@@ -18,7 +18,7 @@ constraint, and default value.
 | [Spots](04-spots.en.md) | Defines global SpotId/SpotRef, the relocation adapter and callback, Instance Spot cold activation, and the [User Spot](../../../00-foundation/02-glossary.en.md#entry-spot-user-spot-and-instance-spot) manager. |
 | [Actors](05-actors.en.md) | Defines global ActorId/ActorRef, the relocation adapter, ID-only messaging, manager create, and mutation/bind. |
 | [STREAM session](06-stream-session.en.md) | Defines the interworking interface between `streams`'s packet session and the bound session an Actor owns. |
-| [Location · Relocation Store · Redis](07-location-store.en.md) | Defines the opaque atomic Location Store, the immutable Relocation Store, operational query, and the official Redis provider. |
+| [Location · Relocation Store · Redis](07-location-store.en.md) | Defines the opaque atomic Location Store, the immutable Relocation Store, operational query, and the official Redis and etcd providers. |
 | [Monitoring](08-monitoring.en.md) | Defines the runtime status/snapshot/health and structured logging boundary an application uses. |
 
 `zlink/framework.hpp` is a facade that gathers the installed headers

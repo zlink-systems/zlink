@@ -407,6 +407,7 @@ cp -aL "$cpp_input/." "$staged_cpp_prefix/"
 
 cmake -S "$source_dir" -B "$build_dir" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
+  -DZLINK_FRAMEWORK_CPP_WITH_ETCD=OFF \
   "${compiler_args[@]}" \
   -DCMAKE_CXX_STANDARD=20 \
   -DCMAKE_CXX_STANDARD_REQUIRED=ON \
@@ -571,7 +572,7 @@ for config in "$prefix"/lib/cmake/zlink_framework*/*Config.cmake \
     esac
   done < <(sed -n 's/^[[:space:]]*find_dependency(\([^ )]*\).*/\1/p' "$config")
 done
-embedded_target_pattern='(redis\+\+|hiredis|libuv|lz4|Boost|absl)::'
+embedded_target_pattern='(redis\+\+|hiredis|libuv|lz4|Boost|absl|gRPC)::'
 if grep -Eq "$embedded_target_pattern" "$prefix"/lib/cmake/zlink_*/*Targets*.cmake; then
   grep -En "$embedded_target_pattern" "$prefix"/lib/cmake/zlink_*/*Targets*.cmake >&2
   echo "an exported Framework target links an embedded third-party library" >&2
