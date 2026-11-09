@@ -28,7 +28,8 @@ class dealer_t : public socket_base_t
       zlink::pipe_t *pipe_, zlink::msg_t *msg_, int flags_,
       pipe_message_admission_t *admission_out_ = NULL,
       pipe_write_observer_fn observer_ = NULL,
-      void *observer_userdata_ = NULL);
+      void *observer_userdata_ = NULL,
+      pipe_write_mode_t write_mode_ = pipe_write_incremental);
 #ifdef ZLINK_BUILD_TESTS
     uint32_t test_peer_weight (zlink::pipe_t *pipe_) const;
     size_t test_peer_weight_count (uint32_t weight_) const;
@@ -42,12 +43,14 @@ class dealer_t : public socket_base_t
     int xsetsockopt (int option_, const void *optval_, size_t optvallen_) ZLINK_OVERRIDE;
     int xgetsockopt (int option_, void *optval_, size_t *optvallen_) ZLINK_OVERRIDE;
     int xsend (zlink::msg_t *msg_,
-               pipe_message_admission_t *admission_out_ = NULL) ZLINK_OVERRIDE;
+               pipe_message_admission_t *admission_out_ = NULL,
+               pipe_write_mode_t write_mode_ = pipe_write_incremental) ZLINK_OVERRIDE;
     int xsend_pipe (
       zlink::msg_t *msg_, zlink::pipe_t **pipe_out_,
       pipe_message_admission_t *admission_out_ = NULL,
       pipe_write_observer_fn observer_ = NULL,
-      void *observer_userdata_ = NULL) ZLINK_OVERRIDE;
+      void *observer_userdata_ = NULL,
+      pipe_write_mode_t write_mode_ = pipe_write_incremental) ZLINK_OVERRIDE;
     int xsend_routed (const zlink_routing_id_t *target_rid_,
                       zlink::msg_t *msg_,
                       uint64_t *connection_id_out_,
@@ -61,7 +64,8 @@ class dealer_t : public socket_base_t
                       routed_send_attempt_identity_t
                         *attempt_identity_out_ = NULL,
                       uint64_t expected_route_incarnation_id_ = 0,
-                      bool request_only_ = false)
+                      bool request_only_ = false,
+                      pipe_write_mode_t write_mode_ = pipe_write_incremental)
       ZLINK_OVERRIDE;
     int xselect_routed_submit_pipe (pipe_t **pipe_out_,
                                     bool request_only_) ZLINK_OVERRIDE;
@@ -70,14 +74,16 @@ class dealer_t : public socket_base_t
                              bool request_only_,
                              pipe_message_admission_t *admission_out_,
                              pipe_write_observer_fn observer_,
-                             void *observer_userdata_) ZLINK_OVERRIDE;
+                             void *observer_userdata_,
+                             pipe_write_mode_t write_mode_ = pipe_write_incremental) ZLINK_OVERRIDE;
     int xsend_configured_endpoint (
       const std::string &endpoint_, zlink::msg_t *msg_, int flags_,
       bool request_only_,
       zlink::pipe_t **pipe_out_,
       pipe_message_admission_t *admission_out_ = NULL,
       pipe_write_observer_fn observer_ = NULL,
-      void *observer_userdata_ = NULL) ZLINK_OVERRIDE;
+      void *observer_userdata_ = NULL,
+      pipe_write_mode_t write_mode_ = pipe_write_incremental) ZLINK_OVERRIDE;
     int xselect_routed_submit_target (
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_) ZLINK_OVERRIDE;
@@ -108,7 +114,8 @@ class dealer_t : public socket_base_t
     int send_selected_pipe (
       pipe_t *pipe_, msg_t *msg_, int flags_, bool request_only_,
       pipe_t **pipe_out_, pipe_message_admission_t *admission_out_,
-      pipe_write_observer_fn observer_, void *observer_userdata_);
+      pipe_write_observer_fn observer_, void *observer_userdata_,
+      pipe_write_mode_t write_mode_ = pipe_write_incremental);
     int apply_peer_weight (pipe_t *pipe_, uint32_t weight_) ZLINK_OVERRIDE;
     void update_request_route_weight (pipe_t *pipe_, uint32_t weight_);
     void remember_request_route (pipe_t *pipe_, uint32_t weight_);

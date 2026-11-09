@@ -798,8 +798,10 @@ void zlink::stream_t::xread_activated (pipe_t *pipe_)
 }
 
 int zlink::stream_t::xsend (
-  msg_t *msg_, pipe_message_admission_t *admission_out_)
+  msg_t *msg_, pipe_message_admission_t *admission_out_,
+  pipe_write_mode_t write_mode_)
 {
+    LIBZLINK_UNUSED (write_mode_);
     if (admission_out_)
         *admission_out_ = pipe_message_admission_invalid;
     if (!_more_out && !(msg_->flags () & msg_t::more) && msg_->get_routing_id () != 0) {
@@ -929,8 +931,10 @@ int zlink::stream_t::xsend_routed (
   pipe_message_admission_t *admission_out_,
   pipe_write_observer_fn observer_, void *observer_userdata_,
   routed_send_attempt_identity_t *attempt_identity_out_,
-  uint64_t expected_route_incarnation_id_, bool request_only_)
+  uint64_t expected_route_incarnation_id_, bool request_only_,
+  pipe_write_mode_t write_mode_)
 {
+    LIBZLINK_UNUSED (write_mode_);
     LIBZLINK_UNUSED (expected_connection_id_);
     LIBZLINK_UNUSED (observer_);
     LIBZLINK_UNUSED (observer_userdata_);

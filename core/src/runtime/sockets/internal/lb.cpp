@@ -277,7 +277,8 @@ zlink::pipe_t *zlink::lb_t::find_pipe_by_endpoint (
 
 int zlink::lb_t::sendpipe_to (
   pipe_t *pipe_, msg_t *msg_, pipe_message_admission_t *admission_out_,
-  pipe_write_observer_fn observer_, void *observer_userdata_)
+  pipe_write_observer_fn observer_, void *observer_userdata_,
+  pipe_write_mode_t write_mode_)
 {
     if (admission_out_)
         *admission_out_ = pipe_message_admission_invalid;
@@ -318,8 +319,8 @@ int zlink::lb_t::sendpipe_to (
     const bool ok =
       observer_
         ? pipe_->write_message_observed (
-            msg_, observer_, observer_userdata_, &write_admission)
-        : more ? pipe_->write (msg_, &write_admission)
+            msg_, observer_, observer_userdata_, &write_admission, write_mode_)
+        : more ? pipe_->write (msg_, &write_admission, write_mode_)
                : pipe_->write_single_message_and_flush_no_recursive_hwm_check (
                    msg_, &write_admission);
     if (!ok) {
@@ -444,7 +445,8 @@ void zlink::lb_t::commit_weighted_selection (pipe_entry_t *selected_, uint32_t t
 int zlink::lb_t::sendpipe (
   msg_t *msg_, pipe_t **pipe_,
   pipe_message_admission_t *admission_out_,
-  pipe_write_observer_fn observer_, void *observer_userdata_)
+  pipe_write_observer_fn observer_, void *observer_userdata_,
+  pipe_write_mode_t write_mode_)
 {
     if (admission_out_)
         *admission_out_ = pipe_message_admission_ready;
@@ -477,8 +479,8 @@ int zlink::lb_t::sendpipe (
         const bool ok =
           observer_
             ? _weighted_multipart_pipe->write_message_observed (
-                msg_, observer_, observer_userdata_, &write_admission)
-          : more ? _weighted_multipart_pipe->write (msg_, &write_admission)
+                msg_, observer_, observer_userdata_, &write_admission, write_mode_)
+          : more ? _weighted_multipart_pipe->write (msg_, &write_admission, write_mode_)
                  : _weighted_multipart_pipe
                      ->write_single_message_and_flush_no_recursive_hwm_check (
                        msg_, &write_admission);
@@ -513,8 +515,8 @@ int zlink::lb_t::sendpipe (
         const bool ok =
           observer_
             ? pipe->write_message_observed (
-                msg_, observer_, observer_userdata_, &write_admission)
-            : more ? pipe->write (msg_, &write_admission)
+                msg_, observer_, observer_userdata_, &write_admission, write_mode_)
+            : more ? pipe->write (msg_, &write_admission, write_mode_)
                    : pipe->write_single_message_and_flush_no_recursive_hwm_check (
                        msg_, &write_admission);
         if (!ok) {
@@ -572,8 +574,8 @@ int zlink::lb_t::sendpipe (
             const bool ok =
               observer_
                 ? pipe->write_message_observed (
-                    msg_, observer_, observer_userdata_, &write_admission)
-                : more ? pipe->write (msg_, &write_admission)
+                    msg_, observer_, observer_userdata_, &write_admission, write_mode_)
+                : more ? pipe->write (msg_, &write_admission, write_mode_)
                        : pipe
                            ->write_single_message_and_flush_no_recursive_hwm_check (
                              msg_, &write_admission);
@@ -644,7 +646,7 @@ int zlink::lb_t::sendpipe (
         pipe_message_admission_t write_admission =
           pipe_message_admission_invalid;
         const bool ok = more
-                          ? _pipes[_current]->write (msg_, &write_admission)
+                          ? _pipes[_current]->write (msg_, &write_admission, write_mode_)
                           : _pipes[_current]->write_and_flush (
                               msg_, &write_admission);
         if (ok) {

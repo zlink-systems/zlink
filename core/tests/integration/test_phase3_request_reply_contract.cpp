@@ -381,6 +381,53 @@ void test_dealer_router_public_request_reply_completion_and_token_consumption ()
     test_context_socket_close_zero_linger (router);
 }
 
+void test_dealer_multipart_reply_uses_complete_record_empty_exception ()
+{
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_ctx_set (get_test_context (), ZLINK_CTX_OPT_AUTO_HWM_ENABLE, 0));
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    const uint64_t hwm = 16;
+    const int zero = 0;
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_set_option (router, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_set_option (dealer, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_set_option (router, ZLINK_OPT_SNDTIMEO, &zero, sizeof (zero)));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_set_option (router, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_set_option (dealer, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (router, "inproc://complete-reply-empty-hwm"));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK,
+                           zlink_connect (dealer, "inproc://complete-reply-empty-hwm"));
+    prime_router_dealer_route (dealer, router);
+    const zlink_completion_id_t request_id = send_public_request (dealer, "request", 2000);
+    const router_part_t request = receive_router_part_eventually (router);
+    TEST_ASSERT_NOT_EQUAL (0, request.reply_token);
+
+    const std::string head (6, 'h');
+    const std::string body (1024, 'b');
+    zlink_msg_t reply[2];
+    init_part (&reply[0], head.c_str ());
+    init_part (&reply[1], body.c_str ());
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK, zlink_reply (router, &request.source_rid, request.reply_token, reply, 2));
+    assert_part_consumed (&reply[0]);
+    assert_part_consumed (&reply[1]);
+    zlink_completion_t completion = receive_completion_eventually (dealer);
+    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST, completion.kind);
+    TEST_ASSERT_EQUAL_UINT64 (request_id, completion.completion_id);
+    TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, completion.request_result);
+    TEST_ASSERT_EQUAL_UINT64 (2, completion.reply_part_count);
+    TEST_ASSERT_EQUAL_STRING (head.c_str (), part_string (&completion.reply_parts[0]).c_str ());
+    TEST_ASSERT_EQUAL_STRING (body.c_str (), part_string (&completion.reply_parts[1]).c_str ());
+    zlink_completion_close (&completion);
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
+}
+
 void test_dealer_router_reply_remains_on_application_fifo_and_accounting ()
 {
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
@@ -1863,6 +1910,8 @@ int main ()
       test_request_outputs_are_zeroed_and_parts_are_always_consumed);
     RUN_PHASE3_REQUEST_TEST (
       test_dealer_router_public_request_reply_completion_and_token_consumption);
+    RUN_PHASE3_REQUEST_TEST (
+      test_dealer_multipart_reply_uses_complete_record_empty_exception);
     RUN_PHASE3_REQUEST_TEST (
       test_dealer_router_reply_remains_on_application_fifo_and_accounting);
     RUN_PHASE3_REQUEST_TEST (

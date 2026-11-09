@@ -42,6 +42,16 @@ void test_set_pipe_write_commit_hook (pipe_write_commit_test_hook_fn hook_,
 //  hot slot-presence predicate can be evaluated inline at its call sites.
 const uint32_t pending_peer_weight_unset = UINT32_MAX;
 
+// Admission policy is call input, never a second pipe-owned record state.
+// Complete-record writers retain every part until the scoped attempt finishes.
+enum pipe_write_mode_t
+{
+    pipe_write_unchecked,
+    pipe_write_final,
+    pipe_write_incremental,
+    pipe_write_complete_record
+};
+
 enum pipe_message_admission_t : int
 {
     pipe_message_admission_ready = 0,
@@ -372,7 +382,8 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  the readiness decision made by admit_owner_message_start(); its actual
     //  byte-HWM admission is still checked while the part is recorded.
     bool write_owner_started_message (
-      const msg_t *msg_, pipe_message_admission_t *admission_out_ = NULL);
+      const msg_t *msg_, pipe_message_admission_t *admission_out_ = NULL,
+      pipe_write_mode_t write_mode_ = pipe_write_incremental);
     //  Request correlation must be visible after this exact candidate has
     //  accepted the message but before the first application frame is made
     //  observable. The prepare phase owns the request-state lock before the
@@ -381,7 +392,8 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool write_owner_started_message_observed (
       const msg_t *msg_, pipe_write_observer_fn observer_,
       void *observer_userdata_,
-      pipe_message_admission_t *admission_out_ = NULL);
+      pipe_message_admission_t *admission_out_ = NULL,
+      pipe_write_mode_t write_mode_ = pipe_write_incremental);
     //  Applies an absolute remote state on the pipe's own thread and reports
     //  whether the caller must publish the write-activated edge. Callers that
     //  already run on that thread use this directly, so the state is in effect
@@ -428,7 +440,8 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  message does not pass check_write. If false, the message object
     //  retains ownership of its message buffer.
     bool write (const msg_t *msg_,
-                pipe_message_admission_t *admission_out_ = NULL);
+                pipe_message_admission_t *admission_out_ = NULL,
+                pipe_write_mode_t write_mode_ = pipe_write_incremental);
 
     // Writes the transport's routing-id setup frame even while a paired
     // Application lane is held for Completion-lane validation.
@@ -460,7 +473,8 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  Writes a message and flushes it downstream in the endpoint owner's C2
     //  turn. Use this for final single-part send hot paths.
     bool write_and_flush (const msg_t *msg_,
-                          pipe_message_admission_t *admission_out_ = NULL);
+                          pipe_message_admission_t *admission_out_ = NULL,
+                          pipe_write_mode_t write_mode_ = pipe_write_incremental);
     //  Rejects a connection already retired at admission. The endpoint turn
     //  owns the write; stamped records accepted before concurrent retirement
     //  are discarded by session pull if they outlive their connection.
@@ -491,7 +505,8 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool write_message_observed (
       const msg_t *msg_, pipe_write_observer_fn observer_,
       void *observer_userdata_,
-      pipe_message_admission_t *admission_out_ = NULL);
+      pipe_message_admission_t *admission_out_ = NULL,
+      pipe_write_mode_t write_mode_ = pipe_write_incremental);
 
 
     //  Remove unfinished parts of the outbound message from the pipe.
@@ -639,15 +654,12 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  These helpers require endpoint-owner exclusion: the socket lifecycle
     //  turn for socket endpoints and the I/O thread for session endpoints.
     //  Cross-owner policy state is published through the atomic fields below.
-    //  enforce_incremental_hwm_ rejects a multipart as soon as the frames
-    //  accumulated so far exceed the HWM, instead of waiting for the final
-    //  frame. Only writers that check the HWM per call may ask for it: the
-    //  *_no_recursive_hwm_check writers admit a whole message up front, so
-    //  rejecting one of its later frames would break that guarantee and make
-    //  the caller drop a message it was told it could send.
+    // Incremental input checks each accumulated MORE charge. A complete
+    // record may use the same empty-queue exception for all its frames.
+    // Pre-admitted writers check only FINAL; unchecked writers already own
+    // the record's byte admission.
     bool write_message_unlocked (const msg_t *msg_,
-                                 bool enforce_hwm_,
-                                 bool enforce_incremental_hwm_ = false,
+                                 pipe_write_mode_t write_mode_,
                                  pipe_message_admission_t *admission_out_ = NULL,
                                  const uint64_t *max_message_bytes_snapshot_ = NULL);
     pipe_message_admission_t write_state_admission_unlocked () const;
@@ -1120,9 +1132,9 @@ pipe_t::can_commit_bytes_unlocked (uint64_t message_bytes_,
       bytes_written > peers_bytes_read ? bytes_written - peers_bytes_read : 0;
     if (allow_empty_pipe_exception_ && in_flight == 0) {
         //  An empty pipe admits one message larger than the HWM so that a
-        //  complete message is not rejected for a small HWM alone. An
-        //  incomplete multipart may use this exception only when a finite
-        //  reader maximum bounds its retained bytes.
+        //  complete message is not rejected for a small HWM alone. Its
+        //  MORE frames may use it only when the writer holds the complete
+        //  record (pipe_write_complete_record).
         return true;
     }
     if (UINT64_MAX - in_flight < message_bytes_)

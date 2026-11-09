@@ -169,8 +169,10 @@ int zlink::xsub_t::xgetsockopt (int option_, void *optval_, size_t *optvallen_)
     return -1;
 }
 
-int zlink::xsub_t::xsend (msg_t *msg_, pipe_message_admission_t *admission_out_)
+int zlink::xsub_t::xsend (msg_t *msg_, pipe_message_admission_t *admission_out_,
+                          pipe_write_mode_t write_mode_)
 {
+    LIBZLINK_UNUSED (write_mode_);
     if (admission_out_)
         *admission_out_ = pipe_message_admission_ready;
     size_t size = msg_->size ();

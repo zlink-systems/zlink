@@ -34,7 +34,8 @@ class xpub_t : public socket_base_t
                        bool subscribe_to_all_ = false,
                        bool locally_initiated_ = false) ZLINK_OVERRIDE;
     int xsend (zlink::msg_t *msg_,
-               pipe_message_admission_t *admission_out_ = NULL) ZLINK_FINAL;
+               pipe_message_admission_t *admission_out_ = NULL,
+               pipe_write_mode_t write_mode_ = pipe_write_incremental) ZLINK_FINAL;
     int xrollback () ZLINK_FINAL;
     bool xhas_out () ZLINK_FINAL;
     int xrecv (zlink::msg_t *msg_) ZLINK_OVERRIDE;
