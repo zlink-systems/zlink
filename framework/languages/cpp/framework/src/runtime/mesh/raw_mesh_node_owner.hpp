@@ -222,7 +222,7 @@ class raw_mesh_node_owner_t
     task_t<bool> send_to_node (const std::vector<std::uint8_t> &target_routing_id,
                                protocol::application_payload_t application_payload);
     task_t<zlink::submit_result_t>
-    send_to_node_result (const std::vector<std::uint8_t> &target_routing_id,
+    send_to_node_result (std::span<const std::uint8_t> target_routing_id,
                          protocol::application_payload_t application_payload);
     task_t<zlink::submit_result_t>
     send_logical_multicast (const std::vector<std::uint8_t> &target_routing_id,
@@ -581,20 +581,20 @@ class raw_mesh_node_owner_t
         std::shared_ptr<task_t<zlink::submit_result_t>> pending_completion;
     };
     struct send_completion_state_t;
-    send_start_result_t start_send (const std::vector<std::uint8_t> &target_routing_id,
-                                    std::vector<zlink::message_t> parts,
+    send_start_result_t start_send (std::span<const std::uint8_t> target_routing_id,
+                                    std::span<zlink::message_t> parts,
                                     bool needs_public_completion,
                                     detail::backend::raw_send_stage_trace_t trace = {});
-    send_start_result_t start_send_on_lane (const std::vector<std::uint8_t> &target_routing_id,
-                                            std::vector<zlink::message_t> parts,
+    send_start_result_t start_send_on_lane (std::span<const std::uint8_t> target_routing_id,
+                                            std::span<zlink::message_t> parts,
                                             bool needs_public_completion,
                                             detail::backend::raw_send_stage_trace_t trace);
     task_t<zlink::submit_result_t>
-    submit_owned_send_result (const std::vector<std::uint8_t> &target_routing_id,
-                              std::vector<zlink::message_t> parts,
+    submit_owned_send_result (std::span<const std::uint8_t> target_routing_id,
+                              std::span<zlink::message_t> parts,
                               detail::backend::raw_send_stage_trace_t trace);
     task_t<zlink::submit_result_t>
-    send_with_header_result (const std::vector<std::uint8_t> &target_routing_id,
+    send_with_header_result (std::span<const std::uint8_t> target_routing_id,
                              zlink::message_t header,
                              protocol::application_payload_t application_payload,
                              detail::backend::raw_send_stage_trace_t trace = {},
