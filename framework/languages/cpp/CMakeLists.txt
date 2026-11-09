@@ -936,7 +936,9 @@ function(zlink_framework_cpp_add_test)
     zlink_framework_cpp_enable_test_unused_result_errors("${command_target}")
     if(MSVC)
       # Some tests add allocation_counter.cpp after registration; check once sources are final.
-      cmake_language(DEFER CALL zlink_framework_cpp_enable_allocation_symbols "${command_target}")
+      # DEFER evaluates its arguments late, so bake the target name in now.
+      cmake_language(EVAL CODE
+        "cmake_language(DEFER CALL zlink_framework_cpp_enable_allocation_symbols [[${command_target}]])")
     endif()
   endif()
   add_test(NAME "${ZLINK_TEST_NAME}" COMMAND ${ZLINK_TEST_COMMAND})
