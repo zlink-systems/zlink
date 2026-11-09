@@ -67,8 +67,72 @@ public sealed class SerialExecutorTests
         Assert.Equal(0, calls);
         Assert.Equal(useRecord ? 0 : 1, checks);
         Assert.Equal(useRecord ? 1 : 0, record.Checks);
+        // The worker completes the item before it releases the slot; wait for the release.
+        await queue.ApplicationDrained.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(0, queue.ApplicationPendingCount);
         await actor._dispatchMailbox.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task StoppedObject_CompletionPrecedesApplicationDrain()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var actor = new ZLinkActorRuntimeState("stopped-drain");
+        var ready = false;
+        using var terminalRelease = new BlockingTerminalRelease();
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            executionAllowed: () => actor.ExecutionStatus
+        );
+        Assert.Equal(
+            ZLinkSerialPostAdmission.Accepted,
+            queue.TryPostApplicationWithAdmission(
+                _ => throw new InvalidOperationException("Stopped work must not start."),
+                0,
+                0,
+                false,
+                out var item,
+                ready: () => Volatile.Read(ref ready),
+                terminalRelease: terminalRelease
+            )
+        );
+        await actor._dispatchMailbox.DisposeAsync();
+        Volatile.Write(ref ready, true);
+        queue.NotifyReadiness();
+        try
+        {
+            await terminalRelease.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => item.Completion);
+            Assert.Equal(1, queue.ApplicationPendingCount);
+            var drained = queue.ApplicationDrained;
+            Assert.False(drained.IsCompleted);
+            terminalRelease.Continue.Set();
+            await drained.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(0, queue.ApplicationPendingCount);
+        }
+        finally
+        {
+            terminalRelease.Continue.Set();
+        }
+    }
+
+    private sealed class BlockingTerminalRelease : IZLinkSerialTerminalRelease, IDisposable
+    {
+        public TaskCompletionSource Entered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public ManualResetEventSlim Continue { get; } = new();
+
+        public void Release()
+        {
+            Entered.TrySetResult();
+            if (!Continue.Wait(TimeSpan.FromSeconds(5)))
+                throw new TimeoutException("Terminal release was not resumed.");
+        }
+
+        public void Dispose() => Continue.Dispose();
     }
 
     [Fact]
