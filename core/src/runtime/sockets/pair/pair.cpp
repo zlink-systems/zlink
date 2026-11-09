@@ -72,7 +72,8 @@ void zlink::pair_t::xwrite_activated (pipe_t *)
 }
 
 int zlink::pair_t::xsend (
-  msg_t *msg_, pipe_message_admission_t *admission_out_)
+  msg_t *msg_, pipe_message_admission_t *admission_out_,
+  pipe_write_mode_t write_mode_)
 {
     if (admission_out_)
         *admission_out_ = pipe_message_admission_invalid;
@@ -86,8 +87,8 @@ int zlink::pair_t::xsend (
     const bool more = (msg_->flags () & msg_t::more) != 0;
     pipe_message_admission_t admission = pipe_message_admission_inactive;
     const bool ok = _pipe
-                      ? (more ? _pipe->write (msg_, &admission)
-                              : _pipe->write_and_flush (msg_, &admission))
+                      ? (more ? _pipe->write (msg_, &admission, write_mode_)
+                              : _pipe->write_and_flush (msg_, &admission, write_mode_))
                       : false;
     if (!ok) {
         const int failure_errno =

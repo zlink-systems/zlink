@@ -906,7 +906,8 @@ class socket_base_t : public own_t,
       zlink::pipe_t *pipe_, zlink_routing_id_t *target_rid_out_);
     virtual int xsend (
       zlink::msg_t *msg_,
-      pipe_message_admission_t *admission_out_ = NULL);
+      pipe_message_admission_t *admission_out_ = NULL,
+      pipe_write_mode_t write_mode_ = pipe_write_incremental);
     // Concrete sockets may commit a complete record in one pipe-owned
     // transaction. False means no frame was published or source ownership
     // transferred, and the caller must use the ordinary per-frame path.
@@ -921,7 +922,8 @@ class socket_base_t : public own_t,
       zlink::msg_t *msg_, zlink::pipe_t **pipe_out_,
       pipe_message_admission_t *admission_out_ = NULL,
       pipe_write_observer_fn observer_ = NULL,
-      void *observer_userdata_ = NULL);
+      void *observer_userdata_ = NULL,
+      pipe_write_mode_t write_mode_ = pipe_write_incremental);
     virtual int xsend_routed (const zlink_routing_id_t *target_rid_,
                               zlink::msg_t *msg_,
                               uint64_t *connection_id_out_,
@@ -935,7 +937,8 @@ class socket_base_t : public own_t,
                               routed_send_attempt_identity_t
                                 *attempt_identity_out_ = NULL,
                               uint64_t expected_route_incarnation_id_ = 0,
-                              bool request_only_ = false);
+                              bool request_only_ = false,
+                              pipe_write_mode_t write_mode_ = pipe_write_incremental);
     //  Hot-path pair for the single-part blocking send: pick the pipe the
     //  load balancer would commit to, then admit one frame to exactly that
     //  pipe. Both run under one send scope, so the pointer never outlives
@@ -951,14 +954,16 @@ class socket_base_t : public own_t,
                                      bool request_only_,
                                      pipe_message_admission_t *admission_out_,
                                      pipe_write_observer_fn observer_,
-                                     void *observer_userdata_);
+                                     void *observer_userdata_,
+                                     pipe_write_mode_t write_mode_ = pipe_write_incremental);
     virtual int xsend_configured_endpoint (
       const std::string &endpoint_, zlink::msg_t *msg_, int flags_,
       bool request_only_,
       zlink::pipe_t **pipe_out_,
       pipe_message_admission_t *admission_out_ = NULL,
       pipe_write_observer_fn observer_ = NULL,
-      void *observer_userdata_ = NULL);
+      void *observer_userdata_ = NULL,
+      pipe_write_mode_t write_mode_ = pipe_write_incremental);
     virtual int xselect_routed_submit_target (
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_);

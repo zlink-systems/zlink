@@ -79,14 +79,16 @@ void trace_xsend_routed_write_failed (unsigned rid_size_)
 }
 
 int zlink::router_t::xsend (
-  msg_t *msg_, pipe_message_admission_t *admission_out_)
+  msg_t *msg_, pipe_message_admission_t *admission_out_,
+  pipe_write_mode_t write_mode_)
 {
-    return send_with_observer (msg_, admission_out_, NULL, NULL);
+    return send_with_observer (msg_, admission_out_, NULL, NULL, write_mode_);
 }
 
 int zlink::router_t::send_with_observer (
   msg_t *msg_, pipe_message_admission_t *admission_out_,
-  pipe_write_observer_fn observer_, void *observer_userdata_)
+  pipe_write_observer_fn observer_, void *observer_userdata_,
+  pipe_write_mode_t write_mode_)
 {
     if (admission_out_)
         *admission_out_ = pipe_message_admission_invalid;
@@ -180,9 +182,9 @@ int zlink::router_t::send_with_observer (
         const bool ok =
           observer_
             ? write_pipe->write_owner_started_message_observed (
-                msg_, observer_, observer_userdata_, &write_admission)
+                msg_, observer_, observer_userdata_, &write_admission, write_mode_)
             : write_pipe->write_owner_started_message (
-                msg_, &write_admission);
+                msg_, &write_admission, write_mode_);
         if (router_debug::enabled ())
             fprintf (stderr, "router xsend write: pipe=%p ok=%d more=%d\\n",
                      static_cast<void *> (write_pipe), ok ? 1 : 0,
@@ -253,12 +255,13 @@ int zlink::router_t::send_with_observer (
 int zlink::router_t::xsend_pipe (
   msg_t *msg_, pipe_t **pipe_out_,
   pipe_message_admission_t *admission_out_,
-  pipe_write_observer_fn observer_, void *observer_userdata_)
+  pipe_write_observer_fn observer_, void *observer_userdata_,
+  pipe_write_mode_t write_mode_)
 {
     if (pipe_out_)
         *pipe_out_ = NULL;
     const int rc = send_with_observer (msg_, admission_out_, observer_,
-                                       observer_userdata_);
+                                       observer_userdata_, write_mode_);
     if (rc == 0 && pipe_out_) {
         if (_current_out)
             *pipe_out_ = _current_out;
@@ -276,7 +279,8 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
   pipe_message_admission_t *admission_out_,
   pipe_write_observer_fn observer_, void *observer_userdata_,
   routed_send_attempt_identity_t *attempt_identity_out_,
-  uint64_t expected_route_incarnation_id_, bool request_only_)
+  uint64_t expected_route_incarnation_id_, bool request_only_,
+  pipe_write_mode_t write_mode_)
 {
     zlink_assert (!_more_out);
     zlink_assert (!_current_out);
@@ -485,8 +489,8 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
         const bool ok =
           observer_
             ? write_pipe->write_message_observed (
-                msg_, observer_, observer_userdata_, &write_admission)
-            : write_more ? write_pipe->write (msg_, &write_admission)
+                msg_, observer_, observer_userdata_, &write_admission, write_mode_)
+            : write_more ? write_pipe->write (msg_, &write_admission, write_mode_)
                          : write_pipe
                             ->write_single_message_and_flush_no_recursive_hwm_check (
                               msg_, &write_admission);

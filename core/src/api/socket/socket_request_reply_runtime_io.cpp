@@ -1457,10 +1457,12 @@ int send_completion_staged_frames_on_pipe (
 #endif
                 written = i + 1 < total_part_count
                             ? completion_->write (
-                                msg, i == 0 ? &admission : NULL)
+                                msg, i == 0 ? &admission : NULL,
+                                zlink::pipe_write_complete_record)
                           : total_part_count > 1
                             ? completion_->write_and_flush (
-                                msg, i == 0 ? &admission : NULL)
+                                msg, i == 0 ? &admission : NULL,
+                                zlink::pipe_write_complete_record)
                             : completion_->write_and_flush_if_transport_connection (
                                 msg, transport_connection_id,
                                 i == 0 ? &admission : NULL);

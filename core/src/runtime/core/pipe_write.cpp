@@ -60,13 +60,14 @@ zlink::pipe_message_admission_t zlink::pipe_t::admit_owner_message_start ()
 }
 
 bool zlink::pipe_t::write_owner_started_message (
-  const msg_t *msg_, pipe_message_admission_t *admission_out_)
+  const msg_t *msg_, pipe_message_admission_t *admission_out_,
+  pipe_write_mode_t write_mode_)
 {
     if (unlikely (!admit_owner_started_write_unlocked (admission_out_)))
         return false;
 
     const bool more = (msg_->flags () & msg_t::more) != 0;
-    if (!write_message_unlocked (msg_, true, true, admission_out_))
+    if (!write_message_unlocked (msg_, write_mode_, admission_out_))
         return false;
     if (!more)
         flush_unlocked ();
@@ -75,7 +76,8 @@ bool zlink::pipe_t::write_owner_started_message (
 
 bool zlink::pipe_t::write_owner_started_message_observed (
   const msg_t *msg_, pipe_write_observer_fn observer_,
-  void *observer_userdata_, pipe_message_admission_t *admission_out_)
+  void *observer_userdata_, pipe_message_admission_t *admission_out_,
+  pipe_write_mode_t write_mode_)
 {
     if (!observer_) {
         errno = EFAULT;
@@ -112,7 +114,7 @@ bool zlink::pipe_t::write_owner_started_message_observed (
 
         const bool more = (msg_->flags () & msg_t::more) != 0;
         if (written)
-            written = write_message_unlocked (msg_, true, true,
+            written = write_message_unlocked (msg_, write_mode_,
                                                admission_out_);
         if (written) {
             committed = observer_ (this, observer_userdata_,
@@ -451,7 +453,8 @@ uint64_t zlink::pipe_t::remote_flow_pause_started_ms () const
 }
 
 bool zlink::pipe_t::write (
-  const msg_t *msg_, pipe_message_admission_t *admission_out_)
+  const msg_t *msg_, pipe_message_admission_t *admission_out_,
+  pipe_write_mode_t write_mode_)
 {
     // Hot path: PAIR/DEALER steady-state send reaches this path for every
     // message. The socket lifecycle turn (or session I/O owner) is this
@@ -459,7 +462,7 @@ bool zlink::pipe_t::write (
     if (unlikely (!admit_write_unlocked (admission_out_)))
         return false;
 
-    return write_message_unlocked (msg_, true, true, admission_out_);
+    return write_message_unlocked (msg_, write_mode_, admission_out_);
 }
 
 bool zlink::pipe_t::write_routing_id_and_flush (const msg_t *msg_)
@@ -471,7 +474,7 @@ bool zlink::pipe_t::write_routing_id_and_flush (const msg_t *msg_)
 
     if (_state != active)
         return false;
-    if (!write_message_unlocked (msg_, false))
+    if (!write_message_unlocked (msg_, pipe_write_unchecked))
         return false;
     flush_unlocked ();
     return true;
@@ -490,7 +493,7 @@ bool zlink::pipe_t::write_transport_probe_and_flush (const msg_t *msg_)
     // The peer socket still withholds reads until its own pair is ready.
     if (!_transport_pair_write_held || _state != active)
         return false;
-    if (!write_message_unlocked (msg_, false))
+    if (!write_message_unlocked (msg_, pipe_write_unchecked))
         return false;
     flush_unlocked ();
     return true;
@@ -810,13 +813,14 @@ bool zlink::pipe_t::has_pending_peer_controls ()
 }
 
 bool zlink::pipe_t::write_and_flush (
-  const msg_t *msg_, pipe_message_admission_t *admission_out_)
+  const msg_t *msg_, pipe_message_admission_t *admission_out_,
+  pipe_write_mode_t write_mode_)
 {
     if (unlikely (!admit_write_unlocked (admission_out_)))
         return false;
 
     const bool more = (msg_->flags () & msg_t::more) != 0;
-    if (!write_message_unlocked (msg_, true, true, admission_out_))
+    if (!write_message_unlocked (msg_, write_mode_, admission_out_))
         return false;
     if (!more)
         flush_unlocked ();
@@ -891,7 +895,7 @@ bool zlink::pipe_t::try_write_complete_record_and_flush (
 
     for (size_t i = 0; i != part_count_; ++i) {
         const bool written =
-          write_message_unlocked (&parts_[i], false, false, NULL,
+          write_message_unlocked (&parts_[i], pipe_write_unchecked, NULL,
                                   &max_message_bytes);
         zlink_assert (written);
         LIBZLINK_UNUSED (written);
@@ -906,14 +910,14 @@ bool zlink::pipe_t::write_no_recursive_hwm_check (
     if (unlikely (!admit_write_unlocked (admission_out_)))
         return false;
 
-    return write_message_unlocked (msg_, true, false, admission_out_);
+    return write_message_unlocked (msg_, pipe_write_final, admission_out_);
 }
 
 bool zlink::pipe_t::write_admitted_publish_frame (const msg_t *msg_)
 {
     if (unlikely (!write_state_ready_unlocked (NULL)))
         return false;
-    if (!write_message_unlocked (msg_, false))
+    if (!write_message_unlocked (msg_, pipe_write_unchecked))
         return false;
     if ((msg_->flags () & msg_t::more) == 0)
         flush_unlocked ();
@@ -1027,7 +1031,7 @@ bool zlink::pipe_t::write_single_message_and_flush_no_recursive_hwm_check (
     if (unlikely (!hwm_credit_ready_unlocked (admission_out_)))
         return false;
 
-    if (!write_message_unlocked (msg_, true, false, admission_out_))
+    if (!write_message_unlocked (msg_, pipe_write_final, admission_out_))
         return false;
     flush_unlocked ();
     return true;
@@ -1035,7 +1039,8 @@ bool zlink::pipe_t::write_single_message_and_flush_no_recursive_hwm_check (
 
 bool zlink::pipe_t::write_message_observed (
   const msg_t *msg_, pipe_write_observer_fn observer_,
-  void *observer_userdata_, pipe_message_admission_t *admission_out_)
+  void *observer_userdata_, pipe_message_admission_t *admission_out_,
+  pipe_write_mode_t write_mode_)
 {
     if (!observer_ || !msg_) {
         errno = EINVAL;
@@ -1073,8 +1078,8 @@ bool zlink::pipe_t::write_message_observed (
         written = admit_write_unlocked (admission_out_);
         const bool more = (msg_->flags () & msg_t::more) != 0;
         if (written)
-            written = write_message_unlocked (msg_, true, more,
-                                               admission_out_);
+            written = write_message_unlocked (
+              msg_, more ? write_mode_ : pipe_write_final, admission_out_);
         if (written) {
             committed = observer_ (this, observer_userdata_,
                                    pipe_write_observer_commit);
@@ -1173,8 +1178,7 @@ void zlink::pipe_t::set_max_message_bytes (uint64_t max_message_bytes_)
 }
 
 bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
-                                            bool enforce_hwm_,
-                                            bool enforce_incremental_hwm_,
+                                            pipe_write_mode_t write_mode_,
                                             pipe_message_admission_t *admission_out_,
                                             const uint64_t *max_message_bytes_snapshot_)
 {
@@ -1227,26 +1231,32 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
           <= _peers_bytes_read.load (std::memory_order_acquire);
     }
     bool commit_credit_ready =
-      !(commits_bytes || enforce_incremental_hwm_) || !enforce_hwm_
+      write_mode_ == pipe_write_unchecked
+      || (write_mode_ == pipe_write_final && !commits_bytes)
       || can_commit_bytes_with_peer_snapshot_unlocked (
-        _out_incomplete_bytes, _out_incomplete_payload_bytes,
-        !more
-          && (incomplete_before == 0 || _out_multipart_started_empty),
+        _out_incomplete_bytes, _out_incomplete_payload_bytes, false,
         &max_message_bytes);
     if (!commit_credit_ready) {
-        const bool exceeds_max_message_size =
-          max_message_bytes != 0
-          && _out_incomplete_payload_bytes > max_message_bytes;
-        if (!exceeds_max_message_size
+        // The first frame fixes empty-queue eligibility. All parts of an
+        // owner-submitted record are present; incremental input can extend
+        // the exception only to FINAL. Keep ordinary HWM admission above
+        // independent of this exceptional policy.
+        const bool allow_empty_pipe_exception =
+          (_out_multipart_started_empty || (!more && incomplete_before == 0))
+          && (!more || write_mode_ == pipe_write_complete_record);
+        commit_credit_ready =
+          allow_empty_pipe_exception
+          && can_commit_bytes_with_peer_snapshot_unlocked (
+            _out_incomplete_bytes, _out_incomplete_payload_bytes, true,
+            &max_message_bytes);
+        if (!commit_credit_ready
             && _bytes_written.load (std::memory_order_acquire)
                  > _peers_bytes_read.load (std::memory_order_acquire)) {
             arm_hwm_credit_wait_unlocked ();
             commit_credit_ready =
               can_commit_bytes_with_peer_snapshot_unlocked (
                 _out_incomplete_bytes, _out_incomplete_payload_bytes,
-                !more
-                  && (incomplete_before == 0
-                      || _out_multipart_started_empty),
+                allow_empty_pipe_exception,
                 &max_message_bytes);
             if (commit_credit_ready)
                 clear_hwm_credit_wait_unlocked ();
@@ -1255,11 +1265,9 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
             _out_incomplete_bytes = incomplete_before;
             _out_incomplete_payload_bytes = payload_before;
             _out_multipart_started_empty = multipart_started_empty_before;
-            errno = exceeds_max_message_size ? EMSGSIZE : EAGAIN;
+            errno = EAGAIN;
             if (admission_out_)
-                *admission_out_ = exceeds_max_message_size
-                                    ? pipe_message_admission_too_large
-                                    : pipe_message_admission_hwm_full;
+                *admission_out_ = pipe_message_admission_hwm_full;
             return false;
         }
     }

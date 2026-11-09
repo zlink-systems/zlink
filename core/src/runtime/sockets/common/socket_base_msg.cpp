@@ -355,9 +355,9 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                                expected_transport_pair_generation_,
                                &first_admission, observer_, observer_userdata_,
                                NULL, expected_route_incarnation_id_,
-                               request_only_)
+                               request_only_, send_scope.write_mode ())
                : xsend_pipe (msg_, pipe_out_, &first_admission, observer_,
-                             observer_userdata_);
+                             observer_userdata_, send_scope.write_mode ());
     if (record_context_admission_ && rc != 0
         && first_admission == pipe_message_admission_hwm_full)
         _auto_hwm_send_blocked_attempts.fetch_add (
@@ -486,9 +486,9 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                                        expected_transport_pair_generation_, NULL,
                                        observer_, observer_userdata_, NULL,
                                        expected_route_incarnation_id_,
-                                       request_only_)
+                                       request_only_, send_scope.write_mode ())
                        : xsend_pipe (msg_, pipe_out_, NULL, observer_,
-                                     observer_userdata_);
+                                     observer_userdata_, send_scope.write_mode ());
             if (unlikely (rc == -2))
                 return finish_multipart_abort ();
             if (rc == 0) {
@@ -571,9 +571,9 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                                expected_transport_pair_generation_, NULL,
                                observer_, observer_userdata_, NULL,
                                expected_route_incarnation_id_,
-                               request_only_)
+                               request_only_, send_scope.write_mode ())
                : xsend_pipe (msg_, pipe_out_, NULL, observer_,
-                             observer_userdata_);
+                             observer_userdata_, send_scope.write_mode ());
         if (unlikely (rc == -2))
             return finish_multipart_abort ();
         if (rc == 0) {

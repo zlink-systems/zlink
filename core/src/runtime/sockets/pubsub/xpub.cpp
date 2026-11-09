@@ -279,8 +279,10 @@ void zlink::xpub_t::mark_last_pipe_as_matching (pipe_t *pipe_, xpub_t *self_)
 }
 
 int zlink::xpub_t::xsend (
-  msg_t *msg_, pipe_message_admission_t *admission_out_)
+  msg_t *msg_, pipe_message_admission_t *admission_out_,
+  pipe_write_mode_t write_mode_)
 {
+    LIBZLINK_UNUSED (write_mode_);
     if (admission_out_)
         *admission_out_ = pipe_message_admission_ready;
     const bool msg_more = (msg_->flags () & msg_t::more) != 0;
