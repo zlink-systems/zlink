@@ -110,7 +110,16 @@ Store 관리 process가 필요한 case는 실제 관리 process를 시험 adapte
 누락·skip·실패·중복·알 수 없는 ID는 실패다. 기본 검사는 네 언어 모두를 요구한다.
 
 ```json
-{"language":"node","cases":[{"id":"etcd.cross-language-record","status":"passed"}]}
+{
+  "language": "node",
+  "cases": [
+    {
+      "id": "etcd.cross-language-record",
+      "status": "passed",
+      "pairs": [{ "writer": "node", "reader": "node", "status": "passed" }]
+    }
+  ]
+}
 ```
 
 `self-test.mjs`는 가짜 통과 결과의 성공과 누락·skip 결과의 실패, byte 보류·해제와 raw KV
@@ -118,3 +127,65 @@ gateway 처리를 확인한다. `verify-harness.mjs`는 두 run을 동시에 띄
 partition·heal·compaction과 raw KV를 확인한 뒤 모두 정리한다. 명령별 출력, member log,
 manifest와 cleanup 결과를 log directory에 남긴다. `--runs 4 --isolation-only`는 네 run의 격리와 정리만 검사한다.
 `--runs 1`은 cluster 하나로 lifecycle을 검사한다. 이 검증은 provider 적합성 실행 결과가 아니다.
+
+## 공통 적합성 실행기
+
+Node workspace의 의존성을 설치하고 `packages/framework-locations-etcd`에서 `npm run build`를
+완료한 뒤 실행한다.
+
+```sh
+node scripts/etcd/conformance-runner.mjs
+node scripts/etcd/conformance-runner.mjs --allow-unverified
+node scripts/etcd/check-conformance-coverage.mjs --language node --allow-unverified node-conformance.json
+node --test scripts/etcd/conformance-self-test.mjs
+```
+
+실행기는 Docker cluster 하나를 생성하고 모든 case와 mutation을 순서대로 실행한 뒤 정리한다.
+`conformance-cases.cjs`가 35개 ID의 판정을 소유한다. 등록 함수의 누락과 알 수 없는 ID를
+실행 전에 검사한다. `--cases ID,ID`는 조사할 항목을 제한하며 전체 coverage 실패를 유지한다.
+`--no-mutations`는 mutation 실행을 끈다. 기본 실행은 mutation 6개의 검출도 요구한다.
+
+Node 의존성은 `framework/languages/node/node_modules`에서 읽는다. 다른 설치 경로를 사용할 때는
+`ZLINK_ETCD_NODE_MODULES`를 해당 node_modules 경로로 설정한다. 실행기는 Node 자식 process의
+`NODE_PATH`에 이 경로를 전달한다. 기준 provider는 package build가 만든
+`framework/languages/node/packages/framework-locations-etcd/dist`를 사용한다.
+`ZLINK_ETCD_PROVIDER_DIST`로 격리 복사본의 package build 산출물을 지정할 수 있다.
+`index.js` 또는 `admin.js`가 없으면 build 명령을 안내하고 cluster 시작 전에 실패한다.
+
+Mutation 산출물은 source를 `ts.transpileModule`로 변환하고 canonical proto를 복사한다.
+같은 변환에서 구문을 바꾸지 않은 대조군으로 mutation 대상 6개 case를 먼저 실행한다.
+대조군이 모두 통과해야 mutation을 실행하며, 결과는 `mutation-control-results.json`에 남긴다.
+기준 dist·대조군·mutation은 별도 process를 사용한다. 대상 구문이 없으면 mutation은 `not-built`다.
+
+`--adapter-config PATH`는 언어 ID를 key로 하는 JSON 객체를 받는다. 값은 `command`, `args`와
+선택적인 `cwd`, `env`다. 등록된 언어로 모든 writer×reader pair를 생성한다. 이번 단계의 기본
+설정은 Node만 등록하므로 각 교차언어 case는 1×1 pair다. Protocol과 결과 형식은
+[adapter JSONL 문서](../../framework/runtime/conformance/location-store-adapter-protocol-v1.ko.md)가 소유한다.
+
+`grpc-proxy.mjs`는 공용 etcd proto의 KV·Auth unary RPC를 실제 etcd로 전달한다. 실행기는
+`startProxy({target})`로 proxy를 만들고 `arm({boundary, key|prefix})`로 경계를 선택한다.
+`entered`는 해당 경계 도착을 알리고 `release()`는 전달을 재개한다. `loseResponse()`는 해당
+응답을 유실시키며 `disconnect()`는 연결을 종료한다. 요청·응답의 protobuf bytes는 그대로 전달하며
+디코딩은 선택과 기록에만 사용한다. 시험 cluster의 plaintext HTTP/2 endpoint를 사용한다.
+
+| Boundary            | 보류 지점                                                       |
+| ------------------- | --------------------------------------------------------------- |
+| `apply-before`      | Put 또는 Delete를 포함한 Txn의 upstream 전달 전                 |
+| `txn-response`      | 적용 Txn 응답의 client 전달 전                                  |
+| `metadata-response` | 선택한 metadata key 범위의 Range 응답 전달 전                   |
+| `cleanup-before`    | Delete를 포함한 정리 Txn의 upstream 전달 전                     |
+| `clock-next`        | 선택한 clock Range 응답을 전달한 뒤 같은 key의 다음 RPC 전달 전 |
+
+Host clock VM이 없으면 해당 3개 항목은 이유와 함께 `unverified`다. 기본 실행은 실패하며
+`--allow-unverified`로만 허용한다. 미검증은 통과 수에 포함하지 않는다. Node test 진입점은
+`ZLINK_ETCD_CONFORMANCE=1`일 때 실행되며, 미검증 허용은 `ZLINK_ETCD_ALLOW_UNVERIFIED=1`로 지정한다.
+Snapshot 유효기간 검사는 같은 instance에서 실제 5분을 기다린다.
+
+Node 전용 `location-etcd-host-clock.test.js`는 `ZLINK_ETCD_INTEGRATION=1`일 때 provider와
+관리 CLI process에만 `Date.now` preloader를 적용한다. 일 단위 시계 변경의 live·expired read,
+조건 write, snapshot page와 관리 시각 증가 상한을 검사한다. 이 보조 시험은 3단계 VM 검사가
+제공되면 제거하며 공통 실행기의 미검증 판정을 통과로 바꾸지 않는다.
+
+`ZLINK_ETCD_TEST_LOG_DIR`는 결과·명령 출력·manager log·proxy 관찰·member log의 저장 위치다.
+기본값은 `scripts/etcd/.conformance-logs/`다. `unverified.json`은 미검증 목록이며
+`cleanup.json`은 container·network·process·임시 디렉터리 잔여 수를 기록한다.
