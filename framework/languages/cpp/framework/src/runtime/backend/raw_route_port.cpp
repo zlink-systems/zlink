@@ -133,24 +133,33 @@ raw_route_port_t::raw_route_port_t (zlink::router_socket_t &socket,
     _wake_timer.attach (*_poller);
 }
 
-raw_send_submission_t raw_route_port_t::submit_send (const raw_bytes_t &target_routing_id,
-                                                     raw_message_t parts,
-                                                     raw_send_stage_trace_t trace)
+raw_send_submission_t
+raw_route_port_t::submit_send (std::span<const std::uint8_t> target_routing_id,
+                               raw_message_t parts,
+                               raw_send_stage_trace_t trace)
 {
     return submit_send_impl (target_routing_id, std::move (parts), std::move (trace));
 }
 
-raw_send_submission_t raw_route_port_t::submit_send (const raw_bytes_t &target_routing_id,
-                                                     std::vector<zlink::message_t> parts,
-                                                     raw_send_stage_trace_t trace)
+raw_send_submission_t
+raw_route_port_t::submit_send (std::span<const std::uint8_t> target_routing_id,
+                               std::vector<zlink::message_t> parts,
+                               raw_send_stage_trace_t trace)
 {
-    return submit_send_impl (target_routing_id, std::move (parts), std::move (trace));
+    return submit_send (target_routing_id, std::span<zlink::message_t> (parts), std::move (trace));
+}
+
+raw_send_submission_t
+raw_route_port_t::submit_send (std::span<const std::uint8_t> target_routing_id,
+                               std::span<zlink::message_t> parts,
+                               raw_send_stage_trace_t trace)
+{
+    return submit_send_impl (target_routing_id, parts, std::move (trace));
 }
 
 template <typename Parts>
-raw_send_submission_t raw_route_port_t::submit_send_impl (const raw_bytes_t &target_routing_id,
-                                                          Parts parts,
-                                                          raw_send_stage_trace_t trace)
+raw_send_submission_t raw_route_port_t::submit_send_impl (
+  std::span<const std::uint8_t> target_routing_id, Parts parts, raw_send_stage_trace_t trace)
 {
     // The binding owns DONTWAIT backpressure retry and its payload snapshot.
     // Submit under the socket lock. Its terminal observer deliberately has no
@@ -189,12 +198,17 @@ raw_send_submission_t raw_route_port_t::submit_send_impl (const raw_bytes_t &tar
                   result_t<zlink::submit_result_t>::success (zlink::submit_result_t::terminated),
                   {}};
             }
-            auto operation =
-              std::move (_socket->send (zlink::routing_id_t::from (target_routing_id)))
-                .message (materialize_binding_part (std::move (parts[0])));
+            const auto take_part = [] (auto &part) -> decltype (auto) {
+                if constexpr (std::is_same_v<std::decay_t<decltype (part)>, zlink::message_t>)
+                    return std::move (part);
+                else
+                    return materialize_binding_part (std::move (part));
+            };
+            auto operation = std::move (_socket->send (zlink::routing_id_t::from (
+                                          target_routing_id.data (), target_routing_id.size ())))
+                               .message (take_part (parts[0]));
             for (std::size_t index = 1; index < parts.size (); ++index) {
-                operation = std::move (operation).message (
-                  materialize_binding_part (std::move (parts[index])));
+                std::move (operation).message (take_part (parts[index]));
             }
             auto submission = std::move (operation).async ();
             pending = take_submission_admission (submission);

@@ -1274,7 +1274,7 @@ raw_mesh_node_owner_t::send_to_node (const std::vector<std::uint8_t> &target_rou
 }
 
 task_t<zlink::submit_result_t>
-raw_mesh_node_owner_t::send_to_node_result (const std::vector<std::uint8_t> &target_routing_id,
+raw_mesh_node_owner_t::send_to_node_result (std::span<const std::uint8_t> target_routing_id,
                                             protocol::application_payload_t application_payload)
 {
     try {
@@ -1313,7 +1313,7 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_logical_multicast (
         if (!metadata.empty ())
             parts.push_back (zlink::message_t::from (metadata));
         parts.push_back (protocol::encode_application_payload_message (application_payload));
-        return submit_owned_send_result (target_routing_id, std::move (parts), {});
+        return submit_owned_send_result (target_routing_id, parts, {});
     }
     catch (...) {
         return task_t<zlink::submit_result_t> (
@@ -1649,21 +1649,22 @@ struct raw_mesh_node_owner_t::send_completion_state_t
 };
 
 raw_mesh_node_owner_t::send_start_result_t
-raw_mesh_node_owner_t::start_send (const std::vector<std::uint8_t> &target_routing_id,
-                                   std::vector<zlink::message_t> parts,
+raw_mesh_node_owner_t::start_send (std::span<const std::uint8_t> target_routing_id,
+                                   std::span<zlink::message_t> parts,
                                    bool needs_public_completion,
                                    detail::backend::raw_send_stage_trace_t trace)
 {
-    return _lane.run_sync ([this, parts = std::move (parts), trace = std::move (trace),
-                            needs_public_completion, &target_routing_id] () mutable {
-        return start_send_on_lane (target_routing_id, std::move (parts), needs_public_completion,
+    // run_sync returns only after the binding has consumed or snapshotted the parts.
+    return _lane.run_sync ([this, parts, trace = std::move (trace), needs_public_completion,
+                            &target_routing_id] () mutable {
+        return start_send_on_lane (target_routing_id, parts, needs_public_completion,
                                    std::move (trace));
     });
 }
 
 raw_mesh_node_owner_t::send_start_result_t
-raw_mesh_node_owner_t::start_send_on_lane (const std::vector<std::uint8_t> &target_routing_id,
-                                           std::vector<zlink::message_t> parts,
+raw_mesh_node_owner_t::start_send_on_lane (std::span<const std::uint8_t> target_routing_id,
+                                           std::span<zlink::message_t> parts,
                                            bool needs_public_completion,
                                            detail::backend::raw_send_stage_trace_t trace)
 {
@@ -1681,7 +1682,7 @@ raw_mesh_node_owner_t::start_send_on_lane (const std::vector<std::uint8_t> &targ
     }
     // The owner turn keeps the port in place until submission returns.
     // raw_route_port_t serializes native submission versus close with its socket gate.
-    auto submission = port->submit_send (target_routing_id, std::move (parts), std::move (trace));
+    auto submission = port->submit_send (target_routing_id, parts, std::move (trace));
     if (submission.state == detail::backend::raw_send_submission_state_t::immediate) {
         return send_start_result_t{
           send_start_state_t::started, std::move (submission.immediate_result), {}};
@@ -1752,7 +1753,7 @@ raw_mesh_node_owner_t::start_send_on_lane (const std::vector<std::uint8_t> &targ
 }
 
 task_t<zlink::submit_result_t>
-raw_mesh_node_owner_t::send_with_header_result (const std::vector<std::uint8_t> &target_routing_id,
+raw_mesh_node_owner_t::send_with_header_result (std::span<const std::uint8_t> target_routing_id,
                                                 zlink::message_t header,
                                                 protocol::application_payload_t application_payload,
                                                 detail::backend::raw_send_stage_trace_t trace,
@@ -1769,13 +1770,17 @@ raw_mesh_node_owner_t::send_with_header_result (const std::vector<std::uint8_t> 
                   zlink::submit_result_t::not_connected));
             }
         }
-        std::vector<zlink::message_t> parts;
-        parts.reserve (metadata ? 3 : 2);
-        parts.push_back (std::move (header));
-        if (metadata)
-            parts.push_back (detail::backend::materialize_binding_part (std::move (*metadata)));
-        parts.push_back (protocol::encode_application_payload_message (application_payload));
-        return submit_owned_send_result (target_routing_id, std::move (parts), std::move (trace));
+        const auto submit = [&] (auto &&...messages) {
+            std::array parts{std::move (messages)...};
+            return submit_owned_send_result (target_routing_id, parts, std::move (trace));
+        };
+        if (metadata) {
+            auto metadata_part = detail::backend::materialize_binding_part (std::move (*metadata));
+            return submit (std::move (header), std::move (metadata_part),
+                           protocol::encode_application_payload_message (application_payload));
+        }
+        return submit (std::move (header),
+                       protocol::encode_application_payload_message (application_payload));
     }
     catch (...) {
         return task_t<zlink::submit_result_t> (
@@ -1784,11 +1789,11 @@ raw_mesh_node_owner_t::send_with_header_result (const std::vector<std::uint8_t> 
 }
 
 task_t<zlink::submit_result_t>
-raw_mesh_node_owner_t::submit_owned_send_result (const std::vector<std::uint8_t> &target_routing_id,
-                                                 std::vector<zlink::message_t> parts,
+raw_mesh_node_owner_t::submit_owned_send_result (std::span<const std::uint8_t> target_routing_id,
+                                                 std::span<zlink::message_t> parts,
                                                  detail::backend::raw_send_stage_trace_t trace)
 {
-    auto started = start_send (target_routing_id, std::move (parts), true, std::move (trace));
+    auto started = start_send (target_routing_id, parts, true, std::move (trace));
     if (started.state == send_start_state_t::terminated)
         return task_t<zlink::submit_result_t> (
           result_t<zlink::submit_result_t>::success (zlink::submit_result_t::terminated));
@@ -1801,8 +1806,8 @@ task_t<bool>
 raw_mesh_node_owner_t::send_header_only (const std::vector<std::uint8_t> &target_routing_id,
                                          std::vector<std::uint8_t> header)
 {
-    auto started = start_send (
-      target_routing_id, detail::backend::materialize_binding_parts ({std::move (header)}), true);
+    std::array parts{detail::backend::materialize_binding_part (std::move (header))};
+    auto started = start_send (target_routing_id, parts, true);
     if (started.state == send_start_state_t::terminated)
         co_return false;
     if (started.immediate_result)
@@ -1822,9 +1827,8 @@ raw_mesh_node_owner_t::submit_header_only (const std::vector<std::uint8_t> &targ
 raw_mesh_node_owner_t::send_start_state_t raw_mesh_node_owner_t::submit_header_only_on_lane (
   const std::vector<std::uint8_t> &target_routing_id, std::vector<std::uint8_t> header)
 {
-    auto started = start_send_on_lane (
-      target_routing_id, detail::backend::materialize_binding_parts ({std::move (header)}), false,
-      {});
+    std::array parts{detail::backend::materialize_binding_part (std::move (header))};
+    auto started = start_send_on_lane (target_routing_id, parts, false, {});
     if (started.state != send_start_state_t::started && mesh_trace_enabled ())
         trace_mesh_enabled ("control-send start=terminated");
     return started.state;
@@ -1848,8 +1852,8 @@ task_t<bool> raw_mesh_node_owner_t::send_control (std::vector<std::uint8_t> targ
         co_return accepted;
     }
     // The owner borrows the target id during its synchronous submission.
-    co_return co_await submit_owned_send_result (
-      target_routing_id, detail::backend::materialize_binding_parts (std::move (parts)), {})
+    auto wire = detail::backend::materialize_binding_parts (std::move (parts));
+    co_return co_await submit_owned_send_result (target_routing_id, wire, {})
       == zlink::submit_result_t::ok;
 }
 
