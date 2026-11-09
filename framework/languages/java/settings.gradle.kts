@@ -30,6 +30,7 @@ include(
     "zlink-framework-codec-protobuf",
     "zlink-framework-codec-msgpack",
     "zlink-framework-locations-redis",
+    "zlink-framework-locations-etcd",
     "zlink-http-client",
     "zlink-framework-spring-boot-starter",
     "zlink-stream-connector",

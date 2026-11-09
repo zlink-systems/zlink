@@ -1,15 +1,10 @@
 import { validateNamespace } from './encoding';
 import { createSecureContext } from 'node:tls';
+import type { ZLinkEtcdLocationOptions } from '../options';
 
 export const DEFAULT_OPERATION_TIMEOUT_MS = 5000;
 
-export interface EtcdOptions {
-  endpoints: readonly string[];
-  namespace: string;
-  operationTimeoutMs?: number;
-  tls?: { trustedCaPem?: string; clientIdentity?: { certificatePem: string; keyPem: string } };
-  credentials?: { user: string; password: string };
-}
+export type EtcdOptions = ZLinkEtcdLocationOptions;
 
 function nonempty(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;

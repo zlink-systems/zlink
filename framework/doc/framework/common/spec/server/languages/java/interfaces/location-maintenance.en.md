@@ -364,6 +364,54 @@ constructor, and connection/key namespace/operation timeout options.
 Key layout, Lua script, private record encoding, retry, and shared
 connection reference count are implementation details.
 
+## etcd Extension
+
+```java
+public final class ZLinkEtcdLocationStore
+ implements ZLinkLocationStore, AutoCloseable {
+ public ZLinkEtcdLocationStore(ZLinkEtcdLocationOptions options);
+}
+
+public final class ZLinkEtcdLocationOptions {
+ public List<String> endpoints();
+ public ZLinkEtcdLocationOptions setEndpoints(List<String> value);
+ public ZLinkEtcdTlsOptions tls();                // null if not set
+ public ZLinkEtcdLocationOptions setTls(ZLinkEtcdTlsOptions value);
+ public ZLinkEtcdCredentials credentials();       // null if not set
+ public ZLinkEtcdLocationOptions setCredentials(ZLinkEtcdCredentials value);
+ public String namespace();
+ public ZLinkEtcdLocationOptions setNamespace(String value);
+ public Duration operationTimeout();              // Default 5 s
+ public ZLinkEtcdLocationOptions setOperationTimeout(Duration value);
+}
+
+public final class ZLinkEtcdTlsOptions {
+ public String trustedCaPem();                    // null if not set
+ public ZLinkEtcdTlsOptions setTrustedCaPem(String value);
+ public ZLinkEtcdClientIdentity clientIdentity(); // null if not set
+ public ZLinkEtcdTlsOptions setClientIdentity(ZLinkEtcdClientIdentity value);
+}
+
+public final class ZLinkEtcdClientIdentity {
+ public ZLinkEtcdClientIdentity(String certificatePem, String keyPem);
+ public String certificatePem();
+ public String keyPem();
+}
+
+public final class ZLinkEtcdCredentials {
+ public ZLinkEtcdCredentials(String user, String password);
+ public String user();
+ public String password();
+}
+```
+
+These classes are in the `systems.zlink.framework.locations.etcd` package. The etcd public surface
+is limited to one Location Store class's minimal constructor and the options above; no Relocation
+Store is provided. The meaning and conditions of each option are defined by the
+[common options](../../../05-location-relocation/07-location-store-etcd.en.md#11-public-options), and the constructor throws `IllegalArgumentException` before
+connecting to etcd if those conditions are violated. Kotlin uses the same class. The
+[official etcd Location Store provider](../../../05-location-relocation/07-location-store-etcd.en.md) owns the rest of the behavior.
+
 ## Contract Not Made Public
 
 The following items aren't an interface a provider or application

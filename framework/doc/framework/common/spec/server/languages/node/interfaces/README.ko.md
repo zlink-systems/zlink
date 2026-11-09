@@ -20,7 +20,7 @@ public TypeScript declaration을 범주별로 고정한다. 같은 declaration�
 | 05 | [Actor와 session binding](05-actors.ko.md) | Actor lifecycle, Actor call과 bound session |
 | 06 | [STREAM, timer와 worker](06-stream-worker.ko.md) | STREAM session, timer와 worker scheduling |
 | 07 | [NestJS host adapter](07-nestjs-host.ko.md) | module, DI token, decorator와 host builder |
-| 08 | [Location·Relocation provider](08-location-maintenance.ko.md) | opaque atomic Location Store, immutable Relocation Store와 공식 Redis provider |
+| 08 | [Location·Relocation provider](08-location-maintenance.ko.md) | opaque atomic Location Store, immutable Relocation Store와 공식 Redis·etcd provider |
 
 배포 package와 이 목차가 가리키는 모든 파일의 export 이름 집합은 양방향으로 같아야 한다.
 Binding package의 service type, backend adapter와 runtime internal subpath는 이 export 집합에 포함하지

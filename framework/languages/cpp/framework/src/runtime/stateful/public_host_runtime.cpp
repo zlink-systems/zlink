@@ -3366,7 +3366,9 @@ public_host_runtime_t::send_to_node (const zlink::routing_id_t &target,
                                      const std::vector<zlink::message_t> &parts)
 {
     try {
-        return _transport->send_to_node_result (target.to_bytes (), encode_application (parts));
+        return _transport->send_to_node_result (
+          std::span<const std::uint8_t> (target.data (), target.size ()),
+          encode_application (parts));
     }
     catch (...) {
         return task_t<zlink::submit_result_t> (
@@ -3379,8 +3381,9 @@ public_host_runtime_t::send_to_node (const zlink::routing_id_t &target,
                                      std::vector<zlink::message_t> &&parts)
 {
     try {
-        return _transport->send_to_node_result (target.to_bytes (),
-                                                encode_application (std::move (parts)));
+        return _transport->send_to_node_result (
+          std::span<const std::uint8_t> (target.data (), target.size ()),
+          encode_application (std::move (parts)));
     }
     catch (...) {
         return task_t<zlink::submit_result_t> (

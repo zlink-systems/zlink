@@ -561,7 +561,7 @@ FRAMEWORK_NODE_PACKAGE_REGISTRY = (
     ("framework/languages/node/packages/framework-codec-msgpack/package.json", "@zlink-systems/framework-codec-msgpack", 3),
     ("framework/languages/node/packages/framework-codec-protobuf/package.json", "@zlink-systems/framework-codec-protobuf", 3),
     ("framework/languages/node/packages/framework-locations-redis/package.json", "@zlink-systems/framework-locations-redis", 1),
-    ("framework/languages/node/packages/framework-locations-etcd/package.json", "@zlink-systems/framework-locations-etcd", 0),
+    ("framework/languages/node/packages/framework-locations-etcd/package.json", "@zlink-systems/framework-locations-etcd", 1),
     ("framework/languages/node/packages/http-client/package.json", "@zlink-systems/http-client", 1),
     ("framework/languages/node/packages/nestjs/package.json", "@zlink-systems/nestjs", 2),
     ("framework/languages/node/packages/stream-connector/package.json", "@zlink-systems/stream-connector", 1),

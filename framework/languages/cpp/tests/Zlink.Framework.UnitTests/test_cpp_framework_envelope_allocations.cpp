@@ -186,6 +186,14 @@ TEST (EnvelopeAllocations, TypedAndErasedEncodingDoNotCloneTheHeader)
     EXPECT_EQ (decoded.value ().content_type, content_type);
     EXPECT_EQ ((*parts)[1].to_string (), "7");
     parts.reset ();
+    header.correlation_id = std::string (32, 'b');
+    EXPECT_EQ (
+      count_allocations ([&] { parts.emplace (codec.encode_parts (header, value, serializers)); }),
+      1u);
+    decoded = codec.decode_header (*parts);
+    ASSERT_TRUE (decoded);
+    EXPECT_EQ (decoded.value ().correlation_id, header.correlation_id);
+    parts.reset ();
     // The erased registry additionally returns an owning content-type string.
     EXPECT_EQ (count_allocations ([&] {
                    parts.emplace (
@@ -202,6 +210,65 @@ TEST (EnvelopeAllocations, TypedAndErasedEncodingDoNotCloneTheHeader)
     ASSERT_TRUE (decoded);
     EXPECT_EQ (decoded.value ().content_type, header.content_type);
     EXPECT_EQ (empty[1].size (), 0u);
+}
+
+TEST (EnvelopeEncoding, RepeatedHeaderKeepsIndependentWritableBytes)
+{
+    msg::envelope_codec_t codec;
+    msg::envelope_header_t header{.kind = msg::message_kind_t::command,
+                                  .channel_name = "cached-channel",
+                                  .message_name = "cached-message"};
+    auto first = codec.encode_header (header);
+    const auto expected = first.to_string ();
+    auto second = codec.encode_header (header);
+    ASSERT_EQ (second.to_string (), expected);
+    first.bytes ()[0] = std::byte{};
+    second.bytes ()[1] = std::byte{};
+    EXPECT_EQ (codec.encode_header (header).to_string (), expected);
+}
+
+TEST (EnvelopeEncoding, ChangedValuesAndInvalidHeadersCannotReusePreviousBytes)
+{
+    msg::envelope_codec_t codec;
+    const msg::envelope_header_t original{.kind = msg::message_kind_t::command,
+                                          .channel_name = "cache-values",
+                                          .message_name = "message"};
+    using mutation_t = std::function<void (msg::envelope_header_t &)>;
+    const mutation_t mutations[] = {[] (auto &h) { h.kind = msg::message_kind_t::publish; },
+                                    [] (auto &h) { h.channel_name = "other-channel"; },
+                                    [] (auto &h) { h.message_name = "other-message"; },
+                                    [] (auto &h) { h.content_type = "other/type"; },
+                                    [] (auto &h) { h.correlation_id = "correlation"; },
+                                    [] (auto &h) { h.deadline = "2026-11-09T00:00:00Z"; },
+                                    [] (auto &h) { h.topic = "topic"; },
+                                    [] (auto &h) { h.error_code = "unavailable"; },
+                                    [] (auto &h) { h.error_message = "error"; },
+                                    [] (auto &h) { h.source = "source"; },
+                                    [] (auto &h) { h.metadata = {{"k", "v"}}; },
+                                    [] (auto &h) {
+                                        h.flow_id = "019a55d5-0000-7000-8000-000000000001";
+                                        h.flow_origin = fw::flow_origin_t::application;
+                                    }};
+    for (const auto &mutate : mutations) {
+        const auto previous = codec.encode_header (original).to_string ();
+        auto changed = original;
+        mutate (changed);
+        const auto bytes = codec.encode_header (changed).to_string ();
+        EXPECT_NE (bytes, previous);
+        EXPECT_EQ (codec.encode_header (changed).to_string (), bytes);
+        EXPECT_EQ (codec.encode_header (original).to_string (), previous);
+    }
+    auto invalid = original;
+    invalid.correlation_id = std::string (65, 'x');
+    EXPECT_THROW (codec.encode_header (invalid), fw::framework_exception_t);
+    invalid = original;
+    invalid.metadata = {{"", "value"}};
+    EXPECT_THROW (codec.encode_header (invalid), fw::framework_exception_t);
+    invalid = original;
+    invalid.flow_origin = fw::flow_origin_t::application;
+    EXPECT_THROW (codec.encode_header (invalid), fw::framework_exception_t);
+    const auto recovered = codec.encode_header (original).to_string ();
+    EXPECT_EQ (nlohmann::json::parse (recovered).at ("channelName"), "cache-values");
 }
 
 // Container members (std::map metadata) may allocate even when empty, and how
