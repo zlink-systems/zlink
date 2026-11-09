@@ -26,6 +26,7 @@ handler가 받는 provider-neutral payload까지만 포함한다.
 | [Location 설정과 운영](08-location-maintenance.ko.md) | Application용 Location option, readiness와 운영 query를 정의한다. |
 | [Location·Relocation provider](08-authority-relocation.ko.md) | Generic atomic Location Store와 immutable Relocation Store provider SPI를 정의한다. |
 | [공식 Redis Store](08-location-provider-redis.ko.md) | 두 Redis Store class의 최소 constructor와 options를 정의한다. |
+| [공식 etcd Location Store](08-location-provider-etcd.ko.md) | etcd Location Store class의 constructor와 options를 정의한다. |
 | [Host와 topology monitoring](10-topology-monitoring.ko.md) | Host state, termination, topology snapshot과 metric을 정의한다. |
 | [Monitoring과 오류](10-monitoring-errors.ko.md) | Monitoring source와 Framework 오류를 정의한다. |
 | [Codec extension](11-serialization.ko.md) | Codec 등록 API와 외부 codec provider SPI를 정의한다. |
