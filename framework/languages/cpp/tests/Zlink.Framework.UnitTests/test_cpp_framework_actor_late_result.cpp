@@ -82,6 +82,9 @@ struct raw_mesh_node_owner_test_access_t
         if (terminal == foundation::operation_terminal_t::cancelled)
             EXPECT_TRUE (owner._operations->cancel (id));
         else if (terminal == foundation::operation_terminal_t::timed_out) {
+            auto indexed = owner._lane.run ([] {});
+            ASSERT_EQ (indexed.wait_for (std::chrono::seconds (2)), std::future_status::ready);
+            indexed.get ();
             const auto deadline = owner._operations->next_deadline ();
             ASSERT_TRUE (deadline);
             EXPECT_EQ (owner._operations->expire (*deadline).result ().value (), 1);
@@ -906,8 +909,10 @@ TEST_F (local_actor_receiver_t, LocalRegistryTerminalsReachPreparedReceiverOnce)
         std::vector<zlink::message_t> parts{zlink::message_t::from (std::string ("request"))};
         rt::mesh::raw_mesh_node_owner_test_access_t::inject_registry_clock (
           runtime->native_node ().transport ());
-        ASSERT_EQ (runtime->request_to_actor (actor, parts, operation, 1h).result ().value (),
-                   zlink::submit_result_t::ok);
+        auto submitted = runtime->request_to_actor (actor, parts, operation, 1h);
+        const auto submit_result = submitted.result_for (2s);
+        ASSERT_TRUE (submit_result && *submit_result);
+        ASSERT_EQ (submit_result->value (), zlink::submit_result_t::ok);
         dispatch_request ();
         ASSERT_TRUE (request);
         if (terminal == terminal_t::completed)
@@ -917,7 +922,9 @@ TEST_F (local_actor_receiver_t, LocalRegistryTerminalsReachPreparedReceiverOnce)
             EXPECT_TRUE (request->application_record->native_reply (std::nullopt));
         } else
             end (terminal);
-        (void) operation.completion->task ().result ();
+        const auto completion_result = operation.completion->task ().result_for (2s);
+        ASSERT_TRUE (completion_result);
+        (void) *completion_result;
         EXPECT_EQ (calls, 1);
         EXPECT_FALSE (runtime->native_node ().transport ().fail_local_operation (
           operation.id, terminal_t::transport_failed));
