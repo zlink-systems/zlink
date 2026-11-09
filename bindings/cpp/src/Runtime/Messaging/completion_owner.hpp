@@ -21,6 +21,7 @@ namespace zlink::detail
 {
 
 struct operation_state_t;
+class socket_handle_t;
 
 class completion_entry_t : public std::enable_shared_from_this<completion_entry_t>
 {
@@ -94,7 +95,7 @@ class completion_entry_t : public std::enable_shared_from_this<completion_entry_
 class completion_owner_t
 {
   public:
-    explicit completion_owner_t (void *socket_);
+    explicit completion_owner_t (std::shared_ptr<socket_handle_t> socket_);
     ~completion_owner_t ();
 
     completion_owner_t (const completion_owner_t &) = delete;
@@ -110,12 +111,14 @@ class completion_owner_t
     void transfer_to_public (const void *poller_owner_);
     void release_public (const void *poller_owner_) noexcept;
     void shutdown (int terminal_errno_ = ESHUTDOWN) noexcept;
+    int close_native_socket () noexcept;
+    const std::shared_ptr<socket_handle_t> &socket_handle () const noexcept { return _socket; }
 
   private:
     void insert_entry_locked (const std::shared_ptr<completion_entry_t> &entry_);
     size_t drain_impl (completion_entry_t *inline_target_);
 
-    void *_socket;
+    const std::shared_ptr<socket_handle_t> _socket;
     std::mutex _mutex;
     std::mutex _inline_drain_mutex;
     // Entry identities are never pooled: Core may still carry one as callback

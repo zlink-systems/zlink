@@ -6,7 +6,6 @@
 #include <Runtime/Native/native_message_parts.hpp>
 #include <Runtime/Native/native_options.hpp>
 #include <Runtime/Native/native_receive.hpp>
-#include <Runtime/Native/native_send.hpp>
 #include <Runtime/Native/socket_handle.hpp>
 #include <Runtime/Core/context_access.hpp>
 #include <Runtime/Options/option_ids.hpp>
@@ -53,7 +52,7 @@ routing_id_t routing_id_from_native_pointer (const void *native_) noexcept
 socket_t::~socket_t ()
 {
     if (_socket)
-        (void) _socket->close ();
+        (void) close_native ();
     if (_runtime)
         _runtime->completion->shutdown ();
 }
@@ -65,7 +64,7 @@ socket_t &socket_t::operator= (socket_t &&other_) noexcept
     if (this == &other_)
         return *this;
     if (_socket) {
-        const int rc = _socket->close ();
+        const int rc = close_native ();
         if (rc != 0 && _socket->valid ())
             return *this;
     }
@@ -83,18 +82,24 @@ bool socket_t::valid () const noexcept
     return _socket && _socket->valid ();
 }
 
+int socket_t::close_native () noexcept
+{
+    return _runtime ? _runtime->completion->close_native_socket () : _socket->close ();
+}
+
 void socket_t::close ()
 {
-    if (!_socket || !_socket->valid ())
+    if (!_socket)
         return;
-    const int rc = _socket->close ();
+    const int rc = close_native ();
+    const int close_errno = rc != 0 ? zlink_errno () : 0;
     // Core can reject a concurrent close with EBUSY while the socket remains
     // live. Preserve the completion owner and all retained retry packets in
     // that case; only a terminal native close may settle them.
-    if (!_socket->valid () && _runtime)
+    if ((rc == 0 || rc == ZLINK_CLOSE_SHUTDOWN) && _runtime)
         _runtime->completion->shutdown (ESHUTDOWN);
     if (rc != 0)
-        throw close_error_t (static_cast<close_result_t> (rc), zlink_errno ());
+        throw close_error_t (static_cast<close_result_t> (rc), close_errno);
 }
 
 void socket_t::bind (const std::string &endpoint_)
@@ -284,28 +289,30 @@ void socket_t::set_receive_flow_state (receive_flow_state_t state_)
 }
 
 socket_t::socket_t () noexcept :
-    _socket (std::make_unique<detail::socket_handle_t> ()),
+    _socket (std::make_shared<detail::socket_handle_t> ()),
     _runtime (),
     _type (socket_type::pair)
 {
 }
 
 socket_t::socket_t (context_t &ctx_, socket_type type_) :
-    _socket (std::make_unique<detail::socket_handle_t> (
+    _socket (std::make_shared<detail::socket_handle_t> (
       zlink_socket (detail::native_handle (ctx_), static_cast<zlink_socket_type_t> (type_)), true)),
     _runtime (),
     _type (type_)
 {
-    if (_socket->valid ())
-        _runtime = std::make_shared<detail::socket_runtime_state_t> (
-          detail::native_handle (*_socket));
+    if (_socket->valid ()) {
+        _runtime = std::make_shared<detail::socket_runtime_state_t> (_socket);
+        _socket->runtime = _runtime;
+    }
 }
 
 int socket_t::send (message_t &part_, send_flags_t flags_)
 {
+    detail::socket_call_t call (detail::submit_handle (_socket));
     return detail::submit_borrowed_message_part (
       part_, [&] (zlink_msg_t *parts_, size_t part_count_) {
-          return zlink_send (detail::native_handle (*this), parts_, part_count_,
+          return zlink_send (call.handle (), parts_, part_count_,
                              static_cast<zlink_send_flags_t> (static_cast<int> (flags_)),
                              nullptr, nullptr);
       });
@@ -313,9 +320,10 @@ int socket_t::send (message_t &part_, send_flags_t flags_)
 
 int socket_t::send (std::vector<message_t> &parts_, send_flags_t flags_)
 {
+    detail::socket_call_t call (detail::submit_handle (_socket));
     return detail::submit_message_parts (
       parts_, [&] (zlink_msg_t *native_parts_, size_t part_count_) {
-          return zlink_send (detail::native_handle (*this), native_parts_, part_count_,
+          return zlink_send (call.handle (), native_parts_, part_count_,
                              static_cast<zlink_send_flags_t> (static_cast<int> (flags_)),
                              nullptr, nullptr);
       });
@@ -323,11 +331,11 @@ int socket_t::send (std::vector<message_t> &parts_, send_flags_t flags_)
 
 int socket_t::send (const routing_id_t &target_rid_, message_t &part_, send_flags_t flags_)
 {
+    detail::socket_call_t call (detail::submit_handle (_socket));
     const zlink_routing_id_t target_rid = zlink::detail::routing_id_native_value (target_rid_);
     return detail::submit_borrowed_message_part (
       part_, [&] (zlink_msg_t *parts_, size_t part_count_) {
-          return zlink_send_rid (
-            detail::native_handle (*this), &target_rid, parts_, part_count_,
+          return zlink_send_rid (call.handle (), &target_rid, parts_, part_count_,
             static_cast<zlink_send_flags_t> (static_cast<int> (flags_)), nullptr, nullptr);
       });
 }
@@ -336,11 +344,11 @@ int socket_t::send (const routing_id_t &target_rid_,
                     std::vector<message_t> &parts_,
                     send_flags_t flags_)
 {
+    detail::socket_call_t call (detail::submit_handle (_socket));
     const zlink_routing_id_t target_rid = zlink::detail::routing_id_native_value (target_rid_);
     return detail::submit_message_parts (
       parts_, [&] (zlink_msg_t *native_parts_, size_t part_count_) {
-          return zlink_send_rid (
-            detail::native_handle (*this), &target_rid, native_parts_, part_count_,
+          return zlink_send_rid (call.handle (), &target_rid, native_parts_, part_count_,
             static_cast<zlink_send_flags_t> (static_cast<int> (flags_)), nullptr, nullptr);
       });
 }
@@ -393,18 +401,17 @@ int socket_t::receive_impl (
       received_, std::move (envelope.source_rid), envelope.has_reply_token,
       envelope.reply_token, _runtime ? _runtime->reply_owner : nullptr, route_generation);
     if (attach_routed_send_context_ && received_.routing_id ().has_value ())
-        detail::received_access_t::set_socket_rid_send_context (received_,
-                                                                detail::native_handle (*this),
-                                                                _runtime);
+        detail::received_access_t::set_socket_rid_send_context (received_, _runtime);
     return 0;
 }
 
 int socket_t::publish (const std::string &topic_id_, message_t &part_, send_flags_t flags_)
 {
+    detail::socket_call_t call (detail::submit_handle (_socket));
     detail::validate_no_embedded_null (topic_id_, "topic");
     return detail::submit_borrowed_message_part (
       part_, [&] (zlink_msg_t *parts_, size_t part_count_) {
-          return zlink_publish (detail::native_handle (*this), topic_id_.c_str (), parts_,
+          return zlink_publish (call.handle (), topic_id_.c_str (), parts_,
                                 part_count_, static_cast<zlink_send_flags_t> (
                                                static_cast<int> (flags_)));
       });
@@ -414,10 +421,11 @@ int socket_t::publish (const std::string &topic_id_,
                        std::vector<message_t> &parts_,
                        send_flags_t flags_)
 {
+    detail::socket_call_t call (detail::submit_handle (_socket));
     detail::validate_no_embedded_null (topic_id_, "topic");
     return detail::submit_message_parts (
       parts_, [&] (zlink_msg_t *native_parts_, size_t part_count_) {
-          return zlink_publish (detail::native_handle (*this), topic_id_.c_str (), native_parts_,
+          return zlink_publish (call.handle (), topic_id_.c_str (), native_parts_,
                                 part_count_, static_cast<zlink_send_flags_t> (
                                                static_cast<int> (flags_)));
       });
