@@ -84,6 +84,8 @@ env:
   # vcpkg binary archives live next to the installed tree in the same main-owned cache,
   # so a vcpkg.json change rebuilds only the ports it touches.
   VCPKG_ARCHIVE_DIR: ${{ github.workspace }}/.cache/framework-cpp/vcpkg-archives
+  # Also the host triplet: gRPC codegen tools then reuse the same release-only
+  # packages instead of rebuilding every dependency for x64-linux (debug + release).
   ZLINK_VCPKG_TRIPLET: x64-linux-zlink-release
   ZLINK_LOCAL_PACKAGE_ROOT: ${{ github.workspace }}/.artifacts/framework-cpp-ci
   SCCACHE_DIR: ${{ github.workspace }}/.cache/framework-cpp/sccache
@@ -194,6 +196,7 @@ jobs:
               "redis-plus-plus[async-std]:${ZLINK_VCPKG_TRIPLET}" \
               "grpc:${ZLINK_VCPKG_TRIPLET}" \
               --overlay-triplets="${GITHUB_WORKSPACE}/framework/languages/cpp/cmake/vcpkg-triplets" \
+              --host-triplet="${ZLINK_VCPKG_TRIPLET}" \
               --x-install-root="${VCPKG_INSTALLED_DIR}" \
               --clean-after-build 2>&1 | tee "${log}"; then
               exit 0
@@ -267,6 +270,7 @@ jobs:
           cmake --preset linux-ninja-release \
             -DVCPKG_MANIFEST_FEATURES=etcd \
             -DVCPKG_TARGET_TRIPLET="${ZLINK_VCPKG_TRIPLET}" \
+            -DVCPKG_HOST_TRIPLET="${ZLINK_VCPKG_TRIPLET}" \
             -DVCPKG_OVERLAY_TRIPLETS="${GITHUB_WORKSPACE}/framework/languages/cpp/cmake/vcpkg-triplets" \
             -DZLINK_FRAMEWORK_CPP_WITH_ETCD=ON \
             -DZLINK_FRAMEWORK_CPP_TEST_PROBES=ON \
