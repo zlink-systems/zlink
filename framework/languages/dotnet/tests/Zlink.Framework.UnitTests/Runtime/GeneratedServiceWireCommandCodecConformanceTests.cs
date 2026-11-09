@@ -358,25 +358,10 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests(
         for (var index = 0; index < iterations; index++)
             action();
 
-        // The helper accepts only windows whose process-wide GC counts stayed unchanged.
-        var measurement = PerCallAllocation
-            .MeasureWindowAsync(() =>
-            {
-                var before = GC.GetAllocatedBytesForCurrentThread();
-                T last = default!;
-                for (var index = 0; index < iterations; index++)
-                    last = action();
-                var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
-                GC.KeepAlive(last);
-                return new ValueTask<long>(bytes);
-            })
-            .GetAwaiter()
-            .GetResult();
-        if (!measurement.IsValid)
-            throw new InvalidOperationException(
-                "All allocation measurement samples overlapped a GC."
-            );
-        return measurement.Value;
+        T last = default!;
+        var minimum = PerCallAllocation.MinWindow(() => last = action(), iterations, windows: 5);
+        GC.KeepAlive(last);
+        return minimum;
     }
 
     [Fact]
