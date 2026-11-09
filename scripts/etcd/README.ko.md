@@ -143,7 +143,7 @@ node --test scripts/etcd/conformance-self-test.mjs
 실행기는 Docker cluster 하나를 생성하고 모든 case와 mutation을 순서대로 실행한 뒤 정리한다.
 `conformance-cases.cjs`가 35개 ID의 판정을 소유한다. 등록 함수의 누락과 알 수 없는 ID를
 실행 전에 검사한다. `--cases ID,ID`는 조사할 항목을 제한하며 전체 coverage 실패를 유지한다.
-`--no-mutations`는 mutation 실행을 끈다. 기본 실행은 mutation 6개의 검출도 요구한다.
+`--no-mutations`는 mutation 실행을 끈다. 기본 실행은 등록한 언어마다 mutation 6개의 검출도 요구한다.
 
 Node 의존성은 `framework/languages/node/node_modules`에서 읽는다. 다른 설치 경로를 사용할 때는
 `ZLINK_ETCD_NODE_MODULES`를 해당 node_modules 경로로 설정한다. 실행기는 Node 자식 process의
@@ -161,6 +161,59 @@ Mutation 산출물은 source를 `ts.transpileModule`로 변환하고 canonical p
 선택적인 `cwd`, `env`다. 등록된 언어로 모든 writer×reader pair를 생성한다. 이번 단계의 기본
 설정은 Node만 등록하므로 각 교차언어 case는 1×1 pair다. Protocol과 결과 형식은
 [adapter JSONL 문서](../../framework/runtime/conformance/location-store-adapter-protocol-v1.ko.md)가 소유한다.
+
+.NET과 Java는 실행기 밖에서 먼저 build한다. .NET SDK 8과 JDK 25를 사용하며, 저장소 root에서
+다음을 실행한다.
+
+```sh
+dotnet build framework/languages/dotnet/tests/Zlink.Framework.LocationStore.ProviderAdapter/Zlink.Framework.LocationStore.ProviderAdapter.csproj -c Release -m:1
+(cd framework/languages/java && ./gradlew --no-daemon --max-workers=1 -Pzlink.includeSamples=false :zlink-framework-locations-etcd:installProviderAdapterDist)
+```
+
+3×3 실행의 adapter 설정 예시는 다음과 같다. `ROOT`를 저장소의 절대 경로로 바꾼다.
+Node package dist와 의존성은 위의 환경 변수로 지정할 수 있다.
+
+```json
+{
+  "node": {
+    "command": "node",
+    "args": [
+      "ROOT/framework/languages/node/test/contract/location-etcd-fixtures/provider-adapter.cjs"
+    ]
+  },
+  "dotnet": {
+    "command": "dotnet",
+    "args": [
+      "ROOT/framework/languages/dotnet/tests/Zlink.Framework.LocationStore.ProviderAdapter/bin/Release/net8.0/Zlink.Framework.LocationStore.ProviderAdapter.dll"
+    ]
+  },
+  "jvm": {
+    "command": "ROOT/framework/languages/java/zlink-framework-locations-etcd/build/install/provider-adapter/bin/location-store-provider-adapter",
+    "env": { "JAVA_OPTS": "-Xmx256m" }
+  }
+}
+```
+
+```sh
+node scripts/etcd/conformance-runner.mjs --adapter-config adapters.json --allow-unverified
+node scripts/etcd/check-conformance-coverage.mjs --language node,dotnet,jvm --allow-unverified node-conformance.json dotnet-conformance.json jvm-conformance.json
+```
+
+실행기는 .NET DLL이나 Java bin script가 없으면 cluster를 만들기 전에 실패한다. 두 교차언어 ID는
+각각 9개 pair를 요구한다. Pair마다 namespace를 분리하며, 누락·중복·skip·실패는 coverage 실패다.
+
+`build-managed-provider.cjs`는 .NET·Java provider source를 격리 사본에 복사해 대조군과 여섯 변형을
+build한다. 격리 사본과 산출물은 OS 임시 디렉터리에 두고 실행이 끝나면 삭제한다.
+.NET은 기준 Release build의 생성 proto와 배포 DLL 의존성을 사용한다. Java는 배포 jar의
+생성 proto를 사용하며 원본 provider class를 제거한 jar 사본에 새 class를 넣는다. 기준 provider와
+각 변형은 별도 process로 실행한다. 언어별 대조군이 대상 case 여섯 개를 모두 통과해야 그 언어의
+mutation을 실행한다. 대상 구문이 없거나 build가 실패하면 `not-built`이며, assertion 실패만
+`detected`다. 결과에는 `language`를 기록하며 build 로그는
+`ZLINK_ETCD_TEST_LOG_DIR/mutation-build/<language>/<mutation 또는 control>/`에 보존한다.
+
+Docker 안에서 실행할 때는 runner의 저장소 절대 경로가 host Docker daemon에서도 같은 bind mount
+경로를 가리켜야 한다. Docker socket과 host network를 연결하고, SDK·JDK·Node·Docker CLI를 준비한다.
+시계 VM이 없는 환경에서는 기존 host 시계 case 세 개를 언어마다 `unverified`로 남긴다.
 
 `grpc-proxy.mjs`는 공용 etcd proto의 KV·Auth unary RPC를 실제 etcd로 전달한다. 실행기는
 `startProxy({target})`로 proxy를 만들고 `arm({boundary, key|prefix})`로 경계를 선택한다.

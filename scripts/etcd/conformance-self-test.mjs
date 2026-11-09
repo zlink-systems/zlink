@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -18,6 +19,41 @@ const {
   packageProviderDist,
 } = require("./build-node-provider.cjs");
 const { AdapterProcess } = require("./provider-process.cjs");
+const {
+  dotnetMutations,
+  javaMutations,
+} = require("./build-managed-provider.cjs");
+
+test("managed mutations require exactly the current provider source targets", () => {
+  const root = fileURLToPath(new URL("../../", import.meta.url));
+  for (const [language, mutations] of Object.entries({
+    dotnet: dotnetMutations,
+    jvm: javaMutations,
+  })) {
+    assert.equal(Object.keys(mutations).length, 6);
+    for (const [id, entry] of Object.entries(mutations)) {
+      const file =
+        language === "dotnet"
+          ? path.join(
+              root,
+              "framework/languages/dotnet/src/Zlink.Framework.Locations.Etcd",
+              entry.file,
+            )
+          : path.join(
+              root,
+              "framework/languages/java/zlink-framework-locations-etcd/src/main/java/systems/zlink/framework/locations/etcd/ZLinkEtcdLocationStore.java",
+            );
+      const source = fs.readFileSync(file, "utf8").replaceAll("\r\n", "\n");
+      const transform = language === "dotnet" ? entry.transform : entry;
+      assert.notEqual(transform(source), source, `${language}:${id}`);
+      assert.throws(() => transform(""), /not-built/);
+      assert.throws(() => transform(source + source), /not-built/);
+    }
+  }
+  console.log(
+    "managed mutation targets: 12 accepted; 24 missing/duplicate targets rejected",
+  );
+});
 
 test("missing package dist fails before cluster startup without transpile fallback", () => {
   const runner = fileURLToPath(
@@ -39,6 +75,26 @@ test("missing package dist fails before cluster startup without transpile fallba
   assert.match(result.stderr, /npm run build/);
   console.log(
     "missing baseline: exit=1; package build required; no transpile fallback",
+  );
+});
+
+test("managed baseline artifacts must exist before cluster startup", async () => {
+  const { runConformance } = await import("./conformance-runner.mjs");
+  for (const language of ["dotnet", "jvm"]) {
+    const absent = fileURLToPath(
+      new URL(`./.absent-${language}-adapter`, import.meta.url),
+    );
+    const config =
+      language === "dotnet"
+        ? { command: "dotnet", args: [absent + ".dll"] }
+        : { command: absent, args: [] };
+    await assert.rejects(
+      runConformance({ adapters: { [language]: config } }),
+      new RegExp(`${language} baseline adapter is missing`),
+    );
+  }
+  console.log(
+    "missing managed baselines: dotnet/jvm rejected before cluster startup",
   );
 });
 
@@ -241,8 +297,12 @@ function reports(languages) {
     })),
   }));
 }
-test("pair coverage requires exactly 1×1 or 4×4 results and permits only explicit host-clock exceptions", () => {
-  for (const languages of [["node"], inventory.languages]) {
+test("pair coverage requires complete matrices and permits only explicit host-clock exceptions", () => {
+  for (const languages of [
+    ["node"],
+    ["node", "dotnet", "jvm"],
+    inventory.languages,
+  ]) {
     const good = reports(languages);
     assert.deepEqual(checkCoverage(inventory, good, languages), []);
     for (const change of [
@@ -270,6 +330,17 @@ test("pair coverage requires exactly 1×1 or 4×4 results and permits only expli
     );
   }
   const host = reports(["node"]);
+  const threeLanguages = ["node", "dotnet", "jvm"];
+  const missingDotnetPair = reports(threeLanguages);
+  missingDotnetPair
+    .find((r) => r.language === "dotnet")
+    .cases.find((c) => c.pairs)
+    .pairs.pop();
+  assert.ok(
+    checkCoverage(inventory, missingDotnetPair, threeLanguages).some(
+      (failure) => failure.includes("missing pair"),
+    ),
+  );
   for (const c of host[0].cases)
     if (hostClockIds.has(c.id)) {
       c.status = "unverified";
