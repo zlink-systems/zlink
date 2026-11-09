@@ -289,7 +289,8 @@ internal sealed partial class SocketKernel : IDisposable
         BoundaryValidation.ValidateTopicOrFilterUtf8(topicOrPattern,
             nameof(topicOrPattern));
 
-        var rc = NativeMethods.zlink_set_subscription(Handle, topicOrPattern);
+        using var call = Reserve();
+        var rc = NativeMethods.zlink_set_subscription(call.Handle, topicOrPattern);
         ZlinkException.ThrowConfigIfError(rc);
     }
 
@@ -300,7 +301,8 @@ internal sealed partial class SocketKernel : IDisposable
         BoundaryValidation.ValidateTopicOrFilterUtf8(topicOrPattern,
             nameof(topicOrPattern));
 
-        var rc = NativeMethods.zlink_unset_subscription(Handle, topicOrPattern);
+        using var call = Reserve();
+        var rc = NativeMethods.zlink_unset_subscription(call.Handle, topicOrPattern);
         ZlinkException.ThrowConfigIfError(rc);
     }
 }

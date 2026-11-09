@@ -15,17 +15,6 @@ internal static class SocketInterop
         return concrete;
     }
 
-    internal static IntPtr RequirePollableHandle(IZlinkSocket socket,
-        string paramName)
-    {
-        if (socket == null)
-            throw new ArgumentNullException(paramName);
-        if (socket is not SocketBase concrete)
-            throw new ArgumentException(
-                "socket must be a concrete zlink socket instance", paramName);
-        return concrete.Handle;
-    }
-
     internal static DealerSocket RequireDealerSocket(IDealerSocket socket,
         string paramName)
     {

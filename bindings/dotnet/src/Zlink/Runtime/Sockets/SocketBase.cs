@@ -21,7 +21,7 @@ internal abstract class SocketBase : ISocket, ISocketOptionEndpoint
         Options = new CommonSocketOptions(this);
     }
 
-    internal IntPtr Handle => Kernel.Handle;
+    internal SocketHandle.Call Reserve() => Kernel.Reserve();
     internal SocketKernel Kernel { get; }
 
     public CommonSocketOptions Options { get; }
@@ -56,7 +56,8 @@ internal abstract class SocketBase : ISocket, ISocketOptionEndpoint
         if (keyPath == null)
             throw new ArgumentNullException(nameof(keyPath));
 
-        var rc = NativeMethods.zlink_set_tls_server(Handle, certPath, keyPath,
+        using var call = Reserve();
+        var rc = NativeMethods.zlink_set_tls_server(call.Handle, certPath, keyPath,
             requireClientCert ? 1 : 0);
         if (rc != 0)
             throw ZlinkException.CreateConfigException((ConfigResult)rc);
@@ -70,7 +71,8 @@ internal abstract class SocketBase : ISocket, ISocketOptionEndpoint
         if (hostname == null)
             throw new ArgumentNullException(nameof(hostname));
 
-        var rc = NativeMethods.zlink_set_tls_client(Handle, caCertPath, hostname,
+        using var call = Reserve();
+        var rc = NativeMethods.zlink_set_tls_client(call.Handle, caCertPath, hostname,
             trustSystem ? 1 : 0);
         if (rc != 0)
             throw ZlinkException.CreateConfigException((ConfigResult)rc);
@@ -78,7 +80,8 @@ internal abstract class SocketBase : ISocket, ISocketOptionEndpoint
 
     public void SetReceiveFlowState(ReceiveFlowState state)
     {
-        var rc = NativeMethods.zlink_socket_set_receive_flow_state(Handle,
+        using var call = Reserve();
+        var rc = NativeMethods.zlink_socket_set_receive_flow_state(call.Handle,
             (int)state);
         ZlinkException.ThrowConfigIfError(rc);
     }

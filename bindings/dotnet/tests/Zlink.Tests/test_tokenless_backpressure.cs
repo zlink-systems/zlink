@@ -16,12 +16,13 @@ public sealed class test_tokenless_backpressure
             "tokenless-reservation-limit"));
 
         const int reservationLimit = 65_536;
-        var pending = new Task<IReadOnlyList<Message>>[reservationLimit];
+        var pending = new RequestSubmission[reservationLimit];
         for (var i = 0; i < pending.Length; i++)
         {
             using Message part = Message.From("reserved");
-            pending[i] = dealer.Request().Message(part).Async().Reply;
-            Assert.False(pending[i].IsCompleted);
+            pending[i] = dealer.Request().Message(part).Async();
+            Assert.False(pending[i].Admitted.IsCompleted);
+            Assert.False(pending[i].Reply.IsCompleted);
         }
 
         try
@@ -41,10 +42,14 @@ public sealed class test_tokenless_backpressure
         finally
         {
             dealer.Close();
-            foreach (Task<IReadOnlyList<Message>> task in pending)
+            foreach (RequestSubmission submission in pending)
             {
+                ZlinkSubmitException admissionError = await Assert.ThrowsAsync<
+                    ZlinkSubmitException>(() => submission.Admitted);
+                Assert.Equal(ZlinkSubmitException.ErrorCode.Terminated,
+                    admissionError.Result);
                 ZlinkSubmitException error = await Assert.ThrowsAsync<
-                    ZlinkSubmitException>(() => task);
+                    ZlinkSubmitException>(() => submission.Reply);
                 Assert.Equal(ZlinkSubmitException.ErrorCode.Terminated,
                     error.Result);
             }

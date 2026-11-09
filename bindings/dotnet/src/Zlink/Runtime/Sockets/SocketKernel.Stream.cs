@@ -17,6 +17,7 @@ internal sealed partial class SocketKernel
         var bodyInitialized = false;
         try
         {
+            using var call = Reserve();
             var rc = NativeMethods.zlink_msg_init(ref header);
             if (rc != 0)
                 throw ZlinkException.CreateConfigException((ConfigResult)rc);
@@ -27,7 +28,7 @@ internal sealed partial class SocketKernel
                 throw ZlinkException.CreateConfigException((ConfigResult)rc);
             bodyInitialized = true;
 
-            rc = NativeMethods.zlink_stream_recv_packet(Handle,
+            rc = NativeMethods.zlink_stream_recv_packet(call.Handle,
                 out var sourceRoutingId, ref header, ref body, (int)flags);
             if ((RecvResult)rc == RecvResult.NoData
                 && (flags & RecvFlags.DontWait) != 0)

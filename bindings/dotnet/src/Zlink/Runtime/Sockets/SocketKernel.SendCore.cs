@@ -10,7 +10,7 @@ internal sealed partial class SocketKernel
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void SendSingleCore(Message message, int flags)
     {
-        var submitter = new SendSingleSubmitter(Handle, flags);
+        var submitter = new SendSingleSubmitter(_handle, flags);
         var rc = SinglePartSubmit.Submit(message, ref submitter);
         if (rc != 0)
             throw ZlinkException.CreateSubmitException((SubmitResult)rc);
@@ -19,14 +19,14 @@ internal sealed partial class SocketKernel
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private SendResult SendSingleResultCore(Message message, int flags)
     {
-        var submitter = new SendSingleSubmitter(Handle, flags);
+        var submitter = new SendSingleSubmitter(_handle, flags);
         return MapSendResult(SinglePartSubmit.Submit(message, ref submitter));
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private SendResult SendSingleNoWaitResultCore(Message message)
     {
-        var submitter = new SendSingleNoWaitSubmitter(Handle);
+        var submitter = new SendSingleNoWaitSubmitter(_handle);
         return MapSendResult(SinglePartSubmit.Submit(message, ref submitter));
     }
 
@@ -42,7 +42,7 @@ internal sealed partial class SocketKernel
     {
         fixed (byte* topicPtr = topicUtf8)
         {
-            var submitter = new PublishSingleSubmitter(Handle, topicPtr, flags);
+            var submitter = new PublishSingleSubmitter(_handle, topicPtr, flags);
             var rc = SinglePartSubmit.Submit(message, ref submitter);
             if (rc != 0)
                 throw ZlinkException.CreateSubmitException((SubmitResult)rc);
@@ -60,7 +60,7 @@ internal sealed partial class SocketKernel
     {
         fixed (byte* topicPtr = topicUtf8)
         {
-            var submitter = new PublishSingleSubmitter(Handle, topicPtr,
+            var submitter = new PublishSingleSubmitter(_handle, topicPtr,
                 DontWaitFlag);
             return MapSendResult(SinglePartSubmit.Submit(message, ref submitter));
         }
@@ -77,7 +77,7 @@ internal sealed partial class SocketKernel
     {
         fixed (ZlinkRoutingId* routingIdPtr = &routingId)
         {
-            var submitter = new TargetedSendSingleSubmitter(Handle, routingIdPtr,
+            var submitter = new TargetedSendSingleSubmitter(_handle, routingIdPtr,
                 flags);
             var rc = SinglePartSubmit.Submit(message, ref submitter);
             if (rc != 0)
@@ -91,7 +91,7 @@ internal sealed partial class SocketKernel
     {
         fixed (ZlinkRoutingId* routingIdPtr = &routingId)
         {
-            var submitter = new TargetedSendSingleSubmitter(Handle, routingIdPtr,
+            var submitter = new TargetedSendSingleSubmitter(_handle, routingIdPtr,
                 flags);
             return MapSendResult(SinglePartSubmit.Submit(message, ref submitter));
         }
@@ -102,7 +102,7 @@ internal sealed partial class SocketKernel
     {
         fixed (ZlinkRoutingId* routingIdPtr = &routingId)
         {
-            var submitter = new TargetedSendSingleNoWaitSubmitter(Handle,
+            var submitter = new TargetedSendSingleNoWaitSubmitter(_handle,
                 routingIdPtr);
             return MapSendResult(SinglePartSubmit.Submit(message, ref submitter));
         }
@@ -123,10 +123,10 @@ internal sealed partial class SocketKernel
     private unsafe readonly struct SendSingleSubmitter
         : INativeSinglePartSubmitter<SendSingleSubmitter>
     {
-        private readonly IntPtr _handle;
+        private readonly SocketHandle _handle;
         private readonly int _flags;
 
-        internal SendSingleSubmitter(IntPtr handle, int flags)
+        internal SendSingleSubmitter(SocketHandle handle, int flags)
         {
             _handle = handle;
             _flags = flags;
@@ -136,7 +136,8 @@ internal sealed partial class SocketKernel
         public static int Submit(ref SendSingleSubmitter submitter,
             ref ZlinkMsg nativePart)
         {
-            return NativeMethods.zlink_send(submitter._handle,
+            using var call = submitter._handle.Reserve(submit: true);
+            return NativeMethods.zlink_send(call.Handle,
                 ref nativePart, 1, submitter._flags);
         }
     }
@@ -144,9 +145,9 @@ internal sealed partial class SocketKernel
     private unsafe readonly struct SendSingleNoWaitSubmitter
         : INativeSinglePartSubmitter<SendSingleNoWaitSubmitter>
     {
-        private readonly IntPtr _handle;
+        private readonly SocketHandle _handle;
 
-        internal SendSingleNoWaitSubmitter(IntPtr handle)
+        internal SendSingleNoWaitSubmitter(SocketHandle handle)
         {
             _handle = handle;
         }
@@ -155,8 +156,9 @@ internal sealed partial class SocketKernel
         public static int Submit(ref SendSingleNoWaitSubmitter submitter,
             ref ZlinkMsg nativePart)
         {
+            using var call = submitter._handle.Reserve(submit: true);
             // DONT_WAIT-only critical variant: contractually non-blocking.
-            return NativeMethods.zlink_send_nowait(submitter._handle,
+            return NativeMethods.zlink_send_nowait(call.Handle,
                 ref nativePart, 1, DontWaitFlag);
         }
     }
@@ -164,11 +166,11 @@ internal sealed partial class SocketKernel
     private unsafe readonly struct PublishSingleSubmitter
         : INativeSinglePartSubmitter<PublishSingleSubmitter>
     {
-        private readonly IntPtr _handle;
+        private readonly SocketHandle _handle;
         private readonly byte* _topicPtr;
         private readonly int _flags;
 
-        internal PublishSingleSubmitter(IntPtr handle, byte* topicPtr,
+        internal PublishSingleSubmitter(SocketHandle handle, byte* topicPtr,
             int flags)
         {
             _handle = handle;
@@ -180,7 +182,8 @@ internal sealed partial class SocketKernel
         public static int Submit(ref PublishSingleSubmitter submitter,
             ref ZlinkMsg nativePart)
         {
-            return NativeMethods.zlink_publish_utf8(submitter._handle,
+            using var call = submitter._handle.Reserve(submit: true);
+            return NativeMethods.zlink_publish_utf8(call.Handle,
                 submitter._topicPtr, ref nativePart, 1, submitter._flags);
         }
     }
@@ -188,11 +191,11 @@ internal sealed partial class SocketKernel
     private unsafe readonly struct TargetedSendSingleSubmitter
         : INativeSinglePartSubmitter<TargetedSendSingleSubmitter>
     {
-        private readonly IntPtr _handle;
+        private readonly SocketHandle _handle;
         private readonly ZlinkRoutingId* _routingId;
         private readonly int _flags;
 
-        internal TargetedSendSingleSubmitter(IntPtr handle,
+        internal TargetedSendSingleSubmitter(SocketHandle handle,
             ZlinkRoutingId* routingId, int flags)
         {
             _handle = handle;
@@ -204,10 +207,11 @@ internal sealed partial class SocketKernel
         public static int Submit(ref TargetedSendSingleSubmitter submitter,
             ref ZlinkMsg nativePart)
         {
+            using var call = submitter._handle.Reserve(submit: true);
             return (submitter._flags & DontWaitFlag) != 0
-                ? NativeMethods.zlink_send_rid_nowait(submitter._handle,
+                ? NativeMethods.zlink_send_rid_nowait(call.Handle,
                     ref *submitter._routingId, ref nativePart, 1, submitter._flags)
-                : NativeMethods.zlink_send_rid(submitter._handle,
+                : NativeMethods.zlink_send_rid(call.Handle,
                     ref *submitter._routingId, ref nativePart, 1,
                     submitter._flags);
         }
@@ -216,10 +220,10 @@ internal sealed partial class SocketKernel
     private unsafe readonly struct TargetedSendSingleNoWaitSubmitter
         : INativeSinglePartSubmitter<TargetedSendSingleNoWaitSubmitter>
     {
-        private readonly IntPtr _handle;
+        private readonly SocketHandle _handle;
         private readonly ZlinkRoutingId* _routingId;
 
-        internal TargetedSendSingleNoWaitSubmitter(IntPtr handle,
+        internal TargetedSendSingleNoWaitSubmitter(SocketHandle handle,
             ZlinkRoutingId* routingId)
         {
             _handle = handle;
@@ -230,7 +234,8 @@ internal sealed partial class SocketKernel
         public static int Submit(ref TargetedSendSingleNoWaitSubmitter submitter,
             ref ZlinkMsg nativePart)
         {
-            return NativeMethods.zlink_send_rid_nowait(submitter._handle,
+            using var call = submitter._handle.Reserve(submit: true);
+            return NativeMethods.zlink_send_rid_nowait(call.Handle,
                 ref *submitter._routingId, ref nativePart, 1, DontWaitFlag);
         }
     }

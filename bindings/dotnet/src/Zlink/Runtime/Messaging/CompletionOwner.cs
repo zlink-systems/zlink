@@ -2,6 +2,7 @@
 
 using System.Runtime.InteropServices;
 using Systems.Zlink.Runtime.Native;
+using Systems.Zlink.Runtime.Sockets.Internal;
 
 namespace Systems.Zlink;
 
@@ -12,7 +13,7 @@ namespace Systems.Zlink;
 internal sealed class CompletionOwner
 {
     private const int DontWait = 1;
-    private readonly IntPtr _handle;
+    private readonly SocketHandle _handle;
     private readonly SocketType _socketType;
     private readonly object _sync = new();
     private readonly object _inlineDrainSync = new();
@@ -20,10 +21,9 @@ internal sealed class CompletionOwner
     private List<CompletionEntry>? _retries;
 
     private object? _publicOwner;
-    private bool _closing;
     private long _nextContext;
 
-    internal CompletionOwner(IntPtr handle, SocketType socketType)
+    internal CompletionOwner(SocketHandle handle, SocketType socketType)
     {
         _handle = handle;
         _socketType = socketType;
@@ -34,7 +34,6 @@ internal sealed class CompletionOwner
     {
         ValidateSend(parts);
         cancellationToken.ThrowIfCancellationRequested();
-        EnsureOpenForSubmit();
 
         // The entry is registered before the submit so that a WRITABLE record
         // pulled by the drain before this call returns finds it. Capture joins
@@ -44,9 +43,9 @@ internal sealed class CompletionOwner
         var context = IntPtr.Zero;
         if (hasPublicOwner || cancellationToken.CanBeCanceled)
         {
-            context = NextContext();
             entry = new SendCompletionEntry(this, target, cancellationToken);
-            Register(entry, context);
+            Register(entry);
+            context = entry.Context;
         }
         try
         {
@@ -110,7 +109,6 @@ internal sealed class CompletionOwner
 
     internal void Send(RoutingId? target, IReadOnlyList<Message> parts)
     {
-        EnsureOpenForSubmit();
         ValidateSend(parts);
         var attempt = SubmitSend(target, parts, 0, IntPtr.Zero);
         if (attempt.Failure is not null)
@@ -125,7 +123,6 @@ internal sealed class CompletionOwner
     {
         RequestReplySupport.EnsureParts(parts, nameof(parts));
         cancellationToken.ThrowIfCancellationRequested();
-        EnsureOpenForSubmit();
         EnsurePublicOwner();
 
         var entry = new RequestCompletionEntry(this, target, timeoutMs,
@@ -185,7 +182,6 @@ internal sealed class CompletionOwner
         IReadOnlyList<Message> parts, uint timeoutMs)
     {
         RequestReplySupport.EnsureParts(parts, nameof(parts));
-        EnsureOpenForSubmit();
         var entry = new RequestCompletionEntry(this, target, timeoutMs,
             CancellationToken.None);
         try
@@ -220,7 +216,6 @@ internal sealed class CompletionOwner
     internal void Reply(RoutingId target, ReplyToken replyToken,
         IReadOnlyList<Message> parts)
     {
-        EnsureOpenForSubmit();
         var submitter = new ReplyMessageSubmitter
         {
             Handle = _handle,
@@ -234,14 +229,17 @@ internal sealed class CompletionOwner
     // the stack. The submitter never escapes SubmitPreservingOnFailure.
     private struct ReplyMessageSubmitter : INativeMessageSubmitter<ReplyMessageSubmitter>
     {
-        internal IntPtr Handle;
+        internal SocketHandle Handle;
         internal ZlinkRoutingId Target;
         internal ulong ReplyToken;
 
         public static int Submit(ref ReplyMessageSubmitter self,
-            Span<ZlinkMsg> parts) =>
-            NativeMethods.zlink_reply(self.Handle, ref self.Target,
+            Span<ZlinkMsg> parts)
+        {
+            using var call = self.Handle.Reserve(submit: true);
+            return NativeMethods.zlink_reply(call.Handle, ref self.Target,
                 self.ReplyToken, ref parts[0], (nuint)parts.Length);
+        }
     }
 
     internal bool TransferToPublic(object pollerOwner)
@@ -249,8 +247,6 @@ internal sealed class CompletionOwner
         lock (_inlineDrainSync)
         lock (_sync)
         {
-            if (_closing)
-                throw new ZlinkConfigException(ConfigResult.InvalidState);
             if (_publicOwner is not null
                 && !ReferenceEquals(_publicOwner, pollerOwner))
                 throw new ZlinkConfigException(
@@ -276,19 +272,25 @@ internal sealed class CompletionOwner
         // Submissions register their entry before the native call and Capture
         // joins a pre-return completion inside that entry, so the drain needs
         // no lock shared with the submitters.
-        lock (_sync)
-            if (_closing)
-                return default;
         return DrainCore();
     }
 
-    internal void FailPublicWaitTerminated()
+    internal void FailLifecycle()
     {
         CompletionEntry[] entries;
         lock (_sync)
             entries = _entries.Values.ToArray();
         foreach (var entry in entries)
             entry.FailLifecycle();
+    }
+
+    private int ReceiveCompletion(ref ZlinkCompletion completion, int flags)
+    {
+        if (!_handle.TryReserve(out var call))
+            return (int)RecvResult.Terminated;
+        using (call)
+            return NativeMethods.zlink_completion_recv(call.Handle,
+                ref completion, flags);
     }
 
     private CompletionDrainResult DrainCore()
@@ -300,8 +302,13 @@ internal sealed class CompletionOwner
             ZlinkCompletion completion = default;
             completion.StructSize = checked(
                 (uint)Marshal.SizeOf<ZlinkCompletion>());
-            var rc = NativeMethods.zlink_completion_recv(_handle,
-                ref completion, DontWait);
+            var rc = ReceiveCompletion(ref completion, DontWait);
+            if ((RecvResult)rc == RecvResult.Terminated)
+            {
+                FailDrainWaits(RecvResult.Terminated);
+                _retries?.Clear();
+                return new CompletionDrainResult(processed, requests);
+            }
             if ((RecvResult)rc == RecvResult.NoData)
             {
                 // Core's part contract requires draining to NO_DATA before
@@ -350,21 +357,6 @@ internal sealed class CompletionOwner
         return completion.Kind == CompletionKind.Request;
     }
 
-    // Core close is fail-fast: it returns EBUSY while another call is in
-    // flight, so the binding neither waits for submitters nor retries. The
-    // caller settles the remaining entries only after Core accepted the close.
-    internal void CompleteClose()
-    {
-        CompletionEntry[] entries;
-        lock (_sync)
-        {
-            _closing = true;
-            entries = _entries.Values.ToArray();
-        }
-        foreach (var entry in entries)
-            entry.FailLifecycle();
-    }
-
     private void ValidateSend(IReadOnlyList<Message> parts)
     {
         RequestReplySupport.EnsureParts(parts, nameof(parts));
@@ -376,16 +368,13 @@ internal sealed class CompletionOwner
     // Core treats user_context as an opaque value. The registry roots entries;
     // monotonically increasing socket-local identities never reuse a GCHandle
     // address and require no managed/native handle-table round trip.
-    private IntPtr NextContext() =>
-        checked((IntPtr)Interlocked.Increment(ref _nextContext));
+    // Called only under _sync, together with insertion into _entries.
+    private IntPtr NextContext() => checked((IntPtr)(++_nextContext));
 
     private void Register(CompletionEntry entry, IntPtr context = default)
     {
         lock (_sync)
         {
-            if (_closing)
-                throw new ZlinkSubmitException(SubmitResult.Terminated,
-                    (int)ErrorCode.EShutdown);
             if (context == IntPtr.Zero)
                 context = NextContext();
             entry.Context = context;
@@ -403,13 +392,6 @@ internal sealed class CompletionOwner
         }
     }
 
-    private void EnsureOpenForSubmit()
-    {
-        if (Volatile.Read(ref _closing))
-            throw new ZlinkSubmitException(SubmitResult.Terminated,
-                (int)ErrorCode.EShutdown);
-    }
-
     private bool HasPublicOwner()
     {
         lock (_sync)
@@ -419,7 +401,11 @@ internal sealed class CompletionOwner
     private void EnsurePublicOwner()
     {
         if (!HasPublicOwner())
+        {
+            // Preserve TERMINATED precedence without a second lifecycle test.
+            using var call = _handle.Reserve(submit: true);
             throw new ZlinkSubmitException(SubmitResult.InvalidState);
+        }
     }
 
     private void Remove(CompletionEntry entry, IntPtr context)
@@ -458,7 +444,8 @@ internal sealed class CompletionOwner
 
     private unsafe struct SendMessageSubmitter : INativeMessageSubmitter<SendMessageSubmitter>
     {
-        internal IntPtr Handle, Context;
+        internal SocketHandle Handle;
+        internal IntPtr Context;
         internal ZlinkRoutingId Target;
         internal bool Routed;
         internal bool TrackCompletion;
@@ -468,14 +455,15 @@ internal sealed class CompletionOwner
         public static int Submit(ref SendMessageSubmitter self,
             Span<ZlinkMsg> parts)
         {
+            using var call = self.Handle.Reserve(submit: true);
             fixed (ulong* id = &self.CompletionId)
             {
                 var idOut = self.TrackCompletion ? id : null;
                 return self.Routed
-                    ? NativeMethods.zlink_send_rid(self.Handle,
+                    ? NativeMethods.zlink_send_rid(call.Handle,
                         ref self.Target, ref parts[0], (nuint)parts.Length,
                         self.Flags, self.Context, idOut)
-                    : NativeMethods.zlink_send(self.Handle,
+                    : NativeMethods.zlink_send(call.Handle,
                         ref parts[0], (nuint)parts.Length, self.Flags,
                         self.Context, idOut);
             }
@@ -508,7 +496,8 @@ internal sealed class CompletionOwner
 
     private unsafe struct RequestMessageSubmitter : INativeMessageSubmitter<RequestMessageSubmitter>
     {
-        internal IntPtr Handle, Context;
+        internal SocketHandle Handle;
+        internal IntPtr Context;
         internal ZlinkRoutingId Target;
         internal bool Routed;
         internal int Flags;
@@ -518,9 +507,10 @@ internal sealed class CompletionOwner
         public static int Submit(ref RequestMessageSubmitter self,
             Span<ZlinkMsg> parts)
         {
+            using var call = self.Handle.Reserve(submit: true);
             fixed (ZlinkRoutingId* target = &self.Target)
             fixed (ulong* id = &self.CompletionId)
-                return NativeMethods.zlink_request(self.Handle,
+                return NativeMethods.zlink_request(call.Handle,
                     self.Routed ? target : null, ref parts[0], (nuint)parts.Length,
                     self.Flags, self.TimeoutMs, self.Context, id);
         }
@@ -560,13 +550,14 @@ internal sealed class CompletionOwner
                 ZlinkCompletion completion = default;
                 completion.StructSize = checked(
                     (uint)Marshal.SizeOf<ZlinkCompletion>());
-                var rc = NativeMethods.zlink_completion_recv(_handle,
-                    ref completion, 0);
+                var rc = ReceiveCompletion(ref completion, 0);
                 if ((RecvResult)rc == RecvResult.NoData)
                     continue;
                 if ((RecvResult)rc != RecvResult.Ok)
                 {
                     FailDrainWaits((RecvResult)rc);
+                    if ((RecvResult)rc == RecvResult.Terminated)
+                        return;
                     throw ZlinkException.CreateRecvException((RecvResult)rc);
                 }
                 try
@@ -587,8 +578,6 @@ internal sealed class CompletionOwner
         CompletionEntry[] entries;
         lock (_sync)
         {
-            if (result == RecvResult.Terminated)
-                _closing = true;
             entries = _entries.Values.ToArray();
         }
 

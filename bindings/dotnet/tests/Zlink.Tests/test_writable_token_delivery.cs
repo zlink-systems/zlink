@@ -127,8 +127,9 @@ public sealed class test_writable_token_delivery
         Assert.True(CoreTestSupport.IsNativeAvailable());
         Type ownerType = CompletionOwnerTestAccess.RuntimeType(
             "Systems.Zlink.CompletionOwner");
-        object owner = CompletionOwnerTestAccess.Create(ownerType,
-            IntPtr.Zero, SocketType.Router);
+        using var context = Zlink.CreateContext();
+        using var router = context.CreateRouterSocket();
+        object owner = CompletionOwnerTestAccess.Owner(router);
         CompletionOwnerTestAccess.Invoke(owner, "TransferToPublic", new object());
         RoutingId target = CoreTestSupport.RoutingIdUtf8("original-target");
         Type entryType = ownerType.GetNestedType(request
@@ -172,6 +173,13 @@ public sealed class test_writable_token_delivery
         Assert.Equal((ZlinkSubmitException.ErrorCode)expectedResult, error.Result);
         Assert.Equal(CompletionOwnerTestAccess.Errno(expectedErrno),
             error.NativeErrno);
+        if (request)
+        {
+            Task admitted = (Task)CompletionOwnerTestAccess.Property(entry, "Admitted");
+            ZlinkSubmitException admissionError = await Assert.ThrowsAsync<ZlinkSubmitException>(
+                () => admitted);
+            Assert.Same(error, admissionError);
+        }
         Assert.Empty(CompletionOwnerTestAccess.Entries(owner));
     }
 }

@@ -35,13 +35,19 @@ internal sealed partial class SocketKernel : IDisposable
         {
             _handle.Dispose();
         }
+        catch (ZlinkCloseException exception) when (
+            exception.Result == ZlinkCloseException.ErrorCode.Shutdown)
+        {
+            _completion?.FailLifecycle();
+            throw;
+        }
         catch
         {
             if (finalizing)
-                _completion?.CompleteClose();
+                _completion?.FailLifecycle();
             throw;
         }
-        _completion?.CompleteClose();
+        _completion?.FailLifecycle();
         if (!finalizing)
             GC.SuppressFinalize(this);
     }

@@ -16,13 +16,13 @@ internal sealed partial class SocketKernel : IDisposable
 
     public SocketKernel(Context context, SocketType type)
     {
-        _handle = new SocketHandle(context, type);
+        _handle = new SocketHandle(this, context, type);
         _options = new SocketOptionAccessor(_handle);
         _policy = new SocketTypePolicy(type);
         _completion = CreateCompletionOwner(type);
     }
 
-    public IntPtr Handle => _handle.DangerousGetHandle();
+    internal SocketHandle.Call Reserve() => _handle.Reserve();
     public SocketType Type => _policy.SocketType;
     /// <summary>The socket-local pull-completion owner.</summary>
     internal CompletionOwner Completion
@@ -44,7 +44,7 @@ internal sealed partial class SocketKernel : IDisposable
     {
         return type is SocketType.Pair or SocketType.Dealer
             or SocketType.Router or SocketType.Stream
-            ? new CompletionOwner(Handle, type)
+            ? new CompletionOwner(_handle, type)
             : null;
     }
 

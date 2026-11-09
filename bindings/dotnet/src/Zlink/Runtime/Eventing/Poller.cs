@@ -33,7 +33,8 @@ internal sealed class Poller : NativeOwner, IPoller
     {
         EnsureNotDisposed();
         var concreteSocket = SocketInterop.RequireSocket(socket, nameof(socket));
-        var socketHandle = concreteSocket.Handle;
+        using var call = concreteSocket.Reserve();
+        var socketHandle = call.Handle;
         EnumValidation.EnsurePollEvents(events, nameof(events));
 
         var ownsCompletion = (events & PollEventFlags.PollCompletion) != 0;
@@ -100,8 +101,8 @@ internal sealed class Poller : NativeOwner, IPoller
     public void Modify(IZlinkSocket socket, PollEventFlags events)
     {
         EnsureNotDisposed();
-        var socketHandle = SocketInterop.RequirePollableHandle(socket,
-            nameof(socket));
+        using var call = SocketInterop.RequireSocket(socket, nameof(socket)).Reserve();
+        var socketHandle = call.Handle;
         EnumValidation.EnsurePollEvents(events, nameof(events));
 
         var index = FindSocket(socketHandle);
@@ -474,7 +475,7 @@ internal sealed class Poller : NativeOwner, IPoller
     {
         foreach (var item in _items)
             if (item.OwnsCompletion)
-                item.CompletionOwner!.FailPublicWaitTerminated();
+                item.CompletionOwner!.FailLifecycle();
     }
 
     private void EnsureNotDisposed()

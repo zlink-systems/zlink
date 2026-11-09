@@ -88,7 +88,8 @@ internal sealed partial class SocketKernel : IDisposable
             Events = (uint)events,
             MonitorHwmBytes = monitorHwmBytes
         };
-        var handle = NativeMethods.zlink_socket_monitor_open(Handle, in options);
+        using var call = Reserve();
+        var handle = NativeMethods.zlink_socket_monitor_open(call.Handle, in options);
         if (handle == IntPtr.Zero)
             throw ZlinkException.CreateConfigException(
                 NativeMethods.GetLastPInvokeError());

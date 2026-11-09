@@ -41,9 +41,10 @@ internal sealed class SocketOptionAccessor
 
     public unsafe void SetBytes(SocketOption option, ReadOnlySpan<byte> value)
     {
-        var handle = _handle.DangerousGetHandle();
         if (option == SocketOption.RoutingId)
         {
+            using var call = _handle.Reserve();
+            var handle = call.Handle;
             int rc;
             fixed (byte* ptr = value)
             {
@@ -120,9 +121,10 @@ internal sealed class SocketOptionAccessor
 
     public byte[] GetBytes(SocketOption option, int initialSize = 256)
     {
-        var handle = _handle.DangerousGetHandle();
         if (option == SocketOption.RoutingId)
         {
+            using var call = _handle.Reserve();
+            var handle = call.Handle;
             var rc = NativeMethods.zlink_get_routing_id(handle, out var routingId);
             ZlinkException.ThrowConfigIfError(rc);
             return NativeHelpers.ReadRoutingId(ref routingId);
@@ -181,22 +183,10 @@ internal sealed class SocketOptionAccessor
         return Encoding.UTF8.GetString(bytes, 0, len);
     }
 
-    public static SocketType ReadSocketType(IntPtr handle)
-    {
-        unsafe
-        {
-            var value = 0;
-            var size = (nuint)sizeof(int);
-            var rc = NativeMethods.zlink_get_option(handle, (int)SocketOption.Type,
-                new IntPtr(&value), ref size);
-            ZlinkException.ThrowConfigIfError(rc);
-            return (SocketType)value;
-        }
-    }
-
     private int SetCore(SocketOption option, IntPtr value, nuint length)
     {
-        var handle = _handle.DangerousGetHandle();
+        using var call = _handle.Reserve();
+        var handle = call.Handle;
         var code = (int)option;
         if ((code & 0xFF00) == 0x3100)
             return NativeMethods.zlink_set_router_option(handle, code, value,
@@ -218,7 +208,8 @@ internal sealed class SocketOptionAccessor
 
     private int GetCore(SocketOption option, IntPtr value, ref nuint length)
     {
-        var handle = _handle.DangerousGetHandle();
+        using var call = _handle.Reserve();
+        var handle = call.Handle;
         var code = (int)option;
         if ((code & 0xFF00) == 0x3100)
             return NativeMethods.zlink_get_router_option(handle, code, value,

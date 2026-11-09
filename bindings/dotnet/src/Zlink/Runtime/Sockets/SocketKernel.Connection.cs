@@ -11,7 +11,8 @@ internal sealed partial class SocketKernel : IDisposable
     {
         BoundaryValidation.ValidateFixedUtf8(address, nameof(address));
 
-        var rc = NativeMethods.zlink_bind(Handle, address);
+        using var call = Reserve();
+        var rc = NativeMethods.zlink_bind(call.Handle, address);
         if (rc != 0)
             throw ZlinkException.CreateBindException((BindResult)rc);
     }
@@ -20,7 +21,8 @@ internal sealed partial class SocketKernel : IDisposable
     {
         BoundaryValidation.ValidateFixedUtf8(address, nameof(address));
 
-        var rc = NativeMethods.zlink_connect(Handle, address);
+        using var call = Reserve();
+        var rc = NativeMethods.zlink_connect(call.Handle, address);
         if (rc != 0)
             throw ZlinkException.CreateConnectException((ConnectResult)rc);
     }
@@ -29,7 +31,8 @@ internal sealed partial class SocketKernel : IDisposable
     {
         BoundaryValidation.ValidateFixedUtf8(address, nameof(address));
 
-        var rc = NativeMethods.zlink_unbind(Handle, address);
+        using var call = Reserve();
+        var rc = NativeMethods.zlink_unbind(call.Handle, address);
         if (rc != 0)
             throw ZlinkException.CreateConnectException((ConnectResult)rc);
     }
@@ -38,7 +41,8 @@ internal sealed partial class SocketKernel : IDisposable
     {
         BoundaryValidation.ValidateFixedUtf8(address, nameof(address));
 
-        var rc = NativeMethods.zlink_disconnect(Handle, address);
+        using var call = Reserve();
+        var rc = NativeMethods.zlink_disconnect(call.Handle, address);
         if (rc != 0)
             throw ZlinkException.CreateConnectException((ConnectResult)rc);
     }
@@ -46,7 +50,8 @@ internal sealed partial class SocketKernel : IDisposable
     public void DisconnectRid(RoutingId peerRid)
     {
         var nativeRid = peerRid.ToNative();
-        var rc = NativeMethods.zlink_disconnect_rid(Handle, ref nativeRid);
+        using var call = Reserve();
+        var rc = NativeMethods.zlink_disconnect_rid(call.Handle, ref nativeRid);
         ZlinkException.ThrowConnectIfError(rc);
     }
 
@@ -54,13 +59,14 @@ internal sealed partial class SocketKernel : IDisposable
     {
         // Core ROUTER §10.1: BUFFER_TOO_SMALL reports the required row count
         // and keeps POLLROUTE readiness, so retry with that capacity.
+        using var call = Reserve();
         var rows = new ZlinkRouterRoute[InitialSnapshotRowCapacity];
         while (true)
         {
             int rc;
             nuint count;
             fixed (ZlinkRouterRoute* routes = rows)
-                rc = NativeMethods.zlink_router_routes_snapshot(Handle, routes,
+                rc = NativeMethods.zlink_router_routes_snapshot(call.Handle, routes,
                     (nuint)rows.Length, out count);
             if ((ConfigResult)rc == ConfigResult.BufferTooSmall
                 && count > (nuint)rows.Length)
@@ -82,6 +88,7 @@ internal sealed partial class SocketKernel : IDisposable
 
     public unsafe IReadOnlyList<ConnectionAttempt> ConnectionAttemptsSnapshot()
     {
+        using var call = Reserve();
         var rows = new ZlinkConnectionAttempt[InitialSnapshotRowCapacity];
         var endpointBytes = new byte[InitialConnectionEndpointBytesCapacity];
         while (true)
@@ -92,7 +99,7 @@ internal sealed partial class SocketKernel : IDisposable
             fixed (ZlinkConnectionAttempt* attempts = rows)
             fixed (byte* endpoints = endpointBytes)
                 rc = NativeMethods.zlink_socket_connection_attempts_snapshot(
-                    Handle, attempts, (nuint)rows.Length, out count,
+                    call.Handle, attempts, (nuint)rows.Length, out count,
                     endpoints, (nuint)endpointBytes.Length, out bytesUsed);
             // Core reports both required capacities without consuming readiness.
             // Only the final successful call supplies a coherent row/arena pair.

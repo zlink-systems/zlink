@@ -84,21 +84,24 @@ internal sealed partial class SocketKernel
                 ? PublishTopicEncoding.GetNullTerminatedUtf8(topic!)
                 : null;
             int rc;
-            if (kind == MultipartSubmitKind.Publish)
-                fixed (byte* topicPtr = publishTopicUtf8)
-                {
-                    rc = NativeMethods.zlink_publish_utf8(Handle,
-                        topicPtr, ref nativeParts[0], (nuint)built, flags);
-                }
-            else
-                rc = kind switch
-                {
-                    MultipartSubmitKind.Send => NativeMethods.zlink_send(
-                        Handle, ref nativeParts[0], (nuint)built, flags),
-                    MultipartSubmitKind.TargetedSend => NativeMethods.zlink_send_rid(
-                        Handle, ref routingId, ref nativeParts[0], (nuint)built, flags),
-                    _ => throw new InvalidOperationException()
-                };
+            using (var call = _handle.Reserve(submit: true))
+            {
+                if (kind == MultipartSubmitKind.Publish)
+                    fixed (byte* topicPtr = publishTopicUtf8)
+                    {
+                        rc = NativeMethods.zlink_publish_utf8(call.Handle,
+                            topicPtr, ref nativeParts[0], (nuint)built, flags);
+                    }
+                else
+                    rc = kind switch
+                    {
+                        MultipartSubmitKind.Send => NativeMethods.zlink_send(
+                            call.Handle, ref nativeParts[0], (nuint)built, flags),
+                        MultipartSubmitKind.TargetedSend => NativeMethods.zlink_send_rid(
+                            call.Handle, ref routingId, ref nativeParts[0], (nuint)built, flags),
+                        _ => throw new InvalidOperationException()
+                    };
+            }
 
             // Every returned Core result consumes the entire native record.
             consumed = built;

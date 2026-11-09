@@ -267,7 +267,7 @@ public sealed class test_socket_concurrency
 
 
     [Fact]
-    public void single_multipart_and_close_race_exposes_only_core_outcomes()
+    public void single_multipart_and_close_race_exposes_only_success_or_terminated()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -291,7 +291,6 @@ public sealed class test_socket_concurrency
         var unexpected = new ConcurrentQueue<Exception>();
         var attempted = 0;
         var succeeded = 0;
-        var multipartRejected = 0;
         var shutdown = 0;
         var closeBusy = 0;
         var closeAccepted = 0;
@@ -316,19 +315,7 @@ public sealed class test_socket_concurrency
                         Interlocked.Increment(ref succeeded);
                     }
                     catch (ZlinkSubmitException exception) when (
-                        exception.Result ==
-                        ZlinkSubmitException.ErrorCode.InvalidArgument)
-                    {
-                        Interlocked.Increment(ref multipartRejected);
-                    }
-                    catch (ZlinkSubmitException exception) when (
-                        exception.Result is ZlinkSubmitException.ErrorCode.Terminated
-                            or ZlinkSubmitException.ErrorCode.InvalidHandle
-                            or ZlinkSubmitException.ErrorCode.NotConnected)
-                    {
-                        Interlocked.Increment(ref shutdown);
-                    }
-                    catch (ObjectDisposedException)
+                        exception.Result == ZlinkSubmitException.ErrorCode.Terminated)
                     {
                         Interlocked.Increment(ref shutdown);
                     }
@@ -381,12 +368,11 @@ public sealed class test_socket_concurrency
         Assert.True(closeThread.Join(TimeSpan.FromSeconds(5)));
 
         _output.WriteLine(
-            $"attempts={totalAttempts} succeeded={succeeded} multipart_rejected={multipartRejected} shutdown={shutdown} close_busy={closeBusy} close_accepted={closeAccepted}");
+            $"attempts={totalAttempts} succeeded={succeeded} shutdown={shutdown} close_busy={closeBusy} close_accepted={closeAccepted}");
         Assert.Empty(unexpected);
         Assert.Equal(totalAttempts,
-            succeeded + multipartRejected + shutdown);
+            succeeded + shutdown);
         Assert.True(succeeded > 0);
-        Assert.True(multipartRejected >= 0);
         Assert.Equal(1, closeAccepted);
     }
 

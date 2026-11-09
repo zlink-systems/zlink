@@ -100,7 +100,9 @@ public sealed class test_optimization_guard
             StringComparison.Ordinal);
         Assert.Contains("DrainInline(entry);", source,
             StringComparison.Ordinal);
-        Assert.Contains("zlink_completion_recv(_handle,", source,
+        Assert.Contains("NativeMethods.zlink_completion_recv(", source,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("private readonly IntPtr _handle;", source,
             StringComparison.Ordinal);
     }
 

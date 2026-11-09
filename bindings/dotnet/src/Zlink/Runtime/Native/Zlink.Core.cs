@@ -41,8 +41,11 @@ public static partial class Zlink
             ? null
             : SocketInterop.RequireSocket(capture, nameof(capture));
 
-        var rc = NativeMethods.zlink_proxy(frontendSocket.Handle,
-            backendSocket.Handle, captureSocket?.Handle ?? IntPtr.Zero);
+        using var frontendCall = frontendSocket.Reserve();
+        using var backendCall = backendSocket.Reserve();
+        using var captureCall = captureSocket?.Reserve();
+        var rc = NativeMethods.zlink_proxy(frontendCall.Handle,
+            backendCall.Handle, captureCall?.Handle ?? IntPtr.Zero);
         if (rc != 0)
             throw ZlinkException.CreateConfigException((ConfigResult)rc);
     }

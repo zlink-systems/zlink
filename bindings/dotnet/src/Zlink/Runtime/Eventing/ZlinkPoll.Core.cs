@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
+using System.Buffers;
 using Systems.Zlink.Runtime.Native;
+using Systems.Zlink.Runtime.Sockets.Internal;
 
 namespace Systems.Zlink;
 
@@ -57,51 +59,63 @@ public static partial class ZlinkPoll
         if (count <= 0)
             return 0;
 
-        long boundedTimeoutMs = Math.Max(0, timeoutMs);
-        if (OperatingSystem.IsWindows())
+        var calls = ArrayPool<SocketHandle.Call>.Shared.Rent(count);
+        var reserved = 0;
+        try
         {
-            var items = EnsureWindowsCapacity(count);
-            for (var i = 0; i < count; i++)
+            for (; reserved < count; reserved++)
+                calls[reserved] = SocketInterop.RequireSocket(sockets[reserved],
+                    nameof(sockets)).Reserve();
+            long boundedTimeoutMs = Math.Max(0, timeoutMs);
+            if (OperatingSystem.IsWindows())
             {
-                items[i].Socket = SocketInterop
-                    .RequireSocket(sockets[i], nameof(sockets)).Handle;
-                items[i].Fd = 0;
-                items[i].Events = (short)(events == null
-                    ? PollEventFlags.PollIn
-                    : events[i]);
-                items[i].Revents = 0;
+                var items = EnsureWindowsCapacity(count);
+                for (var i = 0; i < count; i++)
+                {
+                    items[i].Socket = calls[i].Handle;
+                    items[i].Fd = 0;
+                    items[i].Events = (short)(events == null
+                        ? PollEventFlags.PollIn
+                        : events[i]);
+                    items[i].Revents = 0;
+                }
+
+                var rc = NativeMethods.zlink_poll(items, count, boundedTimeoutMs,
+                    out var windowsErrorOut);
+                if (rc < 0)
+                    throw ZlinkException.CreateConfigException((ConfigResult)windowsErrorOut);
+                if (writeRevents)
+                    for (var i = 0; i < count; i++)
+                        revents[i] = (PollEventFlags)items[i].Revents;
+                return rc;
             }
 
-            var rc = NativeMethods.zlink_poll(items, count, boundedTimeoutMs,
-                out var windowsErrorOut);
-            if (rc < 0)
-                throw ZlinkException.CreateConfigException((ConfigResult)windowsErrorOut);
+            var unixItems = EnsureUnixCapacity(count);
+            for (var i = 0; i < count; i++)
+            {
+                unixItems[i].Socket = calls[i].Handle;
+                unixItems[i].Fd = 0;
+                unixItems[i].Events = (short)(events == null
+                    ? PollEventFlags.PollIn
+                    : events[i]);
+                unixItems[i].Revents = 0;
+            }
+
+            var unixRc = NativeMethods.zlink_poll(unixItems, count,
+                boundedTimeoutMs, out var errorOut);
+            if (unixRc < 0)
+                throw ZlinkException.CreateConfigException((ConfigResult)errorOut);
             if (writeRevents)
                 for (var i = 0; i < count; i++)
-                    revents[i] = (PollEventFlags)items[i].Revents;
-            return rc;
+                    revents[i] = (PollEventFlags)unixItems[i].Revents;
+            return unixRc;
         }
-
-        var unixItems = EnsureUnixCapacity(count);
-        for (var i = 0; i < count; i++)
+        finally
         {
-            unixItems[i].Socket = SocketInterop
-                .RequireSocket(sockets[i], nameof(sockets)).Handle;
-            unixItems[i].Fd = 0;
-            unixItems[i].Events = (short)(events == null
-                ? PollEventFlags.PollIn
-                : events[i]);
-            unixItems[i].Revents = 0;
+            for (var i = reserved - 1; i >= 0; i--)
+                calls[i].Dispose();
+            ArrayPool<SocketHandle.Call>.Shared.Return(calls, clearArray: true);
         }
-
-        var unixRc = NativeMethods.zlink_poll(unixItems, count,
-            boundedTimeoutMs, out var errorOut);
-        if (unixRc < 0)
-            throw ZlinkException.CreateConfigException((ConfigResult)errorOut);
-        if (writeRevents)
-            for (var i = 0; i < count; i++)
-                revents[i] = (PollEventFlags)unixItems[i].Revents;
-        return unixRc;
     }
 
     private static int PollMonitorsCore(

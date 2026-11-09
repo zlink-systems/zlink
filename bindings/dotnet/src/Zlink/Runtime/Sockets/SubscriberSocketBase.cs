@@ -30,7 +30,8 @@ internal abstract class SubscriberSocketBase : ConnectableSocketBase, ISubscribe
 
     public SubscriptionEntry? SubscriptionAt(int index)
     {
-        return SubscriptionIntrospection.At(Handle, index);
+        using var call = Reserve();
+        return SubscriptionIntrospection.At(call.Handle, index);
     }
 
     public bool Subscribe(TopicMessage result, RecvFlags flags = RecvFlags.None)
