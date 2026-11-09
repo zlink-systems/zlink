@@ -26,6 +26,7 @@ find_package(Threads REQUIRED)
 
 option(ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE "Build bindings/cpp from the workspace (explicit opt-in)" OFF)
 option(ZLINK_FRAMEWORK_CPP_BUILD_TESTS "Build C++ framework tests" ON)
+option(ZLINK_FRAMEWORK_CPP_WITH_ETCD "Build the etcd location store extension (requires gRPC)" OFF)
 option(ZLINK_FRAMEWORK_CPP_TEST_PROBES "Enable creation probes for C++ framework tests (not installable)" OFF)
 option(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS "Build isolated C++ service foundation tests" ON)
 option(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES "Build C++ framework samples (opt-in; samples/sample-build-common.sh enables it for each samples/<Sample>/run_sample.sh)" OFF)
@@ -664,6 +665,18 @@ if(_zlink_framework_redis_target)
 endif()
 
 
+set(ZLINK_FRAMEWORK_ETCD_EXPORT_DEPENDENCIES "")
+if(ZLINK_FRAMEWORK_CPP_WITH_ETCD)
+  # The extension and its parent-directory test target share the transport targets.
+  find_package(gRPC CONFIG REQUIRED)
+  add_subdirectory(extensions/framework-locations-etcd)
+  string(CONCAT ZLINK_FRAMEWORK_ETCD_EXPORT_DEPENDENCIES
+    "if(EXISTS \"\${CMAKE_CURRENT_LIST_DIR}/zlink_framework_cppLocationsEtcdTargets.cmake\")\n"
+    "  find_dependency(gRPC CONFIG)\n"
+    "  include(\"\${CMAKE_CURRENT_LIST_DIR}/zlink_framework_cppLocationsEtcdTargets.cmake\")\n"
+    "endif()")
+endif()
+
 set(ZLINK_FRAMEWORK_CPP_PACKAGE_DEPENDENCY_PREFIX_PATH
   ${CMAKE_PREFIX_PATH})
 # Every dependency the installed package config resolves with
@@ -671,7 +684,7 @@ set(ZLINK_FRAMEWORK_CPP_PACKAGE_DEPENDENCY_PREFIX_PATH
 foreach(dependency_dir IN ITEMS
     "${redis++_DIR}" "${hiredis_DIR}" "${libuv_DIR}"
     "${opentelemetry-cpp_DIR}" "${nlohmann_json_DIR}" "${Protobuf_DIR}"
-    "${protobuf_DIR}")
+    "${protobuf_DIR}" "${gRPC_DIR}")
   if(dependency_dir)
     list(APPEND ZLINK_FRAMEWORK_CPP_PACKAGE_DEPENDENCY_PREFIX_PATH
       "${dependency_dir}")
@@ -693,6 +706,12 @@ if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
     zlink_framework_locations_redis
     EXPORT zlink_framework_cppLocationsRedisTargets
     COMPONENT Framework)
+  if(ZLINK_FRAMEWORK_CPP_WITH_ETCD)
+    install(TARGETS
+      zlink_framework_locations_etcd
+      EXPORT zlink_framework_cppLocationsEtcdTargets
+      COMPONENT Framework)
+  endif()
   install(TARGETS
     zlink_http_client
     EXPORT zlink_http_client_cppTargets
@@ -702,6 +721,10 @@ if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
     zlink_framework_provider_abstractions Framework)
   zlink_framework_cpp_restrict_installed_static_archive(
     zlink_framework_locations_redis Framework)
+  if(ZLINK_FRAMEWORK_CPP_WITH_ETCD)
+    zlink_framework_cpp_restrict_installed_static_archive(
+      zlink_framework_locations_etcd Framework)
+  endif()
   zlink_framework_cpp_restrict_installed_static_archive(zlink_http_client HttpClient)
 endif()
 if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK
@@ -814,6 +837,12 @@ if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     COMPONENT Framework
     FILES_MATCHING PATTERN "*.hpp")
+  if(ZLINK_FRAMEWORK_CPP_WITH_ETCD)
+    install(DIRECTORY extensions/framework-locations-etcd/include/
+      DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+      COMPONENT Framework
+      FILES_MATCHING PATTERN "*.hpp")
+  endif()
   install(EXPORT zlink_framework_cppTargets
     NAMESPACE zlink::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_framework_cpp
@@ -828,6 +857,13 @@ if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
     FILE zlink_framework_cppLocationsRedisTargets.cmake
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_framework_cpp
     COMPONENT Framework)
+  if(ZLINK_FRAMEWORK_CPP_WITH_ETCD)
+    install(EXPORT zlink_framework_cppLocationsEtcdTargets
+      NAMESPACE zlink::
+      FILE zlink_framework_cppLocationsEtcdTargets.cmake
+      DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_framework_cpp
+      COMPONENT Framework)
+  endif()
   install(EXPORT zlink_http_client_cppTargets
     NAMESPACE zlink::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_http_client_cpp
@@ -3335,6 +3371,37 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       TIER integration
       TIMEOUT 30)
   endif()
+  if(ZLINK_FRAMEWORK_CPP_WITH_ETCD)
+    add_executable(test_cpp_framework_locations_etcd
+      extensions/framework-locations-etcd/tests/test_etcd.cpp
+      ${ZLINK_ETCD_GENERATED_HEADERS})
+    zlink_enable_coverage(test_cpp_framework_locations_etcd)
+    target_use_zlink_gtest_main(test_cpp_framework_locations_etcd)
+    target_link_libraries(test_cpp_framework_locations_etcd PRIVATE
+      zlink::framework_locations_etcd gRPC::grpc++ protobuf::libprotobuf nlohmann_json::nlohmann_json)
+    target_include_directories(test_cpp_framework_locations_etcd PRIVATE
+      "${ZLINK_ETCD_GENERATED_DIR}"
+      "${ZLINK_FRAMEWORK_CPP_DIR}/extensions/framework-locations-etcd/src")
+    target_compile_definitions(test_cpp_framework_locations_etcd PRIVATE
+      ZLINK_ETCD_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/location-store-etcd-v1.json"
+      ZLINK_ETCD_TLS_DIR="${ZLINK_FRAMEWORK_CPP_DIR}/extensions/framework-locations-etcd/tests/tls")
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_locations_etcd
+      COMMAND test_cpp_framework_locations_etcd --gtest_filter=-EtcdLive.*
+      LABELS "framework-unit;framework-location"
+      TIMEOUT 120)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_locations_etcd_live
+      COMMAND test_cpp_framework_locations_etcd --gtest_filter=EtcdLive.*
+      LABELS "framework-extension;framework-location"
+      TIER integration
+      TIMEOUT 120)
+  endif()
+  set(_zlink_framework_static_archives
+    "$<TARGET_FILE_NAME:zlink_framework>;$<TARGET_FILE_NAME:zlink_framework_provider_abstractions>;$<TARGET_FILE_NAME:zlink_http_client>;$<TARGET_FILE_NAME:zlink_framework_locations_redis>;$<TARGET_FILE_NAME:zlink_stream_connector>")
+  if(ZLINK_FRAMEWORK_CPP_WITH_ETCD)
+    list(APPEND _zlink_framework_static_archives "$<TARGET_FILE_NAME:zlink_framework_locations_etcd>")
+  endif()
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_install_consumer
     COMMAND ${CMAKE_COMMAND}
@@ -3345,8 +3412,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       "-DZLINK_FRAMEWORK_CPP_DEPENDENCY_PREFIX_PATH=${ZLINK_FRAMEWORK_CPP_PACKAGE_DEPENDENCY_PREFIX_PATH}"
       -DZLINK_FRAMEWORK_CPP_EXPECT_REDIS_PLUS_PLUS=${ZLINK_FRAMEWORK_REDIS_EXPORTS_REDIS_PLUS_PLUS}
       -DZLINK_FRAMEWORK_CPP_EXPECT_LIBUV=${ZLINK_FRAMEWORK_REDIS_EXPORTS_LIBUV}
+      -DZLINK_FRAMEWORK_CPP_EXPECT_ETCD=${ZLINK_FRAMEWORK_CPP_WITH_ETCD}
       -DZLINK_FRAMEWORK_CPP_HIDES_STATIC_ARCHIVES=${ZLINK_FRAMEWORK_CPP_HIDES_STATIC_ARCHIVES}
-      "-DZLINK_FRAMEWORK_CPP_STATIC_ARCHIVES=$<TARGET_FILE_NAME:zlink_framework>;$<TARGET_FILE_NAME:zlink_framework_provider_abstractions>;$<TARGET_FILE_NAME:zlink_http_client>;$<TARGET_FILE_NAME:zlink_framework_locations_redis>;$<TARGET_FILE_NAME:zlink_stream_connector>"
+      "-DZLINK_FRAMEWORK_CPP_STATIC_ARCHIVES=${_zlink_framework_static_archives}"
       -DZLINK_FRAMEWORK_CPP_STATIC_ARCHIVE_TOOLS_DIR=${ZLINK_STATIC_ARCHIVE_TOOLS_DIR}
       -DZLINK_FRAMEWORK_CPP_SHARED_SYMBOLS_MAP=${CMAKE_CURRENT_LIST_DIR}/cmake/zlink-framework-shared-symbols.map
       -DZLINK_FRAMEWORK_CPP_NM=${CMAKE_NM}

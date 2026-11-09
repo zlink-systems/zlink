@@ -192,9 +192,29 @@ target_link_libraries(consumer PRIVATE
   zlink::stream_connector_throwing)
 ]=])
 
+if(ZLINK_FRAMEWORK_CPP_EXPECT_ETCD)
+  file(APPEND "${consumer_source_dir}/CMakeLists.txt" [=[
+target_link_libraries(consumer PRIVATE zlink::framework_locations_etcd)
+target_compile_definitions(consumer PRIVATE ZLINK_CONSUMER_WITH_ETCD=1)
+]=])
+else()
+  if(EXISTS "${consumer_install_prefix}/include/zlink/locations/etcd.hpp"
+      OR EXISTS "${consumer_install_prefix}/lib/cmake/zlink_framework_cpp/zlink_framework_cppLocationsEtcdTargets.cmake")
+    message(FATAL_ERROR "etcd artifacts were installed with the extension disabled")
+  endif()
+  file(APPEND "${consumer_source_dir}/CMakeLists.txt" [=[
+if(TARGET zlink::framework_locations_etcd)
+  message(FATAL_ERROR "etcd target is available with the extension disabled")
+endif()
+]=])
+endif()
+
 file(WRITE "${consumer_source_dir}/main.cpp" [=[
 #include <zlink/framework.hpp>
 #include <zlink/locations/redis.hpp>
+#ifdef ZLINK_CONSUMER_WITH_ETCD
+#include <zlink/locations/etcd.hpp>
+#endif
 #include <zlink/http_client.hpp>
 #include <zlink/stream_connector.hpp>
 #include <zlink/stream_connector/codecs/auto_codec.hpp>
@@ -202,12 +222,11 @@ file(WRITE "${consumer_source_dir}/main.cpp" [=[
 #include <zlink/stream_e2e_client.hpp>
 #include <zlink/stream_e2e_client/codecs/auto_codec.hpp>
 
-#include <nlohmann/json.hpp>
-
 #include <boost/asio.hpp>
 
 #include <chrono>
 #include <thread>
+#include <tuple>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -221,6 +240,17 @@ struct room_view_t
 {
   static constexpr const char *packet_name = "RoomView";
   int value = 0;
+};
+
+template <> struct zlink::json::dto_traits<login_request_t>
+{
+  static constexpr auto fields = std::tuple{};
+};
+
+template <> struct zlink::json::dto_traits<room_view_t>
+{
+  static constexpr auto fields = std::tuple{
+    zlink::json::field ("value", &room_view_t::value)};
 };
 
 template <typename T>
@@ -251,24 +281,6 @@ static_assert (
                  zlink::framework::task_t<zlink::framework::location_page_t<
                    zlink::framework::location_object_entry_t>>>);
 
-void
-to_json (nlohmann::json &json, const login_request_t &)
-{
-  json = nlohmann::json::object ();
-}
-
-void
-to_json (nlohmann::json &json, const room_view_t &view)
-{
-  json = nlohmann::json{{"value", view.value}};
-}
-
-void
-from_json (const nlohmann::json &json, room_view_t &view)
-{
-  view.value = json.value ("value", 0);
-}
-
 int
 main ()
 {
@@ -288,6 +300,11 @@ main ()
     zlink::framework::redis::redis_relocation_store_t(relocation_options);
   (void) location_store;
   (void) relocation_store;
+#ifdef ZLINK_CONSUMER_WITH_ETCD
+  auto etcd_store = zlink::framework::etcd::etcd_location_store_t (
+    {.endpoints = {"http://127.0.0.1:2379"}, .key_namespace = "package-test"});
+  (void) etcd_store;
+#endif
   auto client = zlink::http_client::client_t::create ()
                   .base_url ("http://127.0.0.1:18080")
                   .build ();
@@ -335,6 +352,9 @@ set(consumer_configure_command
   "${CMAKE_COMMAND}" -S "${consumer_source_dir}" -B "${consumer_build_dir}"
   "-DCMAKE_PREFIX_PATH=${consumer_prefix_path}"
   "-DZLINK_CONSUMER_BOOST_INCLUDE_DIR=${ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR}")
+if(NOT ZLINK_FRAMEWORK_CPP_EXPECT_ETCD)
+  list(APPEND consumer_configure_command "-DCMAKE_DISABLE_FIND_PACKAGE_gRPC=ON")
+endif()
 if(NOT ZLINK_FRAMEWORK_CPP_IS_MULTI_CONFIG)
   list(APPEND consumer_configure_command
     "-DCMAKE_BUILD_TYPE=${ZLINK_FRAMEWORK_CPP_CONFIGURATION}")
