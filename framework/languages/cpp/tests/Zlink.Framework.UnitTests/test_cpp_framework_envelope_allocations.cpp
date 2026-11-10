@@ -472,8 +472,8 @@ TEST (EnvelopeAllocations, MailboxRecordDoesNotConstructAnUnusedContentType)
     const auto allocations =
       count_allocations ([&] { actual = ::new (static_cast<void *> (actual_storage)) record_t{}; });
     EXPECT_EQ (allocations, container_allocations);
-    EXPECT_TRUE (baseline->parts.empty ());
-    EXPECT_TRUE (actual->parts.empty ());
+    EXPECT_TRUE (baseline->parts ().empty ());
+    EXPECT_TRUE (actual->parts ().empty ());
     std::destroy_at (baseline);
     std::destroy_at (actual);
 }

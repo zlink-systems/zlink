@@ -24,11 +24,9 @@ void require (bool value, const char *message)
 
 record_t record ()
 {
-    record_t value;
-    value.owner = "node";
-    value.domain = mesh::service_mailbox_domain_t::application;
-    value.parts.emplace_back ();
-    return value;
+    std::vector<zlink::message_t> parts (1);
+    return record_t::from_parts ("node", mesh::service_mailbox_domain_t::application,
+                                 std::move (parts));
 }
 
 void rotate (mailbox_t &mailbox, std::size_t count)

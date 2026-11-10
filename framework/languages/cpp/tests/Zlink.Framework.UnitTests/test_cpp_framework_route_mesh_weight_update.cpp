@@ -777,7 +777,7 @@ TEST_P (ChannelMessageFlow, RouteMeshRequestAndSendRecordAllReceiverStages)
     }));
     auto &received = *claim->records.front ();
     auto parts = protocol::decode_application_parts (
-      protocol::decode_application_payload (protocol::message_bytes (received.parts[1]), true));
+      protocol::decode_application_payload (protocol::message_bytes (received.parts ()[1]), true));
     runtime::messaging::message_parts_t encoded (std::move (parts));
     auto header = runtime::messaging::envelope_codec_t{}.decode_header (encoded, true).value ();
     header.kind = request ? runtime::messaging::message_kind_t::request

@@ -3047,6 +3047,24 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   endif()
   target_sources(test_cpp_framework_completion_allocations PRIVATE
     tests/support/allocation_counter.cpp)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND ZLINK_FRAMEWORK_CPP_TEST_PROBES
+      AND NOT ZLINK_FRAMEWORK_CPP_SHARED)
+    add_zlink_framework_test(
+      test_cpp_framework_receive_record
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_record.cpp
+      "framework-unit;framework-contract;framework-regression;messaging"
+      "unit")
+    target_use_zlink_gtest_main(test_cpp_framework_receive_record)
+    target_sources(test_cpp_framework_receive_record PRIVATE tests/support/native_call_counter.cpp)
+    foreach(_native_call IN ITEMS zlink_msg_init zlink_msg_init_size zlink_msg_init_data zlink_msg_copy zlink_msg_close zlink_poller_wait)
+      target_link_options(test_cpp_framework_receive_record PRIVATE "-Wl,--wrap=${_native_call}")
+    endforeach()
+    target_include_directories(test_cpp_framework_receive_record PRIVATE
+      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+    target_link_options(test_cpp_framework_receive_record PRIVATE
+      "LINKER:--wrap=_ZNK5zlink9message_t8to_bytesEv"
+      "LINKER:--wrap=_ZNK5zlink9message_t5cloneEv")
+  endif()
   add_zlink_framework_test(
     test_cpp_framework_receive_allocations
     tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_allocations.cpp

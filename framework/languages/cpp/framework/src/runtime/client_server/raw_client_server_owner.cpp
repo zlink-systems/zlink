@@ -475,24 +475,25 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
     }
     if (budget != nullptr) {
         std::size_t bytes = 0;
-        for (const auto &part : received->parts)
+        for (const auto &part : received->parts ())
             bytes += part.size ();
         budget->account (bytes);
     }
     const bool is_control =
-      !received->parts.empty ()
-      && is_service_control_frame (protocol::message_bytes (received->parts.front ()));
+      !received->parts ().empty ()
+      && is_service_control_frame (protocol::message_bytes (received->parts ().front ()));
     std::optional<result_t<messaging::envelope_header_t>> application_header;
     std::optional<messaging::envelope_header_t> rejection_context;
-    if (!is_control && received->parts.size () == 2) {
+    if (!is_control && received->parts ().size () == 2) {
         application_header.emplace (messaging::envelope_codec_t{}.decode_header (
-          received->parts.front (),
+          received->parts ().front (),
           dispatch_options && detail::message_flow_tracer_t (*dispatch_options).flow_tracing (),
           &rejection_context));
         if (*application_header) {
             const auto &envelope = application_header->value ();
             if (envelope.channel_name == channel_name
-                && ((envelope.kind == messaging::message_kind_t::request && received->reply_token)
+                && ((envelope.kind == messaging::message_kind_t::request
+                     && received->reply_token ())
                     || envelope.kind == messaging::message_kind_t::command)) {
                 co_return co_await enqueue_application_record (
                   std::move (*received), std::move (application_header->value ()),
@@ -504,20 +505,18 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
         (void) co_await enqueue_application_records (*application_records, dispatch_options);
     if (!is_control) {
         if (application_header && !*application_header) {
-            const bool admitted = co_await _lane.run_task ([this, &received, now] {
-                const auto peer = _connections.find (received->source_routing_id);
+            auto rejected = mesh::service_mailbox_record_t::from_received (
+              channel_name, mesh::service_mailbox_domain_t::application, std::move (*received));
+            const bool admitted = co_await _lane.run_task ([this, &rejected, now] {
+                const auto peer = _connections.find (rejected.source_routing_id);
                 if (peer == _connections.end () || !peer->second)
                     return false;
                 if (detail::backend::is_route_connection (peer->second->connection_id,
-                                                          received->route_generation))
+                                                          rejected.received.route_generation ()))
                     peer->second->record_received (now);
                 return true;
             });
-            if (admitted && received->reply_token) {
-                mesh::service_mailbox_record_t rejected{
-                  channel_name, mesh::service_mailbox_domain_t::application,
-                  std::move (received->parts), std::move (received->source_routing_id),
-                  received->reply_token};
+            if (admitted && rejected.reply_token ()) {
                 if (rejection_context)
                     rejected.envelope_header = std::move (*rejection_context);
                 else {
@@ -541,9 +540,7 @@ raw_client_server_server_t::consume_control (const zlink::received_t &received)
     if (received.parts ().empty ()
         || !is_service_control_frame (protocol::message_bytes (received.parts ().front ())))
         return std::nullopt;
-    detail::backend::raw_received_t control{
-      received.routing_id () ? received.routing_id ()->to_bytes () : std::vector<std::uint8_t>{},
-      received.reply_token (), received.parts (), received.route_generation ()};
+    zlink::received_t control = received;
     return process_control_received (std::move (control),
                                      mesh::service_liveness_registry_t::clock_t::now ());
 }
@@ -552,23 +549,24 @@ client_server_pump_result_t raw_client_server_server_t::process_control_received
   detail::backend::raw_received_t received,
   mesh::service_liveness_registry_t::clock_t::time_point now)
 {
+    const auto source =
+      received.routing_id () ? received.routing_id ()->to_bytes () : std::vector<std::uint8_t>{};
     try {
         const auto header =
-          protocol::decode_header (protocol::message_bytes (received.parts.front ()));
+          protocol::decode_header (protocol::message_bytes (received.parts ().front ()));
         if (header.kind == protocol::command::hello) {
             //  Spec 51 §4 (ClientServer direction): the server sends only
             //  reply, liveness, update, and reject. Admission therefore
             //  travels as the reply of the client's hello request — a hello
             //  without a request sequence cannot be answered and is a
             //  protocol error.
-            if (received.parts.size () != 1 || !received.reply_token) {
+            if (received.parts ().size () != 1 || !received.reply_token ()) {
                 return client_server_pump_result_t::protocol_error;
             }
             const auto client = protocol::decode_client_server_client_admission (
-              protocol::message_bytes (received.parts.front ()), protocol::command::hello);
+              protocol::message_bytes (received.parts ().front ()), protocol::command::hello);
             trace_client_server_lazy ("server-hello", [&] {
-                return "channel=" + client.channel_name
-                       + " client=" + routing_id_label (received.source_routing_id)
+                return "channel=" + client.channel_name + " client=" + routing_id_label (source)
                        + " endpoint=" + _options.descriptor.advertised_endpoint;
             });
             if (client.channel_name != _options.descriptor.channel_name
@@ -579,10 +577,9 @@ client_server_pump_result_t raw_client_server_server_t::process_control_received
             }
 
             _connections.insert_or_assign (
-              received.source_routing_id,
+              source,
               _liveness.admit_owned (
-                received.source_routing_id,
-                detail::backend::route_connection_id (received.route_generation), now));
+                source, detail::backend::route_connection_id (received.route_generation ()), now));
 
             const detail::backend::raw_message_t admit_message{
               protocol::encode_client_server_server_admission (protocol::command::admit,
@@ -593,45 +590,43 @@ client_server_pump_result_t raw_client_server_server_t::process_control_received
             }
             trace_client_server_lazy ("server-admit-sent", [&] {
                 return "channel=" + _options.descriptor.channel_name
-                       + " client=" + routing_id_label (received.source_routing_id)
+                       + " client=" + routing_id_label (source)
                        + " endpoint=" + _options.descriptor.advertised_endpoint;
             });
             return client_server_pump_result_t::infrastructure;
         }
-        const auto found = _connections.find (received.source_routing_id);
+        const auto found = _connections.find (source);
         if (found == _connections.end () || !found->second)
             return client_server_pump_result_t::protocol_error;
         if (detail::backend::is_route_connection (found->second->connection_id,
-                                                  received.route_generation))
+                                                  received.route_generation ()))
             found->second->record_received (now);
-        const auto connection = detail::backend::route_connection_id (received.route_generation);
+        const auto connection = detail::backend::route_connection_id (received.route_generation ());
         if (header.kind == protocol::command::livenessProbe
             || header.kind == protocol::command::livenessAck) {
-            if (received.parts.size () != 1) {
+            if (received.parts ().size () != 1) {
                 return client_server_pump_result_t::protocol_error;
             }
             const auto liveness =
-              protocol::decode_liveness (protocol::message_bytes (received.parts.front ()));
+              protocol::decode_liveness (protocol::message_bytes (received.parts ().front ()));
             if (liveness.kind == protocol::command::livenessProbe) {
-                const auto acknowledged = _liveness.acknowledge_probe_owned (
-                  received.source_routing_id, connection, liveness.probe_id);
+                const auto acknowledged =
+                  _liveness.acknowledge_probe_owned (source, connection, liveness.probe_id);
                 const detail::backend::raw_message_t ack_message{
                   protocol::encode_liveness (protocol::command::livenessAck, liveness.probe_id)};
                 if (!acknowledged)
                     return client_server_pump_result_t::protocol_error;
                 //  A request-framed probe is acknowledged on its reply leg;
                 //  a raw probe keeps the raw routed ACK.
-                if (received.reply_token) {
+                if (received.reply_token ()) {
                     if (!_port->reply (received, ack_message))
                         return client_server_pump_result_t::protocol_error;
                 } else {
-                    observe_control_submission (
-                      _port->submit_send (received.source_routing_id, ack_message),
-                      _options.runtime_failures);
+                    observe_control_submission (_port->submit_send (source, ack_message),
+                                                _options.runtime_failures);
                 }
             } else {
-                (void) _liveness.acknowledge_owned (received.source_routing_id, connection,
-                                                    liveness.probe_id, now);
+                (void) _liveness.acknowledge_owned (source, connection, liveness.probe_id, now);
             }
             return client_server_pump_result_t::infrastructure;
         }
@@ -655,28 +650,22 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
     trace_client_server_lazy ("server-received", [&] {
         return "channel=" + envelope.channel_name
                + " kind=" + std::to_string (static_cast<int> (envelope.kind))
-               + " packet=" + envelope.message_name
-               + " client=" + routing_id_label (received.source_routing_id) + " reply_token="
-               + (received.reply_token ? std::string ("present") : std::string ("-"));
+               + " packet=" + envelope.message_name + " client="
+               + routing_id_label (received.routing_id ()->to_bytes ()) + " reply_token="
+               + (received.reply_token () ? std::string ("present") : std::string ("-"));
     });
-    mesh::service_mailbox_record_t record{envelope.channel_name,
-                                          mesh::service_mailbox_domain_t::application,
-                                          std::move (received.parts),
-                                          std::move (received.source_routing_id),
-                                          received.reply_token,
-                                          std::nullopt,
-                                          0,
-                                          std::nullopt,
-                                          std::nullopt,
-                                          [permit = application_permit] () mutable {
-                                              if (!permit)
-                                                  return;
-                                              permit->release_for_handler_entry ();
-                                              permit.reset ();
-                                          }};
+    const auto route_generation = received.route_generation ();
+    auto record = mesh::service_mailbox_record_t::from_received (
+      envelope.channel_name, mesh::service_mailbox_domain_t::application, std::move (received));
+    record.before_application_handler = [permit = application_permit] () mutable {
+        if (!permit)
+            return;
+        permit->release_for_handler_entry ();
+        permit.reset ();
+    };
     record.envelope_header = std::move (envelope);
     received_application_record_t received_record{
-      std::move (record), std::move (application_permit), received_at, received.route_generation};
+      std::move (record), std::move (application_permit), received_at, route_generation};
     if (application_records) {
         application_records->push_back (std::move (received_record));
         co_return client_server_pump_result_t::application;
@@ -798,7 +787,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
             result = client_server_pump_result_t::protocol_error;
         } else if (results[index] == client_server_pump_result_t::backpressured) {
             result = client_server_pump_result_t::backpressured;
-            if (records[index].record.reply_token) {
+            if (records[index].record.reply_token ()) {
                 const framework_exception_t error (
                   framework_error_kind_t::shutting_down,
                   "ClientServer is shutting down and rejects application work");
@@ -866,9 +855,9 @@ task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_reco
                                                 zlink::message_t body,
                                                 std::string content_type)
 {
-    if (request.source_routing_id.empty () || !request.reply_token)
+    if (request.source_routing_id.empty () || !request.reply_token ())
         co_return false;
-    if (request.parts.empty ()) {
+    if (request.parts ().empty ()) {
         throw std::invalid_argument ("ClientServer reply requires request context");
     }
     const auto &request_header = request.envelope_header;
@@ -881,11 +870,11 @@ task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_reco
     header.content_type = std::move (content_type);
     auto parts = std::move (writer.reply_raw_envelope (header, std::move (body))).take_items ();
     const auto delivered =
-      port->reply ({request.source_routing_id, request.reply_token, {}}, std::move (parts));
+      port->reply (request.source_rid (), *request.reply_token (), std::move (parts));
     trace_client_server_lazy ("server-reply", [&] {
         return "channel=" + request_header.channel_name + " packet=" + request_header.message_name
                + " client=" + routing_id_label (request.source_routing_id) + " reply_token="
-               + (request.reply_token ? std::string ("present") : std::string ("-"))
+               + (request.reply_token () ? std::string ("present") : std::string ("-"))
                + " delivered=" + (delivered ? "true" : "false");
     });
     co_return delivered;
@@ -894,9 +883,9 @@ task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_reco
 task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_record_t &request,
                                                 const framework_exception_t &error)
 {
-    if (request.source_routing_id.empty () || !request.reply_token)
+    if (request.source_routing_id.empty () || !request.reply_token ())
         co_return false;
-    if (request.parts.empty ()) {
+    if (request.parts ().empty ()) {
         throw std::invalid_argument ("ClientServer reply requires request context");
     }
     const auto &decoded_header = request.envelope_header;
@@ -909,7 +898,7 @@ task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_reco
     //  language runtimes' error envelope emission.
     auto parts = envelope_wire_parts (writer.reply_raw_envelope (
       header, zlink::message_t::from (std::vector<std::uint8_t>{'n', 'u', 'l', 'l'})));
-    co_return port->reply ({request.source_routing_id, request.reply_token, {}}, parts);
+    co_return port->reply (request.source_rid (), *request.reply_token (), parts);
 }
 
 bool raw_client_server_server_t::byte_vector_less_t::operator() (

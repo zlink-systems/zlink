@@ -560,10 +560,10 @@ void verify_request_metrics_all_surfaces_and_late_reply ()
       },
       [&] (const auto &record) {
           const auto decoded = protocol::decode_instance_spot_activation_header (
-            protocol::message_bytes (record.parts.front ()));
+            protocol::message_bytes (record.parts ().front ()));
           require (decoded.request && decoded.reply_route_id != 0,
                    "instance activation was not encoded as a request");
-          require (record.reply_token.has_value (), "cold request did not use Core request");
+          require (record.reply_token ().has_value (), "cold request did not use Core request");
           return target.reply_instance_spot_activation (record, 0, 0, reply_payload);
       });
 

@@ -919,12 +919,11 @@ TEST (SendAllocations, ReceiveTurnRetainsCallbacksAcrossNativeSuspension)
                     .owner_lease_generation = 1},
           .session_routing_id = {'s'},
           .binding = {.generation = 1}};
-        mesh::service_mailbox_record_t record;
-        record.owner = "control";
-        record.domain = mesh::service_mailbox_domain_t::infrastructure;
-        record.parts.push_back (zlink::message_t::from (wire::encode_bound_session_bind (bind)));
-        record.source_routing_id = {'s'};
-        record.source_node_generation = 1;
+        std::vector<zlink::message_t> parts;
+        parts.push_back (zlink::message_t::from (wire::encode_bound_session_bind (bind)));
+        auto record = mesh::service_mailbox_record_t::from_parts (
+          "control", mesh::service_mailbox_domain_t::infrastructure, std::move (parts), {'s'}, {},
+          1);
         ASSERT_TRUE (runtime.transport ().mailbox ().try_enqueue (std::move (record)));
         auto lifetime = std::make_shared<int> (1);
         std::weak_ptr<int> held = lifetime;

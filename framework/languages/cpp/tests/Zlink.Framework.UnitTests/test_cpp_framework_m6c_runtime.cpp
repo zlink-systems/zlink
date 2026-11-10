@@ -4717,15 +4717,11 @@ void test_relocation_request_source_registration (test_context_t &test,
                                               boundary ? 0x1786u : 0x1771u,
                                               0,
                                               protocol::framework_error_code::none};
-          mesh::service_mailbox_record_t message{
-            "source",
-            mesh::service_mailbox_domain_t::infrastructure,
+          auto message = mesh::service_mailbox_record_t::from_parts (
+            "source", mesh::service_mailbox_domain_t::infrastructure,
             framework::detail::backend::materialize_binding_parts (
               {protocol::encode_reply_relay (relay)}),
-            {'t'},
-            std::nullopt,
-            std::nullopt,
-            1};
+            {'t'}, std::nullopt, 1);
           const auto observed = await_task (replies.process (message));
           std::cerr << "request-registry boundary=" << boundary << " aggregate=" << aggregate
                     << " at-cutover=" << static_cast<int> (observed) << '\n';
@@ -4733,7 +4729,7 @@ void test_relocation_request_source_registration (test_context_t &test,
                         "both saved and boundary requests must be registered before cutover");
           auto matching = relay;
           matching.participant_id = aggregate ? 2 : 1;
-          message.parts = framework::detail::backend::materialize_binding_parts (
+          message.parts () = framework::detail::backend::materialize_binding_parts (
             {protocol::encode_reply_relay (matching)});
           test.require (await_task (replies.process (message))
                           == raw_relocation_replay_result_t::persistence_failed,
@@ -4961,14 +4957,10 @@ void test_relocation_ready_boundary (test_context_t &test, ready_boundary_case_t
       relocation,  target_node.lifecycle_generation,
       coordinator, p::relocation_role_t::source,
       object,      p::encode_frozen_application_record (accepted)};
-    const mesh::service_mailbox_record_t relay_record{
-      "boundary-target",
-      mesh::service_mailbox_domain_t::infrastructure,
+    const auto relay_record = mesh::service_mailbox_record_t::from_parts (
+      "boundary-target", mesh::service_mailbox_domain_t::infrastructure,
       {zlink::message_t::from (p::encode_relocation_control (relay_data))},
-      source_node.node_routing_id,
-      std::nullopt,
-      std::nullopt,
-      source_node.lifecycle_generation};
+      source_node.node_routing_id, std::nullopt, source_node.lifecycle_generation);
     auto ready = source.request_relocation_prepare (target_node.node_routing_id, prepare, 5s);
     for (std::uint32_t ordinal = 0; ordinal != manifest.chunk_count; ++ordinal)
         (void) await_task (source.send_relocation_control (
@@ -5566,7 +5558,7 @@ void test_cutover_replays_over_selected_network_route (test_context_t &test)
                           continue;
                       }
                       const auto control = protocol::decode_relocation_control (
-                        protocol::message_bytes (claim->records.front ()->parts.front ()));
+                        protocol::message_bytes (claim->records.front ()->parts ().front ()));
                       if (const auto *data = std::get_if<protocol::relocation_data_t> (&control)) {
                           received_batch.push_back (protocol::encode_relocation_control (*data));
                       } else {

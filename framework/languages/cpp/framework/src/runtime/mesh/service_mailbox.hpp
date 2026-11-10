@@ -146,10 +146,12 @@ class service_mailbox_application_t
 struct service_mailbox_record_t
 {
     std::string owner;
-    service_mailbox_domain_t domain;
-    std::vector<zlink::message_t> parts;
+    // Same value as value-initialisation, so default-constructed records are never indeterminate.
+    service_mailbox_domain_t domain = service_mailbox_domain_t::application;
+    zlink::received_t received;
+    // Logical peer identity used by topology and location lookups. Native reply routing
+    // always uses received.routing_id() and received.reply_token().
     std::vector<std::uint8_t> source_routing_id{};
-    std::optional<zlink::reply_token_t> reply_token = std::nullopt;
     std::optional<std::uint64_t> correlation = std::nullopt;
     std::uint64_t source_node_generation = 0;
     std::optional<std::pair<std::uint64_t, std::uint64_t>> operation;
@@ -164,8 +166,60 @@ struct service_mailbox_record_t
     std::optional<request_source_t> source_original = std::nullopt;
     std::optional<std::chrono::system_clock::time_point> received_at;
 
-    // Reply callbacks retain routing metadata without copying an owned original.
+    static service_mailbox_record_t
+    from_parts (std::string owner,
+                service_mailbox_domain_t domain,
+                std::vector<zlink::message_t> parts,
+                std::vector<std::uint8_t> source = {},
+                std::optional<std::uint64_t> correlation = {},
+                std::uint64_t generation = 0,
+                std::optional<std::pair<std::uint64_t, std::uint64_t>> operation = {},
+                std::optional<service_bound_session_source_t> bound_session = {},
+                std::function<void ()> before_application_handler = {})
+    {
+        service_mailbox_record_t record{};
+        record.owner = std::move (owner);
+        record.domain = domain;
+        record.parts () = std::move (parts);
+        record.source_routing_id = std::move (source);
+        record.correlation = correlation;
+        record.source_node_generation = generation;
+        record.operation = operation;
+        record.bound_session_source = std::move (bound_session);
+        record.before_application_handler = std::move (before_application_handler);
+        return record;
+    }
+    static service_mailbox_record_t
+    from_received (std::string owner, service_mailbox_domain_t domain, zlink::received_t received)
+    {
+        service_mailbox_record_t record{};
+        record.owner = std::move (owner);
+        record.domain = domain;
+        record.received = std::move (received);
+        if (record.received.routing_id ())
+            record.source_routing_id = record.received.routing_id ()->to_bytes ();
+        return record;
+    }
+    std::vector<zlink::message_t> &parts () { return received.parts (); }
+    const std::vector<zlink::message_t> &parts () const { return received.parts (); }
+    const std::optional<zlink::reply_token_t> &reply_token () const noexcept
+    {
+        return received.reply_token ();
+    }
+    zlink::routing_id_t source_rid () const
+    {
+        return received.routing_id () ? *received.routing_id ()
+                                      : zlink::routing_id_t::from (source_routing_id);
+    }
+    const protocol::service_wire_header_t &service_header () const;
+    std::optional<host::record_kind_t> application_kind () const;
+
     std::shared_ptr<const service_mailbox_record_t> reply_source () const;
+
+    // Wire ingress fills these before publication. Local wire producers use the
+    // same classifier on first consumption; application originals carry their own kind.
+    mutable std::optional<protocol::service_wire_header_t> _service_header;
+    mutable std::optional<host::record_kind_t> _application_kind;
 };
 
 // A claimed slot: the claim and the slot's position in the claimed prefix.
@@ -371,7 +425,7 @@ class service_mailbox_t
 struct service_mailbox_claim_t
 {
     std::string owner;
-    service_mailbox_domain_t domain;
+    service_mailbox_domain_t domain = service_mailbox_domain_t::application;
     std::vector<service_mailbox_record_t *> records;
     std::vector<std::size_t> record_bytes;
     std::size_t claimed_messages = 0;

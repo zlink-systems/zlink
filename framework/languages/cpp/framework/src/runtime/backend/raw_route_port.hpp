@@ -65,15 +65,7 @@ inline bool is_route_connection (const raw_bytes_t &identity, std::uint64_t gene
     return value == generation;
 }
 
-struct raw_received_t
-{
-    raw_bytes_t source_routing_id;
-    std::optional<zlink::reply_token_t> reply_token;
-    std::vector<zlink::message_t> parts;
-    // Opaque nonzero generation of the Core selected route that delivered
-    // this record (Core ROUTER §10.1); compared only for equality.
-    std::uint64_t route_generation = 0;
-};
+using raw_received_t = zlink::received_t;
 
 enum class raw_request_failure_phase_t
 {
@@ -261,10 +253,17 @@ class raw_route_port_t
     std::optional<zlink::poll_event_flag_t> poll (std::chrono::milliseconds timeout,
                                                   bool accept_application_receive = true);
     void signal_activity () noexcept;
+    bool receive_if_ready (zlink::received_t &record, zlink::poll_event_flag_t revents);
     std::optional<raw_received_t> receive_if_ready (zlink::poll_event_flag_t revents);
     std::optional<raw_received_t> try_receive ();
     bool reply (const raw_received_t &request, raw_message_t parts);
     bool reply (const raw_received_t &request, std::vector<zlink::message_t> messages);
+    bool reply (const zlink::routing_id_t &source,
+                const zlink::reply_token_t &token,
+                raw_message_t parts);
+    bool reply (const zlink::routing_id_t &source,
+                const zlink::reply_token_t &token,
+                std::vector<zlink::message_t> parts);
     void close ();
 
   private:
@@ -293,9 +292,6 @@ class raw_route_port_t
     std::shared_ptr<std::mutex> _socket_mutex;
     zlink::poll_event_flag_t _receive_events;
     runtime::eventing::runtime_wake_timer_t _wake_timer;
-    // Keep the binding receive envelope across polls so its message storage
-    // capacity is reused by the binding public receive API.
-    zlink::received_t _received;
 };
 
 } // namespace zlink::framework::detail::backend

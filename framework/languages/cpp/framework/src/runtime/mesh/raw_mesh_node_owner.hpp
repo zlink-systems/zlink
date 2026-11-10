@@ -128,6 +128,9 @@ struct actor_join_wire_outcome_t
 
 class raw_mesh_node_owner_t
 {
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+    friend struct receive_record_test_access_t;
+#endif
     friend state_lane_t &auto_connect_owner_lane (raw_mesh_node_owner_t &owner)
     {
         return owner._lane;
@@ -480,9 +483,16 @@ class raw_mesh_node_owner_t
      * readiness and applies a ready route snapshot (nullopt when the poll
      * failed), then receive_next reads one record per call until the ROUTER
      * reports none. pump_one is the single-record form of the same turn. */
-    std::optional<zlink::poll_event_flag_t>
-    begin_receive_turn (std::optional<zlink::poll_event_flag_t> readiness = {});
-    raw_mesh_pump_result_t receive_next (service_liveness_registry_t::clock_t::time_point now);
+    struct receive_turn_t
+    {
+        std::shared_ptr<detail::backend::raw_route_port_t> port;
+        std::optional<zlink::poll_event_flag_t> readiness;
+        explicit operator bool () const noexcept { return readiness.has_value (); }
+        zlink::poll_event_flag_t operator* () const noexcept { return *readiness; }
+    };
+    receive_turn_t begin_receive_turn (std::optional<zlink::poll_event_flag_t> readiness = {});
+    raw_mesh_pump_result_t receive_next (const receive_turn_t &turn,
+                                         service_liveness_registry_t::clock_t::time_point now);
     /* Wait for ROUTER input or an already admitted mailbox/control record.
      * This is the blocking wake-up used by the host ingress loop; it avoids
      * turning an idle node into a timed polling loop. */
@@ -526,6 +536,7 @@ class raw_mesh_node_owner_t
     friend struct raw_mesh_node_owner_test_access_t;
 
   private:
+    std::shared_ptr<detail::backend::raw_route_port_t> lease_receive_port ();
     void connect_peer_intent_owned (const std::string &endpoint,
                                     std::optional<zlink::routing_id_t> expected,
                                     std::uint64_t expected_lifecycle_generation,

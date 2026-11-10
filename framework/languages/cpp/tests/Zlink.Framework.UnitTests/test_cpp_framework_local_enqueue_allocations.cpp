@@ -792,12 +792,11 @@ TEST (LocalEnqueueAllocations, IdleManagementDoesNotAllocateInfrastructureBatchS
         const protocol::spot_route_fence_t target{"target", 1, {'n'}, 1, 1, 1};
         const protocol::message_follow_notice_t notice{source, target,        1, sequence,
                                                        1,      {1, sequence}, 0};
-        mesh::service_mailbox_record_t record;
-        record.domain = mesh::service_mailbox_domain_t::infrastructure;
-        record.owner = "management";
-        record.source_routing_id = {'n'};
-        record.source_node_generation = 1;
-        record.parts.push_back (zlink::message_t::from (protocol::encode_message_follow (notice)));
+        std::vector<zlink::message_t> parts;
+        parts.push_back (zlink::message_t::from (protocol::encode_message_follow (notice)));
+        auto record = mesh::service_mailbox_record_t::from_parts (
+          "management", mesh::service_mailbox_domain_t::infrastructure, std::move (parts), {'n'},
+          {}, 1);
         ASSERT_TRUE (runtime->transport ().mailbox ().try_enqueue (std::move (record)));
     };
     std::array<tests::allocation_event_t, 256> events{};

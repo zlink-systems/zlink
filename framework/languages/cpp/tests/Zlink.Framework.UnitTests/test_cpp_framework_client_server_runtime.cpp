@@ -1337,7 +1337,7 @@ std::size_t server_receive_turn_records (std::uint32_t queue_capacity,
     assert (claim && claim->records.size () == records);
     for (std::size_t index = 0; index < records; ++index) {
         auto &record = *claim->records[index];
-        const auto &payload = record.parts[1];
+        const auto &payload = record.parts ()[1];
         assert (payload.to_string () == std::to_string (index));
         auto application_permit =
           record.application_permit
