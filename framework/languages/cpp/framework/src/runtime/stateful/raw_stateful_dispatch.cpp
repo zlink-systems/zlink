@@ -365,7 +365,7 @@ raw_stateful_dispatch_t::register_accepted_ingress (const object_ref_t &owner,
     // Pending owns terminal identity and reply routing; the native turn owns body bytes.
     pending.frozen.application.reset ();
     pending.frozen.canonical_bytes.clear ();
-    pending.transport.parts.clear ();
+    pending.transport.replace_parts ({});
     try {
         _pending.emplace (admission.pending_key, std::move (pending));
     }
@@ -618,12 +618,13 @@ claimed_ingress_t claimed_ingress_t::prepare (mesh::service_mailbox_record_t &or
     }
     query.source_original = original.source_original;
     query.bound_session = original.bound_session_source.has_value ();
-    if (original.parts.size () == 2) {
-        query.header.emplace (original.parts.front ().copy ());
-        query.body.emplace (original.parts[1].copy ());
+    if (original.parts ().size () == 2) {
+        query.header.emplace (original.parts ().front ().copy ());
+        query.body.emplace (original.parts ()[1].copy ());
         try {
-            query.body_bytes =
-              protocol::application_payload_hwm_bytes (protocol::message_bytes (original.parts[1]));
+            query.body_bytes = protocol::application_payload_hwm_bytes (
+              protocol::message_bytes (original.parts ()[1]));
+            query.service_header = original.service_header ();
         }
         catch (...) {
             query.error = std::current_exception ();
@@ -678,7 +679,7 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
         if (validation.value () != stateful_error_t::none)
             throw protocol::service_wire_error_t ("invalid application wire record");
         const auto header_bytes = protocol::message_bytes (*prepared->header);
-        const auto header = protocol::decode_header (header_bytes);
+        const auto header = prepared->service_header.value ();
 
         if (validation.value () == stateful_error_t::none && owner.kind == object_kind_t::actor) {
             if (header.kind != protocol::command::actorSend
@@ -762,7 +763,7 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
         accepted_mailbox_reservation_t reservation = std::exchange (record.transferred, {});
         mailbox_claim_release_guard_t claim_guard (reservation);
         if (malformed) {
-            if (record.reply_token && record.correlation) {
+            if (record.reply_token () && record.correlation) {
                 claim_guard.dismiss ();
                 reply_failure_then_release_claim (
                   *_transport, std::move (record),
@@ -772,7 +773,7 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
             }
             co_return stateful_error_t::invalid;
         }
-        if (record.reply_token && record.correlation) {
+        if (record.reply_token () && record.correlation) {
             // moving replies with the retryable relocation terminal
             // (conflict + spotMoving maps to a retryable unavailable on the
             // requester), so the session owner keeps redelivery ownership.
@@ -850,7 +851,7 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
         reservation = std::exchange (taken->transferred, {});
         rejected.emplace (std::move (*taken));
     }
-    if (rejected && rejected->reply_token && rejected->correlation)
+    if (rejected && rejected->reply_token () && rejected->correlation)
         reply_failure_then_release_claim (
           *_transport, std::move (*rejected),
           static_cast<std::uint32_t> (protocol::request_terminal_result::rejected),
@@ -1264,7 +1265,7 @@ task_t<bool> raw_stateful_dispatch_t::complete_relocated_source_async (
   const std::optional<protocol::application_payload_t> &reply)
 {
     std::function<bool (const std::optional<protocol::application_payload_t> &)> relocated_terminal;
-    std::shared_ptr<const mesh::service_mailbox_record_t> reply_source;
+    std::shared_ptr<const mesh::service_mailbox_reply_target_t> reply_source;
     delivery_key_t pending_key{owner.kind, owner.key, sequence};
     {
         std::unique_lock lock (_mutex);
@@ -1273,7 +1274,7 @@ task_t<bool> raw_stateful_dispatch_t::complete_relocated_source_async (
                    && entry.second.frozen.operation == relay.operation
                    && entry.second.frozen.reply_route_id == relay.reply_route_id
                    && (entry.second.relocated_terminal
-                       || (entry.second.transport.reply_token
+                       || (entry.second.transport.reply_token ()
                            && entry.second.transport.correlation));
         };
         auto found = _pending.find (pending_key);
@@ -1357,7 +1358,7 @@ void raw_stateful_dispatch_t::release_relocated_payloads (
             // the source's already committed application payload.
             pending.frozen.application.reset ();
             pending.frozen.canonical_bytes.clear ();
-            pending.transport.parts.clear ();
+            pending.transport.replace_parts ({});
         }
     }
     for (auto &[claim, initial_reservation] : reservations) {
@@ -1658,25 +1659,24 @@ task_t<raw_relocation_replay_result_t> raw_relocation_replay_coordinator_t::pump
 task_t<raw_relocation_replay_result_t>
 raw_relocation_replay_coordinator_t::process (const mesh::service_mailbox_record_t &record)
 {
-    if (record.parts.empty ())
+    if (record.parts ().empty ())
         co_return raw_relocation_replay_result_t::invalid;
     try {
-        const auto header =
-          protocol::decode_header (protocol::message_bytes (record.parts.front ()));
+        const auto header = record.service_header ();
         if (header.kind == protocol::command::relocationData) {
-            const auto control =
-              protocol::decode_relocation_control (protocol::message_bytes (record.parts.front ()));
+            const auto control = protocol::decode_relocation_control (
+              protocol::message_bytes (record.parts ().front ()));
             const auto *data = std::get_if<protocol::relocation_data_t> (&control);
             co_return data ? process_data (record, *data) : raw_relocation_replay_result_t::invalid;
         }
         if (header.kind == protocol::command::replyRelay)
             co_return co_await process_reply_relay (
               record,
-              protocol::decode_reply_relay (protocol::message_bytes (record.parts.front ())));
+              protocol::decode_reply_relay (protocol::message_bytes (record.parts ().front ())));
         if (header.kind == protocol::command::replyRelayAck)
             co_return co_await process_reply_relay_ack (
-              record,
-              protocol::decode_reply_relay_ack (protocol::message_bytes (record.parts.front ())));
+              record, protocol::decode_reply_relay_ack (
+                        protocol::message_bytes (record.parts ().front ())));
     }
     catch (const protocol::service_wire_error_t &) {
         co_return raw_relocation_replay_result_t::invalid;
@@ -1688,7 +1688,7 @@ raw_relocation_replay_result_t
 raw_relocation_replay_coordinator_t::process_data (const mesh::service_mailbox_record_t &record,
                                                    const protocol::relocation_data_t &data)
 {
-    if (record.parts.size () != 1 || !nonzero (data.relocation)
+    if (record.parts ().size () != 1 || !nonzero (data.relocation)
         || data.target_attempt_generation == 0 || !valid_coordinator (data.coordinator)
         || data.sender_role != protocol::relocation_role_t::source
         || !valid_relocation_object (data.object) || !nonzero (data.record.operation))
@@ -1903,17 +1903,17 @@ task_t<raw_relocation_replay_result_t> raw_relocation_replay_coordinator_t::proc
 {
     const auto item_key = terminal_key (relay.relocation, relay.operation);
     std::optional<protocol::application_payload_t> reply;
-    if (record.parts.size () == 2) {
+    if (record.parts ().size () == 2) {
         try {
             /* flow-correlation §4: reply flow pair is observation-only —
              * skip validation/materialization at Off. */
-            reply = protocol::decode_application_payload (protocol::message_bytes (record.parts[1]),
-                                                          capture_flow ());
+            reply = protocol::decode_application_payload (
+              protocol::message_bytes (record.parts ()[1]), capture_flow ());
         }
         catch (const protocol::service_wire_error_t &) {
             co_return raw_relocation_replay_result_t::invalid;
         }
-    } else if (record.parts.size () != 1) {
+    } else if (record.parts ().size () != 1) {
         co_return raw_relocation_replay_result_t::invalid;
     }
     if ((relay.terminal_result != 0 && reply)
@@ -2046,7 +2046,7 @@ task_t<raw_relocation_replay_result_t>
 raw_relocation_replay_coordinator_t::process_reply_relay_ack (
   const mesh::service_mailbox_record_t &record, const protocol::reply_relay_ack_t &ack)
 {
-    if (record.parts.size () != 1)
+    if (record.parts ().size () != 1)
         co_return raw_relocation_replay_result_t::invalid;
     const auto item_key = terminal_key (ack.relocation, ack.operation);
     struct ack_work_t

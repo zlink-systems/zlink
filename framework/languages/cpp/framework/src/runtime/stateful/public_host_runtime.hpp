@@ -984,11 +984,11 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     };
     task_t<void> dispatch_instance_spot_activation (
       protocol::instance_activation_recovery_t command,
-      std::shared_ptr<const mesh::service_mailbox_record_t> reply_record,
+      std::shared_ptr<const mesh::service_mailbox_reply_target_t> reply_record,
       std::function<void (instance_spot_activation_result_t)> done = {});
     task_t<void> dispatch_instance_spot_activation_core (
       std::shared_ptr<protocol::instance_activation_recovery_t> command,
-      std::shared_ptr<const mesh::service_mailbox_record_t> reply_record,
+      std::shared_ptr<const mesh::service_mailbox_reply_target_t> reply_record,
       std::function<void (instance_spot_activation_result_t)> done,
       std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> admission,
       std::shared_ptr<task_completion_source_t<instance_activation_admission_t>>
@@ -1382,7 +1382,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         std::optional<protocol::application_payload_t> application_reply;
         // Retransmissions of the running operation, with their correlations.
         // They receive the same terminal result (§7.1 operation ID).
-        std::vector<std::pair<std::shared_ptr<const mesh::service_mailbox_record_t>, std::uint64_t>>
+        std::vector<
+          std::pair<std::shared_ptr<const mesh::service_mailbox_reply_target_t>, std::uint64_t>>
           waiting;
     };
     std::map<std::string, user_spot_terminal_record_t> _user_spot_terminals;

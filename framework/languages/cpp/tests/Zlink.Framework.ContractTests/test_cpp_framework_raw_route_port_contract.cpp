@@ -508,7 +508,7 @@ void verify_binding_completion_bypasses_handler_executor ()
     while (!received && std::chrono::steady_clock::now () < deadline)
         received = target_port.receive_if_ready (
           target_port.poll (10ms).value_or (zlink::poll_event_flag_t::none));
-    assert (received && received->reply_token);
+    assert (received && received->reply_token ());
     assert (target_port.reply (*received, request_parts ()));
     assert (!target_port.receive_if_ready (
       target_port.poll (0ms).value_or (zlink::poll_event_flag_t::none)));
@@ -565,7 +565,7 @@ void verify_completion_only_wait_keeps_ordinary_record_unclaimed ()
     const auto received = target_port.receive_if_ready (
       target_port.poll (0ms).value_or (zlink::poll_event_flag_t::none));
     assert (received
-            && zlink::framework::detail::backend::copy_binding_parts (received->parts)
+            && zlink::framework::detail::backend::copy_binding_parts (received->parts ())
                  == request_parts ());
     source_port.close ();
     target_port.close ();
@@ -761,7 +761,7 @@ void verify_backpressured_send_waits_for_admission ()
         (void) source_poller.wait (&event, 1, raw_route_fixture_poll_interval);
         auto received = target_port.receive_if_ready (
           target_port.poll (0ms).value_or (zlink::poll_event_flag_t::none));
-        if (received && received->reply_token) {
+        if (received && received->reply_token ()) {
             assert (target_port.reply (*received, request_parts ()));
             ++replies;
         }
@@ -775,7 +775,7 @@ void verify_backpressured_send_waits_for_admission ()
         auto received =
           target_port.receive_if_ready (target_port.poll (raw_route_fixture_poll_interval)
                                           .value_or (zlink::poll_event_flag_t::none));
-        if (received && received->reply_token) {
+        if (received && received->reply_token ()) {
             assert (target_port.reply (*received, request_parts ()));
             ++replies;
         }
@@ -883,7 +883,7 @@ void verify_handover_request_completion_is_replayable ()
     while (!admitted && std::chrono::steady_clock::now () < deadline)
         admitted = target_port.receive_if_ready (
           target_port.poll (1ms).value_or (zlink::poll_event_flag_t::none));
-    assert (admitted && admitted->reply_token);
+    assert (admitted && admitted->reply_token ());
     assert (!pending.await_ready ());
 
     // Z -> A is admitted first; reciprocal A -> Z supersedes that pair.
@@ -1074,9 +1074,9 @@ void verify_stack_parts_survive_backpressured_submission (std::size_t hwm_bytes)
         auto message = target_port.receive_if_ready (
           target_port.poll (10ms).value_or (zlink::poll_event_flag_t::none));
         if (message) {
-            assert (message->parts.size () == 2);
-            assert (message->parts[0].to_string () == "header");
-            assert (message->parts[1].to_string () == body);
+            assert (message->parts ().size () == 2);
+            assert (message->parts ()[0].to_string () == "header");
+            assert (message->parts ()[1].to_string () == body);
             ++received;
         }
     }

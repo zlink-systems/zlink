@@ -56,13 +56,10 @@ std::shared_ptr<host::public_host_runtime_t> make_host ()
 
 mesh::service_mailbox_record_t infrastructure_record (std::vector<std::uint8_t> bytes)
 {
-    mesh::service_mailbox_record_t record;
-    record.owner = "control";
-    record.domain = mesh::service_mailbox_domain_t::infrastructure;
-    record.parts.push_back (zlink::message_t::from (bytes));
-    record.source_routing_id = {'s'};
-    record.source_node_generation = 1;
-    return record;
+    std::vector<zlink::message_t> parts;
+    parts.push_back (zlink::message_t::from (bytes));
+    return mesh::service_mailbox_record_t::from_parts (
+      "control", mesh::service_mailbox_domain_t::infrastructure, std::move (parts), {'s'}, {}, 1);
 }
 
 wire::message_follow_notice_t notice ()
@@ -391,14 +388,14 @@ TEST (ReceiveAllocations, AutomaticClientServerSendRecordHasFixedAllocationCount
         return completed && succeeded;
     };
     const auto enqueue = [&] {
-        mesh::service_mailbox_record_t record;
-        record.owner = "receive";
-        record.domain = mesh::service_mailbox_domain_t::application;
+        std::vector<zlink::message_t> parts;
+        parts.push_back (zlink::message_t::from ("header"));
+        parts.push_back (zlink::message_t::from ("{}"));
+        auto record = mesh::service_mailbox_record_t::from_parts (
+          "receive", mesh::service_mailbox_domain_t::application, std::move (parts));
         record.envelope_header.kind = fw::runtime::messaging::message_kind_t::command;
         record.envelope_header.message_name = "receive.send";
         record.envelope_header.content_type = "application/json";
-        record.parts.push_back (zlink::message_t::from ("header"));
-        record.parts.push_back (zlink::message_t::from ("{}"));
         return server->mailbox ().try_enqueue (std::move (record));
     };
     // Measures one received record through FIFO claim, handler, terminal and release.

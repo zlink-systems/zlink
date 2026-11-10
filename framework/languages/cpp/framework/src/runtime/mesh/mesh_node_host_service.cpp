@@ -79,9 +79,9 @@ bool requires_location_owner_state (const mesh::service_mailbox_record_t &record
     if (record.application) {
         return !detail::is_node_or_channel_record_kind (record.application->record.kind);
     }
-    if (record.parts.empty ())
+    if (record.parts ().empty ())
         return true;
-    const auto header = protocol::decode_header (protocol::message_bytes (record.parts.front ()));
+    const auto header = record.service_header ();
     switch (header.kind) {
         case protocol::command::nodeSend:
         case protocol::command::nodeRequest:

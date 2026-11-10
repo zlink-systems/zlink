@@ -172,10 +172,10 @@ int main ()
         constexpr auto infrastructure = runtime::mesh::service_mailbox_domain_t::infrastructure;
         constexpr auto records = runtime::dispatch_limits::receive_batch_messages * 2 + 1;
         for (std::size_t index = 0; index != records; ++index) {
-            runtime::mesh::service_mailbox_record_t record;
-            record.owner = "receive-cost-infrastructure";
-            record.domain = infrastructure;
-            record.parts.push_back (zlink::message_t::from (std::vector<std::uint8_t>{0}));
+            std::vector<zlink::message_t> parts;
+            parts.push_back (zlink::message_t::from (std::vector<std::uint8_t>{0}));
+            auto record = runtime::mesh::service_mailbox_record_t::from_parts (
+              "receive-cost-infrastructure", infrastructure, std::move (parts));
             require (mailbox.try_enqueue (std::move (record)), "infrastructure enqueue failed");
         }
         std::size_t drained = 0;

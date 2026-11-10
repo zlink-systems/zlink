@@ -470,35 +470,38 @@ void raw_route_port_t::signal_activity () noexcept
     _wake_timer.signal ();
 }
 
-std::optional<raw_received_t> raw_route_port_t::receive_if_ready (zlink::poll_event_flag_t revents)
+bool raw_route_port_t::receive_if_ready (zlink::received_t &record,
+                                         zlink::poll_event_flag_t revents)
 {
     std::lock_guard lock (*_socket_mutex);
     if (_socket == nullptr
         || (static_cast<short> (revents) & static_cast<short> (zlink::poll_event_flag_t::pollin))
              == 0) {
-        return std::nullopt;
+        return false;
     }
-    const int result = _socket->recv (_received, zlink::recv_flags_t::dontwait);
+    const int result = _socket->recv (record, zlink::recv_flags_t::dontwait);
     if (result == static_cast<int> (zlink::recv_result_t::no_data)) {
-        return std::nullopt;
+        return false;
     }
     if (result == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-        return std::nullopt;
+        return false;
     }
     if (result != 0) {
         throw std::runtime_error ("raw route receive failed with result " + std::to_string (result)
                                   + " and errno " + std::to_string (errno));
     }
-    if (!_received.routing_id ()) {
+    if (!record.routing_id ()) {
         throw std::runtime_error ("raw ROUTER receive omitted source routing id");
     }
-    auto source_routing_id = _received.routing_id ()->to_bytes ();
-    auto reply_token = _received.reply_token ();
-    const auto route_generation = _received.route_generation ();
-    auto parts = std::move (_received.parts ());
-    _received.close ();
-    return raw_received_t{std::move (source_routing_id), std::move (reply_token), std::move (parts),
-                          route_generation};
+    return true;
+}
+
+std::optional<raw_received_t> raw_route_port_t::receive_if_ready (zlink::poll_event_flag_t revents)
+{
+    zlink::received_t record;
+    if (!receive_if_ready (record, revents))
+        return std::nullopt;
+    return record;
 }
 
 std::optional<raw_received_t> raw_route_port_t::try_receive ()
@@ -514,16 +517,28 @@ bool raw_route_port_t::reply (const raw_received_t &request, raw_message_t parts
 
 bool raw_route_port_t::reply (const raw_received_t &request, std::vector<zlink::message_t> messages)
 {
-    if (request.source_routing_id.empty () || !request.reply_token || messages.empty ()) {
+    if (!request.routing_id () || !request.reply_token ())
         throw std::invalid_argument ("raw route reply requires request context and message parts");
-    }
+    return reply (*request.routing_id (), *request.reply_token (), std::move (messages));
+}
+
+bool raw_route_port_t::reply (const zlink::routing_id_t &source,
+                              const zlink::reply_token_t &token,
+                              raw_message_t parts)
+{
+    return reply (source, token, materialize_binding_parts (std::move (parts)));
+}
+
+bool raw_route_port_t::reply (const zlink::routing_id_t &source,
+                              const zlink::reply_token_t &token,
+                              std::vector<zlink::message_t> messages)
+{
+    if (messages.empty ())
+        throw std::invalid_argument ("raw route reply requires request context and message parts");
     std::lock_guard lock (*_socket_mutex);
     if (_socket == nullptr)
         return false;
-    auto operation =
-      std::move (_socket->reply (zlink::routing_id_t::from (request.source_routing_id),
-                                 *request.reply_token))
-        .message (messages[0]);
+    auto operation = std::move (_socket->reply (source, token)).message (messages[0]);
     for (std::size_t index = 1; index < messages.size (); ++index)
         operation = std::move (operation).message (messages[index]);
     try {

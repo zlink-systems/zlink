@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/mesh/service_mailbox.hpp"
+#include "runtime/mesh/receive_path_probe.hpp"
 
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/spots/activation_admission.hpp"
@@ -17,18 +18,71 @@ namespace
 {
 bool has_original (const service_mailbox_record_t &record) noexcept
 {
-    return !record.parts.empty () || record.application;
+    return !record.parts ().empty () || record.application;
 }
 } // namespace
 
-std::shared_ptr<const service_mailbox_record_t> service_mailbox_record_t::reply_source () const
+const protocol::service_wire_header_t &service_mailbox_record_t::service_header () const
 {
-    auto source = std::make_shared<service_mailbox_record_t> ();
-    source->domain = service_mailbox_domain_t::infrastructure;
-    source->source_routing_id = source_routing_id;
-    source->reply_token = reply_token;
-    source->correlation = correlation;
-    return source;
+    if (!_service_header) {
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+        if (receive_path_probe)
+            ++receive_path_probe->classifications;
+#endif
+        const auto header = protocol::decode_header (protocol::message_bytes (parts ().front ()));
+        switch (header.kind) {
+            case protocol::command::nodeSend:
+                _application_kind = host::record_kind_t::node_send;
+                break;
+            case protocol::command::nodeRequest:
+                _application_kind = host::record_kind_t::node_request;
+                break;
+            case protocol::command::channelSend:
+                _application_kind = host::record_kind_t::channel_send;
+                break;
+            case protocol::command::channelRequest:
+                _application_kind = host::record_kind_t::channel_request;
+                break;
+            case protocol::command::spotSend:
+                _application_kind = host::record_kind_t::spot_send;
+                break;
+            case protocol::command::spotRequest:
+                _application_kind = host::record_kind_t::spot_request;
+                break;
+            case protocol::command::actorSend:
+                _application_kind = host::record_kind_t::actor_send;
+                break;
+            case protocol::command::actorRequest:
+                _application_kind = host::record_kind_t::actor_request;
+                break;
+            default:
+                break;
+        }
+        _service_header = header;
+    }
+    return *_service_header;
+}
+
+std::optional<host::record_kind_t> service_mailbox_record_t::application_kind () const
+{
+    (void) service_header ();
+    return _application_kind;
+}
+
+service_mailbox_reply_target_t::service_mailbox_reply_target_t (
+  const service_mailbox_record_t &record) :
+    source_routing_id (record.source_routing_id),
+    correlation (record.correlation),
+    _routing_id (record.routing_id ()),
+    _token (record.reply_token ()),
+    _route_generation (record.route_generation ())
+{
+}
+
+std::shared_ptr<const service_mailbox_reply_target_t>
+service_mailbox_record_t::reply_source () const
+{
+    return std::make_shared<service_mailbox_reply_target_t> (*this);
 }
 
 bool service_mailbox_settlement_t::operator() () const
@@ -338,7 +392,7 @@ std::size_t service_mailbox_t::retained_bytes (const service_mailbox_record_t &r
         }
         return true;
     };
-    if (!add (record.parts) || (record.application && !add (record.application->parts)))
+    if (!add (record.parts ()) || (record.application && !add (record.application->parts)))
         return std::numeric_limits<std::size_t>::max ();
     return result;
 }

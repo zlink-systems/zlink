@@ -366,7 +366,7 @@ void complete_bound_session_bind (
     assert (claim && claim->records.size () == 1);
     const auto &record = (*claim->records.front ());
     const auto decoded =
-      protocol::decode_bound_session_bind (protocol::message_bytes (record.parts.front ()));
+      protocol::decode_bound_session_bind (protocol::message_bytes (record.parts ().front ()));
     assert (decoded.actor.actor_id == expected_actor);
     assert (record.correlation && decoded.correlation == *record.correlation);
     const auto accepted =
@@ -429,8 +429,8 @@ void verify_bound_session_close_reply_grammar ()
         }
         assert (claim && claim->records.size () == 1);
         auto &request = *claim->records.front ();
-        const auto decoded =
-          protocol::decode_bound_session_close (protocol::message_bytes (request.parts.front ()));
+        const auto decoded = protocol::decode_bound_session_close (
+          protocol::message_bytes (request.parts ().front ()));
         assert (decoded.actor_id == "close-actor");
         if (reply_case == reply_case_t::correlation_mismatch)
             request.correlation = *request.correlation + 1;
@@ -793,10 +793,10 @@ void verify_bound_session_bind_does_not_replay_after_route_change ()
     };
     auto first = receive ();
     const auto bind = protocol::decode_bound_session_bind (
-      protocol::message_bytes (first->records.front ()->parts.front ()));
+      protocol::message_bytes (first->records.front ()->parts ().front ()));
     // Bind replies select their wire terminal from the original request header.
     auto first_record = target.mailbox ().take ({first, 0});
-    assert (first_record && !first_record->parts.empty ());
+    assert (first_record && !first_record->parts ().empty ());
     std::size_t submissions = first->records.size ();
     assert (admitted.await_ready () && admitted.result ());
     const auto *first_admission = &admitted.result ();
@@ -970,7 +970,7 @@ void verify_actor_create_retries_until_route_is_admitted ()
     assert (claim && claim->records.size () == 1);
     const auto &record = (*claim->records.front ());
     const auto decoded =
-      protocol::decode_actor_create_header (protocol::message_bytes (record.parts.front ()));
+      protocol::decode_actor_create_header (protocol::message_bytes (record.parts ().front ()));
     assert (decoded.actor_id == "startup-actor");
     assert (target.reply_actor_create (
       record, protocol::actor_create_reply_t{{*record.correlation, 0, 0},
@@ -1039,7 +1039,7 @@ void verify_actor_create_intent_removal_ends_operation ()
                 claim = target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure,
                                                      1, 4096);
             }
-            assert (claim && claim->records.front ()->reply_token);
+            assert (claim && claim->records.front ()->reply_token ());
             assert (target.mailbox ().release (*claim));
         }
         if (removal_order == 1) {
@@ -1648,9 +1648,9 @@ void verify_application_owner_drain_transitions ()
 {
     mesh::service_mailbox_t manual;
     manual.begin_application_receive_turn ();
-    assert (manual.try_enqueue (mesh::service_mailbox_record_t{
+    assert (manual.try_enqueue (mesh::service_mailbox_record_t::from_parts (
       "manual", mesh::service_mailbox_domain_t::application,
-      zlink::framework::detail::backend::materialize_binding_parts ({{1}})}));
+      zlink::framework::detail::backend::materialize_binding_parts ({{1}}))));
     manual.end_application_receive_turn ();
     auto manual_claim = manual.try_claim (mesh::service_mailbox_domain_t::application, 1, 4096);
     assert (manual_claim && manual_claim->records.size () == 1);
@@ -1683,9 +1683,9 @@ void verify_application_owner_drain_transitions ()
     mailbox.end_application_receive_turn ();
     assert (ready_copies == registered_copies); // An idle ingress turn has no callback work.
     const auto enqueue = [&] (std::string owner, std::uint8_t value) {
-        return mailbox.try_enqueue (mesh::service_mailbox_record_t{
+        return mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
           std::move (owner), mesh::service_mailbox_domain_t::application,
-          zlink::framework::detail::backend::materialize_binding_parts ({{value}})});
+          zlink::framework::detail::backend::materialize_binding_parts ({{value}})));
     };
     mailbox.begin_application_receive_turn ();
     assert (enqueue ("a", 1));
@@ -1704,12 +1704,12 @@ void verify_application_owner_drain_transitions ()
       mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "a", 1, 4096);
     auto other =
       mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "b", 1, 4096);
-    assert (first && other && first->records[0]->parts[0].to_bytes ()[0] == 1);
+    assert (first && other && first->records[0]->parts ()[0].to_bytes ()[0] == 1);
     assert (mailbox.release (*first));
     assert (ready_copies == delivered_copies); // Terminal release keeps the existing drain.
     auto second =
       mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "a", 1, 4096);
-    assert (second && second->records[0]->parts[0].to_bytes ()[0] == 2);
+    assert (second && second->records[0]->parts ()[0].to_bytes ()[0] == 2);
     assert (ready.size () == 2); // The same drain keeps its execution right.
     assert (enqueue ("a", 4));
     mailbox.end_application_drain ("a"); // A deferred handler retains its reservation.
@@ -1725,7 +1725,7 @@ void verify_application_owner_drain_transitions ()
     assert (mailbox.begin_application_drain ("a"));
     auto third =
       mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "a", 1, 4096);
-    assert (third && third->records[0]->parts[0].to_bytes ()[0] == 4);
+    assert (third && third->records[0]->parts ()[0].to_bytes ()[0] == 4);
     assert (enqueue ("a", 5));
     assert (mailbox.release (*third));
     mailbox.end_application_drain ("a"); // A time-budget yield wakes this owner once.
@@ -1736,7 +1736,7 @@ void verify_application_owner_drain_transitions ()
     assert (mailbox.begin_application_drain ("a"));
     auto final =
       mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "a", 1, 4096);
-    assert (final && final->records[0]->parts[0].to_bytes ()[0] == 5);
+    assert (final && final->records[0]->parts ()[0].to_bytes ()[0] == 5);
     assert (mailbox.release (*final));
     mailbox.end_application_drain ("a");
     assert (mailbox.pending_messages (mesh::service_mailbox_domain_t::application) == 0);
@@ -1748,40 +1748,40 @@ void verify_independent_mailbox_domains_and_claim_fence ()
 {
     constexpr auto fixed_work_cost = runtime::dispatch_limits::fixed_work_byte_cost;
     mesh::service_mailbox_t owner_scoped;
-    assert (owner_scoped.try_enqueue (
-      {"owner-a", mesh::service_mailbox_domain_t::application,
-       zlink::framework::detail::backend::materialize_binding_parts ({{1}})}));
+    assert (owner_scoped.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+      "owner-a", mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts ({{1}}))));
     auto owner_a_claim = owner_scoped.try_claim_owner (mesh::service_mailbox_domain_t::application,
                                                        "owner-a", 1, 4096);
     assert (owner_a_claim && owner_a_claim->records.size () == 1);
-    assert (owner_scoped.try_enqueue (
-      {"owner-a", mesh::service_mailbox_domain_t::application,
-       zlink::framework::detail::backend::materialize_binding_parts ({{2}})}));
-    assert (owner_scoped.try_enqueue (
-      {"owner-b", mesh::service_mailbox_domain_t::application,
-       zlink::framework::detail::backend::materialize_binding_parts ({{3}})}));
+    assert (owner_scoped.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+      "owner-a", mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts ({{2}}))));
+    assert (owner_scoped.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+      "owner-b", mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts ({{3}}))));
     assert (owner_scoped.release (*owner_a_claim));
-    assert (owner_scoped.try_enqueue (
-      {"owner-a", mesh::service_mailbox_domain_t::application,
-       zlink::framework::detail::backend::materialize_binding_parts ({{6}})}));
+    assert (owner_scoped.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+      "owner-a", mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts ({{6}}))));
     auto owner_a_remaining = owner_scoped.try_claim_owner (
       mesh::service_mailbox_domain_t::application, "owner-a", 2, 4096);
     assert (owner_a_remaining && owner_a_remaining->records.size () == 2);
     assert (owner_scoped.release (*owner_a_remaining));
 
     mesh::service_mailbox_t mailbox;
-    assert (mailbox.try_enqueue (
-      {"owner-a", mesh::service_mailbox_domain_t::application,
-       zlink::framework::detail::backend::materialize_binding_parts ({{1, 2, 3}})}));
-    assert (mailbox.try_enqueue (
-      {"owner-a", mesh::service_mailbox_domain_t::application,
-       zlink::framework::detail::backend::materialize_binding_parts ({{4, 5}})}));
-    assert (
-      mailbox.try_enqueue ({"peer-a", mesh::service_mailbox_domain_t::infrastructure,
-                            zlink::framework::detail::backend::materialize_binding_parts ({{9}})}));
-    assert (
-      mailbox.try_enqueue ({"owner-b", mesh::service_mailbox_domain_t::application,
-                            zlink::framework::detail::backend::materialize_binding_parts ({{7}})}));
+    assert (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+      "owner-a", mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts ({{1, 2, 3}}))));
+    assert (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+      "owner-a", mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts ({{4, 5}}))));
+    assert (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+      "peer-a", mesh::service_mailbox_domain_t::infrastructure,
+      zlink::framework::detail::backend::materialize_binding_parts ({{9}}))));
+    assert (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+      "owner-b", mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts ({{7}}))));
 
     auto owner_b =
       mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "owner-b", 1, 64);
@@ -1805,14 +1805,14 @@ void verify_independent_mailbox_domains_and_claim_fence ()
     assert (mailbox.release (*remaining));
 
     mesh::service_mailbox_t accounting;
-    assert (accounting.try_enqueue (
-      {"accounted", mesh::service_mailbox_domain_t::application,
-       zlink::framework::detail::backend::materialize_binding_parts ({{1, 2, 3}})}));
+    assert (accounting.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+      "accounted", mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts ({{1, 2, 3}}))));
     assert (accounting.pending_bytes (mesh::service_mailbox_domain_t::application)
             == fixed_work_cost + 3);
-    assert (accounting.try_enqueue (
-      {"accounted", mesh::service_mailbox_domain_t::application,
-       zlink::framework::detail::backend::materialize_binding_parts ({{4}})}));
+    assert (accounting.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+      "accounted", mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts ({{4}}))));
     // The claim byte budget bounds one receive turn; it is not a queue limit.
     // A batch always takes its first record and then stops at the budget.
     auto accounted = accounting.try_claim (mesh::service_mailbox_domain_t::application, 2, 1);
@@ -1823,20 +1823,21 @@ void verify_independent_mailbox_domains_and_claim_fence ()
     assert (accounted_rest && accounted_rest->records.size () == 1);
     assert (accounting.release (*accounted_rest));
 
-    assert (mailbox.try_enqueue ({"owner-large", mesh::service_mailbox_domain_t::application,
-                                  zlink::framework::detail::backend::materialize_binding_parts (
-                                    {std::vector<std::uint8_t> (20, 7)})}));
+    assert (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+      "owner-large", mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts (
+        {std::vector<std::uint8_t> (20, 7)}))));
     auto oversized = mailbox.try_claim (mesh::service_mailbox_domain_t::application, 1, 1);
     assert (oversized && oversized->records.size () == 1);
     assert (mailbox.release (*oversized));
 
     mesh::service_mailbox_t saturated;
-    assert (saturated.try_enqueue (
-      {"first", mesh::service_mailbox_domain_t::application,
-       zlink::framework::detail::backend::materialize_binding_parts ({{1}})}));
-    mesh::service_mailbox_record_t retained{
+    assert (saturated.try_enqueue (mesh::service_mailbox_record_t::from_parts (
       "first", mesh::service_mailbox_domain_t::application,
-      zlink::framework::detail::backend::materialize_binding_parts ({{2, 3, 4}})};
+      zlink::framework::detail::backend::materialize_binding_parts ({{1}}))));
+    auto retained = mesh::service_mailbox_record_t::from_parts (
+      "first", mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts ({{2, 3, 4}}));
     assert (saturated.try_enqueue (std::move (retained)));
     auto first = saturated.try_claim (mesh::service_mailbox_domain_t::application, 2, 64);
     assert (first && first->records.size () == 1);
@@ -1844,8 +1845,9 @@ void verify_independent_mailbox_domains_and_claim_fence ()
     auto second = saturated.try_claim (mesh::service_mailbox_domain_t::application, 2, 4096);
     assert (second && second->records.size () == 1);
     assert (second->records.front ()->owner == "first");
-    assert ((zlink::framework::detail::backend::copy_binding_parts (second->records.front ()->parts)
-             == std::vector<std::vector<std::uint8_t>>{{2, 3, 4}}));
+    assert (
+      (zlink::framework::detail::backend::copy_binding_parts (second->records.front ()->parts ())
+       == std::vector<std::vector<std::uint8_t>>{{2, 3, 4}}));
     assert (saturated.release (*second));
 }
 
@@ -2438,7 +2440,7 @@ void verify_client_server_independent_raw_path ()
     assert (send_claim && send_claim->records.size () == 1);
     {
         const auto send_header = runtime::messaging::envelope_codec_t{}.decode_header (
-          send_claim->records.front ()->parts.front ().copy (), false);
+          send_claim->records.front ()->parts ().front ().copy (), false);
         assert (send_header);
         assert (send_header.value ().channel_name == expected_server.channel_name);
         assert (send_header.value ().kind == runtime::messaging::message_kind_t::command);
@@ -2461,7 +2463,7 @@ void verify_client_server_independent_raw_path ()
     auto request_claim =
       server.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (request_claim && request_claim->records.size () == 1);
-    assert (request_claim->records.front ()->reply_token);
+    assert (request_claim->records.front ()->reply_token ());
     assert (server
               .reply ((*request_claim->records.front ()),
                       {"ClientServerReply", "application/json", bytes ("reply")})
@@ -3013,13 +3015,13 @@ void verify_raw_owner_node_send_and_liveness (
     auto claim = second.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (claim && claim->records.size () == 1);
     assert (
-      protocol::decode_header (protocol::message_bytes (claim->records.front ()->parts.front ()))
+      protocol::decode_header (protocol::message_bytes (claim->records.front ()->parts ().front ()))
         .kind
       == protocol::command::nodeSend);
     const protocol::application_payload_t expected_payload{"Probe", "application/json",
                                                            bytes ("payload")};
     assert (protocol::decode_application_payload (
-              protocol::message_bytes (claim->records.front ()->parts.at (1)))
+              protocol::message_bytes (claim->records.front ()->parts ().at (1)))
             == expected_payload);
     assert (second.mailbox ().release (*claim));
 
@@ -3060,7 +3062,7 @@ void verify_raw_owner_node_send_and_liveness (
       second.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (channel_claim && channel_claim->owner == "channel:alpha");
     assert (protocol::decode_channel_send_header (
-              protocol::message_bytes (channel_claim->records.front ()->parts.front ()))
+              protocol::message_bytes (channel_claim->records.front ()->parts ().front ()))
             == "alpha");
     assert (second.mailbox ().release (*channel_claim));
 
@@ -3089,11 +3091,11 @@ void verify_raw_owner_node_send_and_liveness (
       second.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (request_claim && request_claim->records.size () == 1);
     const auto &request_record = (*request_claim->records.front ());
-    assert (request_record.reply_token);
+    assert (request_record.reply_token ());
     assert (request_record.correlation);
-    assert (
-      protocol::decode_node_request_header (protocol::message_bytes (request_record.parts.front ()))
-      == *request_record.correlation);
+    assert (protocol::decode_node_request_header (
+              protocol::message_bytes (request_record.parts ().front ()))
+            == *request_record.correlation);
     assert (second.reply (request_record, {"RequestReply", "application/json", bytes ("reply")}));
     assert (second.mailbox ().release (*request_claim));
     const auto request_deadline = mesh::service_liveness_registry_t::clock_t::now () + 2s;
@@ -3152,7 +3154,7 @@ void verify_raw_owner_node_send_and_liveness (
     assert (actor_create_claim && actor_create_claim->records.size () == 1);
     const auto &actor_create_record = (*actor_create_claim->records.front ());
     const auto decoded_actor_create = protocol::decode_actor_create_header (
-      protocol::message_bytes (actor_create_record.parts.front ()));
+      protocol::message_bytes (actor_create_record.parts ().front ()));
     assert (decoded_actor_create.operation == actor_create.operation);
     assert (decoded_actor_create.actor_id == "actor-remote");
     protocol::actor_create_reply_t actor_create_reply{{*actor_create_record.correlation, 0, 0},
@@ -3212,7 +3214,7 @@ void verify_raw_owner_node_send_and_liveness (
         for (const auto &slot : claim->records) {
             const auto &record = *slot;
             const auto decoded = protocol::decode_actor_create_header (
-              protocol::message_bytes (record.parts.front ()));
+              protocol::message_bytes (record.parts ().front ()));
             protocol::actor_create_reply_t burst_reply{{*record.correlation, 0, 0},
                                                        protocol::actor_create_result_t::created,
                                                        second_descriptor.node_routing_id,
@@ -3289,7 +3291,7 @@ void verify_raw_owner_node_send_and_liveness (
     const auto verify_retained_payloads = [] (const mesh::service_mailbox_claim_t &claim) {
         for (const auto &record : claim.records) {
             const auto payload = protocol::decode_application_payload (
-              protocol::message_bytes (record->parts.back ()), false);
+              protocol::message_bytes (record->parts ().back ()), false);
             assert (payload.packet_name () == "SaturatedControl");
             const auto &body = payload.payload_bytes ();
             assert (body.size () == 512u * 1024u);
@@ -3413,7 +3415,7 @@ void verify_raw_owner_node_send_and_liveness (
         if (claim) {
             for (const auto &slot : claim->records) {
                 const auto &record = *slot;
-                assert (record.reply_token);
+                assert (record.reply_token ());
                 assert (
                   second.reply (record, {"ConcurrentReply", "application/json", bytes ("reply")}));
             }
@@ -3507,7 +3509,7 @@ void verify_relocation_prepare_failed_reply_resolves_promptly_with_identity_fenc
     assert (claim && claim->records.size () == 1);
     const auto &record = (*claim->records.front ());
     const auto control =
-      protocol::decode_relocation_control (protocol::message_bytes (record.parts.front ()));
+      protocol::decode_relocation_control (protocol::message_bytes (record.parts ().front ()));
     const auto *decoded_prepare = std::get_if<protocol::relocation_prepare_t> (&control);
     assert (decoded_prepare && *decoded_prepare == prepare);
 
@@ -3636,13 +3638,13 @@ void verify_actor_join_waits_for_admit_without_replay ()
             assert (claim && claim->records.size () == 1);
             return claim;
         };
-        std::shared_ptr<const mesh::service_mailbox_record_t> first;
+        std::shared_ptr<const mesh::service_mailbox_reply_target_t> first;
         std::vector<zlink::message_t> first_parts;
         if (handover) {
             auto claim = receive ();
             first = claim->records.front ()->reply_source ();
-            first_parts = claim->records.front ()->parts;
-            assert (first->reply_token);
+            first_parts = claim->records.front ()->parts ();
+            assert (first->reply_token ());
             assert (target.mailbox ().release (*claim));
             assert (!pending.await_ready ());
             assert (target.connect_peer (source.endpoint (), local));
@@ -3677,10 +3679,10 @@ void verify_actor_join_waits_for_admit_without_replay ()
         auto claim = receive ();
         const auto &record = (*claim->records.front ());
         const auto decoded = protocol::decode_actor_join_28 (
-          zlink::framework::detail::backend::copy_binding_parts (record.parts));
+          zlink::framework::detail::backend::copy_binding_parts (record.parts ()));
         assert (decoded.correlation == request.correlation);
         if (first)
-            assert (zlink::framework::detail::backend::copy_binding_parts (record.parts)
+            assert (zlink::framework::detail::backend::copy_binding_parts (record.parts ())
                     == zlink::framework::detail::backend::copy_binding_parts (first_parts));
         assert (!pending.await_ready ());
         assert (target.reply_actor_join (record, protocol::actor_join_result_t::accepted,
@@ -3743,7 +3745,7 @@ void verify_actor_join_durable_terminals ()
     auto admitted = source.request_actor_join (target_descriptor.node_routing_id, admitted_request,
                                                std::nullopt, 200ms);
     const auto claim = claim_actor_join (target);
-    assert (claim && claim->records.front ()->reply_token);
+    assert (claim && claim->records.front ()->reply_token ());
     assert (target.mailbox ().release (*claim));
     // Physical loss preserves the source's logical connection intent.
     // Local disconnect_rid instead retires issued wait tokens with a typed
@@ -3786,7 +3788,7 @@ void verify_actor_join_ends_after_unexpected_admitted_peer_loss (bool monitor_di
                                              "join-owner-loss-actor", "join-owner-loss-spot");
     auto pending = source.request_actor_join (remote.node_routing_id, request, std::nullopt, 2s);
     const auto claim = claim_actor_join (target);
-    assert (claim && claim->records.front ()->reply_token);
+    assert (claim && claim->records.front ()->reply_token ());
     assert (target.mailbox ().release (*claim));
 
     source.forget_peer (remote.node_routing_id, target.endpoint ());
@@ -3854,7 +3856,7 @@ void verify_actor_join_accepted_reply_threads_chunk_limit_and_epoch ()
     assert (claim && claim->records.size () == 1);
     const auto &record = (*claim->records.front ());
     const auto decoded = protocol::decode_actor_join_28 (
-      zlink::framework::detail::backend::copy_binding_parts (record.parts));
+      zlink::framework::detail::backend::copy_binding_parts (record.parts ()));
     assert (decoded.correlation == request.correlation);
     assert (decoded.actor.id == request.actor.actor_id);
     assert (decoded.actor.generation == request.actor.object_generation);
@@ -4072,7 +4074,7 @@ void verify_actor_join_mismatched_correlation_reply_classifies_protocol_error ()
     assert (claim && claim->records.size () == 1);
     // Reply through the raw route (so the frame reaches the pending
     // request), but stamp a correlation that does not identify it.
-    auto misrouted = std::const_pointer_cast<mesh::service_mailbox_record_t> (
+    auto misrouted = std::const_pointer_cast<mesh::service_mailbox_reply_target_t> (
       claim->records.front ()->reply_source ());
     misrouted->correlation = request.correlation + 2;
     assert (target.reply_actor_join (*misrouted, protocol::actor_join_result_t::accepted,
@@ -4370,7 +4372,7 @@ void verify_liveness_without_selected_route ()
         }
         assert (claim && claim->records.size () == 1);
         assert (protocol::decode_application_payload (
-                  protocol::message_bytes (claim->records.front ()->parts.at (1)))
+                  protocol::message_bytes (claim->records.front ()->parts ().at (1)))
                 == payload);
         assert (receiver->mailbox ().release (*claim));
     }
@@ -4571,7 +4573,7 @@ void verify_prepare_does_not_replay_on_selected_route ()
         }
         assert (claim && claim->records.size () == 1);
         assert (std::get<protocol::relocation_prepare_t> (protocol::decode_relocation_control (
-                  protocol::message_bytes (claim->records.front ()->parts.front ())))
+                  protocol::message_bytes (claim->records.front ()->parts ().front ())))
                 == prepare);
         return claim;
     };
@@ -4639,7 +4641,7 @@ void verify_unadmitted_route (bool repeat_hello)
                 (void) target.observe_routes ();
                 if (auto record = port.try_receive ()) {
                     assert (
-                      protocol::decode_header (protocol::message_bytes (record->parts.front ()))
+                      protocol::decode_header (protocol::message_bytes (record->parts ().front ()))
                         .kind
                       == protocol::command::hello);
                     return true;
@@ -4690,7 +4692,7 @@ void verify_unadmitted_route (bool repeat_hello)
         while (!admit_received && std::chrono::steady_clock::now () < deadline)
             if (auto record = port.try_receive ()) {
                 assert (
-                  protocol::decode_header (protocol::message_bytes (record->parts.front ())).kind
+                  protocol::decode_header (protocol::message_bytes (record->parts ().front ())).kind
                   == protocol::command::admit);
                 admit_received = true;
             }
@@ -4714,7 +4716,8 @@ void verify_unadmitted_route (bool repeat_hello)
         while (!data_received && std::chrono::steady_clock::now () < deadline)
             if (auto record = port.try_receive ()) {
                 const auto kind =
-                  protocol::decode_header (protocol::message_bytes (record->parts.front ())).kind;
+                  protocol::decode_header (protocol::message_bytes (record->parts ().front ()))
+                    .kind;
                 assert (kind == protocol::command::nodeSend
                         || kind == protocol::command::livenessProbe);
                 data_received = kind == protocol::command::nodeSend;

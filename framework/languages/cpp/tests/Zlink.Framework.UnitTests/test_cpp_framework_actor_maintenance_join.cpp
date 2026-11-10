@@ -343,7 +343,7 @@ struct public_host_runtime_test_access_t
                           attempt.terminal->complete (result_t<void>::success ());
                       if (replaced) {
                           attempt = public_host_runtime_t::relocation_target_attempt_t{};
-                          EXPECT_TRUE (pending->request.parts.empty ());
+                          EXPECT_TRUE (pending->request.parts ().empty ());
                           EXPECT_FALSE (pending->request.application);
                           EXPECT_FALSE (pending->request.application_permit);
                           EXPECT_FALSE (pending->request.transferred);
@@ -3593,24 +3593,23 @@ struct native_intake_fixture_t
     {
         namespace wire = fw::runtime::protocol;
         namespace mesh = fw::runtime::mesh;
-        mesh::service_mailbox_record_t record;
-        record.owner = mesh::service_mailbox_t::application_owner (
-          fw::runtime::host::owner_kind_t::actor, actor_id);
-        record.domain = mesh::service_mailbox_domain_t::application;
-        record.source_routing_id = zlink::routing_id_t::from (source_id).to_bytes ();
-        record.source_node_generation = 1;
+        auto source = zlink::routing_id_t::from (source_id).to_bytes ();
         const wire::actor_route_fence_t fence{actor_id, 1, rid, 1, authority_generation, 1};
         fw::runtime::messaging::envelope_header_t envelope;
         envelope.kind = fw::runtime::messaging::message_kind_t::command;
         envelope.channel_name = mesh_name;
         envelope.message_name = probe_t::packet_name;
         auto parts = fw::detail::encode_actor_packet (envelope, zlink::message_t{});
-        record.parts = fw::detail::backend::materialize_binding_parts (
+        auto record_parts = fw::detail::backend::materialize_binding_parts (
           {wire::encode_actor_message_header (wire::command::actorSend, std::nullopt, fence,
                                               {1, sequence}),
            wire::encode_application_payload (
              wire::application_payload_t::from_parts (std::move (parts).take_items ()))});
-        return record;
+        return mesh::service_mailbox_record_t::from_parts (
+          mesh::service_mailbox_t::application_owner (fw::runtime::host::owner_kind_t::actor,
+                                                      actor_id),
+          mesh::service_mailbox_domain_t::application, std::move (record_parts), std::move (source),
+          {}, 1);
     }
 };
 
@@ -3896,7 +3895,8 @@ TEST (NativeIntake, LocalAcceptedRecordReleasesAfterNativeTerminal)
     native_intake_fixture_t fixture;
     auto actor = fixture.host->create_actor (actor_type, actor_id);
     auto wire = fixture.actor_record (1);
-    auto parts = fw::runtime::protocol::decode_application_parts (std::move (wire.parts.back ()));
+    auto parts =
+      fw::runtime::protocol::decode_application_parts (std::move (wire.body_parts ().back ()));
     const auto sent = actor.send_to (actor.ref (), parts).result ();
     ASSERT_TRUE (sent);
     ASSERT_EQ (sent.value (), zlink::submit_result_t::ok);
@@ -3941,7 +3941,7 @@ TEST (NativeIntake, LocalSourceAwaitKeepsCanonicalOriginalAndIgnoresStaleComplet
     auto host = fixture.host;
     auto actor = host->create_actor (actor_type, actor_id);
     auto wire = fixture.actor_record (1);
-    auto parts = rt::protocol::decode_application_parts (std::move (wire.parts.back ()));
+    auto parts = rt::protocol::decode_application_parts (std::move (wire.body_parts ().back ()));
     ASSERT_TRUE (actor.send_to (actor.ref (), parts).result ());
     auto &mailbox = host->transport ().mailbox ();
     const auto key =
@@ -4334,7 +4334,7 @@ TEST (NativeIntake, LocalSourceRejectionSettlesOnlyOwnedOriginal)
     auto host = fixture.host;
     auto actor = host->create_actor (actor_type, actor_id);
     auto wire = fixture.actor_record (1);
-    auto parts = rt::protocol::decode_application_parts (std::move (wire.parts.back ()));
+    auto parts = rt::protocol::decode_application_parts (std::move (wire.body_parts ().back ()));
     rt::host::pending_operation_t operation;
     ASSERT_EQ (
       actor.request_to (actor.ref (), parts, operation, zlink::send_flags_t::none, wait_budget)
@@ -4612,19 +4612,20 @@ TEST (NativeIntake, TypedControlMalformedWireAndKernelMetadata)
     drain ();
     EXPECT_EQ (controls, 1u);
     EXPECT_EQ (rejected, 0u);
-    mesh::service_mailbox_record_t malformed;
-    malformed.owner = owner;
-    malformed.domain = mesh::service_mailbox_domain_t::application;
-    malformed.parts.push_back (zlink::message_t::from ("invalid"));
+    std::vector<zlink::message_t> malformed_parts;
+    malformed_parts.push_back (zlink::message_t::from ("invalid"));
+    auto malformed = mesh::service_mailbox_record_t::from_parts (
+      owner, mesh::service_mailbox_domain_t::application, std::move (malformed_parts));
     ASSERT_TRUE (mailbox.try_enqueue (std::move (malformed)));
     drain ();
     EXPECT_EQ (controls, 1u);
     EXPECT_EQ (rejected, 1u);
     st::raw_stateful_dispatch_t raw (host->objects (), host->transport (), resolver);
-    EXPECT_THROW (mailbox.try_enqueue ({owner, mesh::service_mailbox_domain_t::application, {}}),
+    EXPECT_THROW (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+                    owner, mesh::service_mailbox_domain_t::application, {})),
                   std::invalid_argument);
-    mesh::service_mailbox_record_t invalid_accepted{
-      owner, mesh::service_mailbox_domain_t::application, {zlink::message_t::from ("invalid")}};
+    auto invalid_accepted = mesh::service_mailbox_record_t::from_parts (
+      owner, mesh::service_mailbox_domain_t::application, {zlink::message_t::from ("invalid")});
     const auto invalid_slot =
       fw::test::publish_stateful_claim (host->transport (), object, std::move (invalid_accepted));
     EXPECT_EQ (raw

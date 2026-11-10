@@ -70,6 +70,7 @@ using accepted_mailbox_reservation_t = mesh::service_mailbox_settlement_t;
 struct claimed_ingress_t
 {
     std::optional<zlink::message_t> header;
+    std::optional<protocol::service_wire_header_t> service_header;
     std::optional<zlink::message_t> body;
     std::vector<std::uint8_t> source_routing_id;
     std::uint64_t source_node_generation = 0;

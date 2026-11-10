@@ -17,12 +17,12 @@
 
 namespace zlink::framework::tests
 {
-// A record's permit makes copying ill-formed on every platform. Keep aggregate
-// and move semantics intact rather than adding special members for the test.
+// A record's permit makes copying ill-formed on every platform. Its native
+// storage and classification stay encapsulated; default construction and moves remain available.
 static_assert (!std::is_copy_constructible_v<runtime::mesh::service_mailbox_record_t>);
 static_assert (!std::is_copy_assignable_v<runtime::mesh::service_mailbox_record_t>);
 static_assert (std::is_move_constructible_v<runtime::mesh::service_mailbox_record_t>);
-static_assert (std::is_aggregate_v<runtime::mesh::service_mailbox_record_t>);
+static_assert (std::is_default_constructible_v<runtime::mesh::service_mailbox_record_t>);
 
 struct creation_counts_t
 {
