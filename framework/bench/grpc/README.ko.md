@@ -651,12 +651,17 @@ runner는 여섯 개다: `c/run_local.sh`, `cpp/run_local.sh`, `dotnet/run_local
 | `IMPLEMENTATIONS` | 그 언어의 구현 전부(§1.1, §1.2) | 측정할 구현 |
 | `RUNS` | `3` | run 수. G5 재현성 판정이 run 3개를 요구한다 |
 | `SKIP_BUILD` | `0` | `0`이면 측정 전에 그 언어의 `<lang>/build.sh`로 빌드하고, `1`이면 이미 빌드된 산출물을 쓴다 |
+| `TARGET_RATE` | 설정 안 함(0, unpaced) | C++ runner의 client 제출률(초당 메시지 수) |
+| `SOURCE_CPUS` | 설정 안 함 | C++ source process에 적용할 `taskset -c` CPU 목록 |
+| `TARGET_CPUS` | 설정 안 함 | C++ target process에 적용할 `taskset -c` CPU 목록 |
 
 - `<lang>`은 `c`, `cpp`, `dotnet`, `java`, `kotlin`, `node` 중 하나다.
 - Kotlin runner의 기본값은 §10.5의 보조 셀인 `request-backpressure`와 `1024`다.
   개별 검증에서는 `PATTERNS=request-backpressure,send-saturation`,
   `PAYLOAD_SIZES=1024,4096` 범위에서 선택할 수 있다.
 - 값이 위 범위를 벗어나면 runner는 측정을 시작하기 전에 거부한다.
+- `TARGET_RATE`, `SOURCE_CPUS`, `TARGET_CPUS`는 C++ runner 전용 선택 입력이다. CPU 목록은 Linux `taskset -c` 형식을 쓴다.
+  C++ runner는 세 값을 셀 JSON `metadata`의 `targetRate`(`0`은 unpaced), `sourceCpus`, `targetCpus`(설정 안 하면 `unpinned`)에 기록한다.
 
 위 표 밖의 값은 입력이 아니다. send concurrency 8과 drain 상한 30초(§3), 포트(§9)는
 runner가 정하고 셀 JSON의 `metadata`에 기록한다.
