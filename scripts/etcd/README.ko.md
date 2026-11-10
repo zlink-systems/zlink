@@ -241,6 +241,8 @@ CMAKE_BUILD_PARALLEL_LEVEL=1 \
 사용한다. Build 출력은 log directory의 `*-build.log`, 실행 출력은 `conformance.log`에 저장한다.
 `ZLINK_ETCD_TEST_LOG_DIR`로 로그 위치를 지정할 수 있다. 나머지 인자는 공통 실행기에 전달한다.
 Host clock VM이 없을 때의 `--allow-unverified`는 기존 미검증 항목 세 개만 허용한다.
+매일 밤 `nightly-stress.yml`의 C++ worker 1개 job이 GitHub-hosted runner에서 자기 build directory로
+이 script를 `--allow-unverified`와 함께 실행하고, log directory를 artifact `etcd-4x4-conformance-logs`로 올린다.
 
 C++ target `zlink_location_store_provider_adapter`는 `WITH_ETCD=ON`에서만 생성하며 ctest에
 등록하지 않는다. 별도 adapter 설정을 사용할 때는 `cpp.command`에 이 실행 파일의 절대 경로,
