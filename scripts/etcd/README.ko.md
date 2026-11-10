@@ -211,6 +211,66 @@ mutation을 실행한다. 대상 구문이 없거나 build가 실패하면 `not-
 `detected`다. 결과에는 `language`를 기록하며 build 로그는
 `ZLINK_ETCD_TEST_LOG_DIR/mutation-build/<language>/<mutation 또는 control>/`에 보존한다.
 
+## C++와 4×4 실행
+
+Linux에서 Node.js 22, .NET SDK 8, JDK 25, CMake, Ninja, C++20 compiler와 Docker daemon을
+사용한다. Node workspace 의존성과 저장소가 지정한 Core·binding package, vcpkg 의존성은 먼저
+설치한다. C++ build directory는 다음과 같이 구성한다. `VCPKG_ROOT`, `VCPKG_INSTALLED_DIR`와
+`ZLINK_LOCAL_PACKAGE_ROOT`는 준비한 의존성의 절대 경로다.
+`ZLINK_LOCAL_PACKAGE_ROOT`가 C++ 전용 cache이면 .NET·Java의 로컬 feed 경로도 먼저 만든다.
+빈 feed는 공개 NuGet·Maven 저장소의 의존성 사용을 막지 않는다.
+
+```sh
+mkdir -p "$ZLINK_LOCAL_PACKAGE_ROOT/nuget" "$ZLINK_LOCAL_PACKAGE_ROOT/maven"
+cmake -S framework/languages/cpp -B /build/cpp -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/.github/workflows/framework-cpp-system-toolchain.cmake" \
+  -DVCPKG_TARGET_TRIPLET=x64-linux-zlink-release \
+  -DZLINK_FRAMEWORK_CPP_WITH_ETCD=ON \
+  -DZLINK_FRAMEWORK_CPP_BUILD_TESTS=OFF \
+  -DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF \
+  -DZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=OFF \
+  -DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF
+CMAKE_BUILD_PARALLEL_LEVEL=1 \
+  bash scripts/etcd/build-and-run-4x4.sh /build/cpp /build/conformance --allow-unverified
+```
+
+`build-and-run-4x4.sh`는 네 adapter를 build하고 `/build/conformance/adapters.json`을 만든 뒤
+공통 실행기를 실행한다. C++ build directory는 호출자가 configure한 static build 경로를 받으며, 두 번째 인자는
+.NET adapter 산출물·설정·로그의 출력 경로다. Node와 Java는 각 workspace의 표준 build 경로를
+사용한다. Build 출력은 log directory의 `*-build.log`, 실행 출력은 `conformance.log`에 저장한다.
+`ZLINK_ETCD_TEST_LOG_DIR`로 로그 위치를 지정할 수 있다. 나머지 인자는 공통 실행기에 전달한다.
+Host clock VM이 없을 때의 `--allow-unverified`는 기존 미검증 항목 세 개만 허용한다.
+
+C++ target `zlink_location_store_provider_adapter`는 `WITH_ETCD=ON`에서만 생성하며 ctest에
+등록하지 않는다. 별도 adapter 설정을 사용할 때는 `cpp.command`에 이 실행 파일의 절대 경로,
+`cpp.env.ZLINK_ETCD_CPP_BUILD_DIR`에 기준 CMake build directory의 절대 경로를 지정한다.
+`build-cpp-provider.cjs`는 provider source의 격리 사본과 adapter를 별도 directory에서 build한다.
+기준 build의 생성 protobuf object와 공통 라이브러리를 재사용하며 대조군도 같은 절차로 만든다.
+대상 구문 불일치와 build 실패는 `not-built`이며, provider 생산 코드는 변경하지 않는다.
+
+두 교차언어 ID는 각각 16개 writer×reader pair를 실행한다. Pair namespace와 35개 ID의
+판정·coverage 규칙은 기존 실행기가 소유한다. 다음 명령으로 저장된 결과를 다시 검사한다.
+
+```sh
+node scripts/etcd/check-conformance-coverage.mjs --allow-unverified \
+  /build/conformance/logs/node-conformance.json /build/conformance/logs/dotnet-conformance.json \
+  /build/conformance/logs/jvm-conformance.json /build/conformance/logs/cpp-conformance.json
+```
+
+Container에서 실행할 때는 Docker socket과 etcd의 host 공개 port에 접근할 수 있어야 한다.
+Docker Desktop의 host loopback port를 container에서 직접 쓸 수 없으면 container loopback에서
+`host.docker.internal`로 TCP 전달기를 구성한다. 전달기는 bytes만 전달하며 case나 oracle을
+해석하지 않는다. C++ mutation build는 메모리 사용을 제한하도록 순차 실행한다. Cache는 compiler,
+vcpkg revision·triplet, Core·binding version이 같은 산출물만 재사용한다. 기존 `x64-linux` cache는
+`x64-linux-zlink-release`와 이름을 바꾸어 혼용하지 않으며, 기존 cache 검증에는 configure 시
+`-DVCPKG_TARGET_TRIPLET=x64-linux`를 명시한다.
+
+Docker Desktop에서는 Node 의존성과 package build 산출물을 Linux filesystem에 둔다.
+Workspace 사본을 Linux volume에 두거나, 동일한 package build 산출물을 복사해
+`ZLINK_ETCD_PROVIDER_DIST`와 `ZLINK_ETCD_NODE_MODULES`로 지정한다. 후자는 provider의
+companion package인 Framework·stream-wire 산출물과 그 의존성도 함께 배치해야 한다.
+
 Docker 안에서 실행할 때는 runner의 저장소 절대 경로가 host Docker daemon에서도 같은 bind mount
 경로를 가리켜야 한다. Docker socket과 host network를 연결하고, SDK·JDK·Node·Docker CLI를 준비한다.
 시계 VM이 없는 환경에서는 기존 host 시계 case 세 개를 언어마다 `unverified`로 남긴다.
