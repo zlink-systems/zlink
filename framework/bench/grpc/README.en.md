@@ -702,11 +702,15 @@ difference doesn't show in the result table.
 | `IMPLEMENTATIONS` | Every implementation of the language (§1.1, §1.2) | Implementations to measure |
 | `RUNS` | `3` | Number of runs. The G5 reproducibility check needs three runs |
 | `SKIP_BUILD` | `0` | `0` builds with the language's `<lang>/build.sh` before measuring; `1` uses the artifacts already built |
+| `TARGET_RATE` | Unset (0, unpaced) | C++ runner client submission rate in messages per second |
+| `SOURCE_CPUS` | Unset | CPU list for the C++ source process, passed to `taskset -c` |
+| `TARGET_CPUS` | Unset | CPU list for the C++ target process, passed to `taskset -c` |
 
 - `<lang>` is one of `c`, `cpp`, `dotnet`, `java`, `kotlin`, and `node`.
 - The Kotlin runner defaults to the supplementary §10.5 cells: `request-backpressure` and `1024`.
   Manual verification also accepts `send-saturation` and payload sizes `1024,4096`.
 - If a value is outside these ranges, the runner rejects it before the measurement starts.
+- `TARGET_RATE`, `SOURCE_CPUS`, and `TARGET_CPUS` are optional C++ runner inputs. CPU lists use Linux `taskset -c` syntax.
 
 Values outside the table aren't inputs. Send concurrency 8 and the 30-second drain
 limit (§3), and ports (§9) are set by the runner and recorded in the `metadata` of the cell JSON.
