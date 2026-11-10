@@ -49,50 +49,5 @@ async function waitForRouteMeshReady(
   );
 }
 
-async function logSpotPeerReady(
-  runtime: ZLinkRouteMeshRuntime,
-  host: ZLinkFrameworkRuntime,
-  meshName: string,
-  nodeId: string,
-  peerNodeId: string
-): Promise<void> {
-  const peerRoutingIdPrefix = `tictactoe-play-${peerNodeId}-`;
-  const isReady = (): boolean =>
-    host.status.isReady &&
-    runtime
-      .snapshot(meshName)
-      .peers.some(
-        (peer) =>
-          peer.state === ZLinkPeerState.Ready &&
-          String(peer.nodeRid).startsWith(peerRoutingIdPrefix)
-      );
-  const signal = AbortSignal.timeout(30_000);
-  try {
-    // User Spot placement requires this host's published descriptor.
-    if (!host.status.isReady) {
-      for await (const observed of host.observe(signal)) {
-        if (observed.status.isReady) break;
-      }
-    }
-    signal.throwIfAborted();
-    if (isReady()) {
-      process.stdout.write(`tictactoe-ready kind=peer-route node=${nodeId} peer=${peerNodeId}\n`);
-      return;
-    }
-    for await (const _event of runtime.observe(meshName, 64, signal)) {
-      if (!isReady()) continue;
-      process.stdout.write(`tictactoe-ready kind=peer-route node=${nodeId} peer=${peerNodeId}\n`);
-      return;
-    }
-  } catch (error: unknown) {
-    if (!signal.aborted) throw error;
-  }
-  process.stderr.write('Timed out waiting for a ready Play RouteMesh peer.\n');
-}
-
-export { closeNestRuntime, logSpotPeerReady, waitForRouteMeshReady, waitForShutdown };
-import {
-  ZLinkPeerState,
-  type ZLinkFrameworkRuntime,
-  type ZLinkRouteMeshRuntime
-} from '@zlink-systems/framework';
+export { closeNestRuntime, waitForRouteMeshReady, waitForShutdown };
+import type { ZLinkRouteMeshRuntime } from '@zlink-systems/framework';

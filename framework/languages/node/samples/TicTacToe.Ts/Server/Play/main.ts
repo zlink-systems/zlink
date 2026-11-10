@@ -1,9 +1,13 @@
 import 'reflect-metadata';
 import { enableFlowFileLogging } from '../flow-file-logging';
 import { NestFactory } from '@nestjs/core';
-import type { ZLinkFrameworkRuntime, ZLinkRouteMeshRuntime } from '@zlink-systems/framework';
+import {
+  ZLinkPeerState,
+  type ZLinkFrameworkRuntime,
+  type ZLinkRouteMeshRuntime
+} from '@zlink-systems/framework';
 import { ZLINK_FRAMEWORK_RUNTIME, ZLINK_ROUTE_MESH_RUNTIME } from '@zlink-systems/nestjs';
-import { closeNestRuntime, logSpotPeerReady, waitForShutdown } from '../runtime-support';
+import { closeNestRuntime, waitForShutdown } from '../runtime-support';
 import { TICTACTOE_SAMPLE_CONFIG } from '../Configuration/sample-config';
 import type { TicTacToeSampleConfig } from '../Configuration/sample-config';
 import { SampleNames } from '../Configuration/sample-settings';
@@ -37,6 +41,51 @@ async function main(): Promise<void> {
   );
   await waitForShutdown();
   await closeNestRuntime(channelApp);
+}
+
+async function logSpotPeerReady(
+  runtime: ZLinkRouteMeshRuntime,
+  host: ZLinkFrameworkRuntime,
+  meshName: string,
+  nodeId: string,
+  peerNodeId: string
+): Promise<void> {
+  const peerRoutingIdPrefix = `tictactoe-play-${peerNodeId}-`;
+  // User Spot placement requires this host's published descriptor: wait for Serving too.
+  const hasExpectedReadyPeer = (): boolean =>
+    host.status.isReady &&
+    runtime
+      .snapshot(meshName)
+      .peers.some(
+        (peer) =>
+          peer.state === ZLinkPeerState.Ready &&
+          String(peer.nodeRid).startsWith(peerRoutingIdPrefix)
+      );
+  if (hasExpectedReadyPeer()) {
+    process.stdout.write(`tictactoe-ready kind=peer-route node=${nodeId} peer=${peerNodeId}\n`);
+    return;
+  }
+
+  const signal = AbortSignal.timeout(30_000);
+  try {
+    if (!host.status.isReady) {
+      for await (const observed of host.observe(signal)) {
+        if (observed.status.isReady) break;
+      }
+    }
+    if (hasExpectedReadyPeer()) {
+      process.stdout.write(`tictactoe-ready kind=peer-route node=${nodeId} peer=${peerNodeId}\n`);
+      return;
+    }
+    for await (const _event of runtime.observe(meshName, 64, signal)) {
+      if (!hasExpectedReadyPeer()) continue;
+      process.stdout.write(`tictactoe-ready kind=peer-route node=${nodeId} peer=${peerNodeId}\n`);
+      return;
+    }
+  } catch (error: unknown) {
+    if (!signal.aborted) throw error;
+  }
+  process.stderr.write('Timed out waiting for a ready Play RouteMesh peer.\n');
 }
 
 main().catch((error: unknown) => {
