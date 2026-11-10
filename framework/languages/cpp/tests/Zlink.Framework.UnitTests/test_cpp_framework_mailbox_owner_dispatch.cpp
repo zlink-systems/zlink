@@ -300,8 +300,10 @@ int main (int argc, char **argv)
             assert (executor != nullptr);
             const auto max_workers =
               rt::offload_executor_test_access_t::max_worker_count (*executor);
-            // A occupies one worker, so the other max_workers - 1 reservations are the limit.
-            const auto wake_bound = max_workers - 1;
+            // The previous cdrain guard allowed one wake for this window. The reservation
+            // rule would allow max_workers - 1; 200 runs observed 0 (199) and 1 (1), so the
+            // guard keeps the old strength. More wakes here mean owner fan-out grew.
+            const std::size_t wake_bound = 1;
             if (negative_extra_notify) {
                 // Raise the count to exactly one over the bound through counted worker CV wakes.
                 const auto observed = worker_notifications.load ();

@@ -236,12 +236,18 @@ bool steady_stream (bool notify_every_publication)
     auto source = std::make_shared<source_t> (executor, mailbox);
     std::mutex participants_mutex;
     std::set<std::thread::id> participants;
-    source->handle = [&] (std::size_t) {
+    // Handlers hold until the last publication, so every publication after the
+    // first W lands while all W workers run. Without the hold a descheduled
+    // publisher lets the workers drain and go idle, and the next publication
+    // then wakes an idle worker legitimately (timing, not the rule).
+    std::promise<void> release;
+    const auto released = release.get_future ().share ();
+    source->handle = [&, released] (std::size_t) {
         {
             std::lock_guard lock (participants_mutex);
             participants.insert (std::this_thread::get_id ());
         }
-        std::this_thread::sleep_for (500us);
+        released.wait ();
     };
     mailbox.begin_application_receive_turn ();
     wakes = 0;
@@ -253,6 +259,7 @@ bool steady_stream (bool notify_every_publication)
             worker_conditions[id % worker_conditions.size ()]->notify_one ();
         std::this_thread::sleep_for (50us);
     }
+    release.set_value ();
     await ([&] { return source->completed.load () == count; });
     await ([&] { return executor.drained (); });
     count_wakes = false;
