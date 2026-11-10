@@ -171,11 +171,18 @@ TEST (ZLinkFrameworkSyncSubmit, OneWayTerminalsShareTheSingleSubmissionClaim)
     EXPECT_EQ (1, calls.bound_sends);
 }
 
-struct channel_handler_t
+struct channel_handler_state_t
 {
     calls_t calls;
     task_completion_source_t<void> resume;
     std::promise<void> entered;
+};
+
+struct channel_handler_t
+{
+    explicit channel_handler_t (channel_handler_state_t &state) : state (state) {}
+
+    channel_handler_state_t &state;
 
     int handle (const int &value)
     {
@@ -185,34 +192,34 @@ struct channel_handler_t
         EXPECT_EQ (nullptr, runtime::state_lane_t::current ());
         EXPECT_TRUE (runtime::current_actor_execution.actor_key.empty ());
         EXPECT_TRUE (runtime::current_actor_execution.spot_id.empty ());
-        calls.expect_rejected ();
+        state.calls.expect_rejected ();
         return value;
     }
 
     task_t<void> handle_async (const int &value)
     {
         handle (value);
-        entered.set_value ();
-        co_await resume.task ();
+        state.entered.set_value ();
+        co_await state.resume.task ();
         handle (value);
         co_return;
     }
 
     int handle_with_async_terminals (const int &value)
     {
-        calls.expect_rejected ();
-        EXPECT_EQ (42, calls.request.async ().result ().value ());
-        EXPECT_EQ (42, calls.channel_request.async<int> ().result ().value ());
-        EXPECT_TRUE (calls.send.async ().result ());
-        EXPECT_TRUE (calls.bound_send.async ().result ());
-        EXPECT_TRUE (calls.stream_send.async ().result ());
-        EXPECT_TRUE (calls.stream_write.async ().result ());
+        state.calls.expect_rejected ();
+        EXPECT_EQ (42, state.calls.request.async ().result ().value ());
+        EXPECT_EQ (42, state.calls.channel_request.async<int> ().result ().value ());
+        EXPECT_TRUE (state.calls.send.async ().result ());
+        EXPECT_TRUE (state.calls.bound_send.async ().result ());
+        EXPECT_TRUE (state.calls.stream_send.async ().result ());
+        EXPECT_TRUE (state.calls.stream_write.async ().result ());
         return value;
     }
 
     int complete_application_callbacks (const int &value)
     {
-        resume.complete (result_t<void>::success ());
+        state.resume.complete (result_t<void>::success ());
         return handle (value);
     }
 };
@@ -220,7 +227,7 @@ struct channel_handler_t
 TEST (ZLinkFrameworkSyncSubmit, ChannelHandlerRejectsBeforeMessageSubmission)
 {
     service_collection_t services;
-    services.add_singleton<channel_handler_t> ();
+    services.add_singleton<channel_handler_state_t> ();
     auto provider = services.build_provider ();
     serializer_registry_t serializers;
     handler_registry_t handlers;
@@ -231,7 +238,7 @@ TEST (ZLinkFrameworkSyncSubmit, ChannelHandlerRejectsBeforeMessageSubmission)
     ASSERT_TRUE (result);
     EXPECT_EQ ("42", result.value ().to_string ());
     // Rejected calls remain unclaimed and submit exactly once outside the turn.
-    provider.get_required<channel_handler_t> ().calls.expect_application_submission ();
+    provider.get_required<channel_handler_state_t> ().calls.expect_application_submission ();
 }
 
 TEST (ZLinkFrameworkSyncSubmit, AsyncChannelHandlerRejectsBeforeAndAfterSuspension)
@@ -242,9 +249,9 @@ TEST (ZLinkFrameworkSyncSubmit, AsyncChannelHandlerRejectsBeforeAndAfterSuspensi
         ~executor_scope_t () { runtime::shutdown_handler_coroutine_executor (); }
     } executor_scope;
     service_collection_t services;
-    services.add_singleton<channel_handler_t> ();
+    services.add_singleton<channel_handler_state_t> ();
     auto provider = services.build_provider ();
-    auto &handler = provider.get_required<channel_handler_t> ();
+    auto &handler = provider.get_required<channel_handler_state_t> ();
     serializer_registry_t serializers;
     handler_registry_t handlers;
     handlers.on_send<channel_handler_t, int> ("sync-submit", "", &channel_handler_t::handle_async,
@@ -270,7 +277,7 @@ TEST (ZLinkFrameworkSyncSubmit, AsyncChannelHandlerRejectsBeforeAndAfterSuspensi
 TEST (ZLinkFrameworkSyncSubmit, ChannelHandlerKeepsAllAsyncTerminalsAvailable)
 {
     service_collection_t services;
-    services.add_singleton<channel_handler_t> ();
+    services.add_singleton<channel_handler_state_t> ();
     auto provider = services.build_provider ();
     serializer_registry_t serializers;
     handler_registry_t handlers;
@@ -281,7 +288,7 @@ TEST (ZLinkFrameworkSyncSubmit, ChannelHandlerKeepsAllAsyncTerminalsAvailable)
                                          zlink::message_t::from (std::string ("42")));
     ASSERT_TRUE (result);
     EXPECT_EQ ("42", result.value ().to_string ());
-    const auto &calls = provider.get_required<channel_handler_t> ().calls;
+    const auto &calls = provider.get_required<channel_handler_state_t> ().calls;
     EXPECT_EQ (1, calls.preflights);
     EXPECT_EQ (1, calls.requests);
     EXPECT_EQ (1, calls.channel_requests);
@@ -293,9 +300,9 @@ TEST (ZLinkFrameworkSyncSubmit,
       OutsideCompletionAllowsSubmissionAndInlineTerminalKeepsHandlerContext)
 {
     service_collection_t services;
-    services.add_singleton<channel_handler_t> ();
+    services.add_singleton<channel_handler_state_t> ();
     auto provider = services.build_provider ();
-    auto &handler = provider.get_required<channel_handler_t> ();
+    auto &handler = provider.get_required<channel_handler_state_t> ();
     auto pending = handler.resume.task ();
     int completions = 0;
     int terminals = 0;

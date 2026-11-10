@@ -233,11 +233,12 @@ TEST (RouteHandlerBoundary, SuspendedRegisteredInvocationReturnsTheSingleWorker)
         for (bool suspend_filter : {false, true}) {
             SCOPED_TRACE (std::string (request ? "request" : "send")
                           + (suspend_filter ? "/filter" : "/handler"));
-            suspended_route_state_t state;
+            auto shared_state = std::make_shared<suspended_route_state_t> ();
+            auto &state = *shared_state;
             service_collection_t services;
-            services.add_factory<suspended_route_handler_t> ([&] (service_provider_t &) {
-                return std::make_unique<suspended_route_handler_t> (state);
-            });
+            services.add_factory<suspended_route_state_t> (
+              [shared_state] (service_provider_t &) { return shared_state; },
+              service_lifetime_t::singleton);
             auto provider = services.build_provider ();
             serializer_registry_t serializers;
             handler_registry_t filters;
@@ -347,12 +348,13 @@ TEST (RouteHandlerBoundary, PendingMeshReplyOwnsNativeStorageAndScopeUntilTermin
                     continue;
                 SCOPED_TRACE (std::to_string (request) + ":" + std::to_string (fail_handler) + ":"
                               + std::to_string (fail_reply));
-                suspended_route_state_t state;
+                auto shared_state = std::make_shared<suspended_route_state_t> ();
+                auto &state = *shared_state;
                 state.fail_handler = fail_handler;
                 service_collection_t services;
-                services.add_factory<suspended_route_handler_t> ([&] (service_provider_t &) {
-                    return std::make_unique<suspended_route_handler_t> (state);
-                });
+                services.add_factory<suspended_route_state_t> (
+                  [shared_state] (service_provider_t &) { return shared_state; },
+                  service_lifetime_t::singleton);
                 auto provider = services.build_provider ();
                 serializer_registry_t serializers;
                 detail::route_handler_registry_t handlers;
@@ -524,10 +526,12 @@ TEST (RouteHandlerBoundary, HostedOrdinaryHandoffAllowsSameAndSubsequentClaims)
     using namespace std::chrono_literals;
     namespace host = runtime::host;
     namespace mesh = runtime::mesh;
-    suspended_route_state_t state;
+    auto shared_state = std::make_shared<suspended_route_state_t> ();
+    auto &state = *shared_state;
     auto app = app_t::create ();
-    app.advanced ().services ().add_factory<suspended_route_handler_t> (
-      [&] (service_provider_t &) { return std::make_unique<suspended_route_handler_t> (state); });
+    app.advanced ().services ().add_factory<suspended_route_state_t> (
+      [shared_state] (service_provider_t &) { return shared_state; },
+      service_lifetime_t::singleton);
     auto &options = app.add_zlink_framework ();
     options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
     options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
@@ -644,6 +648,8 @@ struct physical_route_state_t
 
 struct physical_route_handler_t
 {
+    explicit physical_route_handler_t (physical_route_state_t &state) : state (state) {}
+
     physical_route_state_t &state;
     ~physical_route_handler_t () { ++state.destroyed; }
     task_t<void> handle (const int &, const route_message_context_t &)
@@ -658,11 +664,12 @@ struct physical_route_handler_t
 
 TEST (RouteHandlerBoundary, CancellationCannotReplacePhysicalHandlerTerminal)
 {
-    physical_route_state_t state;
+    auto shared_state = std::make_shared<physical_route_state_t> ();
+    auto &state = *shared_state;
     service_collection_t services;
-    services.add_factory<physical_route_handler_t> ([&] (service_provider_t &) {
-        return std::unique_ptr<physical_route_handler_t> (new physical_route_handler_t{state});
-    });
+    services.add_factory<physical_route_state_t> (
+      [shared_state] (service_provider_t &) { return shared_state; },
+      service_lifetime_t::singleton);
     auto provider = services.build_provider ();
     serializer_registry_t serializers;
     handler_registry_t filters;
@@ -729,6 +736,8 @@ struct host_stop_route_state_t
 
 struct host_stop_route_handler_t
 {
+    explicit host_stop_route_handler_t (host_stop_route_state_t &state) : state (state) {}
+
     host_stop_route_state_t &state;
     ~host_stop_route_handler_t () { ++state.destroyed; }
     task_t<void> handle (const int &, const route_message_context_t &)
@@ -744,12 +753,13 @@ TEST (RouteHandlerBoundary, HostStopWaitsForPhysicalOrdinaryHandlerTerminal)
     using namespace std::chrono_literals;
     namespace host = runtime::host;
     namespace mesh = runtime::mesh;
-    host_stop_route_state_t state;
+    auto shared_state = std::make_shared<host_stop_route_state_t> ();
+    auto &state = *shared_state;
     auto entered = state.gate.entered.get_future ();
     auto app = app_t::create ();
-    app.advanced ().services ().add_factory<host_stop_route_handler_t> ([&] (service_provider_t &) {
-        return std::unique_ptr<host_stop_route_handler_t> (new host_stop_route_handler_t{state});
-    });
+    app.advanced ().services ().add_factory<host_stop_route_state_t> (
+      [shared_state] (service_provider_t &) { return shared_state; },
+      service_lifetime_t::singleton);
     auto &options = app.add_zlink_framework ();
     options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
     options.configure_locations ().owner_lease_fencing_margin = std::chrono::milliseconds (1);
@@ -831,16 +841,26 @@ TEST (RouteHandlerBoundary, HostStopWaitsForPhysicalOrdinaryHandlerTerminal)
     EXPECT_NO_THROW (view->failures->rethrow_if_failed ());
 }
 
-struct payload_handler_t
+struct payload_handler_state_t
 {
     const zlink::message_t *payload = nullptr;
     int references = 0;
+};
 
-    void send (const int &, const route_message_context_t &) { references = payload->ref_count (); }
+struct payload_handler_t
+{
+    explicit payload_handler_t (payload_handler_state_t &state) : state (state) {}
+
+    payload_handler_state_t &state;
+
+    void send (const int &, const route_message_context_t &)
+    {
+        state.references = state.payload->ref_count ();
+    }
 
     task_t<int> request (const int &value, const route_message_context_t &)
     {
-        references = payload->ref_count ();
+        state.references = state.payload->ref_count ();
         co_return value;
     }
 };
@@ -1028,13 +1048,20 @@ TEST (RoutePayloadOwnership, NodeSendProjectsDeferredTransportFailures)
     EXPECT_EQ (framework_error_kind_t::protocol_error, duplicate.result ().error_kind ());
 }
 
-struct route_boundary_handler_t
+struct route_boundary_handler_state_t
 {
     int calls = 0;
-    void send (const int &, const route_message_context_t &) { ++calls; }
+};
+
+struct route_boundary_handler_t
+{
+    explicit route_boundary_handler_t (route_boundary_handler_state_t &state) : state (state) {}
+
+    route_boundary_handler_state_t &state;
+    void send (const int &, const route_message_context_t &) { ++state.calls; }
     int request (const int &value, const route_message_context_t &)
     {
-        ++calls;
+        ++state.calls;
         return value;
     }
 };
@@ -1072,12 +1099,12 @@ struct copy_counting_permit_t
 {
     int *copies;
     int *calls;
-    const route_boundary_handler_t *handler;
+    const route_boundary_handler_state_t *handler;
     std::array<std::byte, 1024> storage{};
 
     copy_counting_permit_t (int &copy_count,
                             int &call_count,
-                            const route_boundary_handler_t &owner) :
+                            const route_boundary_handler_state_t &owner) :
         copies (&copy_count), calls (&call_count), handler (&owner)
     {
     }
@@ -1102,9 +1129,9 @@ TEST (RouteHandlerBoundary, DispatcherOwnsPermitCallbackForSuspension)
             SCOPED_TRACE (std::to_string (static_cast<int> (mode)) + ":"
                           + std::to_string (static_cast<int> (kind)));
             service_collection_t services;
-            services.add_singleton<route_boundary_handler_t> ();
+            services.add_singleton<route_boundary_handler_state_t> ();
             auto provider = services.build_provider ();
-            auto &owner = provider.get_required<route_boundary_handler_t> ();
+            auto &owner = provider.get_required<route_boundary_handler_state_t> ();
             serializer_registry_t serializers;
             detail::route_handler_registry_t handlers;
             handlers.on_send<route_boundary_handler_t, int> ("mesh", "packet",
@@ -1154,7 +1181,7 @@ TEST (RouteHandlerBoundary, DispatcherResolvesHandlerOnce)
 {
     const auto measure_dispatch = [] (std::size_t packet_length) {
         service_collection_t services;
-        services.add_singleton<route_boundary_handler_t> ();
+        services.add_singleton<route_boundary_handler_state_t> ();
         auto provider = services.build_provider ();
         serializer_registry_t serializers;
         detail::route_handler_registry_t handlers;
@@ -1176,7 +1203,7 @@ TEST (RouteHandlerBoundary, DispatcherResolvesHandlerOnce)
         EXPECT_TRUE (dispatcher.dispatch (received, header).result ());
         const auto measured = tests::measure_allocations (
           [&] { EXPECT_TRUE (dispatcher.dispatch (received, header).result ()); });
-        EXPECT_EQ (2, provider.get_required<route_boundary_handler_t> ().calls);
+        EXPECT_EQ (2, provider.get_required<route_boundary_handler_state_t> ().calls);
         return measured;
     };
     constexpr std::size_t packet_length = 4096;
@@ -1196,7 +1223,7 @@ TEST (RouteHandlerBoundary, DispatcherResolvesHandlerOnce)
 TEST (RouteHandlerBoundary, DecodeFailureDoesNotReleasePermitForHandlerStart)
 {
     service_collection_t services;
-    services.add_singleton<route_boundary_handler_t> ();
+    services.add_singleton<route_boundary_handler_state_t> ();
     auto provider = services.build_provider ();
     serializer_registry_t serializers;
     bool released = false;
@@ -1225,13 +1252,13 @@ TEST (RouteHandlerBoundary, DecodeFailureDoesNotReleasePermitForHandlerStart)
     EXPECT_FALSE (result);
     EXPECT_TRUE (decoded);
     EXPECT_FALSE (released);
-    EXPECT_EQ (0, provider.get_required<route_boundary_handler_t> ().calls);
+    EXPECT_EQ (0, provider.get_required<route_boundary_handler_state_t> ().calls);
 }
 
 TEST (RouteHandlerBoundary, UnknownWireContentTypeIsProtocolError)
 {
     service_collection_t services;
-    services.add_singleton<route_boundary_handler_t> ();
+    services.add_singleton<route_boundary_handler_state_t> ();
     auto provider = services.build_provider ();
     serializer_registry_t serializers;
     detail::route_handler_registry_t handlers;
@@ -1251,16 +1278,26 @@ TEST (RouteHandlerBoundary, UnknownWireContentTypeIsProtocolError)
     ASSERT_FALSE (result);
     EXPECT_EQ (framework_error_kind_t::protocol_error, result.error_kind ());
     EXPECT_FALSE (released);
-    EXPECT_EQ (0, provider.get_required<route_boundary_handler_t> ().calls);
+    EXPECT_EQ (0, provider.get_required<route_boundary_handler_state_t> ().calls);
 }
+
+struct ordered_route_state_t
+{
+    std::vector<int> order;
+};
 
 struct ordered_route_handler_t
 {
-    std::vector<int> *order;
+    explicit ordered_route_handler_t (ordered_route_state_t &state) : order (state.order)
+    {
+        order.push_back (1);
+    }
+
+    std::vector<int> &order;
     void send (const int &value, const route_message_context_t &)
     {
         EXPECT_EQ (42, value);
-        order->push_back (4);
+        order.push_back (4);
     }
     task_t<void> send_async (const int &value, const route_message_context_t &context)
     {
@@ -1283,12 +1320,10 @@ TEST (RouteHandlerBoundary, TypedInvokersReleaseAfterResolveAndDecode)
     for (int form = 0; form != 4; ++form) {
         for (int failure = 0; failure != 3; ++failure) {
             SCOPED_TRACE (std::to_string (form) + ":" + std::to_string (failure));
-            std::vector<int> order;
+            auto owned_state = std::make_unique<ordered_route_state_t> ();
+            auto &order = owned_state->order;
             service_collection_t services;
-            services.add_factory<ordered_route_handler_t> ([&] (service_provider_t &) {
-                order.push_back (1);
-                return std::make_unique<ordered_route_handler_t> (&order);
-            });
+            services.add_singleton<ordered_route_state_t> (std::move (owned_state));
             auto provider = services.build_provider ();
             serializer_registry_t serializers;
             serializers.add<int> (
@@ -1354,14 +1389,14 @@ TEST (RouteHandlerBoundary, TypedInvokersReleaseAfterResolveAndDecode)
 TEST (RoutePayloadOwnership, SendOwnsPayloadForTheAwaitedHandler)
 {
     service_collection_t services;
-    services.add_singleton<payload_handler_t> ();
+    services.add_singleton<payload_handler_state_t> ();
     auto provider = services.build_provider ();
     serializer_registry_t serializers;
     detail::route_handler_registry_t handlers;
     handlers.on_send<payload_handler_t, int> ("mesh", "payload", &payload_handler_t::send);
     handler_registry_t filters;
     auto payload = zlink::message_t::from (std::string (128, ' ') + "42");
-    auto &handler = provider.get_required<payload_handler_t> ();
+    auto &handler = provider.get_required<payload_handler_state_t> ();
     handler.payload = &payload;
     const auto references = payload.ref_count ();
     detail::route_handler_invoker_t invoker;
@@ -1380,7 +1415,7 @@ TEST (RoutePayloadOwnership, SendOwnsPayloadForTheAwaitedHandler)
 TEST (RoutePayloadOwnership, RequestOwnsPayloadForTheAwaitedHandler)
 {
     service_collection_t services;
-    services.add_singleton<payload_handler_t> ();
+    services.add_singleton<payload_handler_state_t> ();
     auto provider = services.build_provider ();
     serializer_registry_t serializers;
     detail::route_handler_registry_t handlers;
@@ -1388,7 +1423,7 @@ TEST (RoutePayloadOwnership, RequestOwnsPayloadForTheAwaitedHandler)
                                                       &payload_handler_t::request);
     handler_registry_t filters;
     auto payload = zlink::message_t::from (std::string (128, ' ') + "42");
-    auto &handler = provider.get_required<payload_handler_t> ();
+    auto &handler = provider.get_required<payload_handler_state_t> ();
     handler.payload = &payload;
     const auto references = payload.ref_count ();
     detail::route_handler_invoker_t invoker;
@@ -1408,7 +1443,7 @@ TEST (RoutePayloadOwnership, ApplicationDispatcherConsumesTheDecodedHeader)
 {
     service_collection_t services;
     services.add_singleton<detail::actor_gateway_runtime_t> ();
-    services.add_singleton<payload_handler_t> ();
+    services.add_singleton<payload_handler_state_t> ();
     auto provider = services.build_provider ();
     serializer_registry_t serializers;
     detail::route_handler_registry_t handlers;
@@ -1421,7 +1456,7 @@ TEST (RoutePayloadOwnership, ApplicationDispatcherConsumesTheDecodedHeader)
     auto encoded = runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
       header, zlink::message_t::from (std::string (128, ' ') + "42"));
     auto parts = std::move (encoded).take_items ();
-    auto &handler = provider.get_required<payload_handler_t> ();
+    auto &handler = provider.get_required<payload_handler_state_t> ();
     handler.payload = &parts[1];
     auto state = std::make_shared<detail::spot_node_builder_state_t> ("node");
     detail::spot_node_runtime_t spots (state);
@@ -2155,12 +2190,13 @@ TEST (RouteHandlerBoundary, CsitesLocalTerminalAndInvocationSurviveAllRequestOut
     for (int mode = 0; mode != 5; ++mode) {
         SCOPED_TRACE (mode);
         completion_owner_t completion;
-        suspended_route_state_t state;
+        auto shared_state = std::make_shared<suspended_route_state_t> ();
+        auto &state = *shared_state;
         state.fail_handler = mode == 4;
         service_collection_t services;
-        services.add_factory<suspended_route_handler_t> ([&] (service_provider_t &) {
-            return std::make_unique<suspended_route_handler_t> (state);
-        });
+        services.add_factory<suspended_route_state_t> (
+          [shared_state] (service_provider_t &) { return shared_state; },
+          service_lifetime_t::singleton);
         auto provider = services.build_provider ();
         serializer_registry_t serializers;
         handler_registry_t filters;
@@ -2278,7 +2314,7 @@ TEST (RouteHandlerBoundary, CsitesCodecPlansRetainTheirFrozenRegistryAndCheckWir
     using namespace zlink::framework;
     for (int offset : {10, 20}) {
         service_collection_t services;
-        services.add_singleton<route_boundary_handler_t> ();
+        services.add_singleton<route_boundary_handler_state_t> ();
         auto provider = services.build_provider ();
         serializer_registry_t serializers;
         serializers.add<int> (
@@ -2401,8 +2437,6 @@ TEST (RouteHandlerBoundary, CsitesPublicMeshRegistrationBindsWithoutLazyCache)
     EXPECT_FALSE (
       detail::serializer_registry_test_access_t::has_resolved_serializer<int> (serializers));
     service_collection_t services;
-    services.add_singleton<csites_public_codec_handler_t> ();
-    services.add_singleton<csites_public_send_codec_handler_t> ();
     auto provider = services.build_provider ();
     route_message_context_t context{{}, zlink::routing_id_t::from ("source")};
     context.content_type = "application/json";

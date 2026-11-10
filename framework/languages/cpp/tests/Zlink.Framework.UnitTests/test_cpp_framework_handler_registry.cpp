@@ -4,6 +4,7 @@
 
 #include <zlink/framework.hpp>
 #include "runtime/handlers/handler_registry_runtime.hpp"
+#include "runtime/configuration/service_scope.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 
 #include <chrono>
@@ -49,43 +50,62 @@ struct delayed_request_t
     int value{};
 };
 
+struct handler_state_t
+{
+    int last_request = 0;
+    int last_command = 0;
+    int last_event = 0;
+    std::string last_context_mesh;
+    std::string last_context_channel;
+    std::string last_context_packet;
+    std::string last_context_content_type;
+    std::string last_context_correlation;
+    std::string last_context_trace;
+    std::size_t last_context_metadata_size = 0;
+    std::string last_context_topic;
+    std::string last_context_source;
+    std::thread::id last_thread;
+};
+
 class handler_t
 {
   public:
+    explicit handler_t (handler_state_t &state) : state (state) {}
+
     reply_t get_reply (const request_t &request)
     {
-        last_thread = std::this_thread::get_id ();
-        last_request = request.value;
+        state.last_thread = std::this_thread::get_id ();
+        state.last_request = request.value;
         return {request.value + 1};
     }
 
     reply_t get_context_reply (const request_t &request,
                                const zlink::framework::message_context_t &context)
     {
-        last_thread = std::this_thread::get_id ();
-        last_request = request.value;
+        state.last_thread = std::this_thread::get_id ();
+        state.last_request = request.value;
         capture_context (context);
         return {request.value + 2};
     }
 
     void on_command (const command_t &command)
     {
-        last_thread = std::this_thread::get_id ();
-        last_command = command.value;
+        state.last_thread = std::this_thread::get_id ();
+        state.last_command = command.value;
     }
 
     void on_context_command (const command_t &command,
                              const zlink::framework::message_context_t &context)
     {
-        last_thread = std::this_thread::get_id ();
-        last_command = command.value;
+        state.last_thread = std::this_thread::get_id ();
+        state.last_command = command.value;
         capture_context (context);
     }
 
     zlink::framework::task_t<void> on_event (const event_t &event)
     {
-        last_thread = std::this_thread::get_id ();
-        last_event = event.value;
+        state.last_thread = std::this_thread::get_id ();
+        state.last_event = event.value;
         co_return;
     }
 
@@ -93,25 +113,25 @@ class handler_t
     on_context_event (const event_t &event,
                       const zlink::framework::publish_message_context_t &context)
     {
-        last_thread = std::this_thread::get_id ();
-        last_event = event.value;
+        state.last_thread = std::this_thread::get_id ();
+        state.last_event = event.value;
         capture_context (context);
-        last_context_topic = context.topic;
-        last_context_source = context.source.value_or ("<none>");
+        state.last_context_topic = context.topic;
+        state.last_context_source = context.source.value_or ("<none>");
         co_return;
     }
 
     zlink::framework::task_t<reply_t> get_async_reply (const async_request_t &request)
     {
-        last_thread = std::this_thread::get_id ();
-        last_request = request.value;
+        state.last_thread = std::this_thread::get_id ();
+        state.last_request = request.value;
         co_return reply_t{request.value + 10};
     }
 
     zlink::framework::task_t<reply_t> get_delayed_reply (const delayed_request_t &request)
     {
-        last_thread = std::this_thread::get_id ();
-        last_request = request.value;
+        state.last_thread = std::this_thread::get_id ();
+        state.last_request = request.value;
         struct delay_awaiter_t
         {
             int value;
@@ -130,34 +150,23 @@ class handler_t
 
     reply_t throw_reply (const request_t &)
     {
-        last_thread = std::this_thread::get_id ();
+        state.last_thread = std::this_thread::get_id ();
         throw std::runtime_error ("boom");
     }
 
     void capture_context (const zlink::framework::message_context_t &context)
     {
-        last_context_mesh = context.mesh_name.value_or ("<none>");
-        last_context_channel = context.channel_name.value_or ("<none>");
-        last_context_packet = context.packet_name;
-        last_context_content_type = context.content_type.value_or ("<none>");
-        last_context_correlation = context.correlation_id.value_or ("<none>");
-        last_context_trace = std::string (context.metadata.find ("trace-id").value_or ("<none>"));
-        last_context_metadata_size = context.metadata.values ().size ();
+        state.last_context_mesh = context.mesh_name.value_or ("<none>");
+        state.last_context_channel = context.channel_name.value_or ("<none>");
+        state.last_context_packet = context.packet_name;
+        state.last_context_content_type = context.content_type.value_or ("<none>");
+        state.last_context_correlation = context.correlation_id.value_or ("<none>");
+        state.last_context_trace =
+          std::string (context.metadata.find ("trace-id").value_or ("<none>"));
+        state.last_context_metadata_size = context.metadata.values ().size ();
     }
 
-    int last_request = 0;
-    int last_command = 0;
-    int last_event = 0;
-    std::string last_context_mesh;
-    std::string last_context_channel;
-    std::string last_context_packet;
-    std::string last_context_content_type;
-    std::string last_context_correlation;
-    std::string last_context_trace;
-    std::size_t last_context_metadata_size = 0;
-    std::string last_context_topic;
-    std::string last_context_source;
-    std::thread::id last_thread;
+    handler_state_t &state;
 };
 
 struct spot_actor_t
@@ -235,23 +244,8 @@ struct dispatch_spot_t : public zlink::framework::spot_t<spot_actor_t>
     std::string last_source;
 };
 
-class auditing_filter_t
+struct auditing_filter_state_t
 {
-  public:
-    zlink::framework::task_t<void>
-    invoke (const zlink::framework::handler_filter_context_t &context,
-            zlink::framework::handler_next_t next)
-    {
-        ++before_count;
-        last_packet_name = context.packet_name;
-        last_context_channel = context.channel_name.value_or ("<none>");
-        last_context_packet = context.packet_name;
-        last_dispatch_kind = context.dispatch_kind;
-        co_await next ();
-        ++after_count;
-        co_return;
-    }
-
     int before_count = 0;
     int after_count = 0;
     std::string last_packet_name;
@@ -261,28 +255,64 @@ class auditing_filter_t
       zlink::framework::handler_dispatch_kind_t::channel_send;
 };
 
+class auditing_filter_t
+{
+  public:
+    explicit auditing_filter_t (auditing_filter_state_t &state) : state (state) {}
+
+    zlink::framework::task_t<void>
+    invoke (const zlink::framework::handler_filter_context_t &context,
+            zlink::framework::handler_next_t next)
+    {
+        ++state.before_count;
+        state.last_packet_name = context.packet_name;
+        state.last_context_channel = context.channel_name.value_or ("<none>");
+        state.last_context_packet = context.packet_name;
+        state.last_dispatch_kind = context.dispatch_kind;
+        co_await next ();
+        ++state.after_count;
+        co_return;
+    }
+
+    auditing_filter_state_t &state;
+};
+
+struct short_circuit_filter_state_t
+{
+    int short_circuit_count = 0;
+};
+
 class short_circuit_filter_t
 {
   public:
+    explicit short_circuit_filter_t (short_circuit_filter_state_t &state) : state (state) {}
+
     zlink::framework::task_t<void>
     invoke (const zlink::framework::handler_filter_context_t &context,
             zlink::framework::handler_next_t next)
     {
         if (context.packet_name == "blocked" || context.packet_name == "blocked-send"
             || context.packet_name == "blocked-event") {
-            ++short_circuit_count;
+            ++state.short_circuit_count;
             co_return;
         }
         co_await next ();
         co_return;
     }
 
-    int short_circuit_count = 0;
+    short_circuit_filter_state_t &state;
+};
+
+struct duplicate_next_filter_state_t
+{
+    int duplicate_rejections = 0;
 };
 
 class duplicate_next_filter_t
 {
   public:
+    explicit duplicate_next_filter_t (duplicate_next_filter_state_t &state) : state (state) {}
+
     zlink::framework::task_t<void>
     invoke (const zlink::framework::handler_filter_context_t &context,
             zlink::framework::handler_next_t next)
@@ -296,12 +326,12 @@ class duplicate_next_filter_t
             co_await next ();
         }
         catch (const zlink::framework::framework_exception_t &) {
-            ++duplicate_rejections;
+            ++state.duplicate_rejections;
         }
         co_return;
     }
 
-    int duplicate_rejections = 0;
+    duplicate_next_filter_state_t &state;
 };
 
 }
@@ -427,9 +457,147 @@ bool verify_filter_snapshot_reuse (zlink::framework::service_provider_t &provide
 
 } // namespace
 
+// Spec 06 §10: every dispatch gets its own handler and filter instances and scoped
+// dependencies, whatever lifetime the application registered for those types (#4145).
+// Instances are identified by creation order, not address: a freed instance's memory
+// can be reused by the next dispatch.
+struct lifetime_probe_t
+{
+    int dependencies_created = 0;
+    std::vector<int> handlers;
+    std::vector<int> handler_dependencies;
+    std::vector<int> filter_dependencies;
+    int handlers_destroyed = 0;
+    int filters_destroyed = 0;
+    int dependencies_destroyed = 0;
+};
+
+class lifetime_dependency_t
+{
+  public:
+    explicit lifetime_dependency_t (lifetime_probe_t &probe) :
+        _probe (probe), _id (++probe.dependencies_created)
+    {
+    }
+    ~lifetime_dependency_t () { ++_probe.dependencies_destroyed; }
+
+    int id () const noexcept { return _id; }
+
+  private:
+    lifetime_probe_t &_probe;
+    int _id;
+};
+
+class lifetime_handler_t
+{
+  public:
+    lifetime_handler_t (lifetime_probe_t &probe, lifetime_dependency_t &dependency) : _probe (probe)
+    {
+        _probe.handlers.push_back (static_cast<int> (_probe.handlers.size ()) + 1);
+        _probe.handler_dependencies.push_back (dependency.id ());
+    }
+    ~lifetime_handler_t () { ++_probe.handlers_destroyed; }
+
+    reply_t get_reply (const request_t &request)
+    {
+        if (request.value == -1)
+            throw std::runtime_error ("handler failure");
+        if (request.value == -2)
+            throw zlink::framework::detail::make_boundary_exception (
+              zlink::framework::detail::boundary_error_t::shutdown, "dispatch cancelled");
+        return reply_t{request.value + 1};
+    }
+
+  private:
+    lifetime_probe_t &_probe;
+};
+
+class lifetime_filter_t
+{
+  public:
+    lifetime_filter_t (lifetime_probe_t &probe, lifetime_dependency_t &dependency) : _probe (probe)
+    {
+        _probe.filter_dependencies.push_back (dependency.id ());
+    }
+    ~lifetime_filter_t () { ++_probe.filters_destroyed; }
+
+    zlink::framework::task_t<void>
+    invoke (const zlink::framework::handler_filter_context_t &context,
+            zlink::framework::handler_next_t next)
+    {
+        if (context.packet_name == "stopped")
+            co_return;
+        co_await next ();
+    }
+
+  private:
+    lifetime_probe_t &_probe;
+};
+
+int verify_dispatch_instance_lifetime ()
+{
+    zlink::framework::service_collection_t services;
+    services.add_singleton<lifetime_probe_t> (std::make_unique<lifetime_probe_t> ());
+    services.add_scoped<lifetime_dependency_t, lifetime_probe_t> ();
+    services.add_singleton<lifetime_handler_t, lifetime_probe_t, lifetime_dependency_t> ();
+    services.add_singleton<lifetime_filter_t, lifetime_probe_t, lifetime_dependency_t> ();
+    auto provider = services.build_provider ();
+    auto &observed = provider.get_required<lifetime_probe_t> ();
+    zlink::framework::serializer_registry_t serializers;
+    zlink::framework::handler_registry_t handlers;
+    for (const char *packet : {"ok", "failed", "cancelled", "stopped"}) {
+        handlers.on_request<lifetime_handler_t, request_t, reply_t> (
+          "lifetime", packet, &lifetime_handler_t::get_reply, {.packet_name = packet});
+    }
+    handlers.use_filter<lifetime_filter_t> ();
+
+    const auto dispatch = [&] (const char *packet, int value) {
+        auto scope = zlink::framework::detail::service_scope_t::create (provider);
+        auto result = handlers.invoke (
+          "lifetime", packet, packet, scope.provider (), serializers,
+          zlink::message_t::from (std::string (R"({"value":)") + std::to_string (value) + "}"));
+        scope.close ();
+        return result;
+    };
+    const auto ok_first = dispatch ("ok", 1);
+    const auto ok_second = dispatch ("ok", 2);
+    if (!ok_first || !ok_second || observed.handlers.size () != 2
+        || observed.handlers[0] == observed.handlers[1]) {
+        return 1;
+    }
+    for (std::size_t i = 0; i < observed.handlers.size (); ++i) {
+        if (observed.handler_dependencies[i] != observed.filter_dependencies[i])
+            return 2;
+    }
+    if (observed.handler_dependencies[0] == observed.handler_dependencies[1])
+        return 3;
+    if (observed.handlers_destroyed != 2 || observed.filters_destroyed != 2
+        || observed.dependencies_destroyed != 2) {
+        return 4;
+    }
+
+    const auto failed = dispatch ("failed", -1);
+    const auto cancelled = dispatch ("cancelled", -2);
+    const auto stopped = dispatch ("stopped", 3);
+    if (failed || cancelled || stopped
+        || stopped.error_kind () != zlink::framework::framework_error_kind_t::rejected) {
+        return 5;
+    }
+    // The stopped dispatch never reached the handler, so only four handlers were created.
+    if (observed.handlers.size () != 4 || observed.handlers_destroyed != 4
+        || observed.filters_destroyed != 5 || observed.dependencies_destroyed != 5) {
+        return 6;
+    }
+    return 0;
+}
+
 int main ()
 {
     zlink::framework::completion_owner_t completion_owner;
+    if (const int lifetime = verify_dispatch_instance_lifetime (); lifetime != 0) {
+        std::cerr << "dispatch instance lifetime check " << lifetime << " failed\n";
+        return 200 + lifetime;
+    }
 #ifdef __linux__
     // Execution gate §10: call and filter counts must not allocate OS workers.
     const auto executor = zlink::framework::detail::handler_invocation_executor ();
@@ -452,7 +620,7 @@ int main ()
         }
     }
     zlink::framework::service_collection_t filter_services;
-    filter_services.add_singleton<handler_t> ();
+    filter_services.add_singleton<handler_state_t> ();
     auto filter_provider = filter_services.build_provider ();
     zlink::framework::serializer_registry_t filter_serializers;
     zlink::framework::handler_registry_t filter_registry;
@@ -494,10 +662,10 @@ int main ()
         return 150;
 #endif
     zlink::framework::service_collection_t services;
-    services.add_singleton<handler_t> ();
-    services.add_singleton<auditing_filter_t> ();
-    services.add_singleton<short_circuit_filter_t> ();
-    services.add_singleton<duplicate_next_filter_t> ();
+    services.add_singleton<handler_state_t> ();
+    services.add_singleton<auditing_filter_state_t> ();
+    services.add_singleton<short_circuit_filter_state_t> ();
+    services.add_singleton<duplicate_next_filter_state_t> ();
     auto provider = services.build_provider ();
 
     zlink::framework::serializer_registry_t serializers;
@@ -561,10 +729,10 @@ int main ()
              != 8) {
         return 3;
     }
-    if (provider.get_required<handler_t> ().last_thread == std::this_thread::get_id ()) {
+    if (provider.get_required<handler_state_t> ().last_thread == std::this_thread::get_id ()) {
         return 30;
     }
-    auto &audit_filter = provider.get_required<auditing_filter_t> ();
+    auto &audit_filter = provider.get_required<auditing_filter_state_t> ();
     if (audit_filter.before_count != 1 || audit_filter.after_count != 1
         || audit_filter.last_packet_name != "request" || audit_filter.last_context_channel != "game"
         || audit_filter.last_context_packet != "request"
@@ -580,8 +748,8 @@ int main ()
         || blocked_result.error_kind () != zlink::framework::framework_error_kind_t::rejected) {
         return 36;
     }
-    if (provider.get_required<handler_t> ().last_request == 123
-        || provider.get_required<short_circuit_filter_t> ().short_circuit_count != 1) {
+    if (provider.get_required<handler_state_t> ().last_request == 123
+        || provider.get_required<short_circuit_filter_state_t> ().short_circuit_count != 1) {
         return 37;
     }
     if (audit_filter.before_count != 2 || audit_filter.after_count != 1
@@ -595,30 +763,30 @@ int main ()
     if (duplicate_result
         || duplicate_result.error_kind ()
              != zlink::framework::framework_error_kind_t::invalid_operation
-        || provider.get_required<duplicate_next_filter_t> ().duplicate_rejections != 1
-        || provider.get_required<handler_t> ().last_request != 321) {
+        || provider.get_required<duplicate_next_filter_state_t> ().duplicate_rejections != 1
+        || provider.get_required<handler_state_t> ().last_request != 321) {
         return 39;
     }
 
-    provider.get_required<handler_t> ().last_command = 0;
+    provider.get_required<handler_state_t> ().last_command = 0;
     auto blocked_send =
       handlers.invoke ("game", "blocked-send", "blocked-send", provider, serializers,
                        zlink::message_t::from (std::string (R"({"value":41})")));
-    if (!blocked_send || provider.get_required<handler_t> ().last_command != 0) {
+    if (!blocked_send || provider.get_required<handler_state_t> ().last_command != 0) {
         return 40;
     }
 
-    provider.get_required<handler_t> ().last_event = 0;
+    provider.get_required<handler_state_t> ().last_event = 0;
     auto blocked_event =
       handlers.invoke ("game", "blocked-event", "blocked-event", provider, serializers,
                        zlink::message_t::from (std::string (R"({"value":51})")));
-    if (!blocked_event || provider.get_required<handler_t> ().last_event != 0) {
+    if (!blocked_event || provider.get_required<handler_state_t> ().last_event != 0) {
         return 41;
     }
     auto isolated_event =
       handlers.invoke ("game", "event", "event", provider, serializers,
                        zlink::message_t::from (std::string (R"({"value":52})")));
-    if (!isolated_event || provider.get_required<handler_t> ().last_event != 52
+    if (!isolated_event || provider.get_required<handler_state_t> ().last_event != 52
         || audit_filter.last_dispatch_kind
              != zlink::framework::handler_dispatch_kind_t::classic_fanout) {
         return 42;
@@ -632,7 +800,7 @@ int main ()
     auto context_request_result =
       handlers.invoke ("game", "context-move", "context-request", provider, serializers,
                        zlink::message_t::from (std::string (R"({"value":8})")), inbound);
-    auto &handler = provider.get_required<handler_t> ();
+    auto &handler = provider.get_required<handler_state_t> ();
     if (!context_request_result
         || serializers.get<reply_t> ()
                .deserialize (zlink::framework::detail::encoded_payload_from_raw (
@@ -649,7 +817,7 @@ int main ()
 
     auto send_result = handlers.invoke ("game", "command", "command", provider, serializers,
                                         zlink::message_t::from (std::string (R"({"value":9})")));
-    if (!send_result || provider.get_required<handler_t> ().last_command != 9) {
+    if (!send_result || provider.get_required<handler_state_t> ().last_command != 9) {
         return 4;
     }
 
@@ -666,7 +834,7 @@ int main ()
 
     auto event_result = handlers.invoke ("game", "event", "event", provider, serializers,
                                          zlink::message_t::from (std::string (R"({"value":11})")));
-    if (!event_result || provider.get_required<handler_t> ().last_event != 11) {
+    if (!event_result || provider.get_required<handler_state_t> ().last_event != 11) {
         return 5;
     }
     descriptor = handlers.find ("game", "event", "event");
@@ -838,14 +1006,14 @@ int main ()
 
     zlink::framework::detail::inbound_message_context_t mismatched_codec;
     mismatched_codec.message.content_type = "application/avro";
-    provider.get_required<handler_t> ().last_command = 0;
+    provider.get_required<handler_state_t> ().last_command = 0;
     const auto mismatched_result =
       handlers.invoke ("game", "command", "command", provider, serializers,
                        zlink::message_t::from (std::string (R"({"value":91})")), mismatched_codec);
     if (mismatched_result
         || mismatched_result.error_kind ()
              != zlink::framework::framework_error_kind_t::protocol_error
-        || provider.get_required<handler_t> ().last_command != 0 || failure_events != 6) {
+        || provider.get_required<handler_state_t> ().last_command != 0 || failure_events != 6) {
         return 15;
     }
 

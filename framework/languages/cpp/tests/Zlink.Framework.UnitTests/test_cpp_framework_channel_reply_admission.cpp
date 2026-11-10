@@ -67,22 +67,9 @@ namespace
 {
 
 
-class blocking_request_handler_t
+struct blocking_request_state_t
 {
   public:
-    reply_t handle (const request_t &request)
-    {
-        std::unique_lock lock (_mutex);
-        _entered = true;
-        _changed.notify_all ();
-        _changed.wait (lock, [this] { return _released; });
-        _returned = true;
-        _changed.notify_all ();
-        return {request.value + 1};
-    }
-
-    void handle_send (const request_t &request) { (void) handle (request); }
-
     bool wait_until_entered (std::chrono::milliseconds timeout)
     {
         std::unique_lock lock (_mutex);
@@ -102,12 +89,33 @@ class blocking_request_handler_t
         return _changed.wait_for (lock, timeout, [this] { return _returned; });
     }
 
-  private:
     std::mutex _mutex;
     std::condition_variable _changed;
     bool _entered = false;
     bool _released = false;
     bool _returned = false;
+};
+
+class blocking_request_handler_t
+{
+  public:
+    explicit blocking_request_handler_t (blocking_request_state_t &state) : state (state) {}
+
+    reply_t handle (const request_t &request)
+    {
+        std::unique_lock lock (state._mutex);
+        state._entered = true;
+        state._changed.notify_all ();
+        state._changed.wait (lock, [this] { return state._released; });
+        state._returned = true;
+        state._changed.notify_all ();
+        return {request.value + 1};
+    }
+
+    void handle_send (const request_t &request) { (void) handle (request); }
+
+  private:
+    blocking_request_state_t &state;
 };
 
 std::string unique_inproc_endpoint ()
@@ -154,7 +162,7 @@ bool wait_until (Predicate predicate, std::chrono::milliseconds timeout)
 class runtime_cleanup_t
 {
   public:
-    runtime_cleanup_t (blocking_request_handler_t &handler,
+    runtime_cleanup_t (blocking_request_state_t &handler,
                        zlink::framework::runtime::channel_host_service_t &host,
                        zlink::router_socket_t &source) :
         _handler (&handler), _host (&host), _source (&source)
@@ -174,7 +182,7 @@ class runtime_cleanup_t
     }
 
   private:
-    blocking_request_handler_t *_handler;
+    blocking_request_state_t *_handler;
     zlink::framework::runtime::channel_host_service_t *_host;
     zlink::router_socket_t *_source;
 };
@@ -223,9 +231,9 @@ TEST (ChannelHostReplyAdmission, MissingRouteReportsOneTerminalAndReleasesOrdina
     runtime.bind_serializers (serializers);
 
     zlink::framework::service_collection_t services;
-    services.add_singleton<blocking_request_handler_t> ();
+    services.add_singleton<blocking_request_state_t> ();
     auto provider = services.build_provider ();
-    auto &handler = provider.get_required<blocking_request_handler_t> ();
+    auto &handler = provider.get_required<blocking_request_state_t> ();
     zlink::framework::handler_registry_t handlers;
     handlers.on_request<blocking_request_handler_t, request_t, reply_t> (
       "reply-admission", "request", &blocking_request_handler_t::handle,
@@ -356,9 +364,9 @@ TEST_P (ChannelMessageFlow, ClientServerRequestAndSendRecordAllReceiverStages)
     runtime.bind_serializers (serializers);
 
     zlink::framework::service_collection_t services;
-    services.add_singleton<blocking_request_handler_t> ();
+    services.add_singleton<blocking_request_state_t> ();
     auto provider = services.build_provider ();
-    auto &handler = provider.get_required<blocking_request_handler_t> ();
+    auto &handler = provider.get_required<blocking_request_state_t> ();
     zlink::framework::handler_registry_t handlers;
     if (request)
         handlers.on_request<blocking_request_handler_t, request_t, reply_t> (

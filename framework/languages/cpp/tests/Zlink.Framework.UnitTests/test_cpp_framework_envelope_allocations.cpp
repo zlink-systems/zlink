@@ -40,13 +40,20 @@ namespace
 {
 
 
-struct allocation_handler_t
+struct allocation_handler_state_t
 {
     unsigned calls = 0;
-    void send (const payload_t &) { ++calls; }
+};
+
+struct allocation_handler_t
+{
+    explicit allocation_handler_t (allocation_handler_state_t &state) : state (state) {}
+
+    allocation_handler_state_t &state;
+    void send (const payload_t &) { ++state.calls; }
     payload_t request (const payload_t &value)
     {
-        ++calls;
+        ++state.calls;
         return value;
     }
 };
@@ -66,7 +73,7 @@ TEST (EnvelopeAllocations, DisabledTypedChannelDispatchAllocationProbe)
       [] (const fw::encoded_payload_t &) { return payload_t{}; }, "application/json");
     runtime.bind_serializers (serializers);
     fw::service_collection_t services;
-    services.add_singleton<allocation_handler_t> ();
+    services.add_singleton<allocation_handler_state_t> ();
     auto provider = services.build_provider ();
     fw::handler_registry_t handlers;
     handlers.on_send<allocation_handler_t, payload_t> ("c", "", &allocation_handler_t::send,
@@ -102,7 +109,7 @@ TEST (EnvelopeAllocations, DisabledTypedChannelDispatchAllocationProbe)
         std::printf ("Off typed Channel %s: %zu allocations / 128 calls.\n",
                      request ? "request" : "send", allocations);
     }
-    EXPECT_EQ (512u, provider.get_required<allocation_handler_t> ().calls);
+    EXPECT_EQ (512u, provider.get_required<allocation_handler_state_t> ().calls);
 }
 
 TEST (EnvelopeAllocations, DisabledChannelTraceFactoriesDoNotAllocate)

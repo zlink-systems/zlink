@@ -163,7 +163,6 @@ int main ()
           [] (const probe_t &value) { return fw::encoded_payload_t::from_string (value.value); },
           [] (const fw::encoded_payload_t &value) { return probe_t{value.to_string ()}; });
         fw::service_collection_t services;
-        services.add_singleton<handler_t> (std::make_unique<handler_t> ());
         auto owned = std::make_unique<rt::in_memory_location_repository_t> ();
         auto &store = *owned;
         services.add_singleton<fw::location_repository_t> (

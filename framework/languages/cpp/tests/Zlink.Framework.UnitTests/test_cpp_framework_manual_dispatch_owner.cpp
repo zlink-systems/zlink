@@ -39,26 +39,33 @@ struct payload_t
     int value = 0;
 };
 
-struct owner_handler_t
+struct owner_handler_state_t
 {
     std::thread::id entered_on;
     unsigned calls = 0;
     std::chrono::system_clock::time_point received_at;
+};
+
+struct owner_handler_t
+{
+    explicit owner_handler_t (owner_handler_state_t &state) : state (state) {}
 
     payload_t request (const payload_t &payload, const fw::message_context_t &context)
     {
-        entered_on = std::this_thread::get_id ();
-        received_at = context.received_at;
-        ++calls;
+        state.entered_on = std::this_thread::get_id ();
+        state.received_at = context.received_at;
+        ++state.calls;
         return payload_t{payload.value + 1};
     }
 
     void send (const payload_t &, const fw::message_context_t &context)
     {
-        entered_on = std::this_thread::get_id ();
-        received_at = context.received_at;
-        ++calls;
+        state.entered_on = std::this_thread::get_id ();
+        state.received_at = context.received_at;
+        ++state.calls;
     }
+
+    owner_handler_state_t &state;
 };
 
 void check_synchronous_handler_owner (bool request)
@@ -79,9 +86,9 @@ void check_synchronous_handler_owner (bool request)
       "application/json");
     runtime.bind_serializers (serializers);
     fw::service_collection_t services;
-    services.add_singleton<owner_handler_t> ();
+    services.add_singleton<owner_handler_state_t> ();
     auto provider = services.build_provider ();
-    auto &handler = provider.get_required<owner_handler_t> ();
+    auto &handler = provider.get_required<owner_handler_state_t> ();
     fw::handler_registry_t handlers;
     handlers.on_request<owner_handler_t, payload_t, payload_t> (
       "manual", "", &owner_handler_t::request, {.packet_name = "request"});
@@ -253,7 +260,7 @@ TEST (ManualDispatchOwner, RuntimeOptionReadDoesNotWaitForStateOwner)
 
 namespace
 {
-struct fifo_handler_t
+struct fifo_handler_state_t
 {
     std::mutex mutex;
     std::condition_variable changed;
@@ -265,24 +272,32 @@ struct fifo_handler_t
     std::atomic_int scopes_destroyed{0};
     fw::task_completion_source_t<void> release_filter;
     fw::task_completion_source_t<void> release_first;
+};
+
+struct fifo_handler_t
+{
+    explicit fifo_handler_t (fifo_handler_state_t &state) : state (state) {}
+
     fw::task_t<payload_t> request (const payload_t &payload)
     {
         {
-            std::lock_guard lock (mutex);
-            entries.push_back (payload.value);
+            std::lock_guard lock (state.mutex);
+            state.entries.push_back (payload.value);
         }
-        changed.notify_all ();
-        if (fault_matrix && payload.value == 4)
+        state.changed.notify_all ();
+        if (state.fault_matrix && payload.value == 4)
             throw std::runtime_error ("native manual handler failure");
         if (payload.value == 1)
-            co_await release_first.task ();
+            co_await state.release_first.task ();
         co_return payload_t{payload.value + 100};
     }
+
+    fifo_handler_state_t &state;
 };
 
 struct scope_probe_t
 {
-    explicit scope_probe_t (fifo_handler_t &state) : state (state) { ++state.scopes_created; }
+    explicit scope_probe_t (fifo_handler_state_t &state) : state (state) { ++state.scopes_created; }
     ~scope_probe_t ()
     {
         {
@@ -291,12 +306,12 @@ struct scope_probe_t
         }
         state.changed.notify_all ();
     }
-    fifo_handler_t &state;
+    fifo_handler_state_t &state;
 };
 
 struct pending_filter_t
 {
-    pending_filter_t (fifo_handler_t &state, scope_probe_t &) : state (state) {}
+    pending_filter_t (fifo_handler_state_t &state, scope_probe_t &) : state (state) {}
     fw::task_t<void> invoke (const fw::handler_filter_context_t &context, fw::handler_next_t next)
     {
         const auto value = std::stoi (context.correlation_id.value ());
@@ -314,7 +329,7 @@ struct pending_filter_t
             throw std::runtime_error ("native manual filter failure");
         co_await next ();
     }
-    fifo_handler_t &state;
+    fifo_handler_state_t &state;
 };
 
 template <typename T> fw::task_t<T> native_result (zlink::async_result_t<T> pending)
@@ -367,11 +382,10 @@ struct native_manual_fixture_t
               observed->changed.notify_all ();
           });
         fw::detail::apply_dispatch_options (builder, options);
-        services.add_singleton<fifo_handler_t> ();
-        services.add_scoped<scope_probe_t, fifo_handler_t> ();
-        services.add_transient<pending_filter_t, fifo_handler_t, scope_probe_t> ();
+        services.add_singleton<fifo_handler_state_t> ();
+        services.add_scoped<scope_probe_t, fifo_handler_state_t> ();
         provider = services.build_provider ();
-        handler = &provider.get_required<fifo_handler_t> ();
+        handler = &provider.get_required<fifo_handler_state_t> ();
         handlers.on_request<fifo_handler_t, payload_t, payload_t> (
           "manual", "", &fifo_handler_t::request, {.packet_name = "request"});
         if (with_filter)
@@ -475,7 +489,7 @@ struct native_manual_fixture_t
     fw::service_collection_t services;
     fw::service_provider_t provider;
     fw::handler_registry_t handlers;
-    fifo_handler_t *handler = nullptr;
+    fifo_handler_state_t *handler = nullptr;
     std::shared_ptr<fw::runtime::application_job_queue_t> jobs;
     std::shared_ptr<fw::runtime::listener_status_registry_t> listeners;
     fw::runtime::offload_executor_t *executor = nullptr;
