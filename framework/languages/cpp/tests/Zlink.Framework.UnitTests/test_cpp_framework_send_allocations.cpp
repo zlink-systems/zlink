@@ -922,8 +922,8 @@ TEST (SendAllocations, ReceiveTurnRetainsCallbacksAcrossNativeSuspension)
         std::vector<zlink::message_t> parts;
         parts.push_back (zlink::message_t::from (wire::encode_bound_session_bind (bind)));
         auto record = mesh::service_mailbox_record_t::from_parts (
-          "control", mesh::service_mailbox_domain_t::infrastructure, std::move (parts), {'s'}, {},
-          1);
+          "control", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
+          std::move (parts), {'s'}, {}, 1);
         ASSERT_TRUE (runtime.transport ().mailbox ().try_enqueue (std::move (record)));
         auto lifetime = std::make_shared<int> (1);
         std::weak_ptr<int> held = lifetime;

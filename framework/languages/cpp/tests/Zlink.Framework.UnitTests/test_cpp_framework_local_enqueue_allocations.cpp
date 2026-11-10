@@ -795,8 +795,8 @@ TEST (LocalEnqueueAllocations, IdleManagementDoesNotAllocateInfrastructureBatchS
         std::vector<zlink::message_t> parts;
         parts.push_back (zlink::message_t::from (protocol::encode_message_follow (notice)));
         auto record = mesh::service_mailbox_record_t::from_parts (
-          "management", mesh::service_mailbox_domain_t::infrastructure, std::move (parts), {'n'},
-          {}, 1);
+          "management", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
+          std::move (parts), {'n'}, {}, 1);
         ASSERT_TRUE (runtime->transport ().mailbox ().try_enqueue (std::move (record)));
     };
     std::array<tests::allocation_event_t, 256> events{};
@@ -926,6 +926,7 @@ TEST (LocalEnqueueAllocations, NativeSpotPublicationMovesCanonicalRecordStorage)
     ASSERT_EQ (token_copies, 1u);
     mesh::service_mailbox_record_t original;
     original.owner = mesh::service_mailbox_t::application_owner (application->owner);
+    original.owner_kind = application->owner.owner_kind;
     original.domain = mesh::service_mailbox_domain_t::application;
     original.source_routing_id = {'n'};
     original.source_node_generation = 1;
@@ -1184,6 +1185,7 @@ TEST (LocalEnqueueAllocations, ReadyNativePublicationMovesFinalIdentityStorage)
         application->parts.push_back (zlink::message_t::from ("payload"));
         mesh::service_mailbox_record_t original;
         original.owner = mesh::service_mailbox_t::application_owner (application->owner);
+        original.owner_kind = application->owner.owner_kind;
         const auto owner = original.owner;
         original.domain = mesh::service_mailbox_domain_t::application;
         original.application.emplace (std::move (*application));

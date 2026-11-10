@@ -1918,7 +1918,7 @@ void verify_bind_handler_rejects_missing_session_owner_descriptor (bool test_sea
           .target_node_generation = source->status ().lifecycle_generation ()};
         assert (
           target->transport ().mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
-            "seal", mesh::service_mailbox_domain_t::infrastructure,
+            "seal", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
             {zlink::message_t::from (protocol::encode_session_relocation_seal (seal))},
             source->status ().routing_id ().to_bytes (), std::nullopt,
             source->status ().lifecycle_generation ())));
@@ -2034,6 +2034,7 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
       {0, 0, 0, 1, 0, 0, 0, 2, 0x7b, 0x7d}};
     auto queued = mesh::service_mailbox_record_t::from_parts (
       "bound-session:" + target.key, mesh::service_mailbox_domain_t::application,
+      host::owner_kind_t::actor,
       zlink::framework::detail::backend::materialize_binding_parts (
         {protocol::encode_bound_session_send (send),
          protocol::encode_application_payload (application)}),
@@ -2122,6 +2123,7 @@ void verify_bound_session_push_admission_uses_only_session_owned_fields ()
         assert (session_owner->transport ().mailbox ().try_enqueue (
           mesh::service_mailbox_record_t::from_parts (
             "bound-session:" + actor.key, mesh::service_mailbox_domain_t::application,
+            host::owner_kind_t::actor,
             zlink::framework::detail::backend::materialize_binding_parts (
               {protocol::encode_bound_session_send (send),
                protocol::encode_application_payload (application)}),
@@ -4127,6 +4129,7 @@ void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
         application->parts.push_back (zlink::message_t::from (value));
         mesh::service_mailbox_record_t record;
         record.owner = mesh::service_mailbox_t::application_owner (host::owner_kind_t::node);
+        record.owner_kind = host::owner_kind_t::node;
         record.domain = mesh::service_mailbox_domain_t::application;
         record.application.emplace (std::move (*application));
         return mailbox.try_enqueue (std::move (record));
@@ -4676,7 +4679,7 @@ void verify_failed_relay_persistence_rearms_dispatch_wait ()
           relay.relocation,     coordinator, relay.operation,
           relay.reply_route_id, source,      protocol::reply_relay_ack_status_t::terminal_received};
         const auto record = mesh::service_mailbox_record_t::from_parts (
-          "relay", mesh::service_mailbox_domain_t::infrastructure,
+          "relay", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
           zlink::framework::detail::backend::materialize_binding_parts (
             {protocol::encode_reply_relay_ack (ack)}),
           source.node_routing_id, std::nullopt, source.node_generation);
@@ -5563,7 +5566,7 @@ void verify_memory_accepted_record_authority ()
         const protocol::spot_route_fence_t fence{
           object.key, 1, target.node_routing_id, target.lifecycle_generation, 1, 11};
         auto record = mesh::service_mailbox_record_t::from_parts (
-          owner, mesh::service_mailbox_domain_t::application,
+          owner, mesh::service_mailbox_domain_t::application, host::owner_kind_t::spot,
           detail::backend::materialize_binding_parts (
             {protocol::encode_spot_message_header (protocol::command::spotSend,
                                                    "memory-source-spot", fence, {1, 900}),
@@ -5630,6 +5633,7 @@ void verify_memory_accepted_record_authority ()
                         "memory-source-spot", spot, {1, sequence}, correlation);
                 auto record = mesh::service_mailbox_record_t::from_parts (
                   {}, mesh::service_mailbox_domain_t::application,
+                  actor ? host::owner_kind_t::actor : host::owner_kind_t::spot,
                   detail::backend::materialize_binding_parts (
                     {header, protocol::encode_application_payload (
                                {"Memory", "application/json", {'{', '}'}})}),
@@ -6069,7 +6073,7 @@ void verify_raw_spot_and_actor_routing ()
 
     const protocol::wire_operation_id_t relocated_one_way_operation{0x91, 0x92};
     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
-      "spot:spot-1", mesh::service_mailbox_domain_t::application,
+      "spot:spot-1", mesh::service_mailbox_domain_t::application, host::owner_kind_t::spot,
       zlink::framework::detail::backend::materialize_binding_parts (
         {protocol::encode_spot_message_header (protocol::command::spotSend, "source-spot",
                                                spot_fence, relocated_one_way_operation),
@@ -6254,7 +6258,7 @@ void verify_raw_spot_and_actor_routing ()
     // the frame under a fallback node/actor identity.
     const protocol::wire_operation_id_t unfenced_operation{0xb1, 0xb2};
     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
-      "actor:actor-1", mesh::service_mailbox_domain_t::application,
+      "actor:actor-1", mesh::service_mailbox_domain_t::application, host::owner_kind_t::actor,
       zlink::framework::detail::backend::materialize_binding_parts (
         {protocol::encode_actor_message_header (protocol::command::actorRequest, std::nullopt,
                                                 actor_fence, unfenced_operation, 92, 0),
@@ -6278,7 +6282,7 @@ void verify_raw_spot_and_actor_routing ()
     // bound-session tail at all is the same pre-Captured condition.
     const protocol::wire_operation_id_t tailless_operation{0xb3, 0xb4};
     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
-      "actor:actor-1", mesh::service_mailbox_domain_t::application,
+      "actor:actor-1", mesh::service_mailbox_domain_t::application, host::owner_kind_t::actor,
       zlink::framework::detail::backend::materialize_binding_parts (
         {protocol::encode_actor_message_header (protocol::command::actorRequest, std::nullopt,
                                                 actor_fence, tailless_operation, 93, 0),
@@ -6441,6 +6445,7 @@ void verify_relocated_source_reply_failure_keeps_terminal_record ()
     const auto unreachable_source = bytes ("unreachable-source");
     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
       "actor:relocated-reply-actor", mesh::service_mailbox_domain_t::application,
+      host::owner_kind_t::actor,
       zlink::framework::detail::backend::materialize_binding_parts (
         {protocol::encode_actor_message_header (protocol::command::actorRequest, std::nullopt,
                                                 actor_fence, operation, 99),
@@ -6524,6 +6529,7 @@ void verify_atomic_raw_stateful_ingress_commit ()
         const protocol::wire_operation_id_t operation{41, operation_low};
         assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
           "actor:atomic-actor", mesh::service_mailbox_domain_t::application,
+          host::owner_kind_t::actor,
           zlink::framework::detail::backend::materialize_binding_parts (
             {protocol::encode_actor_message_header (protocol::command::actorSend, std::nullopt,
                                                     fence, operation),
@@ -7029,7 +7035,7 @@ void verify_relocation_data_duplicates_are_distinct_arrivals ()
       relocation, 31, coordinator, protocol::relocation_role_t::source, wire_object, frozen};
     const auto encoded_data = protocol::encode_relocation_control (data);
     const auto wire_record = mesh::service_mailbox_record_t::from_parts (
-      "duplicate-data-target", mesh::service_mailbox_domain_t::infrastructure,
+      "duplicate-data-target", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
       zlink::framework::detail::backend::materialize_binding_parts ({encoded_data}),
       source_routing_id, std::nullopt, source_generation);
 
@@ -7191,7 +7197,7 @@ void verify_durable_reply_relay_single_winner ()
       relocation,           coordinator,    operation,
       relay.reply_route_id, request_source, protocol::reply_relay_ack_status_t::terminal_received};
     auto stale_ack_record = mesh::service_mailbox_record_t::from_parts (
-      "target", mesh::service_mailbox_domain_t::infrastructure,
+      "target", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
       zlink::framework::detail::backend::materialize_binding_parts (
         {protocol::encode_reply_relay_ack (stale_ack)}),
       source_descriptor.node_routing_id, std::nullopt, source_descriptor.lifecycle_generation + 1);
@@ -7200,7 +7206,7 @@ void verify_durable_reply_relay_single_winner ()
     auto wrong_route_ack = stale_ack;
     ++wrong_route_ack.reply_route_id;
     auto wrong_route_ack_record = mesh::service_mailbox_record_t::from_parts (
-      "target", mesh::service_mailbox_domain_t::infrastructure,
+      "target", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
       zlink::framework::detail::backend::materialize_binding_parts (
         {protocol::encode_reply_relay_ack (wrong_route_ack)}),
       source_descriptor.node_routing_id, std::nullopt, source_descriptor.lifecycle_generation);
@@ -9644,7 +9650,7 @@ void verify_dispatch_callbacks_survive_suspension (bool through_mesh, bool dispa
       zlink::routing_id_t::from ("lifetime-session").to_bytes (),
       {protocol::bound_session_binding_state_t::active, 17}};
     assert (target.transport ().mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
-      "lifetime-bind", mesh::service_mailbox_domain_t::infrastructure,
+      "lifetime-bind", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
       {zlink::message_t::from (protocol::encode_bound_session_bind (bind))},
       local.routing_id ().to_bytes (), std::nullopt, local.lifecycle_generation ())));
     host::public_host_runtime_test_access_t::enqueue_lifetime_probe (target);

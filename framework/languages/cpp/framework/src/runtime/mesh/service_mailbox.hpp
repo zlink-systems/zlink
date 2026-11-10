@@ -166,6 +166,8 @@ class service_mailbox_reply_target_t
 struct service_mailbox_record_t
 {
     std::string owner;
+    // Application producers set the kind before publication; infrastructure leaves it empty.
+    std::optional<host::owner_kind_t> owner_kind;
     // Same value as value-initialisation, so default-constructed records are never indeterminate.
     service_mailbox_domain_t domain = service_mailbox_domain_t::application;
     // Logical peer identity used by topology and location lookups. Native reply routing
@@ -188,6 +190,7 @@ struct service_mailbox_record_t
     static service_mailbox_record_t
     from_parts (std::string owner,
                 service_mailbox_domain_t domain,
+                std::optional<host::owner_kind_t> owner_kind,
                 std::vector<zlink::message_t> parts,
                 std::vector<std::uint8_t> source = {},
                 std::optional<std::uint64_t> correlation = {},
@@ -199,6 +202,7 @@ struct service_mailbox_record_t
         service_mailbox_record_t record{};
         record.owner = std::move (owner);
         record.domain = domain;
+        record.owner_kind = owner_kind;
         record.replace_parts (std::move (parts));
         record.source_routing_id = std::move (source);
         record.correlation = correlation;
@@ -208,12 +212,15 @@ struct service_mailbox_record_t
         record.before_application_handler = std::move (before_application_handler);
         return record;
     }
-    static service_mailbox_record_t
-    from_received (std::string owner, service_mailbox_domain_t domain, zlink::received_t received)
+    static service_mailbox_record_t from_received (std::string owner,
+                                                   service_mailbox_domain_t domain,
+                                                   std::optional<host::owner_kind_t> owner_kind,
+                                                   zlink::received_t received)
     {
         service_mailbox_record_t record{};
         record.owner = std::move (owner);
         record.domain = domain;
+        record.owner_kind = owner_kind;
         record._received = std::move (received);
         if (record._received.routing_id ())
             record.source_routing_id = record._received.routing_id ()->to_bytes ();
@@ -320,7 +327,7 @@ class service_mailbox_t
     static std::string application_owner (const host::ready_record_t &owner);
 
     using application_prepare_t = std::function<void (service_mailbox_record_t &)>;
-    using application_ready_t = std::function<void (const std::string &)>;
+    using application_ready_t = std::function<void (const std::string &, host::owner_kind_t)>;
     using application_dispatch_t = std::function<void (const host::ready_record_t &,
                                                        const host::receive_record_t &,
                                                        std::vector<zlink::message_t>,
@@ -334,8 +341,10 @@ class service_mailbox_t
     bool has_application_dispatch () const;
     void begin_application_receive_turn ();
     void end_application_receive_turn ();
+    // A notification keeps its kind even if its queue is consumed before delivery.
+    using ready_owner_t = std::pair<std::string, std::optional<host::owner_kind_t>>;
     using application_ready_batch_t =
-      std::optional<std::pair<std::list<std::string>, application_ready_t>>;
+      std::optional<std::pair<std::list<ready_owner_t>, application_ready_t>>;
     application_ready_batch_t take_application_receive_turn ();
     static void notify_application_ready (application_ready_batch_t &ready);
     bool begin_application_drain (const std::string &owner);
@@ -360,7 +369,7 @@ class service_mailbox_t
                                                               const claimed_t &claimed = {});
     // Scheduler-only Node/Channel take. The original list node stays in its
     // existing claim until settlement, independently of later owner records.
-    static bool concurrent_application_owner (std::string_view owner) noexcept;
+    static bool concurrent_application_owner (host::owner_kind_t kind);
     std::shared_ptr<service_mailbox_claim_t> try_claim_application_record (
       const std::string &owner, bool &more, const claimed_t &claimed = {});
     std::size_t pending_application_records (const std::string &owner) const;
@@ -444,6 +453,7 @@ class service_mailbox_t
     // Node/Channel claims transfer the taken list node into the claim.
     struct owner_queue_t
     {
+        std::optional<host::owner_kind_t> owner_kind;
         std::list<service_mailbox_record_t> records;
         std::size_t messages = 0;
         std::size_t bytes = 0;
@@ -455,7 +465,7 @@ class service_mailbox_t
     struct domain_t
     {
         std::unordered_map<std::string, owner_queue_t> owners;
-        std::list<std::string> ready;
+        std::list<ready_owner_t> ready;
         std::size_t messages = 0;
         std::size_t bytes = 0;
         std::size_t active_messages = 0;

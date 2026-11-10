@@ -175,7 +175,7 @@ int main ()
             std::vector<zlink::message_t> parts;
             parts.push_back (zlink::message_t::from (std::vector<std::uint8_t>{0}));
             auto record = runtime::mesh::service_mailbox_record_t::from_parts (
-              "receive-cost-infrastructure", infrastructure, std::move (parts));
+              "receive-cost-infrastructure", infrastructure, std::nullopt, std::move (parts));
             require (mailbox.try_enqueue (std::move (record)), "infrastructure enqueue failed");
         }
         std::size_t drained = 0;

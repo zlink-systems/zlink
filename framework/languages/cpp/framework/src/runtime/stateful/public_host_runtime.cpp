@@ -9117,6 +9117,7 @@ void public_host_runtime_t::publish_local_application (mesh::service_mailbox_app
     }
     mesh::service_mailbox_record_t record;
     record.owner = mesh::service_mailbox_t::application_owner (dispatch.owner);
+    record.owner_kind = dispatch.owner.owner_kind;
     record.domain = mesh::service_mailbox_domain_t::application;
     record.before_application_handler = dispatch.record.before_application_handler;
     record.source_routing_id = dispatch.record.source_node_rid.to_bytes ();

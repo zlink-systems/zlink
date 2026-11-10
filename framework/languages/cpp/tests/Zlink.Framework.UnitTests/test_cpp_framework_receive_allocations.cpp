@@ -59,7 +59,8 @@ mesh::service_mailbox_record_t infrastructure_record (std::vector<std::uint8_t> 
     std::vector<zlink::message_t> parts;
     parts.push_back (zlink::message_t::from (bytes));
     return mesh::service_mailbox_record_t::from_parts (
-      "control", mesh::service_mailbox_domain_t::infrastructure, std::move (parts), {'s'}, {}, 1);
+      "control", mesh::service_mailbox_domain_t::infrastructure, std::nullopt, std::move (parts),
+      {'s'}, {}, 1);
 }
 
 wire::message_follow_notice_t notice ()
@@ -367,7 +368,8 @@ TEST (ReceiveAllocations, AutomaticClientServerSendRecordHasFixedAllocationCount
                                                     .advertised_endpoint = "tcp://127.0.0.1:*"}};
     options.runtime_failures = std::make_shared<fw::runtime::runtime_failure_collector_t> ();
     auto server = std::make_shared<cs::raw_client_server_server_t> (options, context);
-    server->mailbox ().bind_application_dispatch ({}, [] (const std::string &) {});
+    server->mailbox ().bind_application_dispatch (
+      {}, [] (const std::string &, zlink::framework::runtime::host::owner_kind_t) {});
     boost::asio::io_context executor;
     receive_handler_t::calls = 0;
     const auto dispatch = [&] {
@@ -392,7 +394,8 @@ TEST (ReceiveAllocations, AutomaticClientServerSendRecordHasFixedAllocationCount
         parts.push_back (zlink::message_t::from ("header"));
         parts.push_back (zlink::message_t::from ("{}"));
         auto record = mesh::service_mailbox_record_t::from_parts (
-          "receive", mesh::service_mailbox_domain_t::application, std::move (parts));
+          "receive", mesh::service_mailbox_domain_t::application, host::owner_kind_t::channel,
+          std::move (parts));
         record.envelope_header.kind = fw::runtime::messaging::message_kind_t::command;
         record.envelope_header.message_name = "receive.send";
         record.envelope_header.content_type = "application/json";

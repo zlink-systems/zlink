@@ -102,10 +102,11 @@ class HandlerEntryPermit : public ::testing::Test
         });
     }
 
-    mesh::service_mailbox_record_t queued (const std::string &owner)
+    mesh::service_mailbox_record_t queued (const std::string &owner, host::owner_kind_t owner_kind)
     {
         mesh::service_mailbox_record_t record;
         record.owner = owner;
+        record.owner_kind = owner_kind;
         record.domain = domain;
         record.application_permit = jobs->try_reserve_supply ();
         EXPECT_TRUE (record.application_permit);
@@ -152,7 +153,7 @@ class HandlerEntryPermit : public ::testing::Test
         auto parts = runtime::messaging::envelope_codec_t{}
                        .encode_raw_body_parts (header, zlink::message_t::from ("17"))
                        .take_items ();
-        auto record = queued (owner);
+        auto record = queued (owner, host::owner_kind_t::node);
         record.replace_parts (
           {zlink::message_t::from (protocol::encode_node_send_header ()),
            zlink::message_t::from (protocol::encode_application_payload (
@@ -266,7 +267,8 @@ TEST_F (HandlerEntryPermit, StatefulAcceptedRecordAsyncFilterOutlivesClaim)
       header, {"source", 1, {'p', 'e', 'e', 'r'}, 1},
       protocol::application_payload_t{"packet", "application/json", {'1', '7'}}, false);
     auto original =
-      queued (mesh::service_mailbox_t::application_owner (host::owner_kind_t::actor, actor->key));
+      queued (mesh::service_mailbox_t::application_owner (host::owner_kind_t::actor, actor->key),
+              host::owner_kind_t::actor);
     original.application.emplace ();
     auto slot = test::publish_stateful_claim (transport, *actor, std::move (original));
     auto waiter = jobs->wait_for_supply (

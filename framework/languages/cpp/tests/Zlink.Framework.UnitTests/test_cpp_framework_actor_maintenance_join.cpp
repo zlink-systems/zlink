@@ -3608,8 +3608,8 @@ struct native_intake_fixture_t
         return mesh::service_mailbox_record_t::from_parts (
           mesh::service_mailbox_t::application_owner (fw::runtime::host::owner_kind_t::actor,
                                                       actor_id),
-          mesh::service_mailbox_domain_t::application, std::move (record_parts), std::move (source),
-          {}, 1);
+          mesh::service_mailbox_domain_t::application, fw::runtime::host::owner_kind_t::actor,
+          std::move (record_parts), std::move (source), {}, 1);
     }
 };
 
@@ -4605,6 +4605,7 @@ TEST (NativeIntake, TypedControlMalformedWireAndKernelMetadata)
     };
     mesh::service_mailbox_record_t typed;
     typed.owner = owner;
+    typed.owner_kind = rt::host::owner_kind_t::actor;
     typed.domain = mesh::service_mailbox_domain_t::application;
     typed.application.emplace ();
     typed.application->record.kind = rt::host::record_kind_t::spot_control;
@@ -4615,17 +4616,20 @@ TEST (NativeIntake, TypedControlMalformedWireAndKernelMetadata)
     std::vector<zlink::message_t> malformed_parts;
     malformed_parts.push_back (zlink::message_t::from ("invalid"));
     auto malformed = mesh::service_mailbox_record_t::from_parts (
-      owner, mesh::service_mailbox_domain_t::application, std::move (malformed_parts));
+      owner, mesh::service_mailbox_domain_t::application, fw::runtime::host::owner_kind_t::actor,
+      std::move (malformed_parts));
     ASSERT_TRUE (mailbox.try_enqueue (std::move (malformed)));
     drain ();
     EXPECT_EQ (controls, 1u);
     EXPECT_EQ (rejected, 1u);
     st::raw_stateful_dispatch_t raw (host->objects (), host->transport (), resolver);
     EXPECT_THROW (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
-                    owner, mesh::service_mailbox_domain_t::application, {})),
+                    owner, mesh::service_mailbox_domain_t::application,
+                    fw::runtime::host::owner_kind_t::actor, {})),
                   std::invalid_argument);
     auto invalid_accepted = mesh::service_mailbox_record_t::from_parts (
-      owner, mesh::service_mailbox_domain_t::application, {zlink::message_t::from ("invalid")});
+      owner, mesh::service_mailbox_domain_t::application, fw::runtime::host::owner_kind_t::actor,
+      {zlink::message_t::from ("invalid")});
     const auto invalid_slot =
       fw::test::publish_stateful_claim (host->transport (), object, std::move (invalid_accepted));
     EXPECT_EQ (raw

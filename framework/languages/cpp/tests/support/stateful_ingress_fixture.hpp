@@ -22,13 +22,14 @@ publish_stateful_claims (runtime::mesh::raw_mesh_node_owner_t &transport,
                          std::vector<runtime::mesh::service_mailbox_record_t> records)
 {
     auto &mailbox = transport.mailbox ();
-    const auto key = runtime::mesh::service_mailbox_t::application_owner (
-      owner.kind == runtime::stateful::object_kind_t::actor ? runtime::host::owner_kind_t::actor
-                                                            : runtime::host::owner_kind_t::spot,
-      owner.key);
+    const auto owner_kind = owner.kind == runtime::stateful::object_kind_t::actor
+                              ? runtime::host::owner_kind_t::actor
+                              : runtime::host::owner_kind_t::spot;
+    const auto key = runtime::mesh::service_mailbox_t::application_owner (owner_kind, owner.key);
     mailbox.begin_application_receive_turn ();
     for (auto &record : records) {
         record.owner = key;
+        record.owner_kind = owner_kind;
         record.domain = runtime::mesh::service_mailbox_domain_t::application;
         if (!mailbox.try_enqueue (std::move (record)))
             throw std::runtime_error ("fixture mailbox publication failed");

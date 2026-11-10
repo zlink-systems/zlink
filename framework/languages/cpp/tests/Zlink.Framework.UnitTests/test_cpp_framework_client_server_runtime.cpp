@@ -452,7 +452,8 @@ struct overlap_batch_t
         options.runtime_failures =
           std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ();
         server = std::make_shared<client_server::raw_client_server_server_t> (options, context);
-        server->mailbox ().bind_application_dispatch ({}, [] (const std::string &) {});
+        server->mailbox ().bind_application_dispatch (
+          {}, [] (const std::string &, zlink::framework::runtime::host::owner_kind_t) {});
         server->start ();
         source.options ().linger (0ms);
         source.set_routing_id (zlink::routing_id_t::from ("overlap-peer"));

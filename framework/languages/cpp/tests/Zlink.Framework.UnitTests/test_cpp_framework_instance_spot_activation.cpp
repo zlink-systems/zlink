@@ -1403,7 +1403,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, RecoveredRequestWithoutNativeTokenDo
        .runtime_failures = std::make_shared<rt::runtime_failure_collector_t> ()});
     target.start ();
     auto recovered = rt::mesh::service_mailbox_record_t::from_parts (
-      "source", rt::mesh::service_mailbox_domain_t::infrastructure, {}, {2}, 17);
+      "source", rt::mesh::service_mailbox_domain_t::infrastructure, std::nullopt, {}, {2}, 17);
     EXPECT_NO_THROW (EXPECT_FALSE (target.reply_instance_spot_activation (recovered, 0, 0)));
     target.close ();
 }

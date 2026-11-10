@@ -4718,7 +4718,7 @@ void test_relocation_request_source_registration (test_context_t &test,
                                               0,
                                               protocol::framework_error_code::none};
           auto message = mesh::service_mailbox_record_t::from_parts (
-            "source", mesh::service_mailbox_domain_t::infrastructure,
+            "source", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
             framework::detail::backend::materialize_binding_parts (
               {protocol::encode_reply_relay (relay)}),
             {'t'}, std::nullopt, 1);
@@ -4958,7 +4958,7 @@ void test_relocation_ready_boundary (test_context_t &test, ready_boundary_case_t
       coordinator, p::relocation_role_t::source,
       object,      p::encode_frozen_application_record (accepted)};
     const auto relay_record = mesh::service_mailbox_record_t::from_parts (
-      "boundary-target", mesh::service_mailbox_domain_t::infrastructure,
+      "boundary-target", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
       {zlink::message_t::from (p::encode_relocation_control (relay_data))},
       source_node.node_routing_id, std::nullopt, source_node.lifecycle_generation);
     auto ready = source.request_relocation_prepare (target_node.node_routing_id, prepare, 5s);

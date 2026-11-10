@@ -202,8 +202,8 @@ mesh::service_mailbox_record_t spot_send (host::public_host_runtime_t &host,
     auto source_routing_id = std::vector<std::uint8_t>{source};
     auto record = mesh::service_mailbox_record_t::from_parts (
       mesh::service_mailbox_t::application_owner (host::owner_kind_t::spot, spot.key),
-      mesh::service_mailbox_domain_t::application, std::move (parts), std::move (source_routing_id),
-      correlation, 1);
+      mesh::service_mailbox_domain_t::application, host::owner_kind_t::spot, std::move (parts),
+      std::move (source_routing_id), correlation, 1);
     record.source_original = mesh::raw_mesh_node_owner_t::local_accepted_source (
       record.source_routing_id, record.source_node_generation, {});
     return record;
@@ -356,7 +356,7 @@ TEST (FrameworkRelocationSealContract, public_actor_push_submits_while_session_r
             expected_binding_generation};
           auto record = mesh::service_mailbox_record_t::from_parts (
             "bound-session:" + std::string (source_actor.actor_id ().value ()),
-            mesh::service_mailbox_domain_t::application,
+            mesh::service_mailbox_domain_t::application, host::owner_kind_t::actor,
             zlink::framework::detail::backend::materialize_binding_parts (
               {protocol::encode_bound_session_send (send),
                protocol::encode_application_payload (application)}),
@@ -1594,7 +1594,8 @@ TEST (FrameworkRelocationSealContract, mailbox_cut_takes_each_untaken_original_o
     mesh::service_mailbox_t mailbox;
     const auto record = [domain] (std::uint8_t id) {
         auto parts = detail::backend::materialize_binding_parts ({{id}});
-        return mesh::service_mailbox_record_t::from_parts ("spot:cut", domain, std::move (parts));
+        return mesh::service_mailbox_record_t::from_parts (
+          "spot:cut", domain, host::owner_kind_t::spot, std::move (parts));
     };
     const auto id_of = [] (const mesh::service_mailbox_record_t &value) {
         return value.parts ().front ().to_bytes ().front ();
@@ -1643,7 +1644,8 @@ TEST (FrameworkRelocationSealContract, ordinary_claim_transfers_batch_before_cut
     batch.reserve (64);
     for (std::uint8_t index = 0; index < 64; ++index) {
         auto original = mesh::service_mailbox_record_t::from_parts (
-          "ordinary", domain, detail::backend::materialize_binding_parts ({{index}}));
+          "ordinary", domain, host::owner_kind_t::node,
+          detail::backend::materialize_binding_parts ({{index}}));
         ASSERT_TRUE (mailbox.try_enqueue (std::move (original)));
     }
     const auto claim = mailbox.try_claim (domain, 64, 65536, [&] (const auto &claimed) noexcept {
@@ -1672,7 +1674,8 @@ TEST (FrameworkRelocationSealContract, throwing_claim_consumer_returns_all_credi
         mesh::service_mailbox_t mailbox;
         const auto enqueue = [&] {
             auto original = mesh::service_mailbox_record_t::from_parts (
-              "ordinary", domain, detail::backend::materialize_binding_parts ({{1}}));
+              "ordinary", domain, host::owner_kind_t::node,
+              detail::backend::materialize_binding_parts ({{1}}));
             ASSERT_TRUE (mailbox.try_enqueue (std::move (original)));
         };
         enqueue ();
@@ -1718,6 +1721,7 @@ TEST (FrameworkRelocationSealContract, ordinary_dispatch_failure_settles_each_re
     const auto enqueue = [&] {
         mesh::service_mailbox_record_t original;
         original.owner = "node";
+        original.owner_kind = host::owner_kind_t::node;
         original.domain = mesh::service_mailbox_domain_t::application;
         original.application.emplace ();
         original.application->owner.owner_kind = host::owner_kind_t::node;
@@ -2239,7 +2243,7 @@ void verify_native_spot_seal (bool fail_second,
     if (without_ingress) {
         // A production host binds its mailbox dispatcher and has no inventory scan.
         host->transport ().mailbox ().bind_application_dispatch ([] (auto &) {},
-                                                                 [] (const auto &) {});
+                                                                 [] (const auto &, auto) {});
         (void) host->dispatch_ready (publish).result ().value ();
     } else {
         // Fresh native ingress may not pass the originals restored by this abort.
@@ -2913,7 +2917,7 @@ TEST (FrameworkRelocationSealContract, raw_dispatch_waits_for_state_lane_outside
         if (ingest) {
             const protocol::actor_route_fence_t route{object.key, 1, {1}, 1, 1, 3};
             auto record = mesh::service_mailbox_record_t::from_parts (
-              {}, mesh::service_mailbox_domain_t::application,
+              {}, mesh::service_mailbox_domain_t::application, host::owner_kind_t::actor,
               detail::backend::materialize_binding_parts (
                 {protocol::encode_actor_message_header (protocol::command::actorSend, std::nullopt,
                                                         route, {1, 1}),
@@ -3483,7 +3487,7 @@ TEST (FrameworkRelocationSealContract,
     const auto reply = protocol::application_payload_t::from_parts (parts);
     const auto relay_record = [&] (const protocol::reply_relay_t &value) {
         return mesh::service_mailbox_record_t::from_parts (
-          {}, mesh::service_mailbox_domain_t::infrastructure,
+          {}, mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
           detail::backend::materialize_binding_parts (
             {protocol::encode_reply_relay (value), protocol::encode_application_payload (reply)}),
           target->status ().routing_id ().to_bytes (), std::nullopt,
@@ -3570,7 +3574,7 @@ TEST (FrameworkRelocationSealContract, bound_session_close_compares_the_current_
            lease_generation, session_rid.to_bytes (), binding.binding_generation}};
         ASSERT_TRUE (session_owner->transport ().mailbox ().try_enqueue (
           mesh::service_mailbox_record_t::from_parts (
-            "bound-session-close", mesh::service_mailbox_domain_t::infrastructure,
+            "bound-session-close", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
             zlink::framework::detail::backend::materialize_binding_parts (
               {protocol::encode_bound_session_close (request)}),
             zlink::routing_id_t::from ("close-actor-owner").to_bytes (), std::nullopt, 1)));
@@ -3605,7 +3609,7 @@ TEST (FrameworkRelocationSealContract, malformed_command_42_records_invalid_fram
     const std::vector<std::uint8_t> malformed{0x5a, 0x4d, 0x01, 0x2a, 0x00};
     ASSERT_TRUE (
       owner->transport ().mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
-        "malformed-command-42", mesh::service_mailbox_domain_t::infrastructure,
+        "malformed-command-42", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
         zlink::framework::detail::backend::materialize_binding_parts ({malformed}),
         source_rid.to_bytes (), std::nullopt, 1)));
 

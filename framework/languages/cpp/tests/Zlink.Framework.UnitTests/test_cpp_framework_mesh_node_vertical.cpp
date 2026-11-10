@@ -684,6 +684,7 @@ void enqueue_application_route (
     namespace mesh = zlink::framework::runtime::mesh;
     mesh::service_mailbox_record_t mailbox_record;
     mailbox_record.owner = mesh::service_mailbox_t::application_owner (owner);
+    mailbox_record.owner_kind = owner.owner_kind;
     mailbox_record.domain = mesh::service_mailbox_domain_t::application;
     mailbox_record.before_application_handler = [] {};
     mailbox_record.application.emplace (
@@ -846,8 +847,8 @@ void verify_route_internal_packets_precede_application_dispatch ()
           "Rel358MulticastPayload", "rel-358-topic", "multicast-through-host")})))};
     auto multicast_record = runtime::mesh::service_mailbox_record_t::from_parts (
       multicast_owner, runtime::mesh::service_mailbox_domain_t::application,
-      std::move (multicast_parts), multicast_source, std::nullopt, 0, {}, {},
-      std::move (before_multicast_handler));
+      zlink::framework::runtime::host::owner_kind_t::node, std::move (multicast_parts),
+      multicast_source, std::nullopt, 0, {}, {}, std::move (before_multicast_handler));
     assert (
       node->native_node ().transport ().mailbox ().try_enqueue (std::move (multicast_record)));
     assert (multicast_future.wait_for (1s) == std::future_status::ready);
@@ -890,6 +891,7 @@ void verify_route_internal_packets_precede_application_dispatch ()
     auto node_send_record = runtime::mesh::service_mailbox_record_t::from_parts (
       runtime::mesh::service_mailbox_t::application_owner (host::owner_kind_t::node),
       runtime::mesh::service_mailbox_domain_t::application,
+      zlink::framework::runtime::host::owner_kind_t::node,
       {zlink::message_t::from (runtime::protocol::encode_node_send_header ()),
        zlink::message_t::from (runtime::protocol::encode_application_payload (
          runtime::protocol::application_payload_t::from_parts (

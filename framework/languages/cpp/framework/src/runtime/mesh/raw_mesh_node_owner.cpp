@@ -1844,7 +1844,7 @@ task_t<bool> raw_mesh_node_owner_t::send_control (std::vector<std::uint8_t> targ
           admit_control (local, local,
                          service_mailbox_record_t::from_parts (
                            owner_key (local.node_routing_id),
-                           service_mailbox_domain_t::infrastructure,
+                           service_mailbox_domain_t::infrastructure, std::nullopt,
                            detail::backend::materialize_binding_parts (parts),
                            local.node_routing_id, std::nullopt, local.lifecycle_generation))
           == raw_mesh_pump_result_t::infrastructure;
@@ -2835,7 +2835,7 @@ task_t<bool> raw_mesh_node_owner_t::send_instance_spot_activation (
         parts.push_back (std::move (*metadata));
     parts.push_back (protocol::encode_application_payload (application_payload));
     const auto accepted = _mailbox.try_enqueue (service_mailbox_record_t::from_parts (
-      owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure,
+      owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure, std::nullopt,
       detail::backend::materialize_binding_parts (std::move (parts)), local.node_routing_id,
       std::nullopt));
     if (accepted)
@@ -2889,7 +2889,7 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
     }
     if (target_routing_id == local.node_routing_id) {
         const auto accepted = _mailbox.try_enqueue (service_mailbox_record_t::from_parts (
-          owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure,
+          owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure, std::nullopt,
           detail::backend::materialize_binding_parts (std::move (parts)), local.node_routing_id,
           correlation));
         if (!accepted)
@@ -3024,7 +3024,7 @@ task_t<bool> raw_mesh_node_owner_t::request_infrastructure (
     }
     if (target_routing_id == local.node_routing_id) {
         const auto accepted = _mailbox.try_enqueue (service_mailbox_record_t::from_parts (
-          owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure,
+          owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure, std::nullopt,
           detail::backend::materialize_binding_parts ({header (correlation)}),
           local.node_routing_id, correlation));
         if (!accepted)
@@ -3636,9 +3636,11 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
       [&] (std::string owner, service_mailbox_domain_t domain,
            std::optional<std::uint64_t> correlation = std::nullopt, std::uint64_t generation = 0,
            std::optional<std::pair<std::uint64_t, std::uint64_t>> operation = std::nullopt,
-           std::optional<service_bound_session_source_t> bound_session = std::nullopt) {
+           std::optional<service_bound_session_source_t> bound_session = std::nullopt,
+           std::optional<host::owner_kind_t> owner_kind = std::nullopt) {
           ingress.owner = std::move (owner);
           ingress.domain = domain;
+          ingress.owner_kind = owner_kind;
           ingress.correlation = correlation;
           ingress.source_node_generation = generation;
           ingress.operation = operation;
@@ -3810,11 +3812,12 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
             }
             (void) protocol::decode_application_payload (
               protocol::message_bytes (received->parts ().back ()), false);
-            return enqueue_received (route_received ("bound-session:" + send.actor.actor_id,
-                                                     service_mailbox_domain_t::application,
-                                                     std::nullopt,
-                                                     admitted->descriptor.lifecycle_generation),
-                                     raw_mesh_pump_result_t::application);
+            return enqueue_received (
+              route_received ("bound-session:" + send.actor.actor_id,
+                              service_mailbox_domain_t::application, std::nullopt,
+                              admitted->descriptor.lifecycle_generation, std::nullopt, std::nullopt,
+                              host::owner_kind_t::actor),
+              raw_mesh_pump_result_t::application);
         }
         if (header.kind == protocol::command::boundSessionBind) {
             if (header.flags != 0 || received->parts ().size () != 1 || !received->reply_token ()) {
@@ -4118,7 +4121,8 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
             return enqueue_received (
               route_received (service_mailbox_t::application_owner (host::owner_kind_t::node),
                               service_mailbox_domain_t::application, std::nullopt,
-                              admitted->descriptor.lifecycle_generation),
+                              admitted->descriptor.lifecycle_generation, std::nullopt, std::nullopt,
+                              host::owner_kind_t::node),
               raw_mesh_pump_result_t::application);
         }
         if ((header.kind != protocol::command::nodeSend
@@ -4137,6 +4141,7 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
             return reject ();
         }
         std::string mailbox_owner;
+        std::optional<host::owner_kind_t> mailbox_owner_kind;
         std::optional<std::uint64_t> correlation;
         std::optional<std::pair<std::uint64_t, std::uint64_t>> operation;
         std::optional<service_bound_session_source_t> bound_session_source;
@@ -4153,7 +4158,8 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
                 correlation = protocol::decode_node_request_header (
                   protocol::message_bytes (received->parts ().front ()));
             }
-            mailbox_owner = service_mailbox_t::application_owner (host::owner_kind_t::node);
+            mailbox_owner_kind = host::owner_kind_t::node;
+            mailbox_owner = service_mailbox_t::application_owner (*mailbox_owner_kind);
         } else if (header.kind == protocol::command::channelSend
                    || header.kind == protocol::command::channelRequest) {
             std::string channel_name;
@@ -4173,8 +4179,9 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
             if (!find_service_channel (local, channel_name)) {
                 return reject ();
             }
+            mailbox_owner_kind = host::owner_kind_t::channel;
             mailbox_owner =
-              service_mailbox_t::application_owner (host::owner_kind_t::channel, channel_name);
+              service_mailbox_t::application_owner (*mailbox_owner_kind, channel_name);
         } else if (header.kind == protocol::command::spotSend
                    || header.kind == protocol::command::spotRequest) {
             if (header.kind == protocol::command::spotRequest && !received->reply_token ()) {
@@ -4189,8 +4196,9 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
             }
             correlation = spot.correlation;
             operation = std::pair{spot.operation.high, spot.operation.low};
+            mailbox_owner_kind = host::owner_kind_t::spot;
             mailbox_owner =
-              service_mailbox_t::application_owner (host::owner_kind_t::spot, spot.target.spot_id);
+              service_mailbox_t::application_owner (*mailbox_owner_kind, spot.target.spot_id);
         } else {
             if (header.kind == protocol::command::actorRequest && !received->reply_token ()) {
                 return reject ();
@@ -4210,12 +4218,14 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
                   actor.bound_session_source->binding_generation,
                   actor.bound_session_source->session_sequence};
             }
-            mailbox_owner = service_mailbox_t::application_owner (host::owner_kind_t::actor,
-                                                                  actor.target.actor_id);
+            mailbox_owner_kind = host::owner_kind_t::actor;
+            mailbox_owner =
+              service_mailbox_t::application_owner (*mailbox_owner_kind, actor.target.actor_id);
         }
-        auto record = route_received (
-          std::move (mailbox_owner), service_mailbox_domain_t::application, correlation,
-          admitted->descriptor.lifecycle_generation, operation, std::move (bound_session_source));
+        auto record =
+          route_received (std::move (mailbox_owner), service_mailbox_domain_t::application,
+                          correlation, admitted->descriptor.lifecycle_generation, operation,
+                          std::move (bound_session_source), mailbox_owner_kind);
         // The receive turn only observes the polling list; a missing source is read by
         // the authority owner after the canonical claim has recorded its shared lookup.
         if (operation && _request_sources)

@@ -1649,7 +1649,7 @@ void verify_application_owner_drain_transitions ()
     mesh::service_mailbox_t manual;
     manual.begin_application_receive_turn ();
     assert (manual.try_enqueue (mesh::service_mailbox_record_t::from_parts (
-      "manual", mesh::service_mailbox_domain_t::application,
+      "manual", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
       zlink::framework::detail::backend::materialize_binding_parts ({{1}}))));
     manual.end_application_receive_turn ();
     auto manual_claim = manual.try_claim (mesh::service_mailbox_domain_t::application, 1, 4096);
@@ -1674,7 +1674,10 @@ void verify_application_owner_drain_transitions ()
             ++copies;
         }
         ready_observer_t (ready_observer_t &&) = default;
-        void operator() (const std::string &owner) const { ready.push_back (owner); }
+        void operator() (const std::string &owner, runtime::host::owner_kind_t) const
+        {
+            ready.push_back (owner);
+        }
     };
     mailbox.bind_application_dispatch ([&] (mesh::service_mailbox_record_t &) { ++prepared; },
                                        ready_observer_t{ready, ready_copies});
@@ -1685,6 +1688,7 @@ void verify_application_owner_drain_transitions ()
     const auto enqueue = [&] (std::string owner, std::uint8_t value) {
         return mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
           std::move (owner), mesh::service_mailbox_domain_t::application,
+          runtime::host::owner_kind_t::spot,
           zlink::framework::detail::backend::materialize_binding_parts ({{value}})));
     };
     mailbox.begin_application_receive_turn ();
@@ -1749,20 +1753,20 @@ void verify_independent_mailbox_domains_and_claim_fence ()
     constexpr auto fixed_work_cost = runtime::dispatch_limits::fixed_work_byte_cost;
     mesh::service_mailbox_t owner_scoped;
     assert (owner_scoped.try_enqueue (mesh::service_mailbox_record_t::from_parts (
-      "owner-a", mesh::service_mailbox_domain_t::application,
+      "owner-a", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
       zlink::framework::detail::backend::materialize_binding_parts ({{1}}))));
     auto owner_a_claim = owner_scoped.try_claim_owner (mesh::service_mailbox_domain_t::application,
                                                        "owner-a", 1, 4096);
     assert (owner_a_claim && owner_a_claim->records.size () == 1);
     assert (owner_scoped.try_enqueue (mesh::service_mailbox_record_t::from_parts (
-      "owner-a", mesh::service_mailbox_domain_t::application,
+      "owner-a", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
       zlink::framework::detail::backend::materialize_binding_parts ({{2}}))));
     assert (owner_scoped.try_enqueue (mesh::service_mailbox_record_t::from_parts (
-      "owner-b", mesh::service_mailbox_domain_t::application,
+      "owner-b", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
       zlink::framework::detail::backend::materialize_binding_parts ({{3}}))));
     assert (owner_scoped.release (*owner_a_claim));
     assert (owner_scoped.try_enqueue (mesh::service_mailbox_record_t::from_parts (
-      "owner-a", mesh::service_mailbox_domain_t::application,
+      "owner-a", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
       zlink::framework::detail::backend::materialize_binding_parts ({{6}}))));
     auto owner_a_remaining = owner_scoped.try_claim_owner (
       mesh::service_mailbox_domain_t::application, "owner-a", 2, 4096);
@@ -1771,16 +1775,16 @@ void verify_independent_mailbox_domains_and_claim_fence ()
 
     mesh::service_mailbox_t mailbox;
     assert (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
-      "owner-a", mesh::service_mailbox_domain_t::application,
+      "owner-a", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
       zlink::framework::detail::backend::materialize_binding_parts ({{1, 2, 3}}))));
     assert (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
-      "owner-a", mesh::service_mailbox_domain_t::application,
+      "owner-a", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
       zlink::framework::detail::backend::materialize_binding_parts ({{4, 5}}))));
     assert (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
-      "peer-a", mesh::service_mailbox_domain_t::infrastructure,
+      "peer-a", mesh::service_mailbox_domain_t::infrastructure, std::nullopt,
       zlink::framework::detail::backend::materialize_binding_parts ({{9}}))));
     assert (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
-      "owner-b", mesh::service_mailbox_domain_t::application,
+      "owner-b", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
       zlink::framework::detail::backend::materialize_binding_parts ({{7}}))));
 
     auto owner_b =
@@ -1806,12 +1810,12 @@ void verify_independent_mailbox_domains_and_claim_fence ()
 
     mesh::service_mailbox_t accounting;
     assert (accounting.try_enqueue (mesh::service_mailbox_record_t::from_parts (
-      "accounted", mesh::service_mailbox_domain_t::application,
+      "accounted", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
       zlink::framework::detail::backend::materialize_binding_parts ({{1, 2, 3}}))));
     assert (accounting.pending_bytes (mesh::service_mailbox_domain_t::application)
             == fixed_work_cost + 3);
     assert (accounting.try_enqueue (mesh::service_mailbox_record_t::from_parts (
-      "accounted", mesh::service_mailbox_domain_t::application,
+      "accounted", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
       zlink::framework::detail::backend::materialize_binding_parts ({{4}}))));
     // The claim byte budget bounds one receive turn; it is not a queue limit.
     // A batch always takes its first record and then stops at the budget.
@@ -1824,7 +1828,7 @@ void verify_independent_mailbox_domains_and_claim_fence ()
     assert (accounting.release (*accounted_rest));
 
     assert (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
-      "owner-large", mesh::service_mailbox_domain_t::application,
+      "owner-large", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
       zlink::framework::detail::backend::materialize_binding_parts (
         {std::vector<std::uint8_t> (20, 7)}))));
     auto oversized = mailbox.try_claim (mesh::service_mailbox_domain_t::application, 1, 1);
@@ -1833,10 +1837,10 @@ void verify_independent_mailbox_domains_and_claim_fence ()
 
     mesh::service_mailbox_t saturated;
     assert (saturated.try_enqueue (mesh::service_mailbox_record_t::from_parts (
-      "first", mesh::service_mailbox_domain_t::application,
+      "first", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
       zlink::framework::detail::backend::materialize_binding_parts ({{1}}))));
     auto retained = mesh::service_mailbox_record_t::from_parts (
-      "first", mesh::service_mailbox_domain_t::application,
+      "first", mesh::service_mailbox_domain_t::application, runtime::host::owner_kind_t::spot,
       zlink::framework::detail::backend::materialize_binding_parts ({{2, 3, 4}}));
     assert (saturated.try_enqueue (std::move (retained)));
     auto first = saturated.try_claim (mesh::service_mailbox_domain_t::application, 2, 64);

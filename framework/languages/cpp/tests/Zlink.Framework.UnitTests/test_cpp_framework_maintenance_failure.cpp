@@ -95,6 +95,7 @@ TEST (MaintenanceFailure, ApplicationClaimAllocationFailureReturnsWorkAccounting
     const auto enqueue = [&] {
         mesh::service_mailbox_record_t original;
         original.owner = "node";
+        original.owner_kind = host::owner_kind_t::node;
         original.domain = mesh::service_mailbox_domain_t::application;
         original.application.emplace ();
         original.application->owner.owner_kind = host::owner_kind_t::node;

@@ -506,7 +506,8 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
     if (!is_control) {
         if (application_header && !*application_header) {
             auto rejected = mesh::service_mailbox_record_t::from_received (
-              channel_name, mesh::service_mailbox_domain_t::application, std::move (*received));
+              channel_name, mesh::service_mailbox_domain_t::application,
+              host::owner_kind_t::channel, std::move (*received));
             const bool admitted = co_await _lane.run_task ([this, &rejected, now] {
                 const auto peer = _connections.find (rejected.source_routing_id);
                 if (peer == _connections.end () || !peer->second)
@@ -656,7 +657,8 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
     });
     const auto route_generation = received.route_generation ();
     auto record = mesh::service_mailbox_record_t::from_received (
-      envelope.channel_name, mesh::service_mailbox_domain_t::application, std::move (received));
+      envelope.channel_name, mesh::service_mailbox_domain_t::application,
+      host::owner_kind_t::channel, std::move (received));
     record.before_application_handler = [permit = application_permit] () mutable {
         if (!permit)
             return;

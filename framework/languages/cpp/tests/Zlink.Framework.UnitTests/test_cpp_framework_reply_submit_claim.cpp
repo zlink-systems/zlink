@@ -122,6 +122,7 @@ void verify_stateful_claim_releases_after_one_shot_reply_terminal ()
     const std::string mailbox_owner = "actor:" + actor.key;
     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
       mailbox_owner, mesh::service_mailbox_domain_t::application,
+      zlink::framework::runtime::host::owner_kind_t::actor,
       zlink::framework::detail::backend::materialize_binding_parts (
         {protocol::encode_actor_message_header (protocol::command::actorRequest, std::nullopt,
                                                 fence, operation, correlation),
@@ -140,6 +141,7 @@ void verify_stateful_claim_releases_after_one_shot_reply_terminal ()
 
     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
       mailbox_owner, mesh::service_mailbox_domain_t::application,
+      zlink::framework::runtime::host::owner_kind_t::actor,
       zlink::framework::detail::backend::materialize_binding_parts ({{0x01}}))));
     assert (objects.enqueue (actor, stateful::turn_domain_t::application, {777, {0x02}})
             == stateful::stateful_error_t::none);
@@ -216,6 +218,7 @@ void verify_client_server_claim_releases_after_one_shot_reply_terminal ()
       messaging::envelope_codec_t{}.encode_header (request_header).to_bytes ();
     auto request_record = mesh::service_mailbox_record_t::from_parts (
       mailbox_owner, mesh::service_mailbox_domain_t::application,
+      zlink::framework::runtime::host::owner_kind_t::channel,
       zlink::framework::detail::backend::materialize_binding_parts (
         {request_header_bytes, bytes ("request")}),
       source_routing_id, correlation);
@@ -223,6 +226,7 @@ void verify_client_server_claim_releases_after_one_shot_reply_terminal ()
     assert (server.mailbox ().try_enqueue (std::move (request_record)));
     assert (server.mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
       mailbox_owner, mesh::service_mailbox_domain_t::application,
+      zlink::framework::runtime::host::owner_kind_t::channel,
       zlink::framework::detail::backend::materialize_binding_parts ({{0x02}}))));
     auto claim = server.mailbox ().try_claim_owner (mesh::service_mailbox_domain_t::application,
                                                     mailbox_owner, 1, 1024);
@@ -283,10 +287,12 @@ void verify_stateful_ingest_rejection_releases_on_one_shot_terminal ()
     const std::string mailbox_owner = "actor:" + actor.key;
     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
       mailbox_owner, mesh::service_mailbox_domain_t::application,
+      zlink::framework::runtime::host::owner_kind_t::actor,
       zlink::framework::detail::backend::materialize_binding_parts ({{0xff}, {0x00}}),
       source_routing_id, 81, 1)));
     assert (target.mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
       mailbox_owner, mesh::service_mailbox_domain_t::application,
+      zlink::framework::runtime::host::owner_kind_t::actor,
       zlink::framework::detail::backend::materialize_binding_parts ({{0x01}}))));
 
     assert (
@@ -321,6 +327,7 @@ void verify_claim_original_remains_takeable ()
     mesh::service_mailbox_t mailbox;
     assert (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
       "spot:canonical", mesh::service_mailbox_domain_t::application,
+      zlink::framework::runtime::host::owner_kind_t::spot,
       zlink::framework::detail::backend::materialize_binding_parts ({{1}, {2}}))));
     auto claim = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application,
                                           "spot:canonical", 1, 4096);
@@ -368,6 +375,7 @@ void verify_source_wait_original (bool seal_first, bool reject, bool restore)
     int permits = 0;
     auto record = mesh::service_mailbox_record_t::from_parts (
       key, mesh::service_mailbox_domain_t::application,
+      zlink::framework::runtime::host::owner_kind_t::actor,
       detail::backend::materialize_binding_parts (
         {protocol::encode_actor_message_header (protocol::command::actorSend, std::nullopt, fence,
                                                 {11, 12}),
@@ -445,6 +453,7 @@ void verify_partial_prefix_and_stale_claim (bool local)
     for (std::uint8_t value : {1, 2, 3}) {
         mesh::service_mailbox_record_t record;
         record.owner = owner;
+        record.owner_kind = zlink::framework::runtime::host::owner_kind_t::spot;
         record.domain = mesh::service_mailbox_domain_t::application;
         record.operation = std::pair<std::uint64_t, std::uint64_t>{9, value};
         record.before_application_handler = [&] { ++permits; };
@@ -582,6 +591,7 @@ void verify_concurrent_gate_seal_take ()
         mesh::service_mailbox_t mailbox;
         assert (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
           "spot:race", mesh::service_mailbox_domain_t::application,
+          zlink::framework::runtime::host::owner_kind_t::spot,
           zlink::framework::detail::backend::materialize_binding_parts ({{1}, {2}}))));
         auto claim = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application,
                                               "spot:race", 1, 4096);
@@ -613,6 +623,7 @@ void verify_claim_owner_can_expire ()
         mesh::service_mailbox_t mailbox;
         assert (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
           "spot:expired", mesh::service_mailbox_domain_t::application,
+          zlink::framework::runtime::host::owner_kind_t::spot,
           zlink::framework::detail::backend::materialize_binding_parts ({{1}}))));
         auto claim = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application,
                                               "spot:expired", 1, 4096);

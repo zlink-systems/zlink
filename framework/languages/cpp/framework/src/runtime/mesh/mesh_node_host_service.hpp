@@ -158,6 +158,7 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
     drain_application_owner (std::shared_ptr<detail::mesh_node_runtime_t> node,
                              std::shared_ptr<detail::mesh_node_builder_state_t> registration,
                              std::string owner,
+                             host::owner_kind_t owner_kind,
                              bool reject_only,
                              service_provider_t *services,
                              serializer_registry_t *serializers,
@@ -194,7 +195,8 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
     auto
     make_application_owner_work (std::shared_ptr<detail::mesh_node_runtime_t> node,
                                  std::shared_ptr<detail::mesh_node_builder_state_t> registration,
-                                 std::string owner);
+                                 std::string owner,
+                                 host::owner_kind_t owner_kind);
     std::optional<location_owner_token_t> current_location_owner () const;
 };
 

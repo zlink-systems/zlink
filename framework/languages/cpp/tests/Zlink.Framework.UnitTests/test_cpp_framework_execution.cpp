@@ -1690,7 +1690,8 @@ bool verify_transferred_owner_reservation_is_continuous_until_terminal ()
     std::vector<zlink::message_t> parts;
     parts.push_back (zlink::message_t::from (std::vector<std::uint8_t> (512, std::uint8_t{0x2a})));
     auto record = service_mailbox_record_t::from_parts (
-      "transferred-owner", service_mailbox_domain_t::application, std::move (parts));
+      "transferred-owner", service_mailbox_domain_t::application,
+      zlink::framework::runtime::host::owner_kind_t::spot, std::move (parts));
     if (!mailbox.try_enqueue (std::move (record))) {
         (*complete_active) ([] {});
         queue.drain ();

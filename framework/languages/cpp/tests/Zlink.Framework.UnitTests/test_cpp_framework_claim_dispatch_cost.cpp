@@ -113,8 +113,9 @@ void enqueue (mesh::service_mailbox_t &mailbox,
         correlation = request_correlation;
     }
     auto record = mesh::service_mailbox_record_t::from_parts (
-      claim_owner (channel), domain, std::move (parts), std::move (source), correlation, 0, {}, {},
-      std::move (before));
+      claim_owner (channel), domain,
+      channel ? host::owner_kind_t::channel : host::owner_kind_t::node, std::move (parts),
+      std::move (source), correlation, 0, {}, {}, std::move (before));
     if (!raw_request) {
         record.application.emplace ();
         record.application->owner.owner_kind =
@@ -343,6 +344,7 @@ void measure_permit_ownership_cost ()
             for (std::size_t i = 0; i < count; ++i) {
                 mesh::service_mailbox_record_t record;
                 record.owner = owner;
+                record.owner_kind = host::owner_kind_t::node;
                 record.domain = domain;
                 record.application.emplace ();
                 auto &permit = admitted ? record.application_permit : external[i];
@@ -381,6 +383,7 @@ void verify_inline_permit (bool bulk_release, bool enter_handler = true)
     require (permit.has_value (), "inline permit reservation failed");
     mesh::service_mailbox_record_t record;
     record.owner = owner;
+    record.owner_kind = host::owner_kind_t::node;
     record.domain = domain;
     record.application.emplace ();
     record.application_permit.emplace (std::move (*permit));
@@ -439,8 +442,8 @@ void verify_failure_permit ()
     enqueue (mailbox, true);
     std::vector<zlink::message_t> malformed_parts;
     malformed_parts.push_back (zlink::message_t::from ("invalid"));
-    auto malformed =
-      mesh::service_mailbox_record_t::from_parts (owner, domain, std::move (malformed_parts));
+    auto malformed = mesh::service_mailbox_record_t::from_parts (
+      owner, domain, host::owner_kind_t::node, std::move (malformed_parts));
     malformed.application_permit = jobs->try_reserve_supply ();
     require (malformed.application_permit.has_value (), "failure permit unavailable");
     malformed.application_permit->mark_queued ();
@@ -485,6 +488,7 @@ void verify_cut_permit ()
     mesh::service_mailbox_t mailbox;
     mesh::service_mailbox_record_t record;
     record.owner = owner;
+    record.owner_kind = host::owner_kind_t::node;
     record.domain = domain;
     record.application.emplace ();
     record.application_permit = jobs.try_reserve_supply ();
@@ -508,7 +512,8 @@ void verify_reply_source_snapshot ()
     std::vector<zlink::message_t> parts;
     parts.push_back (zlink::message_t::from ("request"));
     auto original = mesh::service_mailbox_record_t::from_parts (
-      owner, domain, std::move (parts), request_source, request_correlation, 0, {}, {}, [] {});
+      owner, domain, host::owner_kind_t::node, std::move (parts), request_source,
+      request_correlation, 0, {}, {}, [] {});
     original.application.emplace ();
     const auto source = original.reply_source ();
     require (source->source_routing_id == request_source
@@ -544,8 +549,8 @@ void verify_multicast_admission (bool has_target)
     parts.push_back (zlink::message_t::from (std::move (writer.data)));
     parts.push_back (zlink::message_t::from (protocol::encode_application_payload (
       protocol::application_payload_t::from_parts ({zlink::message_t::from ("payload")}))));
-    auto original =
-      mesh::service_mailbox_record_t::from_parts (owner, domain, std::move (parts), request_source);
+    auto original = mesh::service_mailbox_record_t::from_parts (
+      owner, domain, host::owner_kind_t::node, std::move (parts), request_source);
     original.application_permit.emplace (std::move (*permit));
     original.application_permit->mark_queued ();
     auto &mailbox = target->transport ().mailbox ();
@@ -648,6 +653,7 @@ void verify_retained_local_original ()
 {
     mesh::service_mailbox_record_t original;
     original.owner = owner;
+    original.owner_kind = host::owner_kind_t::node;
     original.domain = domain;
     original.application.emplace ();
     original.application->parts.push_back (zlink::message_t::from ("original"));
@@ -738,7 +744,8 @@ void verify_prestart_terminal (host::public_host_runtime_t &target)
     auto &mailbox = target.transport ().mailbox ();
     std::vector<zlink::message_t> parts;
     parts.push_back (zlink::message_t::from (std::vector<std::uint8_t>{0}));
-    auto record = mesh::service_mailbox_record_t::from_parts (owner, domain, std::move (parts));
+    auto record = mesh::service_mailbox_record_t::from_parts (
+      owner, domain, host::owner_kind_t::node, std::move (parts));
     require (mailbox.try_enqueue (std::move (record)), "malformed fixture enqueue failed");
     std::size_t started = 0;
     std::size_t rejected = 0;
@@ -798,6 +805,7 @@ void verify_late_release ()
     std::weak_ptr<host::public_host_runtime_t> alive = target;
     mesh::service_mailbox_record_t original;
     original.owner = owner;
+    original.owner_kind = host::owner_kind_t::node;
     original.domain = domain;
     original.application.emplace ();
     original.source_original = mesh::local_request_source_t{
@@ -850,6 +858,7 @@ void verify_suspended_actor (bool local)
       "pending-actor", 1, {'c', 'l', 'a', 'i', 'm'}, 1, 1, 1};
     mesh::service_mailbox_record_t first;
     first.owner = actor_owner;
+    first.owner_kind = host::owner_kind_t::actor;
     first.domain = domain;
     first.source_routing_id = {'c', 'l', 'a', 'i', 'm'};
     first.source_node_generation = 1;
@@ -873,6 +882,7 @@ void verify_suspended_actor (bool local)
     require (mailbox.try_enqueue (std::move (first)), "suspended Actor enqueue failed");
     mesh::service_mailbox_record_t suffix;
     suffix.owner = actor_owner;
+    suffix.owner_kind = host::owner_kind_t::actor;
     suffix.domain = domain;
     suffix.application.emplace ();
     suffix.application->owner.owner_kind = host::owner_kind_t::node;

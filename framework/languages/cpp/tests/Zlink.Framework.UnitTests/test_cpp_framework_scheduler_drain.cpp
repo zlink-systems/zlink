@@ -17,6 +17,7 @@
 #include <set>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 
 namespace fw = zlink::framework;
 namespace rt = fw::runtime;
@@ -147,13 +148,14 @@ struct source_t final : rt::offload_executor_t::drain_source_t
 
 void enqueue (mesh::service_mailbox_t &mailbox,
               const std::string &owner,
+              rt::host::owner_kind_t owner_kind,
               std::size_t id,
               const std::shared_ptr<rt::application_job_queue_t> &jobs = {})
 {
     std::vector<zlink::message_t> parts;
     parts.push_back (zlink::message_t::from (std::to_string (id)));
     auto record = mesh::service_mailbox_record_t::from_parts (
-      owner, mesh::service_mailbox_domain_t::application, std::move (parts));
+      owner, mesh::service_mailbox_domain_t::application, owner_kind, std::move (parts));
     if (jobs) {
         auto permit = jobs->try_reserve_supply ();
         require (permit.has_value (), "test exhausted application permits");
@@ -183,7 +185,7 @@ bool burst (std::string_view negative)
     };
     mailbox.begin_application_receive_turn ();
     for (std::size_t id = 0; id != count; ++id)
-        enqueue (mailbox, "node", id);
+        enqueue (mailbox, "node", rt::host::owner_kind_t::node, id);
     wakes = 0;
     count_wakes = true;
     if (negative == "items") {
@@ -253,7 +255,7 @@ bool steady_stream (bool notify_every_publication)
     wakes = 0;
     count_wakes = true;
     for (std::size_t id = 0; id != count; ++id) {
-        enqueue (mailbox, "node", id);
+        enqueue (mailbox, "node", rt::host::owner_kind_t::node, id);
         require (executor.try_submit_drain (source), "stream publication rejected");
         if (notify_every_publication)
             worker_conditions[id % worker_conditions.size ()]->notify_one ();
@@ -274,7 +276,9 @@ bool steady_stream (bool notify_every_publication)
     return notifications <= workers && distinct_workers != 0 && distinct_workers <= workers;
 }
 
-bool independent (bool wait_for_terminal, const std::string &owner)
+bool independent (bool wait_for_terminal,
+                  const std::string &owner,
+                  rt::host::owner_kind_t owner_kind)
 {
     rt::offload_executor_t executor (2);
     mesh::service_mailbox_t mailbox;
@@ -295,8 +299,8 @@ bool independent (bool wait_for_terminal, const std::string &owner)
         }
     };
     mailbox.begin_application_receive_turn ();
-    enqueue (mailbox, owner, 0);
-    enqueue (mailbox, owner, 1);
+    enqueue (mailbox, owner, owner_kind, 0);
+    enqueue (mailbox, owner, owner_kind, 1);
     require (executor.try_submit_drain (source), "independent source rejected");
     await (a);
     const bool progressed = b.wait_for (5s) == std::future_status::ready;
@@ -336,7 +340,7 @@ void shutdown (bool running)
         };
     mailbox.begin_application_receive_turn ();
     for (std::size_t id = 0; id != count; ++id)
-        enqueue (mailbox, "node", id, jobs);
+        enqueue (mailbox, "node", rt::host::owner_kind_t::node, id, jobs);
     require (executor.try_submit_drain (source), "shutdown source rejected");
     if (running)
         await (started);
@@ -358,15 +362,17 @@ void shutdown (bool running)
 
 void last_take_publication_races ()
 {
-    for (const auto &owner : {std::string ("node"), std::string ("channel:test")}) {
+    for (const auto &[owner, owner_kind] :
+         {std::pair{std::string ("node"), rt::host::owner_kind_t::node},
+          std::pair{std::string ("channel:test"), rt::host::owner_kind_t::channel}}) {
         rt::offload_executor_t executor (2);
         mesh::service_mailbox_t mailbox;
         auto source = std::make_shared<source_t> (executor, mailbox, owner);
-        mailbox.bind_application_dispatch ({}, [&] (const auto &) {
+        mailbox.bind_application_dispatch ({}, [&] (const auto &, auto) {
             require (executor.try_submit_drain (source), "racing source publication rejected");
         });
         for (std::size_t id = 0; id != 1000; ++id) {
-            enqueue (mailbox, owner, id);
+            enqueue (mailbox, owner, owner_kind, id);
             if ((id & 1) == 0)
                 await ([&] { return source->completed.load () == id + 1; });
         }
@@ -466,15 +472,17 @@ int main (int argc, char **argv)
         if (mode == "--negative-stream-wakes")
             return steady_stream (true) ? 0 : 1;
         if (mode == "--negative-terminal")
-            return independent (true, "node") ? 0 : 1;
+            return independent (true, "node", rt::host::owner_kind_t::node) ? 0 : 1;
         if (mode == "--negative-spot-gate")
             return gated (false, true) ? 0 : 1;
         if (mode == "--negative-actor-gate")
             return gated (true, true) ? 0 : 1;
         require (burst (""), "burst exceeded item/wake bound");
         require (steady_stream (false), "steady stream exceeded wake/worker bound");
-        require (independent (false, "node"), "same Node waited for A terminal");
-        require (independent (false, "channel:test"), "same Channel waited for A terminal");
+        require (independent (false, "node", rt::host::owner_kind_t::node),
+                 "same Node waited for A terminal");
+        require (independent (false, "channel:test", rt::host::owner_kind_t::channel),
+                 "same Channel waited for A terminal");
         shutdown (false);
         shutdown (true);
         last_take_publication_races ();

@@ -27,6 +27,7 @@
 #include <future>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
@@ -151,6 +152,87 @@ TEST (ManualDispatchOwner, ReceivedAtSurvivesApplicationQueueWait)
     check_synchronous_handler_owner (true);
 }
 
+TEST (ManualDispatchOwner, ApplicationConcurrencyUsesKindWithOpaqueOwnerKeys)
+{
+    namespace mesh = fw::runtime::mesh;
+    using kind_t = fw::runtime::host::owner_kind_t;
+    const auto verify = [] (const std::string &key, kind_t kind, bool concurrent) {
+        mesh::service_mailbox_t mailbox;
+        std::optional<kind_t> notified;
+        mailbox.bind_application_dispatch ({}, [&] (const std::string &owner, kind_t owner_kind) {
+            EXPECT_EQ (key, owner);
+            notified = owner_kind;
+        });
+        mailbox.begin_application_receive_turn ();
+        for (unsigned index = 0; index != 2; ++index) {
+            auto record = mesh::service_mailbox_record_t::from_parts (
+              key, mesh::service_mailbox_domain_t::application, kind,
+              {zlink::message_t::from ("payload")});
+            ASSERT_TRUE (mailbox.try_enqueue (std::move (record)));
+        }
+        auto ready = mailbox.take_application_receive_turn ();
+        EXPECT_EQ (concurrent, mesh::service_mailbox_t::concurrent_application_owner (kind));
+        bool more = false;
+        if (concurrent) {
+            const auto first = mailbox.try_claim_application_record (key, more);
+            ASSERT_TRUE (first);
+            EXPECT_TRUE (more);
+            const auto second = mailbox.try_claim_application_record (key, more);
+            ASSERT_TRUE (second);
+            EXPECT_FALSE (more);
+            mailbox.release (*first);
+            mailbox.release (*second);
+        } else {
+            EXPECT_THROW (mailbox.try_claim_application_record (key, more), std::invalid_argument);
+            const auto claim =
+              mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, key, 2, 4096);
+            ASSERT_TRUE (claim);
+            mailbox.release (*claim);
+        }
+        // Delivery still carries the original kind after settlement erased the queue.
+        mesh::service_mailbox_t::notify_application_ready (ready);
+        ASSERT_TRUE (notified);
+        EXPECT_EQ (kind, *notified);
+        EXPECT_EQ (0u, mailbox.pending_messages (mesh::service_mailbox_domain_t::application));
+    };
+    verify ("opaque-node-owner", kind_t::node, true);
+    verify ("opaque-channel-owner", kind_t::channel, true);
+    verify ("node", kind_t::spot, false);
+    verify ("channel:looks-concurrent", kind_t::actor, false);
+}
+
+TEST (ManualDispatchOwner, ApplicationOwnerKindMustBeSetAndMatchItsQueue)
+{
+    namespace mesh = fw::runtime::mesh;
+    using kind_t = fw::runtime::host::owner_kind_t;
+    mesh::service_mailbox_t mailbox;
+    unsigned prepared = 0, admitted = 0;
+    mailbox.bind_application_dispatch ([&] (mesh::service_mailbox_record_t &) { ++prepared; }, {});
+    auto record = mesh::service_mailbox_record_t::from_parts (
+      "node", mesh::service_mailbox_domain_t::application, std::nullopt,
+      {zlink::message_t::from ("payload")});
+    EXPECT_THROW (mailbox.try_enqueue (std::move (record), [&] { ++admitted; }),
+                  std::invalid_argument);
+    EXPECT_EQ (0u, prepared);
+    EXPECT_EQ (0u, admitted);
+    EXPECT_EQ (0u, mailbox.pending_messages (mesh::service_mailbox_domain_t::application));
+    record.owner_kind = kind_t::node;
+    ASSERT_TRUE (mailbox.try_enqueue (std::move (record), [&] { ++admitted; }));
+    auto conflicting = mesh::service_mailbox_record_t::from_parts (
+      "node", mesh::service_mailbox_domain_t::application, kind_t::channel,
+      {zlink::message_t::from ("payload")});
+    EXPECT_THROW (mailbox.try_enqueue (std::move (conflicting), [&] { ++admitted; }),
+                  std::invalid_argument);
+    EXPECT_EQ (1u, prepared);
+    EXPECT_EQ (1u, admitted);
+    EXPECT_EQ (1u, mailbox.pending_messages (mesh::service_mailbox_domain_t::application));
+    bool more;
+    const auto claim = mailbox.try_claim_application_record ("node", more);
+    ASSERT_TRUE (claim);
+    EXPECT_FALSE (more);
+    mailbox.release (*claim);
+}
+
 TEST (ManualDispatchOwner, MailboxUsesItsInjectedUtcClockAtAcceptance)
 {
     const auto accepted_at =
@@ -165,14 +247,15 @@ TEST (ManualDispatchOwner, MailboxUsesItsInjectedUtcClockAtAcceptance)
       [&] (fw::runtime::mesh::service_mailbox_record_t &record) {
           prepared_at = record.received_at;
       },
-      [] (const std::string &) {});
+      [] (const std::string &, zlink::framework::runtime::host::owner_kind_t) {});
 
     std::vector<zlink::message_t> parts;
     parts.push_back (zlink::message_t::from ("payload"));
     auto record = fw::runtime::mesh::service_mailbox_record_t::from_parts (
       fw::runtime::mesh::service_mailbox_t::application_owner (
         fw::runtime::host::owner_kind_t::node),
-      fw::runtime::mesh::service_mailbox_domain_t::application, std::move (parts));
+      fw::runtime::mesh::service_mailbox_domain_t::application,
+      fw::runtime::host::owner_kind_t::node, std::move (parts));
 
     ASSERT_TRUE (mailbox.try_enqueue (std::move (record)));
     ASSERT_TRUE (prepared_at);

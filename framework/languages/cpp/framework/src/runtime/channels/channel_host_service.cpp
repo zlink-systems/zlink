@@ -163,7 +163,8 @@ class channel_host_service_t::server_loop_t
         _source = std::make_unique<client_server::raw_client_server_server_t> (
           std::move (options), _context, &_runtime.state_executor ());
         _source->start (*_router);
-        _source->mailbox ().bind_application_dispatch ({}, [this] (const std::string &owner) {
+        _source->mailbox ().bind_application_dispatch ({}, [this] (const std::string &owner,
+                                                                   host::owner_kind_t) {
             try {
                 const auto create = [&] { return std::make_shared<owner_drain_t> (*this, owner); };
                 if (_handler_executor->try_submit_drain (this, owner, std::ref (create)))
@@ -300,7 +301,8 @@ class channel_host_service_t::server_loop_t
           std::make_shared<application_job_queue_t::permit_t> (std::move (permit));
         auto record = mesh::service_mailbox_record_t::from_received (
           mesh::service_mailbox_t::application_owner (host::owner_kind_t::channel, _channel_name),
-          mesh::service_mailbox_domain_t::application, std::move (received));
+          mesh::service_mailbox_domain_t::application, host::owner_kind_t::channel,
+          std::move (received));
         record.before_application_handler = [application_job] {
             application_job->release_for_handler_entry ();
         };

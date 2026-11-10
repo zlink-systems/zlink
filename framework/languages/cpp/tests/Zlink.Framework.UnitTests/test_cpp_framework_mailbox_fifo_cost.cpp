@@ -26,7 +26,7 @@ record_t record ()
 {
     std::vector<zlink::message_t> parts (1);
     return record_t::from_parts ("node", mesh::service_mailbox_domain_t::application,
-                                 std::move (parts));
+                                 fw::runtime::host::owner_kind_t::node, std::move (parts));
 }
 
 void rotate (mailbox_t &mailbox, std::size_t count)
@@ -55,15 +55,17 @@ void verify_cost ()
     // Calibrate the owning FIFO, its owner index and its ready index on this
     // ABI/runtime. Record payload storage is prepared before either measurement.
     std::unordered_map<std::string, std::list<record_t>> owners;
-    std::list<std::string> ready_owners;
+    std::list<mailbox_t::ready_owner_t> ready_owners;
     auto reference_record = record ();
     const auto reference = fw::tests::measure_allocations ([&] {
         owners["node"].push_back (std::move (reference_record));
-        ready_owners.push_back ("node");
+        ready_owners.emplace_back ("node", fw::runtime::host::owner_kind_t::node);
     });
     mailbox_t mailbox;
     std::size_t notifications = 0;
-    const mailbox_t::application_ready_t ready_callback = [&] (const auto &) { ++notifications; };
+    const mailbox_t::application_ready_t ready_callback = [&] (const auto &, auto) {
+        ++notifications;
+    };
     mailbox.bind_application_dispatch ({}, ready_callback);
     mailbox.begin_application_receive_turn ();
     auto original = record ();
@@ -75,7 +77,7 @@ void verify_cost ()
     // Calibrate construction/move too: some standard libraries allocate a list
     // sentinel even for an empty/moved-from container.
     using ready_reference_t =
-      std::optional<std::pair<std::list<std::string>, mailbox_t::application_ready_t>>;
+      std::optional<std::pair<std::list<mailbox_t::ready_owner_t>, mailbox_t::application_ready_t>>;
     const auto take_reference = [&] () -> ready_reference_t {
         // Match the owner's mixed nullopt/value returns: NRVO is optional and
         // MSVC moves the list when this function returns an engaged optional.
@@ -110,7 +112,7 @@ int main ()
     try {
         verify_cost ();
         mailbox_t mailbox;
-        mailbox.bind_application_dispatch ({}, [] (const auto &) {});
+        mailbox.bind_application_dispatch ({}, [] (const auto &, auto) {});
         for (auto count : {1u, 128u})
             rotate (mailbox, count);
     }
@@ -132,7 +134,7 @@ zlink_mailbox_fifo_measure (std::size_t iterations,
 {
     try {
         mailbox_t mailbox;
-        mailbox.bind_application_dispatch ({}, [] (const auto &) {});
+        mailbox.bind_application_dispatch ({}, [] (const auto &, auto) {});
         rotate (mailbox, batch_size);
         const auto start = std::chrono::steady_clock::now ();
         const auto run = [&] {

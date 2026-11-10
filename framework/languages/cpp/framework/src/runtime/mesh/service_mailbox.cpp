@@ -137,6 +137,8 @@ bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record,
         throw std::invalid_argument (
           "service mailbox record requires an owner and retained payload");
     }
+    if (record.domain == service_mailbox_domain_t::application && !record.owner_kind)
+        throw std::invalid_argument ("application mailbox record requires an owner kind");
     // A queued original carries no claim credit; take mints it.
     record.transferred = {};
     const auto retained = retained_bytes (record);
@@ -149,6 +151,11 @@ bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record,
         record.received_at = _utc_clock ();
     const auto owner = record.owner;
     auto &queue = target.owners[owner];
+    if (queue.owner_kind != record.owner_kind) {
+        if (queue.owner_kind)
+            throw std::invalid_argument ("mailbox owner kind must match its queue");
+        queue.owner_kind = record.owner_kind;
+    }
     if (record.domain == service_mailbox_domain_t::application && _state->application_prepare)
         _state->application_prepare (record);
     if (admitted)
@@ -160,14 +167,15 @@ bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record,
     target.bytes += retained;
     if (queue.phase == owner_phase_t::idle) {
         queue.phase = owner_phase_t::ready;
-        target.ready.push_back (owner);
-    } else if (&target == &_state->application && concurrent_application_owner (owner)
+        target.ready.emplace_back (owner, queue.owner_kind);
+    } else if (&target == &_state->application && concurrent_application_owner (*queue.owner_kind)
                && queue.phase != owner_phase_t::draining) {
         // ready carries publication notifications. The executor's persistent
         // entry retains ready membership after this notification list is taken.
         queue.phase = owner_phase_t::ready;
-        if (std::find (target.ready.begin (), target.ready.end (), owner) == target.ready.end ())
-            target.ready.push_back (owner);
+        if (std::none_of (target.ready.begin (), target.ready.end (),
+                          [&] (const auto &ready) { return ready.first == owner; }))
+            target.ready.emplace_back (owner, queue.owner_kind);
     }
     const bool notify = &target == &_state->application && !_state->application_receive_turn;
     lock.unlock ();
@@ -188,7 +196,7 @@ service_mailbox_t::try_claim (service_mailbox_domain_t domain_value,
     std::unique_lock lock (_state->mutex);
     auto &source = domain (domain_value);
     while (!source.ready.empty ()) {
-        const auto &owner = source.ready.front ();
+        const auto &owner = source.ready.front ().first;
         auto found = source.owners.find (owner);
         if (found == source.owners.end () || found->second.phase != owner_phase_t::ready
             || found->second.records.empty ()) {
@@ -223,15 +231,22 @@ service_mailbox_t::try_claim_owner (service_mailbox_domain_t domain_value,
     auto claim =
       claim_owner_locked (source, domain_value, owner, message_budget, byte_budget, claimed, lock);
     if (found->second.phase != owner_phase_t::draining) {
-        source.ready.erase (std::remove (source.ready.begin (), source.ready.end (), owner),
-                            source.ready.end ());
+        source.ready.remove_if ([&] (const auto &ready) { return ready.first == owner; });
     }
     return claim;
 }
 
-bool service_mailbox_t::concurrent_application_owner (std::string_view owner) noexcept
+bool service_mailbox_t::concurrent_application_owner (host::owner_kind_t kind)
 {
-    return owner == "node" || owner.starts_with ("channel:");
+    switch (kind) {
+        case host::owner_kind_t::node:
+        case host::owner_kind_t::channel:
+            return true;
+        case host::owner_kind_t::spot:
+        case host::owner_kind_t::actor:
+            return false;
+    }
+    throw std::invalid_argument ("unknown application owner kind");
 }
 
 std::size_t service_mailbox_t::pending_application_records (const std::string &owner) const
@@ -244,8 +259,6 @@ std::size_t service_mailbox_t::pending_application_records (const std::string &o
 std::shared_ptr<service_mailbox_claim_t> service_mailbox_t::try_claim_application_record (
   const std::string &owner, bool &more, const claimed_t &claimed)
 {
-    if (!concurrent_application_owner (owner))
-        throw std::invalid_argument ("independent application take requires Node/Channel owner");
     std::unique_lock lock (_state->mutex);
     auto &source = _state->application;
     const auto found = source.owners.find (owner);
@@ -253,6 +266,8 @@ std::shared_ptr<service_mailbox_claim_t> service_mailbox_t::try_claim_applicatio
     if (found == source.owners.end () || found->second.records.empty ())
         return nullptr;
     auto &queue = found->second;
+    if (!concurrent_application_owner (queue.owner_kind.value ()))
+        throw std::invalid_argument ("independent application take requires Node/Channel owner");
     auto claim = std::make_shared<service_mailbox_claim_t> ();
     claim->owner = owner;
     claim->domain = service_mailbox_domain_t::application;
@@ -279,7 +294,7 @@ std::shared_ptr<service_mailbox_claim_t> service_mailbox_t::try_claim_applicatio
     more = !queue.records.empty ();
     queue.phase = more ? owner_phase_t::ready : owner_phase_t::retained;
     if (!more)
-        source.ready.remove (owner);
+        source.ready.remove_if ([&] (const auto &ready) { return ready.first == owner; });
     try {
         if (claimed)
             claimed (claim);
@@ -555,7 +570,7 @@ bool service_mailbox_t::finish_locked (state_t &state, const service_mailbox_cla
             target.owners.erase (found);
         else {
             queue.phase = owner_phase_t::ready;
-            target.ready.push_back (claim.owner);
+            target.ready.emplace_back (claim.owner, queue.owner_kind);
         }
     }
     return &target == &state.application && !state.application_receive_turn;
@@ -610,7 +625,7 @@ void service_mailbox_t::end_application_drain (const std::string &owner)
         _state->application.owners.erase (found);
     } else {
         queue.phase = owner_phase_t::ready;
-        _state->application.ready.push_back (owner);
+        _state->application.ready.emplace_back (owner, queue.owner_kind);
     }
     const bool notify = !_state->application_receive_turn;
     lock.unlock ();
@@ -654,7 +669,7 @@ void service_mailbox_t::notify_application_ready (application_ready_batch_t &rea
     while (ready && !ready->first.empty ()) {
         auto owner = std::move (ready->first.front ());
         ready->first.pop_front ();
-        ready->second (owner);
+        ready->second (owner.first, owner.second.value ());
     }
 }
 

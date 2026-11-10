@@ -342,7 +342,8 @@ TEST_F (ReceiveRecord, CallerWrapperDestructionKeepsQueuedNativeStorage)
         original_body = caller_wrapper.parts ().back ().data ();
         original_token = caller_wrapper.reply_token ();
         auto record = mesh::service_mailbox_record_t::from_received (
-          "node", mesh::service_mailbox_domain_t::application, std::move (caller_wrapper));
+          "node", mesh::service_mailbox_domain_t::application,
+          zlink::framework::runtime::host::owner_kind_t::node, std::move (caller_wrapper));
         record.correlation =
           wire::decode_node_request_header (wire::message_bytes (record.parts ().front ()));
         ASSERT_TRUE (target.mailbox ().try_enqueue (std::move (record)));
@@ -560,7 +561,7 @@ TEST_F (ReceiveRecord, RetainedLocalReplyDoesNotRequireNativeContext)
       target.register_local_operation_async (now () + 3s, [] (auto, auto) {}).result ().value ();
     ASSERT_TRUE (operation);
     const auto record = mesh::service_mailbox_record_t::from_parts (
-      "node", mesh::service_mailbox_domain_t::infrastructure, {},
+      "node", mesh::service_mailbox_domain_t::infrastructure, std::nullopt, {},
       target.startup_descriptor ().node_routing_id, operation->low);
     const auto source = record.reply_source ();
     EXPECT_FALSE (source->routing_id ());
@@ -578,6 +579,7 @@ TEST (ReceiveRecordClassification, WholePartsReplacementReclassifiesAndBodyEdits
     const std::unique_ptr<void, decltype (restore)> scope (&probe, restore);
     auto record = mesh::service_mailbox_record_t::from_parts (
       "node", mesh::service_mailbox_domain_t::application,
+      zlink::framework::runtime::host::owner_kind_t::node,
       {zlink::message_t::from (wire::encode_node_send_header ()), zlink::message_t::from ("body")});
     static_assert (std::is_const_v<std::remove_reference_t<decltype (record.parts ())>>);
     EXPECT_EQ (record.service_header ().kind, wire::command::nodeSend);

@@ -584,6 +584,7 @@ TEST (RouteHandlerBoundary, HostedOrdinaryHandoffAllowsSameAndSubsequentClaims)
             .take_items ();
         mesh::service_mailbox_record_t queued;
         queued.owner = mesh::service_mailbox_t::application_owner (owner);
+        queued.owner_kind = owner.owner_kind;
         queued.domain = mesh::service_mailbox_domain_t::application;
         queued.before_application_handler = [&] { ++permits; };
         queued.application.emplace (
@@ -807,6 +808,7 @@ TEST (RouteHandlerBoundary, HostStopWaitsForPhysicalOrdinaryHandlerTerminal)
                    .take_items ();
     mesh::service_mailbox_record_t queued;
     queued.owner = mesh::service_mailbox_t::application_owner (owner);
+    queued.owner_kind = owner.owner_kind;
     queued.domain = mesh::service_mailbox_domain_t::application;
     queued.before_application_handler = [] {};
     queued.application.emplace (
