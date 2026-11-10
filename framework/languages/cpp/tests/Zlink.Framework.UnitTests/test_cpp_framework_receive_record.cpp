@@ -521,6 +521,8 @@ TEST_F (ReceiveRecord, LocalReplyDecisionsUseLogicalIdentityDespiteDifferentNati
             const auto request = source ? mesh::service_mailbox_reply_view_t (*source)
                                         : mesh::service_mailbox_reply_view_t (*record);
             const wire::reply_header_t header{operation->low, 0, 0};
+            // Failed create replies encode only the header, so no object fields apply.
+            const wire::reply_header_t rejected_header{operation->low, 106, 15};
             if (kind == 0) {
                 EXPECT_TRUE (target.reply_failure (request, 106, 15));
             } else if (kind == 1) {
@@ -529,11 +531,11 @@ TEST_F (ReceiveRecord, LocalReplyDecisionsUseLogicalIdentityDespiteDifferentNati
             } else if (kind == 2) {
                 EXPECT_TRUE (target.reply_user_spot_create (
                   request, wire::user_spot_create_reply_t{
-                             header, wire::user_spot_create_result_t::rejected, {}, 1}));
+                             rejected_header, wire::user_spot_create_result_t::rejected, {}, 0}));
             } else if (kind == 3) {
                 EXPECT_TRUE (target.reply_actor_create (
                   request, wire::actor_create_reply_t{
-                             header, wire::actor_create_result_t::rejected, {}, {}, 0}));
+                             rejected_header, wire::actor_create_result_t::rejected, {}, {}, 0}));
             } else {
                 EXPECT_TRUE (target.reply_instance_spot_activation (request, 106, 15));
             }
