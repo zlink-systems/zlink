@@ -1332,7 +1332,11 @@ internal sealed class CompletionOwner
 
         private void SetExceptionLocked(Exception exception)
         {
-            _admitted.TrySetException(exception);
+            // A failure before admission ends both stages with one cause, and Reply reports it.
+            // Admitted's copy is marked observed so a caller that awaits only Reply does not get
+            // the same failure again as UnobservedTaskException (async-execution-model §stage).
+            if (_admitted.TrySetException(exception) && !Task.IsCompleted)
+                _ = _admitted.Task.Exception;
             if (Task.IsCompleted)
                 return;
             TrySetException(exception);
