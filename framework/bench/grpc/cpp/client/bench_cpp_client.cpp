@@ -19,6 +19,7 @@
 #include <zlink.hpp>
 
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -72,11 +73,10 @@ class submission_pacer_t
   public:
     explicit submission_pacer_t (double rate) : _rate (rate) {}
 
+    // Both drivers call this only when target_rate > 0; rate 0 keeps the unpaced paths.
     size_t wait_for_due_slots (clock_t_::time_point deadline)
     {
-        if (_rate == 0)
-            return clock_t_::now () < deadline ? 1 : 0;
-
+        assert (_rate > 0);
         auto interval = std::chrono::duration_cast<clock_t_::duration> (
           std::chrono::duration<double> (1.0 / _rate));
         if (interval <= clock_t_::duration::zero ())
@@ -686,7 +686,9 @@ class zlink_raw_driver_t : public driver_t
                             try {
                                 co_await std::move (submission.admitted);
                             }
-                            catch (...) {
+                            catch (const std::exception &error) {
+                                // Record why pacing stopped so the cell shows it, not only fewer submits.
+                                _counters->record_exception (error);
                                 co_return;
                             }
                         }
