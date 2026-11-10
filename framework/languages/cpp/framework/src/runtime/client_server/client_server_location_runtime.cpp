@@ -713,8 +713,8 @@ void client_server_location_runtime_t::start_server (
     auto raw = std::make_shared<raw_client_server_server_t> (std::move (options),
                                                              _channel_runtime.core_context ());
     raw->mailbox ().bind_application_dispatch (
-      {},
-      [this, weak = std::weak_ptr<raw_client_server_server_t> (raw)] (const std::string &owner) {
+      {}, [this, weak = std::weak_ptr<raw_client_server_server_t> (raw)] (const std::string &owner,
+                                                                          host::owner_kind_t) {
           auto server = weak.lock ();
           if (!server)
               return;
