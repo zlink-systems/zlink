@@ -16,6 +16,8 @@
 namespace zlink::framework
 {
 
+class service_provider_t;
+
 namespace detail
 {
 class service_registry_t;
