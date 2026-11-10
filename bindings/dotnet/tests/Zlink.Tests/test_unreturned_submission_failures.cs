@@ -22,8 +22,7 @@ public sealed class test_unreturned_submission_failures
     [Fact]
     public void pre_admission_failure_is_reported_once_through_reply()
     {
-        if (!CoreTestSupport.IsNativeAvailable())
-            return;
+        Assert.True(CoreTestSupport.IsNativeAvailable());
 
         WeakReference admitted = null!;
         Exception replyError = null!;
