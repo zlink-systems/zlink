@@ -207,6 +207,13 @@ foreach(test ${unittests})
 
 endforeach()
 
+# UBSan's vptr check probes memory with pipe(), which fails once a test
+# exhausts RLIMIT_NOFILE and turns into a false invalid-vptr report (#4149).
+# CI passes -fsanitize through CXXFLAGS, so check the flags as well as ENABLE_UBSAN.
+if(ENABLE_UBSAN OR CMAKE_CXX_FLAGS MATCHES "-fsanitize=[^ ]*(undefined|vptr)")
+  target_compile_definitions(unittest_ctx_lifecycle PRIVATE ZLINK_TEST_UBSAN_VPTR)
+endif()
+
 zlink_warn_unregistered_tests(
   "${CMAKE_CURRENT_LIST_DIR}"
   "unittest_*.cpp"
