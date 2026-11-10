@@ -98,21 +98,24 @@ void enqueue (mesh::service_mailbox_t &mailbox,
               bool channel = false,
               std::function<void ()> before = {})
 {
-    mesh::service_mailbox_record_t record;
-    record.owner = claim_owner (channel);
-    record.domain = domain;
-    record.before_application_handler = std::move (before);
+    std::vector<zlink::message_t> parts;
+    std::vector<std::uint8_t> source;
+    std::optional<std::uint64_t> correlation;
     if (raw_request) {
-        record.parts.push_back (zlink::message_t::from (
+        parts.push_back (zlink::message_t::from (
           channel ? protocol::encode_channel_request_header (request_correlation, "c")
                   : protocol::encode_node_request_header (request_correlation)));
-        protocol::application_payload_t::multipart_t parts;
-        parts.push_back (zlink::message_t::from (std::vector<std::uint8_t>{'o', 'k'}));
-        record.parts.push_back (zlink::message_t::from (protocol::encode_application_payload (
-          protocol::application_payload_t::from_parts (std::move (parts)))));
-        record.source_routing_id = request_source;
-        record.correlation = request_correlation;
-    } else {
+        protocol::application_payload_t::multipart_t payload_parts;
+        payload_parts.push_back (zlink::message_t::from (std::vector<std::uint8_t>{'o', 'k'}));
+        parts.push_back (zlink::message_t::from (protocol::encode_application_payload (
+          protocol::application_payload_t::from_parts (std::move (payload_parts)))));
+        source = request_source;
+        correlation = request_correlation;
+    }
+    auto record = mesh::service_mailbox_record_t::from_parts (
+      claim_owner (channel), domain, std::move (parts), std::move (source), correlation, 0, {}, {},
+      std::move (before));
+    if (!raw_request) {
         record.application.emplace ();
         record.application->owner.owner_kind =
           channel ? host::owner_kind_t::channel : host::owner_kind_t::node;
@@ -434,10 +437,10 @@ void verify_failure_permit ()
     auto target = make_host (jobs);
     auto &mailbox = target->transport ().mailbox ();
     enqueue (mailbox, true);
-    mesh::service_mailbox_record_t malformed;
-    malformed.owner = owner;
-    malformed.domain = domain;
-    malformed.parts.push_back (zlink::message_t::from ("invalid"));
+    std::vector<zlink::message_t> malformed_parts;
+    malformed_parts.push_back (zlink::message_t::from ("invalid"));
+    auto malformed =
+      mesh::service_mailbox_record_t::from_parts (owner, domain, std::move (malformed_parts));
     malformed.application_permit = jobs->try_reserve_supply ();
     require (malformed.application_permit.has_value (), "failure permit unavailable");
     malformed.application_permit->mark_queued ();
@@ -502,24 +505,20 @@ void verify_cut_permit ()
 
 void verify_reply_source_snapshot ()
 {
-    mesh::service_mailbox_record_t original;
-    original.owner = owner;
-    original.domain = domain;
+    std::vector<zlink::message_t> parts;
+    parts.push_back (zlink::message_t::from ("request"));
+    auto original = mesh::service_mailbox_record_t::from_parts (
+      owner, domain, std::move (parts), request_source, request_correlation, 0, {}, {}, [] {});
     original.application.emplace ();
-    original.parts.push_back (zlink::message_t::from ("request"));
-    original.source_routing_id = request_source;
-    original.correlation = request_correlation;
-    original.before_application_handler = [] {};
     const auto source = original.reply_source ();
     require (source->source_routing_id == request_source
+               && source->routing_id () == original.routing_id ()
                && source->correlation == request_correlation
-               && source->reply_token.has_value () == original.reply_token.has_value (),
+               && source->reply_token ().has_value () == original.reply_token ().has_value (),
              "reply source snapshot changed routing metadata");
-    require (!source->application && source->parts.empty () && !source->transferred
-               && !source->application_permit && !source->before_application_handler
-               && !source->source_original,
-             "reply source snapshot retained owned application work");
-    require (original.application && original.parts.size () == 1,
+    require (source->route_generation () == original.route_generation (),
+             "reply source snapshot changed route generation");
+    require (original.application && original.parts ().size () == 1,
              "reply source snapshot consumed the owned original");
 }
 
@@ -533,12 +532,6 @@ void verify_multicast_admission (bool has_target)
         target->get_or_create_spot ("multicast-target").set_subscription ("c", "topic");
     auto permit = jobs->try_reserve_supply ();
     require (permit.has_value (), "multicast fixture admission failed");
-    mesh::service_mailbox_record_t original;
-    original.owner = owner;
-    original.domain = domain;
-    original.source_routing_id = request_source;
-    original.application_permit.emplace (std::move (*permit));
-    original.application_permit->mark_queued ();
     namespace wire = runtime::protocol::generated::detail;
     wire::logicalMulticast_23_t header;
     header.channelName.value = "c";
@@ -547,9 +540,14 @@ void verify_multicast_admission (bool has_target)
     wire::writer_t writer;
     require (wire::encode_head_logicalMulticast_23 (writer, header) == wire::error_code::ok,
              "multicast fixture header failed");
-    original.parts.push_back (zlink::message_t::from (std::move (writer.data)));
-    original.parts.push_back (zlink::message_t::from (protocol::encode_application_payload (
+    std::vector<zlink::message_t> parts;
+    parts.push_back (zlink::message_t::from (std::move (writer.data)));
+    parts.push_back (zlink::message_t::from (protocol::encode_application_payload (
       protocol::application_payload_t::from_parts ({zlink::message_t::from ("payload")}))));
+    auto original =
+      mesh::service_mailbox_record_t::from_parts (owner, domain, std::move (parts), request_source);
+    original.application_permit.emplace (std::move (*permit));
+    original.application_permit->mark_queued ();
     auto &mailbox = target->transport ().mailbox ();
     require (mailbox.try_enqueue (std::move (original)), "multicast fixture publication failed");
     auto claim =
@@ -738,10 +736,9 @@ void verify_standalone (host::public_host_runtime_t &target)
 void verify_prestart_terminal (host::public_host_runtime_t &target)
 {
     auto &mailbox = target.transport ().mailbox ();
-    mesh::service_mailbox_record_t record;
-    record.owner = owner;
-    record.domain = domain;
-    record.parts.push_back (zlink::message_t::from (std::vector<std::uint8_t>{0}));
+    std::vector<zlink::message_t> parts;
+    parts.push_back (zlink::message_t::from (std::vector<std::uint8_t>{0}));
+    auto record = mesh::service_mailbox_record_t::from_parts (owner, domain, std::move (parts));
     require (mailbox.try_enqueue (std::move (record)), "malformed fixture enqueue failed");
     std::size_t started = 0;
     std::size_t rejected = 0;
@@ -866,12 +863,12 @@ void verify_suspended_actor (bool local)
         first.application->record.operation_id = {1, 1};
         first.application->parts.push_back (zlink::message_t::from (std::string ("ok")));
     } else {
-        first.parts.push_back (zlink::message_t::from (protocol::encode_actor_message_header (
-          protocol::command::actorSend, std::nullopt, fence, {1, 1})));
         protocol::application_payload_t::multipart_t parts;
         parts.push_back (zlink::message_t::from (std::string ("ok")));
-        first.parts.push_back (zlink::message_t::from (protocol::encode_application_payload (
-          protocol::application_payload_t::from_parts (std::move (parts)))));
+        first.replace_parts ({zlink::message_t::from (protocol::encode_actor_message_header (
+                                protocol::command::actorSend, std::nullopt, fence, {1, 1})),
+                              zlink::message_t::from (protocol::encode_application_payload (
+                                protocol::application_payload_t::from_parts (std::move (parts))))});
     }
     require (mailbox.try_enqueue (std::move (first)), "suspended Actor enqueue failed");
     mesh::service_mailbox_record_t suffix;

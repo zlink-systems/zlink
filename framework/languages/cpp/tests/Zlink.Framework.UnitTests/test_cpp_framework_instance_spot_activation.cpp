@@ -1402,8 +1402,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation, RecoveredRequestWithoutNativeTokenDo
                       .advertised_endpoint = "tcp://127.0.0.1:0"},
        .runtime_failures = std::make_shared<rt::runtime_failure_collector_t> ()});
     target.start ();
-    rt::mesh::service_mailbox_record_t recovered{
-      "source", rt::mesh::service_mailbox_domain_t::infrastructure, {}, {2}, std::nullopt, 17};
+    auto recovered = rt::mesh::service_mailbox_record_t::from_parts (
+      "source", rt::mesh::service_mailbox_domain_t::infrastructure, {}, {2}, 17);
     EXPECT_NO_THROW (EXPECT_FALSE (target.reply_instance_spot_activation (recovered, 0, 0)));
     target.close ();
 }

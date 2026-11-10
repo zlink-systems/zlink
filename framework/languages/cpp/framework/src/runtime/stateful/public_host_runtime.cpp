@@ -563,29 +563,6 @@ zlink::submit_result_t submitted (bool accepted)
     return accepted ? zlink::submit_result_t::ok : zlink::submit_result_t::not_connected;
 }
 
-std::optional<record_kind_t> record_kind (protocol::command command)
-{
-    switch (command) {
-        case protocol::command::nodeSend:
-            return record_kind_t::node_send;
-        case protocol::command::nodeRequest:
-            return record_kind_t::node_request;
-        case protocol::command::channelSend:
-            return record_kind_t::channel_send;
-        case protocol::command::channelRequest:
-            return record_kind_t::channel_request;
-        case protocol::command::spotSend:
-            return record_kind_t::spot_send;
-        case protocol::command::spotRequest:
-            return record_kind_t::spot_request;
-        case protocol::command::actorSend:
-            return record_kind_t::actor_send;
-        case protocol::command::actorRequest:
-            return record_kind_t::actor_request;
-        default:
-            return std::nullopt;
-    }
-}
 
 operation_kind_t operation_kind (record_kind_t)
 {
@@ -5195,7 +5172,7 @@ public_host_runtime_t::stage_relocation_record (const stateful::object_ref_t &ta
 
 task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
   protocol::instance_activation_recovery_t command,
-  std::shared_ptr<const mesh::service_mailbox_record_t> mailbox_record,
+  std::shared_ptr<const mesh::service_mailbox_reply_target_t> mailbox_record,
   std::function<void (instance_spot_activation_result_t)> done)
 {
     auto lifetime = shared_from_this ();
@@ -5480,7 +5457,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
 
 task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
   std::shared_ptr<protocol::instance_activation_recovery_t> owned_command,
-  std::shared_ptr<const mesh::service_mailbox_record_t> mailbox_record,
+  std::shared_ptr<const mesh::service_mailbox_reply_target_t> mailbox_record,
   std::function<void (instance_spot_activation_result_t)> done,
   std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> admission,
   std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> previous_admission)
@@ -6274,7 +6251,7 @@ public_host_runtime_t::dispatch_user_spot_batch (
             continue;
         auto &mailbox_record = *original;
         std::size_t record_bytes = 0;
-        for (const auto &part : mailbox_record.parts)
+        for (const auto &part : mailbox_record.parts ())
             record_bytes = part.size () > std::numeric_limits<std::size_t>::max () - record_bytes
                              ? std::numeric_limits<std::size_t>::max ()
                              : record_bytes + part.size ();
@@ -6283,13 +6260,13 @@ public_host_runtime_t::dispatch_user_spot_batch (
         activation_terminal_t preparation_terminal;
         std::optional<std::pair<std::uint32_t, std::uint32_t>> dispatch_failure;
         try {
-            const auto wire =
-              protocol::decode_header (protocol::message_bytes (mailbox_record.parts.front ()));
+            const auto wire = mailbox_record.service_header ();
             if (wire.kind == protocol::command::messageFollow) {
-                if (mailbox_record.parts.size () != 1 || mailbox_record.source_node_generation == 0)
+                if (mailbox_record.parts ().size () != 1
+                    || mailbox_record.source_node_generation == 0)
                     continue;
                 const auto notice = protocol::decode_message_follow (
-                  protocol::message_bytes (mailbox_record.parts.front ()));
+                  protocol::message_bytes (mailbox_record.parts ().front ()));
                 if (message_follow_handler) {
                     try {
                         message_follow_handler (notice);
@@ -6302,7 +6279,7 @@ public_host_runtime_t::dispatch_user_spot_batch (
             }
             if (wire.kind == protocol::command::boundSessionBind) {
                 const auto bind = protocol::decode_bound_session_bind (
-                  protocol::message_bytes (mailbox_record.parts.front ()));
+                  protocol::message_bytes (mailbox_record.parts ().front ()));
                 const auto local = status ();
                 const auto actor = co_await _objects.find_async (stateful::object_kind_t::actor,
                                                                  bind.actor.actor_id);
@@ -6324,8 +6301,7 @@ public_host_runtime_t::dispatch_user_spot_batch (
                 bound_session_bind_operation_result_t operation_result{
                   stateful::stateful_error_t::conflict, std::nullopt};
                 bool terminal_replied = false;
-                const auto session_owner_rid =
-                  zlink::routing_id_t::from (mailbox_record.source_routing_id);
+                const auto session_owner_rid = mailbox_record.source_rid ();
                 std::optional<location_owner_token_t> session_owner;
                 if (admission == bound_session_bind_admission_t::ready
                     && bound_session_operations.bind && bound_session_operations.session_owner)
@@ -6372,7 +6348,7 @@ public_host_runtime_t::dispatch_user_spot_batch (
             }
             if (wire.kind == protocol::command::boundSessionClose) {
                 const auto request = protocol::decode_bound_session_close (
-                  protocol::message_bytes (mailbox_record.parts.front ()));
+                  protocol::message_bytes (mailbox_record.parts ().front ()));
                 const auto local = status ();
                 // Session-Actor binding §4: compare with this host's current
                 // descriptor identity.
@@ -6402,7 +6378,7 @@ public_host_runtime_t::dispatch_user_spot_batch (
             }
             if (wire.kind == protocol::command::boundSessionReplaced) {
                 const auto replacement = protocol::decode_bound_session_replaced (
-                  protocol::message_bytes (mailbox_record.parts.front ()));
+                  protocol::message_bytes (mailbox_record.parts ().front ()));
                 trace_mesh_host ("bound-session-replacement-received",
                                  "actor=" + replacement.actor_authority.actor_id);
                 if (bound_session_operations.replaced)
@@ -6410,11 +6386,11 @@ public_host_runtime_t::dispatch_user_spot_batch (
                 continue;
             }
             if (wire.kind == protocol::command::relocationPrepare) {
-                if (mailbox_record.parts.empty () || !mailbox_record.reply_token
+                if (mailbox_record.parts ().empty () || !mailbox_record.reply_token ()
                     || !session_route_owner_resolver)
                     continue;
                 const auto control = protocol::decode_relocation_control (
-                  protocol::message_bytes (mailbox_record.parts.front ()));
+                  protocol::message_bytes (mailbox_record.parts ().front ()));
                 const auto *prepare = std::get_if<protocol::relocation_prepare_t> (&control);
                 const auto local = status ();
                 const auto owner = session_route_owner_resolver ();
@@ -6517,10 +6493,10 @@ public_host_runtime_t::dispatch_user_spot_batch (
                 continue;
             }
             if (wire.kind == protocol::command::relocationState) {
-                if (mailbox_record.parts.size () != 1)
+                if (mailbox_record.parts ().size () != 1)
                     continue;
                 const auto control = protocol::decode_relocation_control (
-                  protocol::message_bytes (mailbox_record.parts.front ()));
+                  protocol::message_bytes (mailbox_record.parts ().front ()));
                 const auto *state = std::get_if<protocol::relocation_state_t> (&control);
                 if (!state || state->sender_role != protocol::relocation_role_t::source
                     || state->chunk_data.empty ())
@@ -6567,10 +6543,10 @@ public_host_runtime_t::dispatch_user_spot_batch (
                 continue;
             }
             if (wire.kind == protocol::command::relocationCutover) {
-                if (mailbox_record.parts.size () != 1)
+                if (mailbox_record.parts ().size () != 1)
                     continue;
                 const auto control = protocol::decode_relocation_control (
-                  protocol::message_bytes (mailbox_record.parts.front ()));
+                  protocol::message_bytes (mailbox_record.parts ().front ()));
                 const auto *cutover = std::get_if<protocol::relocation_cutover_t> (&control);
                 if (!cutover || cutover->sender_role != protocol::relocation_role_t::source)
                     continue;
@@ -6673,12 +6649,12 @@ public_host_runtime_t::dispatch_user_spot_batch (
                 throw protocol::service_wire_error_t ("unsupported infrastructure mailbox command");
 
             if (wire.kind == protocol::command::sessionRelocationSeal) {
-                if (mailbox_record.parts.size () != 1)
+                if (mailbox_record.parts ().size () != 1)
                     continue;
                 const auto seal = [&] {
                     try {
                         return protocol::decode_session_relocation_seal (
-                          protocol::message_bytes (mailbox_record.parts.front ()));
+                          protocol::message_bytes (mailbox_record.parts ().front ()));
                     }
                     catch (const protocol::service_wire_error_t &) {
                         detail::dispatch_error_reporter_t (_options.mesh.dispatch)
@@ -6690,9 +6666,7 @@ public_host_runtime_t::dispatch_user_spot_batch (
                                 framework_error_kind_t::protocol_error);
                               event.action = dispatch_error_action_t::drop;
                               event.packet_name = "sessionRelocationSeal";
-                              event.source_rid =
-                                zlink::routing_id_t::from (mailbox_record.source_routing_id)
-                                  .to_hex ();
+                              event.source_rid = mailbox_record.source_rid ().to_hex ();
                               event.exception = std::current_exception ();
                               return event;
                           });
@@ -6723,11 +6697,11 @@ public_host_runtime_t::dispatch_user_spot_batch (
             }
 
             if (wire.kind == protocol::command::sessionRelocationRoute) {
-                if (mailbox_record.parts.size () != 1 || !session_route_owner_resolver) {
+                if (mailbox_record.parts ().size () != 1 || !session_route_owner_resolver) {
                     continue;
                 }
                 const auto route = protocol::decode_session_relocation_route (
-                  protocol::message_bytes (mailbox_record.parts.front ()));
+                  protocol::message_bytes (mailbox_record.parts ().front ()));
                 const auto authenticated_sender =
                   route.route.action == protocol::session_relocation_route_action_t::commit
                     ? route.sender_role == protocol::relocation_role_t::target
@@ -6844,7 +6818,7 @@ public_host_runtime_t::dispatch_user_spot_batch (
 
             if (wire.kind == protocol::command::actorCreate) {
                 const auto request = protocol::decode_actor_create_header (
-                  protocol::message_bytes (mailbox_record.parts.front ()));
+                  protocol::message_bytes (mailbox_record.parts ().front ()));
                 if (!actor_create_target || request.deadline_unix_ms <= unix_milliseconds_now ()) {
                     actor_create_operation_result_t result;
                     result.reply.header.correlation = request.correlation;
@@ -6890,10 +6864,11 @@ public_host_runtime_t::dispatch_user_spot_batch (
             }
 
             if (wire.kind == protocol::command::actorJoin) {
-                if (mailbox_record.parts.empty () || mailbox_record.parts.size () > 2)
+                if (mailbox_record.parts ().empty () || mailbox_record.parts ().size () > 2)
                     throw protocol::service_wire_error_t ("Actor join has an invalid part count");
                 auto canonical = try_decode_canonical_actor_join (
-                  ::zlink::framework::detail::backend::copy_binding_parts (mailbox_record.parts));
+                  ::zlink::framework::detail::backend::copy_binding_parts (
+                    mailbox_record.parts ()));
                 if (!canonical)
                     throw protocol::service_wire_error_t (
                       "Actor join is not a canonical command-28 record");
@@ -6934,16 +6909,16 @@ public_host_runtime_t::dispatch_user_spot_batch (
 
             if (wire.kind == protocol::command::instanceSpot) {
                 const auto request = protocol::decode_instance_spot_activation_header (
-                  protocol::message_bytes (mailbox_record.parts.front ()));
+                  protocol::message_bytes (mailbox_record.parts ().front ()));
                 const auto expected_parts = request.has_metadata ? 3u : 2u;
-                if (mailbox_record.parts.size () != expected_parts)
+                if (mailbox_record.parts ().size () != expected_parts)
                     throw protocol::service_wire_error_t (
                       "Instance Spot activation has an invalid part count");
                 std::optional<std::vector<std::uint8_t>> metadata;
                 if (request.has_metadata)
-                    metadata = mailbox_record.parts[1].to_bytes ();
+                    metadata = mailbox_record.parts ()[1].to_bytes ();
                 auto application = protocol::decode_application_payload (
-                  protocol::message_bytes (mailbox_record.parts[request.has_metadata ? 2 : 1]),
+                  protocol::message_bytes (mailbox_record.parts ()[request.has_metadata ? 2 : 1]),
                   capture_flow ());
                 auto reply_record = mailbox_record.reply_source ();
                 auto running = std::make_shared<task_t<void>> (dispatch_instance_spot_activation (
@@ -6957,7 +6932,7 @@ public_host_runtime_t::dispatch_user_spot_batch (
             }
             if (wire.kind == protocol::command::userSpotCreate) {
                 const auto request = protocol::decode_user_spot_create_header (
-                  protocol::message_bytes (mailbox_record.parts.front ()));
+                  protocol::message_bytes (mailbox_record.parts ().front ()));
                 auto fingerprint_request = request;
                 fingerprint_request.correlation = 1;
                 const auto request_fingerprint =
@@ -7242,7 +7217,7 @@ public_host_runtime_t::dispatch_user_spot_batch (
             }
 
             const auto request = protocol::decode_user_spot_close_header (
-              protocol::message_bytes (mailbox_record.parts.front ()));
+              protocol::message_bytes (mailbox_record.parts ().front ()));
             auto fingerprint_request = request;
             fingerprint_request.correlation = 1;
             const auto request_fingerprint =
@@ -7313,8 +7288,8 @@ public_host_runtime_t::dispatch_user_spot_batch (
                              correlation = request.correlation] (std::uint32_t terminal_result,
                                                                  std::uint32_t failure_code,
                                                                  bool closed) {
-                std::vector<
-                  std::pair<std::shared_ptr<const mesh::service_mailbox_record_t>, std::uint64_t>>
+                std::vector<std::pair<std::shared_ptr<const mesh::service_mailbox_reply_target_t>,
+                                      std::uint64_t>>
                   waiting;
                 _user_spot_terminal_lane.run_sync ([&] {
                     auto &stored = _user_spot_terminals[operation_key];
@@ -7391,7 +7366,7 @@ public_host_runtime_t::dispatch_user_spot_batch (
                 if (failure)
                     dispatch_failure = {failure->terminal_result, failure->failure_code};
             }
-            if (mailbox_record.reply_token && mailbox_record.correlation)
+            if (mailbox_record.reply_token () && mailbox_record.correlation)
                 (void) _transport->reply_failure (mailbox_record, dispatch_failure->first,
                                                   dispatch_failure->second);
         }
@@ -7459,10 +7434,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
 bool public_host_runtime_t::dispatch_bound_session_send (
   const mesh::service_mailbox_record_t &mailbox_record)
 {
-    if (mailbox_record.parts.size () != 2)
+    if (mailbox_record.parts ().size () != 2)
         return false;
-    const auto record =
-      protocol::decode_bound_session_send (protocol::message_bytes (mailbox_record.parts.front ()));
+    const auto record = protocol::decode_bound_session_send (
+      protocol::message_bytes (mailbox_record.parts ().front ()));
     if (mailbox_record.source_routing_id != record.actor.target_node_routing_id
         || mailbox_record.source_node_generation == 0
         || mailbox_record.source_node_generation != record.actor.target_node_generation)
@@ -7472,7 +7447,7 @@ bool public_host_runtime_t::dispatch_bound_session_send (
     if (!operations.capture_send && !operations.send)
         return false;
     const auto application = protocol::decode_application_payload (
-      protocol::message_bytes (mailbox_record.parts.back ()), capture_flow ());
+      protocol::message_bytes (mailbox_record.parts ().back ()), capture_flow ());
     auto parts = protocol::decode_application_parts (application);
     std::function<stateful::stateful_error_t (std::vector<zlink::message_t>)> delivery;
     const auto admitted = _sessions.capture_outbound (
@@ -7554,11 +7529,11 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready_impl (
       && (static_cast<short> (*readiness) & static_cast<short> (zlink::poll_event_flag_t::pollin))
            != 0;
     while (budget.can_receive ()) {
-        const auto pumped =
-          !readiness ? mesh::raw_mesh_pump_result_t::protocol_error
-          : receive_ready
-            ? _transport->receive_next (mesh::service_liveness_registry_t::clock_t::now ())
-            : mesh::raw_mesh_pump_result_t::no_data;
+        const auto pumped = !readiness ? mesh::raw_mesh_pump_result_t::protocol_error
+                            : receive_ready
+                              ? _transport->receive_next (
+                                  readiness, mesh::service_liveness_registry_t::clock_t::now ())
+                              : mesh::raw_mesh_pump_result_t::no_data;
         budget.account (_transport->last_pump_bytes ());
         trace_mesh_host ("pump", std::string ("result=") + pump_result_name (pumped) + " pending="
                                    + std::to_string (_transport->mailbox ().pending_messages (
@@ -8028,10 +8003,10 @@ task_t<bool> public_host_runtime_t::dispatch_native_spot (
             record.kind =
               header.correlation ? record_kind_t::spot_request : record_kind_t::spot_send;
             record.operation_kind = operation_kind (record.kind);
-            record.source_node_rid = zlink::routing_id_t::from (original->source_routing_id);
+            record.source_node_rid = original->source_rid ();
             record.operation_id = {header.operation.high, header.operation.low};
             record.reply_route_id = header.correlation.value_or (0);
-            original->parts.clear ();
+            original->replace_parts ({});
             if (header.correlation)
                 record.reply_token = {
                   weak_from_this (),
@@ -8161,10 +8136,7 @@ public_host_runtime_t::dispatch_application_claim (
                             return kept_t{kept_local_t{original.application.retain (),
                                                        original.source_original}};
                         }
-                        const auto kind =
-                          record_kind (protocol::decode_header (
-                                         protocol::message_bytes (original.parts.front ()))
-                                         .kind);
+                        const auto kind = original.application_kind ();
                         if (!kind || !is_stateful_application (*kind))
                             return std::nullopt;
                         return kept_t{
@@ -8331,16 +8303,15 @@ public_host_runtime_t::dispatch_application_claim (
                     release_mailbox_reservation ();
                 continue;
             }
-            if (mailbox_record.parts.size () < 2)
+            if (mailbox_record.parts ().size () < 2)
                 throw protocol::service_wire_error_t (
                   "application wire requires a header and payload");
-            const auto wire =
-              protocol::decode_header (protocol::message_bytes (mailbox_record.parts.at (0)));
+            const auto wire = mailbox_record.service_header ();
             if (wire.kind == protocol::command::logicalMulticast) {
                 namespace generated = protocol::generated::detail;
                 generated::logicalMulticast_23_t multicast;
                 generated::reader_t reader (
-                  protocol::message_bytes (mailbox_record.parts.front ()));
+                  protocol::message_bytes (mailbox_record.parts ().front ()));
                 if (generated::decode_head_logicalMulticast_23 (reader, multicast)
                     != generated::error_code::ok)
                     throw protocol::service_wire_error_t ("invalid logical multicast frame");
@@ -8350,14 +8321,14 @@ public_host_runtime_t::dispatch_application_claim (
                   (multicast.flags & static_cast<std::uint8_t> (protocol::flag::metadata)) == 0
                     ? std::shared_ptr<const std::vector<std::uint8_t>>{}
                     : std::make_shared<const std::vector<std::uint8_t>> (
-                        mailbox_record.parts[1].to_bytes ());
-                auto parts =
-                  protocol::decode_application_parts (std::move (mailbox_record.parts.back ()));
+                        mailbox_record.parts ()[1].to_bytes ());
+                auto parts = protocol::decode_application_parts (
+                  std::move (mailbox_record.body_parts ().back ()));
                 auto before = std::move (mailbox_record.before_application_handler);
                 auto pending = std::make_shared<task_t<void>> (enqueue_local_multicast (
                   std::move (targets), std::move (multicast.channelName.value),
                   std::move (multicast.topic.value), std::move (parts), std::move (metadata),
-                  zlink::routing_id_t::from (mailbox_record.source_routing_id), std::move (before),
+                  mailbox_record.source_rid (), std::move (before),
                   mailbox_record.application_permit ? std::move (*mailbox_record.application_permit)
                                                     : application_job_queue_t::permit_t{}));
                 detail::observe_task_completion (
@@ -8367,7 +8338,7 @@ public_host_runtime_t::dispatch_application_claim (
                     release_mailbox_reservation ();
                 continue;
             }
-            if (mailbox_record.parts.size () != 2)
+            if (mailbox_record.parts ().size () != 2)
                 throw protocol::service_wire_error_t ("application wire requires two parts");
             if (wire.kind == protocol::command::boundSessionSend) {
                 // The outbound stream delivery is a transport handoff, not an application handler.
@@ -8379,7 +8350,7 @@ public_host_runtime_t::dispatch_application_claim (
                     release_mailbox_reservation ();
                 continue;
             }
-            const auto wire_kind = record_kind (wire.kind);
+            const auto wire_kind = mailbox_record.application_kind ();
             if (!wire_kind)
                 throw protocol::service_wire_error_t (
                   "mailbox record is not application messaging");
@@ -8391,7 +8362,7 @@ public_host_runtime_t::dispatch_application_claim (
             record.kind = kind;
             record.domain = ready_domain_t::application;
             record.operation_kind = operation_kind (kind);
-            record.source_node_rid = zlink::routing_id_t::from (mailbox_record.source_routing_id);
+            record.source_node_rid = mailbox_record.source_rid ();
             if (mailbox_record.operation) {
                 record.operation_id = {mailbox_record.operation->first,
                                        mailbox_record.operation->second};
@@ -8407,23 +8378,24 @@ public_host_runtime_t::dispatch_application_claim (
             }
             if (kind == record_kind_t::channel_send || kind == record_kind_t::channel_request) {
                 owner.owner_kind = owner_kind_t::channel;
-                owner.channel_name = kind == record_kind_t::channel_send
-                                       ? protocol::decode_channel_send_header (
-                                           protocol::message_bytes (mailbox_record.parts.front ()))
-                                       : protocol::decode_channel_request_header (
-                                           protocol::message_bytes (mailbox_record.parts.front ()))
-                                           .channel_name;
+                owner.channel_name =
+                  kind == record_kind_t::channel_send
+                    ? protocol::decode_channel_send_header (
+                        protocol::message_bytes (mailbox_record.parts ().front ()))
+                    : protocol::decode_channel_request_header (
+                        protocol::message_bytes (mailbox_record.parts ().front ()))
+                        .channel_name;
                 record.channel_name = owner.channel_name;
             } else if (kind == record_kind_t::spot_send || kind == record_kind_t::spot_request) {
                 owner.owner_kind = owner_kind_t::spot;
                 const auto spot = protocol::decode_spot_message_header (
-                  protocol::message_bytes (mailbox_record.parts.front ()), wire.kind);
+                  protocol::message_bytes (mailbox_record.parts ().front ()), wire.kind);
                 owner.spot_id = spot.target.spot_id;
                 record.spot_route = spot.target;
             } else if (kind == record_kind_t::actor_send || kind == record_kind_t::actor_request) {
                 owner.owner_kind = owner_kind_t::actor;
                 const auto actor = protocol::decode_actor_message_header (
-                  protocol::message_bytes (mailbox_record.parts.front ()), wire.kind);
+                  protocol::message_bytes (mailbox_record.parts ().front ()), wire.kind);
                 record.actor_route = actor.target;
                 record.message_follow_hop_count = actor.message_follow_hop_count;
                 record.reply_route_id = actor.correlation.value_or (0);
@@ -8449,14 +8421,14 @@ public_host_runtime_t::dispatch_application_claim (
             } else {
                 owner.owner_kind = owner_kind_t::node;
             }
-            auto parts = protocol::decode_application_parts (std::move (mailbox_record.parts[1]),
-                                                             capture_flow ());
+            auto parts = protocol::decode_application_parts (
+              std::move (mailbox_record.body_parts ()[0]), capture_flow ());
             trace_mesh_host (
               "dispatch",
               std::string ("kind=") + std::to_string (static_cast<int> (kind)) + " source="
                 + (mailbox_record.source_routing_id.empty () ? std::string ("-")
                                                              : record.source_node_rid.to_string ())
-                + " parts=" + std::to_string (mailbox_record.parts.size ()));
+                + " parts=" + std::to_string (mailbox_record.parts ().size ()));
             record.release_mailbox_reservation = release_mailbox_reservation;
             record.retain_mailbox_reservation = retain_mailbox_reservation;
             record.transferred_owner_byte_cost = claim->record_bytes[index];
@@ -9221,11 +9193,10 @@ public_host_runtime_t::cut_relocation_source (
             const auto &record = original.application->record;
             return !record.application_record && is_stateful_application (record.kind);
         }
-        if (original.parts.size () != 2)
+        if (original.parts ().size () != 2)
             return false;
         try {
-            const auto kind = record_kind (
-              protocol::decode_header (protocol::message_bytes (original.parts.front ())).kind);
+            const auto kind = original.application_kind ();
             return kind && is_stateful_application (*kind);
         }
         catch (...) {

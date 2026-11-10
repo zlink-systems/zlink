@@ -166,11 +166,12 @@ TEST (ManualDispatchOwner, MailboxUsesItsInjectedUtcClockAtAcceptance)
       },
       [] (const std::string &) {});
 
-    fw::runtime::mesh::service_mailbox_record_t record;
-    record.owner = fw::runtime::mesh::service_mailbox_t::application_owner (
-      fw::runtime::host::owner_kind_t::node);
-    record.domain = fw::runtime::mesh::service_mailbox_domain_t::application;
-    record.parts.push_back (zlink::message_t::from ("payload"));
+    std::vector<zlink::message_t> parts;
+    parts.push_back (zlink::message_t::from ("payload"));
+    auto record = fw::runtime::mesh::service_mailbox_record_t::from_parts (
+      fw::runtime::mesh::service_mailbox_t::application_owner (
+        fw::runtime::host::owner_kind_t::node),
+      fw::runtime::mesh::service_mailbox_domain_t::application, std::move (parts));
 
     ASSERT_TRUE (mailbox.try_enqueue (std::move (record)));
     ASSERT_TRUE (prepared_at);

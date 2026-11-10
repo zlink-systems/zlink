@@ -153,9 +153,10 @@ class HandlerEntryPermit : public ::testing::Test
                        .encode_raw_body_parts (header, zlink::message_t::from ("17"))
                        .take_items ();
         auto record = queued (owner);
-        record.parts.push_back (zlink::message_t::from (protocol::encode_node_send_header ()));
-        record.parts.push_back (zlink::message_t::from (protocol::encode_application_payload (
-          protocol::application_payload_t::from_parts (std::move (parts)))));
+        record.replace_parts (
+          {zlink::message_t::from (protocol::encode_node_send_header ()),
+           zlink::message_t::from (protocol::encode_application_payload (
+             protocol::application_payload_t::from_parts (std::move (parts))))});
         record.source_routing_id = {'p', 'e', 'e', 'r'};
         ASSERT_TRUE (mailbox.try_enqueue (std::move (record)));
         auto waiter = jobs->wait_for_supply (

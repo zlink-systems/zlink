@@ -822,17 +822,14 @@ void verify_route_internal_packets_precede_application_dispatch ()
     wire::writer_t multicast_header;
     assert (wire::encode_head_logicalMulticast_23 (multicast_header, multicast)
             == wire::error_code::ok);
-    runtime::mesh::service_mailbox_record_t multicast_record;
-    multicast_record.owner =
+    const auto multicast_owner =
       runtime::mesh::service_mailbox_t::application_owner (host::owner_kind_t::node);
-    multicast_record.domain = runtime::mesh::service_mailbox_domain_t::application;
-    multicast_record.source_routing_id = zlink::routing_id_t::from ("route-source").to_bytes ();
+    const auto multicast_source = zlink::routing_id_t::from ("route-source").to_bytes ();
     auto ingress_permit =
       std::make_shared<runtime::application_job_queue_t::permit_t> (std::move (*ingress_supply));
     ingress_supply.reset ();
     ingress_permit->mark_queued ();
-    multicast_record.before_application_handler = [permit = std::move (ingress_permit),
-                                                   ingress_entered] {
+    auto before_multicast_handler = [permit = std::move (ingress_permit), ingress_entered] {
         permit->release_for_handler_entry ();
         ingress_entered->count_down ();
     };
@@ -840,13 +837,17 @@ void verify_route_internal_packets_precede_application_dispatch ()
     assert (queued_ingress.effective_max_queued_application_jobs == 1);
     assert (queued_ingress.queued_application_jobs == 1);
     assert (queued_ingress.permits_in_use == 1);
-    multicast_record.parts = {
+    std::vector<zlink::message_t> multicast_parts{
       zlink::message_t::from (std::move (multicast_header.data)),
       zlink::message_t::from (
         mesh_metadata_codec_t::encode ({{"trace-key", "native-receive-snapshot"}})),
       zlink::message_t::from (runtime::protocol::encode_application_payload (
         runtime::protocol::application_payload_t::from_parts ({make_route_multicast_frame (
           "Rel358MulticastPayload", "rel-358-topic", "multicast-through-host")})))};
+    auto multicast_record = runtime::mesh::service_mailbox_record_t::from_parts (
+      multicast_owner, runtime::mesh::service_mailbox_domain_t::application,
+      std::move (multicast_parts), multicast_source, std::nullopt, 0, {}, {},
+      std::move (before_multicast_handler));
     assert (
       node->native_node ().transport ().mailbox ().try_enqueue (std::move (multicast_record)));
     assert (multicast_future.wait_for (1s) == std::future_status::ready);
@@ -886,17 +887,14 @@ void verify_route_internal_packets_precede_application_dispatch ()
                                                              "vertical-mesh", "OwnerLeaseProbe");
     auto node_send_parts = node_send_codec.encode_envelope_parts (
       node_send_header, owner_lease_node_send_message_t{"owner lease independent"}, serializers);
-    runtime::mesh::service_mailbox_record_t node_send_record;
-    node_send_record.owner =
-      runtime::mesh::service_mailbox_t::application_owner (host::owner_kind_t::node);
-    node_send_record.domain = runtime::mesh::service_mailbox_domain_t::application;
-    node_send_record.before_application_handler = [] {};
-    node_send_record.source_routing_id = zlink::routing_id_t::from ("route-source").to_bytes ();
-    node_send_record.parts = {
-      zlink::message_t::from (runtime::protocol::encode_node_send_header ()),
-      zlink::message_t::from (runtime::protocol::encode_application_payload (
-        runtime::protocol::application_payload_t::from_parts (
-          std::move (node_send_parts).take_items ())))};
+    auto node_send_record = runtime::mesh::service_mailbox_record_t::from_parts (
+      runtime::mesh::service_mailbox_t::application_owner (host::owner_kind_t::node),
+      runtime::mesh::service_mailbox_domain_t::application,
+      {zlink::message_t::from (runtime::protocol::encode_node_send_header ()),
+       zlink::message_t::from (runtime::protocol::encode_application_payload (
+         runtime::protocol::application_payload_t::from_parts (
+           std::move (node_send_parts).take_items ())))},
+      zlink::routing_id_t::from ("route-source").to_bytes (), std::nullopt, 0, {}, {}, [] {});
     assert (
       node->native_node ().transport ().mailbox ().try_enqueue (std::move (node_send_record)));
     assert (node_send_dispatched_future.wait_for (1s) == std::future_status::ready);

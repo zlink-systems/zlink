@@ -155,7 +155,7 @@ class channel_host_service_t::server_loop_t
                         for (std::size_t index = 0; index != claim->claimed_messages; ++index) {
                             if (auto record = mailbox.take ({claim, index}))
                                 report_dispatch_rejection (
-                                  messaging::message_parts_t (std::move (record->parts)));
+                                  messaging::message_parts_t (record->take_parts ()));
                         }
                     }
                     catch (...) {
@@ -294,17 +294,13 @@ class channel_host_service_t::server_loop_t
     {
         auto application_job =
           std::make_shared<application_job_queue_t::permit_t> (std::move (permit));
-        mesh::service_mailbox_record_t record{};
-        record.owner =
-          mesh::service_mailbox_t::application_owner (host::owner_kind_t::channel, _channel_name);
-        record.domain = mesh::service_mailbox_domain_t::application;
-        if (received.routing_id ())
-            record.source_routing_id = received.routing_id ()->to_bytes ();
-        record.reply_token = received.reply_token ();
+        auto record = mesh::service_mailbox_record_t::from_received (
+          mesh::service_mailbox_t::application_owner (host::owner_kind_t::channel, _channel_name),
+          mesh::service_mailbox_domain_t::application, std::move (received));
         record.before_application_handler = [application_job] {
             application_job->release_for_handler_entry ();
         };
-        auto parts = messaging::message_parts_t (std::move (received.parts ()));
+        auto parts = messaging::message_parts_t (record.take_parts ());
         detail::message_flow_tracer_t flow (_runtime.dispatch_options_ref ());
         if (flow.enabled_for (message_flow_outcome_t::received)) {
             auto header = messaging::envelope_codec_t{}.decode_header (parts, true);
@@ -374,11 +370,10 @@ class channel_host_service_t::server_loop_t
                 }
             }
         }
-        received.close ();
-        record.parts = std::move (parts).take_items ();
+        record.replace_parts (std::move (parts).take_items ());
         if (!_source->mailbox ().try_enqueue (
               std::move (record), [application_job] { application_job->mark_queued (); }))
-            report_dispatch_rejection (messaging::message_parts_t (std::move (record.parts)));
+            report_dispatch_rejection (messaging::message_parts_t (record.take_parts ()));
     }
 
     void drain_owner (const std::string &owner)
@@ -420,10 +415,9 @@ class channel_host_service_t::server_loop_t
     {
         auto routing_id = record.source_routing_id.empty ()
                             ? std::optional<zlink::routing_id_t>{}
-                            : std::optional<zlink::routing_id_t> (
-                                zlink::routing_id_t::from (record.source_routing_id));
-        auto reply_token = std::move (record.reply_token);
-        auto parts = messaging::message_parts_t (std::move (record.parts));
+                            : std::optional<zlink::routing_id_t> (record.source_rid ());
+        auto reply_token = record.reply_token ();
+        auto parts = messaging::message_parts_t (record.take_parts ());
         try {
             auto scope = detail::service_scope_t::create (
               *_services, detail::service_scope_kind_t::handler_invocation);

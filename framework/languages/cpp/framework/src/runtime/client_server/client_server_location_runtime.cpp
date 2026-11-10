@@ -1399,7 +1399,7 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
   std::shared_ptr<raw_client_server_server_t> owner, mesh::service_mailbox_record_t record)
 {
     if (_stop->stop_requested ()) {
-        if (record.reply_token) {
+        if (record.reply_token ()) {
             const framework_exception_t error (
               framework_error_kind_t::shutting_down,
               "ClientServer is shutting down and rejects application work");
@@ -1407,7 +1407,7 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
         }
         co_return;
     }
-    if (record.parts.size () != 2)
+    if (record.parts ().size () != 2)
         co_return;
     std::optional<zlink::message_t> pending_reply;
     std::optional<framework_exception_t> pending_failure_reply;
@@ -1415,7 +1415,7 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
         /* Ingress validates the envelope and captures flow fields.
          * The worker consumes its header and the native payload. */
         auto &request_envelope = record.envelope_header;
-        auto message = std::move (record.parts[1]);
+        auto message = std::move (record.body_parts ()[0]);
         detail::inbound_message_context_t inbound{
           .message = {.received_at = record.received_at.value ()}};
         inbound.before_application_handler = record.before_application_handler;
@@ -1464,7 +1464,7 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
         }
         auto scope = zlink::framework::detail::service_scope_t::create (
           _services, zlink::framework::detail::service_scope_kind_t::handler_invocation);
-        if (record.reply_token) {
+        if (record.reply_token ()) {
             auto reply = co_await _channel_runtime.dispatch_request_on_handler_executor (
               record.owner, {}, request_envelope.message_name, scope.provider (), *_serializers,
               *_handlers, std::move (message), inbound);
@@ -1518,12 +1518,13 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
     catch (const framework_exception_t &error) {
         report_client_server_dispatch_error (
           _channel_runtime.dispatch_options_ref (), record,
-          record.parts.size () > 1 ? zlink::framework::detail::diagnostic_decoded_value
-                                   : zlink::framework::detail::diagnostic_absent_value,
-          record.reply_token ? dispatch_message_kind_t::request : dispatch_message_kind_t::send,
-          record.reply_token ? dispatch_error_action_t::reply_error : dispatch_error_action_t::drop,
+          record.parts ().size () > 1 ? zlink::framework::detail::diagnostic_decoded_value
+                                      : zlink::framework::detail::diagnostic_absent_value,
+          record.reply_token () ? dispatch_message_kind_t::request : dispatch_message_kind_t::send,
+          record.reply_token () ? dispatch_error_action_t::reply_error
+                                : dispatch_error_action_t::drop,
           error);
-        if (record.reply_token) {
+        if (record.reply_token ()) {
             pending_reply.reset ();
             pending_failure_reply = error;
         }
@@ -1533,12 +1534,13 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
                                              error.what ());
         report_client_server_dispatch_error (
           _channel_runtime.dispatch_options_ref (), record,
-          record.parts.size () > 1 ? zlink::framework::detail::diagnostic_decoded_value
-                                   : zlink::framework::detail::diagnostic_absent_value,
-          record.reply_token ? dispatch_message_kind_t::request : dispatch_message_kind_t::send,
-          record.reply_token ? dispatch_error_action_t::reply_error : dispatch_error_action_t::drop,
+          record.parts ().size () > 1 ? zlink::framework::detail::diagnostic_decoded_value
+                                      : zlink::framework::detail::diagnostic_absent_value,
+          record.reply_token () ? dispatch_message_kind_t::request : dispatch_message_kind_t::send,
+          record.reply_token () ? dispatch_error_action_t::reply_error
+                                : dispatch_error_action_t::drop,
           failure);
-        if (record.reply_token) {
+        if (record.reply_token ()) {
             pending_reply.reset ();
             pending_failure_reply = failure;
         }
@@ -1548,12 +1550,13 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
                                              "ClientServer dispatch failed");
         report_client_server_dispatch_error (
           _channel_runtime.dispatch_options_ref (), record,
-          record.parts.size () > 1 ? zlink::framework::detail::diagnostic_decoded_value
-                                   : zlink::framework::detail::diagnostic_absent_value,
-          record.reply_token ? dispatch_message_kind_t::request : dispatch_message_kind_t::send,
-          record.reply_token ? dispatch_error_action_t::reply_error : dispatch_error_action_t::drop,
+          record.parts ().size () > 1 ? zlink::framework::detail::diagnostic_decoded_value
+                                      : zlink::framework::detail::diagnostic_absent_value,
+          record.reply_token () ? dispatch_message_kind_t::request : dispatch_message_kind_t::send,
+          record.reply_token () ? dispatch_error_action_t::reply_error
+                                : dispatch_error_action_t::drop,
           failure);
-        if (record.reply_token) {
+        if (record.reply_token ()) {
             pending_reply.reset ();
             pending_failure_reply = failure;
         }

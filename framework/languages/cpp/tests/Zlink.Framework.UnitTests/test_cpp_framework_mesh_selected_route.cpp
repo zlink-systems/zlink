@@ -456,8 +456,8 @@ TEST_P (CppFrameworkHelloExchange, RetainsFirstDescriptorUntilAdmit)
         });
     };
     ASSERT_TRUE (receive ());
-    ASSERT_EQ (1u, received->parts.size ());
-    const auto first = received->parts.front ().to_bytes ();
+    ASSERT_EQ (1u, received->parts ().size ());
+    const auto first = received->parts ().front ().to_bytes ();
     EXPECT_EQ (protocol::encode_route_mesh_admission (protocol::command::hello,
                                                       source.topology ().local_descriptor ()),
                first);
@@ -471,7 +471,7 @@ TEST_P (CppFrameworkHelloExchange, RetainsFirstDescriptorUntilAdmit)
                        .value ());
         ASSERT_TRUE (receive ());
         EXPECT_EQ (protocol::encode_route_mesh_admission (protocol::command::admit, initial),
-                   received->parts.front ().to_bytes ());
+                   received->parts ().front ().to_bytes ());
         ASSERT_TRUE (source.topology ().peer (descriptor.node_routing_id));
         EXPECT_FALSE (source.topology ().peer (descriptor.node_routing_id)->ready);
     };
@@ -490,13 +490,13 @@ TEST_P (CppFrameworkHelloExchange, RetainsFirstDescriptorUntilAdmit)
     ASSERT_TRUE (next_activity);
     const auto tick = source.tick_liveness (*next_activity).result ().value ();
     ASSERT_TRUE (receive ());
-    EXPECT_EQ (first, received->parts.front ().to_bytes ());
+    EXPECT_EQ (first, received->parts ().front ().to_bytes ());
     if (GetParam () != remote_hello_t::none) {
         ASSERT_EQ (1u, tick.probes.size ());
         ASSERT_TRUE (receive ());
         EXPECT_EQ (protocol::encode_liveness (protocol::command::livenessProbe,
                                               tick.probes.front ().probe_id),
-                   received->parts.front ().to_bytes ());
+                   received->parts ().front ().to_bytes ());
         ASSERT_TRUE (port
                        .send (bytes ("hello-source"),
                               {protocol::encode_liveness (protocol::command::livenessAck,
@@ -512,7 +512,7 @@ TEST_P (CppFrameworkHelloExchange, RetainsFirstDescriptorUntilAdmit)
                    .value ());
     ASSERT_TRUE (receive ());
     EXPECT_EQ (protocol::encode_route_mesh_admission (protocol::command::update, latest),
-               received->parts.front ().to_bytes ());
+               received->parts ().front ().to_bytes ());
     source.close ();
 }
 
