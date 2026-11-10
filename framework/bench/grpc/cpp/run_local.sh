@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # C++ server-driven with-grpc bench runner (README §11).
+# Optional controls: TARGET_RATE (messages/second), SOURCE_CPUS and TARGET_CPUS (taskset CPU lists).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,7 +62,11 @@ for run in $(seq 1 "${RUNS}"); do
         mkdir -p "${cell_dir}"
         log "cell=${cell_id} run=${run}: start target B then source A"
 
-        setsid "${target_command[@]}" >"${cell_dir}/target.log" 2>&1 &
+        target_process=("${target_command[@]}")
+        if [[ -n "${TARGET_CPUS:-}" ]]; then
+          target_process=(taskset -c "${TARGET_CPUS}" "${target_process[@]}")
+        fi
+        setsid "${target_process[@]}" >"${cell_dir}/target.log" 2>&1 &
         b_pid=$!
         wait_for_stats "${target_stats_url}" 0
 
@@ -76,7 +81,14 @@ for run in $(seq 1 "${RUNS}"); do
         if [[ -n "${target_command_endpoint}" ]]; then
           source_args+=(--command-endpoint "${target_command_endpoint}")
         fi
-        setsid "${BUILD_DIR}/bench_cpp_client" "${source_args[@]}" >"${cell_dir}/source.log" 2>&1 &
+        if [[ -n "${TARGET_RATE:-}" ]]; then
+          source_args+=(--target-rate "${TARGET_RATE}")
+        fi
+        source_process=("${BUILD_DIR}/bench_cpp_client" "${source_args[@]}")
+        if [[ -n "${SOURCE_CPUS:-}" ]]; then
+          source_process=(taskset -c "${SOURCE_CPUS}" "${source_process[@]}")
+        fi
+        setsid "${source_process[@]}" >"${cell_dir}/source.log" 2>&1 &
         a_pid=$!
         wait_for_stats "${source_stats_url}" 1
 

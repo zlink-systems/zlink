@@ -20,6 +20,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <deque>
 #include <functional>
@@ -28,6 +29,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <typeinfo>
 #include <type_traits>
 #include <vector>
@@ -61,7 +63,41 @@ struct options_t
     int drain_bound_ms = 30000;
     int readiness_timeout_ms = 30000;
     size_t latency_sample_limit = 200000;
+    double target_rate = 0;
     std::string output_file;
+};
+
+class submission_pacer_t
+{
+  public:
+    explicit submission_pacer_t (double rate) : _rate (rate) {}
+
+    size_t wait_for_due_slots (clock_t_::time_point deadline)
+    {
+        if (_rate == 0)
+            return clock_t_::now () < deadline ? 1 : 0;
+
+        auto interval = std::chrono::duration_cast<clock_t_::duration> (
+          std::chrono::duration<double> (1.0 / _rate));
+        if (interval <= clock_t_::duration::zero ())
+            interval = clock_t_::duration (1);
+        const auto now = clock_t_::now ();
+        const auto scheduled = std::max (now, _next);
+        if (scheduled >= deadline)
+            return 0;
+        std::this_thread::sleep_until (scheduled);
+        const auto woke = clock_t_::now ();
+        if (woke >= deadline)
+            return 0;
+        const size_t due = 1 + static_cast<size_t> (
+          std::chrono::duration_cast<clock_t_::duration> (woke - scheduled) / interval);
+        _next = scheduled + interval * due;
+        return due;
+    }
+
+  private:
+    double _rate;
+    clock_t_::time_point _next{};
 };
 
 // ---------------------------------------------------------------------------
@@ -441,7 +477,10 @@ class zlink_raw_driver_t : public driver_t
     int request_window () const override { return _window; }
 
     zlink_raw_driver_t (const options_t &options, int window, bool command_path) :
-        _options (options), _window (window), _command_path (command_path)
+        _options (options),
+        _window (window),
+        _command_path (command_path),
+        _pacer (options.target_rate)
     {
         _socket = std::make_unique<zlink::router_socket_t> (_context);
         const std::string client_rid =
@@ -486,6 +525,10 @@ class zlink_raw_driver_t : public driver_t
               counters_t &counters,
               latency_sampler_t *latency) override
     {
+        if (_options.target_rate > 0) {
+            run_paced_slots (deadline, payload_size, phase, counters, latency);
+            return;
+        }
         // spec 2 request-backpressure: _window <= 0 means no application
         // ceiling, so depth cannot be a slot count.
         if (_window <= 0)
@@ -557,8 +600,111 @@ class zlink_raw_driver_t : public driver_t
         close_window (deadline);
     }
 
+    void run_paced_slots (clock_t_::time_point deadline,
+                          size_t payload_size,
+                          phase_t phase,
+                          counters_t &counters,
+                          latency_sampler_t *latency)
+    {
+        _deadline = deadline;
+        _phase = phase;
+        _payload_size = payload_size;
+        _counters = &counters;
+        _latency = latency;
+
+        std::vector<task_t> replies;
+        task_t submitter = paced_submitter (replies);
+        const auto hard_stop = deadline + std::chrono::milliseconds (_options.drain_bound_ms);
+        std::vector<zlink::poll_event_t> events (4);
+        for (;;) {
+            const auto now = clock_t_::now ();
+            close_window (deadline);
+            const size_t resumed = _ready.run_ready_round ();
+            replies.erase (std::remove_if (replies.begin (), replies.end (),
+                                           [] (const task_t &task) { return task.done (); }),
+                           replies.end ());
+            if (submitter.done () && replies.empty ())
+                break;
+            if (now >= hard_stop)
+                break;
+            const std::chrono::milliseconds wait =
+              resumed != 0
+                ? std::chrono::milliseconds (0)
+                : poll_timeout_until (now, now < deadline ? deadline : hard_stop, poll_max_wait_ms);
+            _poller.wait (events.data (), events.size (), wait);
+        }
+        close_window (deadline);
+    }
+
 
   private:
+    task_t paced_submitter (std::vector<task_t> &replies)
+    {
+        co_await _ready.schedule ();
+        while (clock_t_::now () < _deadline) {
+            const size_t due = _pacer.wait_for_due_slots (_deadline);
+            if (due == 0)
+                co_return;
+            const size_t burst_limit = _window > 0 ? std::min (due, static_cast<size_t> (_window))
+                                                   : due;
+            size_t submitted = 0;
+            while (submitted < burst_limit && clock_t_::now () < _deadline) {
+                if (_window > 0
+                    && _counters->outstanding.load (std::memory_order_acquire) >= _window) {
+                    co_await _ready.schedule ();
+                    if (_counters->outstanding.load (std::memory_order_acquire) >= _window)
+                        break;
+                    continue;
+                }
+                const uint64_t seq = _seq++;
+                auto parts = make_parts (_payload_size, _phase, seq);
+                _counters->enter ();
+                _counters->submitted.fetch_add (1, std::memory_order_relaxed);
+                bool failed = false;
+                try {
+                    if (_command_path) {
+                        zlink::send_submission_t submission =
+                          send_operation ().message (parts.first).message (parts.second).async ();
+                        if (submission.result == ZLINK_SUBMIT_BACKPRESSURED)
+                            co_await std::move (submission.admitted);
+                        else if (submission.result != ZLINK_SUBMIT_OK)
+                            throw std::logic_error ("unexpected send submit result");
+                        _counters->leave ();
+                        _counters->completed.fetch_add (1, std::memory_order_relaxed);
+                    } else {
+                        zlink::request_submission_t submission =
+                          request_operation ()
+                            .message (parts.first)
+                            .message (parts.second)
+                            .timeout (std::chrono::milliseconds (_options.request_timeout_ms))
+                            .async ();
+                        const bool backpressured = submission.result == ZLINK_SUBMIT_BACKPRESSURED;
+                        if (submission.result != ZLINK_SUBMIT_OK && !backpressured)
+                            throw std::logic_error ("unexpected request submit result");
+                        replies.push_back (observe_request_reply (std::move (submission.reply), seq));
+                        if (backpressured) {
+                            try {
+                                co_await std::move (submission.admitted);
+                            }
+                            catch (...) {
+                                co_return;
+                            }
+                        }
+                    }
+                    ++submitted;
+                } catch (const std::exception &error) {
+                    _counters->leave ();
+                    _counters->record_exception (error);
+                    ++submitted;
+                    failed = true;
+                }
+                if (failed)
+                    co_await _ready.schedule ();
+            }
+            co_await _ready.schedule ();
+        }
+    }
+
     void run_slots (clock_t_::time_point deadline,
                     size_t payload_size,
                     phase_t phase,
@@ -773,6 +919,7 @@ class zlink_raw_driver_t : public driver_t
     const options_t &_options;
     int _window;
     bool _command_path;
+    submission_pacer_t _pacer;
     uint32_t _run_id = static_cast<uint32_t> (now_ns ());
     zlink::context_t _context;
     std::unique_ptr<zlink::router_socket_t> _socket;
@@ -800,6 +947,7 @@ class framework_driver_t final : public driver_t
 
     framework_driver_t (const options_t &options, int window, bool command) :
         _options (options),
+        _pacer (options.target_rate),
         _window (window),
         _command (command),
         _host (std::vector<int>{}, bench_http_callback_t{})
@@ -916,39 +1064,48 @@ class framework_driver_t final : public driver_t
                 return !preceding_admission || preceding_admission->await_ready ();
             });
         };
+        const auto submit_one = [&] {
+            uint64_t sent = 0;
+            if constexpr (!std::is_void_v<T>)
+                sent = now_ns ();
+            auto payload = make_payload (size, phase);
+            counters.enter ();
+            counters.submitted.fetch_add (1, std::memory_order_relaxed);
+            size_t slot = 0;
+            if (free_slots.empty ()) {
+                slot = pending.size ();
+                pending.emplace_back (std::nullopt);
+            } else {
+                slot = free_slots.back ();
+                free_slots.pop_back ();
+            }
+            auto submission = submit<T> (std::move (payload));
+            if constexpr (!std::is_void_v<T>) {
+                preceding_admission.emplace (submission.admitted ());
+                fw::detail::observe_task_completion (
+                  *preceding_admission, [completion_signal] (const auto &) {
+                      completion_signal->notify (admission_notification);
+                  });
+            }
+            pending[slot].emplace (std::move (submission), sent, _seq - 1);
+            completion_signal->notify (pending[slot]->task, slot, completed_slots,
+                                       completion_signal);
+            ++in_flight;
+        };
         do {
             close_window (deadline);
             completed_slots.clear ();
             if (in_flight != 0 || !std::is_void_v<T>)
                 completion_signal->take_completed (completed_slots);
             // Admission sequences submits; the pattern window bounds replies.
-            if (can_submit (clock_t_::now ())) {
-                uint64_t sent = 0;
-                if constexpr (!std::is_void_v<T>)
-                    sent = now_ns ();
-                auto payload = make_payload (size, phase);
-                counters.enter ();
-                counters.submitted.fetch_add (1, std::memory_order_relaxed);
-                size_t slot = 0;
-                if (free_slots.empty ()) {
-                    slot = pending.size ();
-                    pending.emplace_back (std::nullopt);
-                } else {
-                    slot = free_slots.back ();
-                    free_slots.pop_back ();
+            if (_options.target_rate > 0) {
+                if (can_submit (clock_t_::now ())) {
+                    const size_t due = _pacer.wait_for_due_slots (deadline);
+                    for (size_t slot = 0; slot < due && can_submit (clock_t_::now ()); ++slot)
+                        submit_one ();
                 }
-                auto submission = submit<T> (std::move (payload));
-                if constexpr (!std::is_void_v<T>) {
-                    preceding_admission.emplace (submission.admitted ());
-                    fw::detail::observe_task_completion (
-                      *preceding_admission, [completion_signal] (const auto &) {
-                          completion_signal->notify (admission_notification);
-                      });
-                }
-                pending[slot].emplace (std::move (submission), sent, _seq - 1);
-                completion_signal->notify (pending[slot]->task, slot, completed_slots,
-                                           completion_signal);
-                ++in_flight;
+            } else if (can_submit (clock_t_::now ())) {
+                submit_one ();
             }
             for (const size_t slot : completed_slots) {
                 if (slot == admission_notification)
@@ -999,6 +1156,7 @@ class framework_driver_t final : public driver_t
     }
 
     const options_t &_options;
+    submission_pacer_t _pacer;
     int _window;
     bool _command;
     stats_http_server_t _host;
@@ -1370,6 +1528,9 @@ int main (int argc, char **argv)
         options.stats_port = std::stoi (arg_value (argc, argv, "--stats-port", "5281"));
         options.target_stats_port =
           std::stoi (arg_value (argc, argv, "--target-stats-port", "5283"));
+        options.target_rate = std::stod (arg_value (argc, argv, "--target-rate", "0"));
+        if (!std::isfinite (options.target_rate) || options.target_rate < 0)
+            throw std::runtime_error ("target rate must be finite and non-negative");
         options.warmup_seconds = std::stod (arg_value (argc, argv, "--warmup-seconds", "5"));
         options.warmup_segments = std::stoi (arg_value (argc, argv, "--warmup-segments", "10"));
         options.request_timeout_ms =
