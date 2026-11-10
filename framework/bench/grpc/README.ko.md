@@ -661,6 +661,7 @@ runner는 여섯 개다: `c/run_local.sh`, `cpp/run_local.sh`, `dotnet/run_local
   `PAYLOAD_SIZES=1024,4096` 범위에서 선택할 수 있다.
 - 값이 위 범위를 벗어나면 runner는 측정을 시작하기 전에 거부한다.
 - `TARGET_RATE`, `SOURCE_CPUS`, `TARGET_CPUS`는 C++ runner 전용 선택 입력이다. CPU 목록은 Linux `taskset -c` 형식을 쓴다.
+  C++ runner는 세 값을 셀 JSON `metadata`의 `targetRate`(`0`은 unpaced), `sourceCpus`, `targetCpus`(설정 안 하면 `unpinned`)에 기록한다.
 
 위 표 밖의 값은 입력이 아니다. send concurrency 8과 drain 상한 30초(§3), 포트(§9)는
 runner가 정하고 셀 JSON의 `metadata`에 기록한다.
