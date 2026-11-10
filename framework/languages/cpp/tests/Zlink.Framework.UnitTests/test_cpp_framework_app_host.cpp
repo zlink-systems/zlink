@@ -930,8 +930,11 @@ bool verify_source_waiter_host_ownership (bool completion_first = false,
     auto make_host = [] (source_wait_probe_t &probe) {
         auto app = app_t::create ();
         app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
-            options.services ().add_singleton<source_wait_http_handler_t> (
-              std::make_unique<source_wait_http_handler_t> (probe));
+            options.services ().add_factory<source_wait_probe_t> (
+              [&probe] (service_provider_t &) {
+                  return std::shared_ptr<source_wait_probe_t> (&probe, [] (auto *) {});
+              },
+              service_lifetime_t::singleton);
             options.http ()
               .listen ("http://127.0.0.1:0")
               .map_get<source_wait_http_handler_t> ("/wait");
@@ -1162,15 +1165,12 @@ struct telemetry_deadline_handler_t
 {
     using request_type = int;
     using reply_type = int;
-    std::shared_ptr<telemetry_http_state_t> state;
-    explicit telemetry_deadline_handler_t (std::shared_ptr<telemetry_http_state_t> state) :
-        state (std::move (state))
-    {
-    }
+    telemetry_http_state_t &state;
+    explicit telemetry_deadline_handler_t (telemetry_http_state_t &state) : state (state) {}
     zlink::framework::task_t<int> handle (const int &)
     {
-        state->deadline_entered.set_value ();
-        co_await state->deadline.task ();
+        state.deadline_entered.set_value ();
+        co_await state.deadline.task ();
         co_return 2758;
     }
 };
@@ -1224,13 +1224,12 @@ int verify_telemetry_host_progress ()
         app->add_zlink_framework ([&] (zlink_framework_options_t &options) {
             dispatch = &options.configure_dispatch ();
             dispatch->message_flow (message_flow_log_mode_t::normal);
-            options.services ().add_singleton<telemetry_http_handler_t> ();
             options.http ()
               .listen ("http://127.0.0.1:0")
               .map_get<telemetry_http_handler_t> ("/probe");
             if (server) {
-                options.services ().add_singleton<telemetry_deadline_handler_t> (
-                  std::make_unique<telemetry_deadline_handler_t> (state));
+                options.services ().add_factory<telemetry_http_state_t> (
+                  [state] (service_provider_t &) { return state; }, service_lifetime_t::singleton);
                 options.add_client_server_channel ("telemetry-deadline")
                   .server ()
                   .set_bind_host ("127.0.0.1")
@@ -1481,7 +1480,6 @@ int verify_no_provider_host (bool empty_setters)
     app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
         dispatch = &options.configure_dispatch ();
         dispatch->message_flow (message_flow_log_mode_t::normal);
-        options.services ().add_singleton<telemetry_http_handler_t> ();
         options.http ().listen ("http://127.0.0.1:0").map_get<telemetry_http_handler_t> ("/probe");
     });
     app.add_hosted_service (std::make_unique<telemetry_ready_service_t> (state));

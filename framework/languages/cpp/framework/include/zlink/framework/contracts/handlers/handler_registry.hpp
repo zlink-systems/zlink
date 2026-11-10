@@ -104,7 +104,7 @@ class handler_registry_t
                     const zlink::message_t &message,
                     const detail::inbound_message_context_t &inbound) -> task_t<zlink::message_t> {
               try {
-                  auto &owner = services.get_required<TOwner> ();
+                  auto &owner = detail::create_dispatch_instance<TOwner> (services);
                   auto request = codecs->deserialize (serializers, message,
                                                       inbound.message.content_type.value_or (""));
                   auto reply = (owner.*method) (request);
@@ -137,7 +137,7 @@ class handler_registry_t
                     const detail::inbound_message_context_t &inbound) -> task_t<zlink::message_t> {
               const auto plan = codecs;
               try {
-                  auto &owner = services.get_required<TOwner> ();
+                  auto &owner = detail::create_dispatch_instance<TOwner> (services);
                   auto request = plan->deserialize (serializers, message,
                                                     inbound.message.content_type.value_or (""));
                   auto reply = co_await (owner.*method) (request);
@@ -174,7 +174,7 @@ class handler_registry_t
                     const zlink::message_t &message,
                     const detail::inbound_message_context_t &inbound) -> task_t<zlink::message_t> {
               try {
-                  auto &owner = services.get_required<TOwner> ();
+                  auto &owner = detail::create_dispatch_instance<TOwner> (services);
                   auto request = codecs->deserialize (serializers, message,
                                                       inbound.message.content_type.value_or (""));
                   auto reply = (owner.*method) (request, inbound.message);
@@ -213,7 +213,7 @@ class handler_registry_t
                     const detail::inbound_message_context_t &inbound) -> task_t<zlink::message_t> {
               const auto plan = codecs;
               try {
-                  auto &owner = services.get_required<TOwner> ();
+                  auto &owner = detail::create_dispatch_instance<TOwner> (services);
                   auto request = plan->deserialize (serializers, message,
                                                     inbound.message.content_type.value_or (""));
                   auto reply = co_await (owner.*method) (request, inbound.message);
@@ -358,7 +358,7 @@ class handler_registry_t
         return add_filter ([] (service_provider_t &services, serializer_registry_t &,
                                const handler_filter_context_t &context,
                                handler_next_t next) -> task_t<void> {
-            auto &filter = services.get_required<TFilter> ();
+            auto &filter = detail::create_dispatch_instance<TFilter> (services);
             return filter.invoke (context, std::move (next));
         });
     }
@@ -431,7 +431,7 @@ class handler_registry_t
                     const zlink::message_t &message,
                     const detail::inbound_message_context_t &inbound) -> task_t<zlink::message_t> {
               try {
-                  auto &owner = services.get_required<TOwner> ();
+                  auto &owner = detail::create_dispatch_instance<TOwner> (services);
                   auto payload = codecs->deserialize (serializers, message,
                                                       inbound.message.content_type.value_or (""));
                   (owner.*method) (payload);
@@ -463,7 +463,7 @@ class handler_registry_t
                     const zlink::message_t &message,
                     const detail::inbound_message_context_t &inbound) -> task_t<zlink::message_t> {
               try {
-                  auto &owner = services.get_required<TOwner> ();
+                  auto &owner = detail::create_dispatch_instance<TOwner> (services);
                   auto payload = codecs->deserialize (serializers, message,
                                                       inbound.message.content_type.value_or (""));
                   co_await (owner.*method) (payload);
@@ -512,7 +512,7 @@ class handler_registry_t
                     const zlink::message_t &message,
                     const detail::inbound_message_context_t &inbound) -> task_t<zlink::message_t> {
               try {
-                  auto &owner = services.get_required<TOwner> ();
+                  auto &owner = detail::create_dispatch_instance<TOwner> (services);
                   auto payload = codecs->deserialize (serializers, message,
                                                       inbound.message.content_type.value_or (""));
                   (owner.*method) (payload, project_context<TContext> (inbound));
@@ -551,7 +551,7 @@ class handler_registry_t
                     const zlink::message_t &message,
                     const detail::inbound_message_context_t &inbound) -> task_t<zlink::message_t> {
               try {
-                  auto &owner = services.get_required<TOwner> ();
+                  auto &owner = detail::create_dispatch_instance<TOwner> (services);
                   auto payload = codecs->deserialize (serializers, message,
                                                       inbound.message.content_type.value_or (""));
                   co_await (owner.*method) (payload, project_context<TContext> (inbound));

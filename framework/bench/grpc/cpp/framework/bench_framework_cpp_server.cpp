@@ -56,10 +56,12 @@ int main (int argc, char **argv)
         server.app ().logging ().disable_record_capture ();
         auto &options = server.app ().add_zlink_framework ();
         options.codecs ().use (zlink::framework_codecs::protobuf ());
-        options.services ().add_singleton<echo_handler_t> (
-          std::make_unique<echo_handler_t> (metrics));
-        options.services ().add_singleton<command_handler_t> (
-          std::make_unique<command_handler_t> (metrics));
+        // Metrics outlive the server; handlers get them by constructor injection (#4145).
+        options.services ().add_factory<server_metrics_t> (
+          [&metrics] (fw::service_provider_t &) {
+              return std::shared_ptr<server_metrics_t> (&metrics, [] (auto *) {});
+          },
+          fw::service_lifetime_t::singleton);
         auto mesh = options.add_route_mesh ("bench");
         mesh.set_object_role (fw::object_role_t::none)
           .listen (endpoint)

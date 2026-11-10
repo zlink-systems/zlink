@@ -414,7 +414,6 @@ class CppFrameworkDecodeFailure : public ::testing::TestWithParam<int>
 TEST_P (CppFrameworkDecodeFailure, RequestRetainsOriginalCause)
 {
     fw::service_collection_t services;
-    services.add_singleton<decode_handler_t> ();
     auto provider = services.build_provider ();
     fw::handler_registry_t handlers;
     handlers.on_request<decode_handler_t, decode_payload_t, std::string> (
@@ -426,7 +425,6 @@ TEST_P (CppFrameworkDecodeFailure, RequestRetainsOriginalCause)
 TEST_P (CppFrameworkDecodeFailure, SendRetainsOriginalCause)
 {
     fw::service_collection_t services;
-    services.add_singleton<decode_handler_t> ();
     auto provider = services.build_provider ();
     fw::handler_registry_t handlers;
     handlers.on_send<decode_handler_t, decode_payload_t> ("decode", "send", &decode_handler_t::send,

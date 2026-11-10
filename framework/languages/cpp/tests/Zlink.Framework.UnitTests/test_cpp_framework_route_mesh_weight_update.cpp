@@ -730,7 +730,6 @@ TEST_P (ChannelMessageFlow, RouteMeshRequestAndSendRecordAllReceiverStages)
         return peer && peer->ready;
     }));
     service_collection_t services;
-    services.add_singleton<channel_flow_handler_t> ();
     auto provider = services.build_provider ();
     serializer_registry_t serializers;
     serializers.add<std::string> (

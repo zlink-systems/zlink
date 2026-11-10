@@ -321,47 +321,8 @@ namespace
 {
 
 
-class local_handler_t
+struct local_handler_state_t
 {
-  public:
-    reply_t handle_request (const request_t &request)
-    {
-        last_request = request.value;
-        return {request.value + 100};
-    }
-
-    void handle_send (const event_t &event)
-    {
-        if (event.value == 300) {
-            std::unique_lock lock (send_gate_mutex);
-            blocking_send_entered = true;
-            send_gate_changed.notify_all ();
-            send_gate_changed.wait (lock, [this] { return release_blocking_send; });
-        }
-        last_event = event.value;
-    }
-
-    reply_t handle_route_request (const request_t &request,
-                                  const zlink::framework::route_message_context_t &context)
-    {
-        last_route_request = request.value;
-        last_route_source = context.source_node_rid.to_string ();
-        last_route_request_thread = std::this_thread::get_id ();
-        route_request_saw_permit_release =
-          application_permit_released != nullptr && *application_permit_released;
-        return {request.value + 200};
-    }
-
-    void handle_route_send (const event_t &event,
-                            const zlink::framework::route_message_context_t &context)
-    {
-        last_route_event = event.value;
-        last_route_source = context.source_node_rid.to_string ();
-        last_route_send_thread = std::this_thread::get_id ();
-        route_send_saw_permit_release =
-          application_permit_released != nullptr && *application_permit_released;
-    }
-
     int last_request = 0;
     int last_event = 0;
     int last_route_request = 0;
@@ -379,20 +340,77 @@ class local_handler_t
     bool release_blocking_send = false;
 };
 
+class local_handler_t
+{
+  public:
+    explicit local_handler_t (local_handler_state_t &state) : state (state) {}
+
+    reply_t handle_request (const request_t &request)
+    {
+        state.last_request = request.value;
+        return {request.value + 100};
+    }
+
+    void handle_send (const event_t &event)
+    {
+        if (event.value == 300) {
+            std::unique_lock lock (state.send_gate_mutex);
+            state.blocking_send_entered = true;
+            state.send_gate_changed.notify_all ();
+            state.send_gate_changed.wait (lock, [this] { return state.release_blocking_send; });
+        }
+        state.last_event = event.value;
+    }
+
+    reply_t handle_route_request (const request_t &request,
+                                  const zlink::framework::route_message_context_t &context)
+    {
+        state.last_route_request = request.value;
+        state.last_route_source = context.source_node_rid.to_string ();
+        state.last_route_request_thread = std::this_thread::get_id ();
+        state.route_request_saw_permit_release =
+          state.application_permit_released != nullptr && *state.application_permit_released;
+        return {request.value + 200};
+    }
+
+    void handle_route_send (const event_t &event,
+                            const zlink::framework::route_message_context_t &context)
+    {
+        state.last_route_event = event.value;
+        state.last_route_source = context.source_node_rid.to_string ();
+        state.last_route_send_thread = std::this_thread::get_id ();
+        state.route_send_saw_permit_release =
+          state.application_permit_released != nullptr && *state.application_permit_released;
+    }
+
+    local_handler_state_t &state;
+};
+
+struct route_filter_state_t
+{
+    bool reject_request = false;
+    bool suppress_send = false;
+    std::vector<zlink::framework::handler_dispatch_kind_t> seen_kinds;
+    std::string last_mesh;
+    std::string last_channel;
+};
+
 class route_filter_t
 {
   public:
+    explicit route_filter_t (route_filter_state_t &state) : state (state) {}
+
     zlink::framework::task_t<void>
     invoke (const zlink::framework::handler_filter_context_t &context,
             zlink::framework::handler_next_t next)
     {
-        seen_kinds.push_back (context.dispatch_kind);
-        last_mesh = context.mesh_name.value_or ("<none>");
-        last_channel = context.channel_name.value_or ("<none>");
-        if ((reject_request
+        state.seen_kinds.push_back (context.dispatch_kind);
+        state.last_mesh = context.mesh_name.value_or ("<none>");
+        state.last_channel = context.channel_name.value_or ("<none>");
+        if ((state.reject_request
              && context.dispatch_kind
                   == zlink::framework::handler_dispatch_kind_t::node_direct_request)
-            || (suppress_send
+            || (state.suppress_send
                 && context.dispatch_kind
                      == zlink::framework::handler_dispatch_kind_t::node_direct_send)) {
             co_return;
@@ -401,11 +419,7 @@ class route_filter_t
         co_return;
     }
 
-    bool reject_request = false;
-    bool suppress_send = false;
-    std::vector<zlink::framework::handler_dispatch_kind_t> seen_kinds;
-    std::string last_mesh;
-    std::string last_channel;
+    route_filter_state_t &state;
 };
 
 class throwing_handler_t
@@ -723,7 +737,7 @@ class local_internal_dispatcher_t final
     {
         (void) received;
         (void) header;
-        services.get_required<local_handler_t> ().internal_dispatch_provider_seen = 1;
+        services.get_required<local_handler_state_t> ().internal_dispatch_provider_seen = 1;
         ++send_count;
         co_return zlink::framework::result_t<void>::success ();
     }
@@ -734,7 +748,7 @@ class local_internal_dispatcher_t final
                       zlink::framework::service_provider_t &services) const override
     {
         (void) received;
-        services.get_required<local_handler_t> ().internal_dispatch_provider_seen = 2;
+        services.get_required<local_handler_state_t> ().internal_dispatch_provider_seen = 2;
         if (header.message_name != "internal.request") {
             return zlink::framework::result_t<zlink::message_t>::failure (
               zlink::framework::framework_error_kind_t::not_found, "unsupported internal request");
@@ -819,24 +833,29 @@ int main ()
     {
         using namespace zlink::framework;
         namespace msg = runtime::messaging;
-        struct flow_command_handler_t
+        struct flow_command_state_t
         {
             int invocations = 0;
             int last_value = 0;
+        };
+        struct flow_command_handler_t
+        {
+            explicit flow_command_handler_t (flow_command_state_t &state) : state (state) {}
+            flow_command_state_t &state;
             void handle (const int &value, const route_message_context_t &)
             {
-                ++invocations;
-                last_value = value;
+                ++state.invocations;
+                state.last_value = value;
             }
         };
         service_collection_t services;
-        services.add_singleton<flow_command_handler_t> ();
+        services.add_singleton<flow_command_state_t> ();
         auto provider = services.build_provider ();
         serializer_registry_t serializers;
         detail::route_handler_registry_t handlers;
         handlers.on_send<flow_command_handler_t, int> ("mesh", "flow-command",
                                                        &flow_command_handler_t::handle);
-        auto &handler = provider.get_required<flow_command_handler_t> ();
+        auto &handler = provider.get_required<flow_command_state_t> ();
         handler_registry_t filters;
         runtime::host::receive_record_t record;
         record.channel_name = "mesh";
@@ -1213,9 +1232,8 @@ int main ()
     }
 
     zlink::framework::service_collection_t services;
-    services.add_singleton<local_handler_t> ();
-    services.add_singleton<throwing_handler_t> ();
-    services.add_singleton<route_filter_t> ();
+    services.add_singleton<local_handler_state_t> ();
+    services.add_singleton<route_filter_state_t> ();
     auto provider = services.build_provider ();
 
     zlink::framework::serializer_registry_t serializers;
@@ -1519,7 +1537,7 @@ int main ()
         .dispatch_send_async ("local", "send", "event", provider, serializers, handlers,
                               zlink::message_t::from (std::string ("31")), {})
         .result ();
-    if (!async_local_send || provider.get_required<local_handler_t> ().last_event != 31) {
+    if (!async_local_send || provider.get_required<local_handler_state_t> ().last_event != 31) {
         return 114;
     }
 
@@ -1657,7 +1675,7 @@ int main ()
     const auto packet_publish_result = packet_dispatcher.dispatch_server_message (
       "local", publish_parts, provider, serializers, handlers);
     if (!packet_publish_result || packet_publish_result.value ().size () != 0
-        || provider.get_required<local_handler_t> ().last_event != 34) {
+        || provider.get_required<local_handler_state_t> ().last_event != 34) {
         return 111;
     }
 
@@ -1694,7 +1712,7 @@ int main ()
     malformed_header.topic = "request";
     malformed_header.correlation_id = "corr-payload-decode";
     const auto last_request_before_malformed =
-      provider.get_required<local_handler_t> ().last_request;
+      provider.get_required<local_handler_state_t> ().last_request;
     auto malformed_parts = envelope_codec.encode_raw_body_parts (
       malformed_header, zlink::message_t::from (std::string ("not-an-int")));
     request_deserialize_count.store (0, std::memory_order_relaxed);
@@ -1708,7 +1726,8 @@ int main ()
         || malformed_reply_header.value ().kind
              != zlink::framework::runtime::messaging::message_kind_t::error
         || malformed_reply_header.value ().error_code.value_or ("") != "protocol_error"
-        || provider.get_required<local_handler_t> ().last_request != last_request_before_malformed
+        || provider.get_required<local_handler_state_t> ().last_request
+             != last_request_before_malformed
         || request_deserialize_count.load (std::memory_order_relaxed) != 1) {
         return 109;
     }
@@ -2057,14 +2076,15 @@ int main ()
     }
     hosted_builder.message_bus ().send ("hosted", event_t{30}).async ();
     for (int attempt = 0;
-         attempt < 50 && provider.get_required<local_handler_t> ().last_event != 30; ++attempt) {
+         attempt < 50 && provider.get_required<local_handler_state_t> ().last_event != 30;
+         ++attempt) {
         std::this_thread::sleep_for (std::chrono::milliseconds (10));
     }
-    if (provider.get_required<local_handler_t> ().last_event != 30) {
+    if (provider.get_required<local_handler_state_t> ().last_event != 30) {
         hosted_service.stop ();
         return 87;
     }
-    auto &hosted_handler = provider.get_required<local_handler_t> ();
+    auto &hosted_handler = provider.get_required<local_handler_state_t> ();
     hosted_builder.message_bus ().send ("hosted", event_t{300}).async ();
     bool blocking_send_started = false;
     {
@@ -2222,7 +2242,6 @@ int main ()
     zlink::framework::service_collection_t nested_services;
     nested_services.add_singleton<zlink::framework::channel_client_t> (
       std::make_unique<zlink::framework::channel_client_t> (nested_hosted_builder.message_bus ()));
-    nested_services.add_transient<nested_request_handler_t, zlink::framework::channel_client_t> ();
     auto nested_provider = nested_services.build_provider ();
     zlink::framework::handler_registry_t nested_handlers;
     nested_handlers.on_request<nested_request_handler_t, request_t, reply_t> (
@@ -2260,8 +2279,6 @@ int main ()
     scoped_hosted_runtime.bind_serializers (serializers);
     zlink::framework::service_collection_t scoped_services;
     scoped_services.add_scoped<scoped_channel_dependency_t> ();
-    scoped_services.add_transient<scoped_channel_filter_t, scoped_channel_dependency_t> ();
-    scoped_services.add_transient<scoped_channel_handler_t, scoped_channel_dependency_t> ();
     auto scoped_provider = scoped_services.build_provider ();
     zlink::framework::handler_registry_t scoped_handlers;
     scoped_handlers.use_filter<scoped_channel_filter_t> ();
@@ -2347,7 +2364,7 @@ int main ()
     auto local_send =
       local_runtime.dispatch_send ("local", "send", "event", provider, serializers, handlers,
                                    zlink::message_t::from (std::string ("31")));
-    if (!local_send || provider.get_required<local_handler_t> ().last_event != 31) {
+    if (!local_send || provider.get_required<local_handler_state_t> ().last_event != 31) {
         return 10;
     }
 
@@ -2757,7 +2774,7 @@ int main ()
     zlink::framework::detail::no_route_internal_packet_dispatcher_t no_internal;
     const auto route_dispatch_thread = std::this_thread::get_id ();
     bool application_permit_released = false;
-    provider.get_required<local_handler_t> ().application_permit_released =
+    provider.get_required<local_handler_state_t> ().application_permit_released =
       &application_permit_released;
     test_route_receive_pump_t route_handler_pump{
       zlink::framework::detail::route_packet_dispatcher_t (
@@ -2779,11 +2796,11 @@ int main ()
                  zlink::framework::detail::encoded_payload_from_raw (route_reply_body.value ()))
                .value
              != 224
-        || provider.get_required<local_handler_t> ().last_route_request != 24
-        || provider.get_required<local_handler_t> ().last_route_source != "source-node"
-        || provider.get_required<local_handler_t> ().last_route_request_thread
+        || provider.get_required<local_handler_state_t> ().last_route_request != 24
+        || provider.get_required<local_handler_state_t> ().last_route_source != "source-node"
+        || provider.get_required<local_handler_state_t> ().last_route_request_thread
              != route_dispatch_thread
-        || !provider.get_required<local_handler_t> ().route_request_saw_permit_release) {
+        || !provider.get_required<local_handler_state_t> ().route_request_saw_permit_release) {
         return 49;
     }
     route_handler_pump.enqueue (zlink::framework::detail::route_received_packet_t{
@@ -2792,17 +2809,18 @@ int main ()
     application_permit_released = false;
     const auto route_send_receive = route_handler_pump.drain ();
     if (!route_send_receive || !route_send_receive.value ().replies.empty ()
-        || provider.get_required<local_handler_t> ().last_route_event != 78
-        || provider.get_required<local_handler_t> ().last_route_send_thread != route_dispatch_thread
-        || !provider.get_required<local_handler_t> ().route_send_saw_permit_release) {
+        || provider.get_required<local_handler_state_t> ().last_route_event != 78
+        || provider.get_required<local_handler_state_t> ().last_route_send_thread
+             != route_dispatch_thread
+        || !provider.get_required<local_handler_state_t> ().route_send_saw_permit_release) {
         return 50;
     }
 
     zlink::framework::handler_registry_t route_filters;
     route_filters.use_filter<route_filter_t> ();
-    auto &route_filter = provider.get_required<route_filter_t> ();
+    auto &route_filter = provider.get_required<route_filter_state_t> ();
     route_filter.reject_request = true;
-    provider.get_required<local_handler_t> ().last_route_request = 0;
+    provider.get_required<local_handler_state_t> ().last_route_request = 0;
     test_route_receive_pump_t filtered_route_pump{
       zlink::framework::detail::route_packet_dispatcher_t ("game.route", provider, serializers,
                                                            route_handlers, no_internal,
@@ -2811,7 +2829,7 @@ int main ()
       zlink::routing_id_t::from (std::string ("source-node")), 79, route_request_parts});
     const auto filtered_request = filtered_route_pump.drain ();
     if (!filtered_request || filtered_request.value ().replies.size () != 1
-        || provider.get_required<local_handler_t> ().last_route_request != 0
+        || provider.get_required<local_handler_state_t> ().last_route_request != 0
         || route_filter.seen_kinds.empty ()
         || route_filter.seen_kinds.back ()
              != zlink::framework::handler_dispatch_kind_t::node_direct_request
@@ -2829,13 +2847,13 @@ int main ()
 
     route_filter.reject_request = false;
     route_filter.suppress_send = true;
-    provider.get_required<local_handler_t> ().last_route_event = 0;
+    provider.get_required<local_handler_state_t> ().last_route_event = 0;
     filtered_route_pump.enqueue (zlink::framework::detail::route_received_packet_t{
       zlink::routing_id_t::from (std::string ("source-node")), std::nullopt,
       route_runtime.outbound_packets ()[0].parts});
     const auto filtered_send = filtered_route_pump.drain ();
     if (!filtered_send || !filtered_send.value ().replies.empty ()
-        || provider.get_required<local_handler_t> ().last_route_event != 0
+        || provider.get_required<local_handler_state_t> ().last_route_event != 0
         || route_filter.seen_kinds.back ()
              != zlink::framework::handler_dispatch_kind_t::node_direct_send) {
         return 411;
@@ -2928,7 +2946,7 @@ int main ()
     if (!internal_reply_body || internal_reply_body.value ().to_string () != "88") {
         return 52;
     }
-    if (provider.get_required<local_handler_t> ().internal_dispatch_provider_seen != 2) {
+    if (provider.get_required<local_handler_state_t> ().internal_dispatch_provider_seen != 2) {
         return 64;
     }
     if (no_internal.can_handle_send ("internal.send")
@@ -2975,7 +2993,7 @@ int main ()
         internal_send_parts});
     if (!internal_a.can_handle_send ("internal.send") || !supported_internal_send
         || supported_internal_send.value ().has_value () || internal_a.send_count != 1
-        || provider.get_required<local_handler_t> ().internal_dispatch_provider_seen != 1) {
+        || provider.get_required<local_handler_state_t> ().internal_dispatch_provider_seen != 1) {
         return 68;
     }
     zlink::framework::runtime::messaging::envelope_header_t unsupported_internal_header;

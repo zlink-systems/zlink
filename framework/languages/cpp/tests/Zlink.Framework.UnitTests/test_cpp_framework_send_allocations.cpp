@@ -4,6 +4,7 @@
 #include "location_runtime_test_access.hpp"
 #include "manual_internal_scheduler.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/configuration/service_scope.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime_failure_fixture.hpp"
 #include "stateful_object_sync.hpp"
@@ -382,10 +383,19 @@ TEST (SendAllocations, NodeDirectSendPreservesTransportExceptionClassification)
     }
 }
 
-struct synchronous_route_handler_t
+struct synchronous_route_handler_state_t
 {
     unsigned calls = 0;
-    void handle (const route_payload_t &) { ++calls; }
+};
+
+struct synchronous_route_handler_t
+{
+    explicit synchronous_route_handler_t (synchronous_route_handler_state_t &state) : state (state)
+    {
+    }
+
+    synchronous_route_handler_state_t &state;
+    void handle (const route_payload_t &) { ++state.calls; }
 };
 
 TEST (SendAllocations, SynchronousNodeHandlerDoesNotConstructSharedTaskStates)
@@ -395,7 +405,7 @@ TEST (SendAllocations, SynchronousNodeHandlerDoesNotConstructSharedTaskStates)
       [] (const route_payload_t &) { return fw::encoded_payload_t::from_string ("7"); },
       [] (const fw::encoded_payload_t &) { return route_payload_t{}; }, "x/y");
     fw::service_collection_t services;
-    services.add_singleton<synchronous_route_handler_t> ();
+    services.add_singleton<synchronous_route_handler_state_t> ();
     auto provider = services.build_provider ();
     auto builder = fw::test::runtime_failure_builder ();
     builder.add_route_mesh ("m")
@@ -407,16 +417,22 @@ TEST (SendAllocations, SynchronousNodeHandlerDoesNotConstructSharedTaskStates)
     auto message = zlink::message_t::from ("7");
     fw::route_message_context_t context{{}, zlink::routing_id_t::from ("source")};
     context.content_type = "x/y";
+    // Each call runs in its own dispatch scope, as the runtime does (#4145).
+    std::optional<detail::service_scope_t> scope;
     const auto adapter = [&] {
-        handler->invoker (provider, serializers, message, context, {}).result ().value ();
+        handler->invoker (scope->provider (), serializers, message, context, {}).result ().value ();
     };
+    scope.emplace (detail::service_scope_t::create (provider));
     adapter ();
+    scope.emplace (detail::service_scope_t::create (provider));
     const std::array state_sites{fw::tests::shared_state_allocation_site<
       detail::coroutine_task_shared_state_t<zlink::message_t>> ()};
     const auto adapter_allocations =
       measure_ready_operation ("synchronous node handler", state_sites, adapter);
-    EXPECT_EQ (adapter_allocations, 0u);
-    EXPECT_EQ (provider.get_required<synchronous_route_handler_t> ().calls, 2u);
+    // The handler instance and its entry in the dispatch scope (#4145); no task state.
+    EXPECT_EQ (adapter_allocations, 2u);
+    scope.reset ();
+    EXPECT_EQ (provider.get_required<synchronous_route_handler_state_t> ().calls, 2u);
 }
 
 struct retained_route_payload_t
@@ -424,18 +440,28 @@ struct retained_route_payload_t
     std::shared_ptr<int> value;
 };
 
-struct asynchronous_route_handler_t
+struct asynchronous_route_handler_state_t
 {
     fw::task_completion_source_t<void> release;
     int observed = 0;
+};
+
+struct asynchronous_route_handler_t
+{
+    explicit asynchronous_route_handler_t (asynchronous_route_handler_state_t &state) :
+        state (state)
+    {
+    }
+
+    asynchronous_route_handler_state_t &state;
 
     fw::task_t<void> handle (const retained_route_payload_t &payload,
                              const fw::route_message_context_t &)
     {
         const auto lifetime = std::weak_ptr<int> (payload.value);
-        co_await release.task ();
+        co_await state.release.task ();
         if (!lifetime.expired ())
-            observed = *payload.value;
+            state.observed = *payload.value;
     }
 };
 
@@ -452,7 +478,7 @@ TEST (SendAllocations, AsynchronousMeshHandlerRetainsItsBorrowedPayloadUntilTerm
       },
       "x/y");
     fw::service_collection_t services;
-    services.add_singleton<asynchronous_route_handler_t> ();
+    services.add_singleton<asynchronous_route_handler_state_t> ();
     auto provider = services.build_provider ();
     auto builder = fw::test::runtime_failure_builder ();
     builder.add_route_mesh ("m")
@@ -467,7 +493,7 @@ TEST (SendAllocations, AsynchronousMeshHandlerRetainsItsBorrowedPayloadUntilTerm
     auto pending = handler->invoker (provider, serializers, message, context, {});
     EXPECT_FALSE (pending.await_ready ());
     EXPECT_FALSE (lifetime.expired ());
-    auto &owner = provider.get_required<asynchronous_route_handler_t> ();
+    auto &owner = provider.get_required<asynchronous_route_handler_state_t> ();
     ASSERT_TRUE (owner.release.complete (fw::result_t<void>::success ()));
     pending.result ().value ();
     EXPECT_EQ (owner.observed, 7);

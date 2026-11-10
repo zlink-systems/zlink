@@ -470,20 +470,17 @@ struct suspended_handler_state_t
 };
 struct suspended_handler_t
 {
-    std::shared_ptr<suspended_handler_state_t> state;
-    explicit suspended_handler_t (std::shared_ptr<suspended_handler_state_t> state) :
-        state (std::move (state))
-    {
-    }
-    ~suspended_handler_t () { ++state->scopes_closed; }
+    suspended_handler_state_t &state;
+    explicit suspended_handler_t (suspended_handler_state_t &state) : state (state) {}
+    ~suspended_handler_t () { ++state.scopes_closed; }
     fw::task_t<void> handle (const std::string &)
     {
         {
-            std::lock_guard lock (state->mutex);
-            ++state->entered;
-            state->changed.notify_all ();
+            std::lock_guard lock (state.mutex);
+            ++state.entered;
+            state.changed.notify_all ();
         }
-        co_await state->release.task ();
+        co_await state.release.task ();
     }
 };
 }
@@ -498,11 +495,9 @@ TEST (ManualIngressWait, SuspendedHandlersReturnWorkersBeforeTerminal)
         ~release_t () { handler->release.complete (fw::result_t<void>::success ()); }
     };
     manual_source_t source ({}, [&] (manual_source_t &source) {
-        source.services.add_factory<suspended_handler_t> (
-          [handler] (fw::service_provider_t &) {
-              return std::make_unique<suspended_handler_t> (handler);
-          },
-          fw::service_lifetime_t::scoped);
+        source.services.add_factory<suspended_handler_state_t> (
+          [handler] (fw::service_provider_t &) { return handler; },
+          fw::service_lifetime_t::singleton);
         source.provider = source.services.build_provider ();
         source.handlers.on_send<suspended_handler_t, std::string> (
           "manual-wait", "", &suspended_handler_t::handle, {.packet_name = "suspend"});
