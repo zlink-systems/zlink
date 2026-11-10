@@ -14,6 +14,9 @@
 #include <atomic>
 #include <charconv>
 #include <cstdlib>
+#include <fstream>
+#include <map>
+#include <mutex>
 #include <pthread.h>
 #include <optional>
 #include <string>
@@ -76,6 +79,9 @@ class completion_dispatcher_t : public std::enable_shared_from_this<completion_d
   public:
     completion_dispatcher_t ()
     {
+        const char *queue_log = std::getenv ("ZLINK_PERF_COMPLETION_QUEUE_LOG");
+        if (queue_log != nullptr && *queue_log != '\0')
+            _queue_log_path = queue_log;
         const auto count = completion_worker_count ();
         _workers.reserve (count);
         for (unsigned index = 0; index < count; ++index)
@@ -91,6 +97,16 @@ class completion_dispatcher_t : public std::enable_shared_from_this<completion_d
         _work.reset ();
         for (auto &worker : _workers)
             worker.join ();
+        if (!_queue_log_path.empty ()) {
+            std::ofstream log (_queue_log_path);
+            if (log) {
+                std::lock_guard lock (_queue_histogram_mutex);
+                log << "depth\tcount\n";
+                for (const auto &[depth, count] : _queue_histogram)
+                    log << depth << '\t' << count << '\n';
+                log << "max\t" << _queue_max_depth << '\n';
+            }
+        }
     }
 
     template <typename Work> void post (Work &&work)
@@ -98,13 +114,39 @@ class completion_dispatcher_t : public std::enable_shared_from_this<completion_d
         if (_context.stopped ())
             throw framework_exception_t (framework_error_kind_t::shutting_down,
                                          registered_execution_context_shutting_down_message);
-        boost::asio::post (_context, std::forward<Work> (work));
+        _queued_completions.fetch_add (1, std::memory_order_relaxed);
+        try {
+            boost::asio::post (
+              _context,
+              [this, work = std::forward<Work> (work)] () mutable {
+                  const auto queued_before =
+                    _queued_completions.fetch_sub (1, std::memory_order_relaxed);
+                  if (!_queue_log_path.empty ())
+                      record_queue_depth (queued_before - 1);
+                  work ();
+              });
+        } catch (...) {
+            _queued_completions.fetch_sub (1, std::memory_order_relaxed);
+            throw;
+        }
     }
     std::size_t worker_count () const noexcept { return _workers.size (); }
 
   private:
+    void record_queue_depth (std::size_t depth)
+    {
+        std::lock_guard lock (_queue_histogram_mutex);
+        ++_queue_histogram[depth];
+        _queue_max_depth = std::max (_queue_max_depth, depth);
+    }
+
     boost::asio::io_context _context;
     std::vector<std::jthread> _workers;
+    std::atomic<std::size_t> _queued_completions{0};
+    std::string _queue_log_path;
+    std::mutex _queue_histogram_mutex;
+    std::map<std::size_t, std::uint64_t> _queue_histogram;
+    std::size_t _queue_max_depth = 0;
     // Declared last so construction failure releases work before joining started workers.
     boost::asio::executor_work_guard<boost::asio::io_context::executor_type> _work{
       _context.get_executor ()};
