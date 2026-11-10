@@ -12,7 +12,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <charconv>
+#include <cstdlib>
+#include <pthread.h>
 #include <optional>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -22,6 +26,23 @@ namespace zlink::framework::detail
 
 namespace
 {
+unsigned completion_worker_count ()
+{
+    constexpr unsigned minimum_worker_count = 2;
+    const auto default_count = std::max (
+      minimum_worker_count, ::zlink::framework::runtime::available_processor_count ());
+    const char *configured_count = std::getenv ("ZLINK_PERF_COMPLETION_POOL");
+    if (configured_count == nullptr)
+        return default_count;
+
+    unsigned count = 0;
+    const auto length = std::char_traits<char>::length (configured_count);
+    const auto parsed = std::from_chars (configured_count, configured_count + length, count);
+    return parsed.ec == std::errc{} && parsed.ptr == configured_count + length && count > 0
+             ? count
+             : default_count;
+}
+
 thread_local std::shared_ptr<serial_turn_t> current_serial_turn_handle;
 thread_local std::optional<serial_resume_failure_t> current_serial_resume_failure;
 thread_local const void *current_application_job = nullptr;
@@ -55,13 +76,14 @@ class completion_dispatcher_t : public std::enable_shared_from_this<completion_d
   public:
     completion_dispatcher_t ()
     {
-        // A blocked callback must leave another worker available for independent turns.
-        constexpr unsigned minimum_worker_count = 2;
-        const auto count = std::max (minimum_worker_count,
-                                     ::zlink::framework::runtime::available_processor_count ());
+        const auto count = completion_worker_count ();
         _workers.reserve (count);
         for (unsigned index = 0; index < count; ++index)
-            _workers.emplace_back ([this] { _context.run (); });
+            _workers.emplace_back ([this, index] {
+                const auto name = "zl-cmpl-" + std::to_string (index);
+                (void) pthread_setname_np (pthread_self (), name.c_str ());
+                _context.run ();
+            });
     }
 
     void close ()
