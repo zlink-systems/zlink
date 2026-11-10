@@ -1,6 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
-const { spawn } = require("node:child_process");
+const { runProviderBuild } = require("./provider-build-command.cjs");
 const { replaceExactly } = require("./build-node-provider.cjs");
 
 const root = path.resolve(__dirname, "../..");
@@ -158,30 +158,6 @@ function copySources(source, target, extension) {
     );
   }
 }
-async function run(command, args, directory, name, logDirectory = directory) {
-  const log = path.join(logDirectory, `${name}.log`);
-  const output = fs.openSync(log, "w");
-  try {
-    await new Promise((resolve, reject) => {
-      const process = spawn(command, args, {
-        cwd: directory,
-        stdio: ["ignore", output, output],
-      });
-      process.once("error", reject);
-      process.once("exit", (code, signal) =>
-        code === 0
-          ? resolve()
-          : reject(
-              new Error(
-                `not-built: ${command} exited ${code ?? signal}; see ${log}`,
-              ),
-            ),
-      );
-    });
-  } finally {
-    fs.closeSync(output);
-  }
-}
 function mutate(file, transform) {
   fs.writeFileSync(file, transform(fs.readFileSync(file, "utf8")));
 }
@@ -277,7 +253,7 @@ async function buildDotnet(directory, mutation, baseline, logDirectory) {
     path.join(directory, "Directory.Build.targets"),
     "<Project />\n",
   );
-  await run(
+  await runProviderBuild(
     "dotnet",
     [
       "build",
@@ -292,8 +268,7 @@ async function buildDotnet(directory, mutation, baseline, logDirectory) {
       path.join(directory, "output"),
     ],
     directory,
-    "build",
-    logDirectory,
+    path.join(logDirectory, "build.log"),
   );
   fs.copyFileSync(
     path.join(directory, "output", `${dotnetAssembly}.dll`),
@@ -344,21 +319,19 @@ async function buildJava(directory, mutation, baseline, logDirectory) {
   const classpath = jars
     .map((file) => path.join(lib, file))
     .join(path.delimiter);
-  await run(
+  await runProviderBuild(
     "javac",
     ["-J-Xmx256m", "-cp", classpath, "-d", classes, ...files(source, ".java")],
     directory,
-    "build",
-    logDirectory,
+    path.join(logDirectory, "build.log"),
   );
   const jarTree = path.join(directory, "jar-tree");
   fs.mkdirSync(jarTree);
-  await run(
+  await runProviderBuild(
     "jar",
     ["--extract", "--file", path.join(lib, providerJars[0]), "--dir", jarTree],
     directory,
-    "jar-extract",
-    logDirectory,
+    path.join(logDirectory, "jar-extract.log"),
   );
   // Remove the original production classes, including nested classes, while retaining generated proto classes.
   const providerPackage = path.join(
@@ -369,7 +342,7 @@ async function buildJava(directory, mutation, baseline, logDirectory) {
     if (file.endsWith(".class"))
       fs.unlinkSync(path.join(providerPackage, file));
   fs.cpSync(classes, jarTree, { recursive: true });
-  await run(
+  await runProviderBuild(
     "jar",
     [
       "--create",
@@ -381,8 +354,7 @@ async function buildJava(directory, mutation, baseline, logDirectory) {
       ".",
     ],
     directory,
-    "jar",
-    logDirectory,
+    path.join(logDirectory, "jar.log"),
   );
   return {
     ...baseline,

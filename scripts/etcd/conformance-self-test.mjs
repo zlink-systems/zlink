@@ -23,6 +23,28 @@ const {
   dotnetMutations,
   javaMutations,
 } = require("./build-managed-provider.cjs");
+const { cppMutations } = require("./build-cpp-provider.cjs");
+
+test("C++ mutations require exactly the current provider source targets", () => {
+  const source = fs
+    .readFileSync(
+      new URL(
+        "../../framework/languages/cpp/extensions/framework-locations-etcd/src/etcd.cpp",
+        import.meta.url,
+      ),
+      "utf8",
+    )
+    .replaceAll("\r\n", "\n");
+  assert.equal(Object.keys(cppMutations).length, 6);
+  for (const [id, transform] of Object.entries(cppMutations)) {
+    assert.notEqual(transform(source), source, id);
+    assert.throws(() => transform(""), /not-built/, id);
+    assert.throws(() => transform(source + source), /not-built/, id);
+  }
+  console.log(
+    "C++ mutation targets: 6 accepted; 12 missing/duplicate targets rejected",
+  );
+});
 
 test("managed mutations require exactly the current provider source targets", () => {
   const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -78,9 +100,9 @@ test("missing package dist fails before cluster startup without transpile fallba
   );
 });
 
-test("managed baseline artifacts must exist before cluster startup", async () => {
+test("managed and C++ baseline artifacts must exist before cluster startup", async () => {
   const { runConformance } = await import("./conformance-runner.mjs");
-  for (const language of ["dotnet", "jvm"]) {
+  for (const language of ["dotnet", "jvm", "cpp"]) {
     const absent = fileURLToPath(
       new URL(`./.absent-${language}-adapter`, import.meta.url),
     );
@@ -94,7 +116,7 @@ test("managed baseline artifacts must exist before cluster startup", async () =>
     );
   }
   console.log(
-    "missing managed baselines: dotnet/jvm rejected before cluster startup",
+    "missing baselines: dotnet/jvm/cpp rejected before cluster startup",
   );
 });
 
