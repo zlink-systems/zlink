@@ -1230,28 +1230,20 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
           _bytes_written.load (std::memory_order_acquire)
           <= _peers_bytes_read.load (std::memory_order_acquire);
     }
+    // Fix empty-queue eligibility at the first frame. Complete-record writers
+    // retain every part; incremental writers may use the exception only at FINAL.
+    const bool allow_empty_pipe_exception =
+      (_out_multipart_started_empty || (!more && incomplete_before == 0))
+      && (!more || write_mode_ == pipe_write_complete_record);
     bool commit_credit_ready =
       write_mode_ == pipe_write_unchecked
       || (write_mode_ == pipe_write_final && !commits_bytes)
       || can_commit_bytes_with_peer_snapshot_unlocked (
-        _out_incomplete_bytes, _out_incomplete_payload_bytes, false,
-        &max_message_bytes);
+        _out_incomplete_bytes, _out_incomplete_payload_bytes,
+        allow_empty_pipe_exception, &max_message_bytes);
     if (!commit_credit_ready) {
-        // The first frame fixes empty-queue eligibility. All parts of an
-        // owner-submitted record are present; incremental input can extend
-        // the exception only to FINAL. Keep ordinary HWM admission above
-        // independent of this exceptional policy.
-        const bool allow_empty_pipe_exception =
-          (_out_multipart_started_empty || (!more && incomplete_before == 0))
-          && (!more || write_mode_ == pipe_write_complete_record);
-        commit_credit_ready =
-          allow_empty_pipe_exception
-          && can_commit_bytes_with_peer_snapshot_unlocked (
-            _out_incomplete_bytes, _out_incomplete_payload_bytes, true,
-            &max_message_bytes);
-        if (!commit_credit_ready
-            && _bytes_written.load (std::memory_order_acquire)
-                 > _peers_bytes_read.load (std::memory_order_acquire)) {
+        if (_bytes_written.load (std::memory_order_acquire)
+            > _peers_bytes_read.load (std::memory_order_acquire)) {
             arm_hwm_credit_wait_unlocked ();
             commit_credit_ready =
               can_commit_bytes_with_peer_snapshot_unlocked (
