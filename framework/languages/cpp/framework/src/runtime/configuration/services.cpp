@@ -317,6 +317,15 @@ std::shared_ptr<void> service_provider_t::resolve (std::type_index type)
                                  "unknown service lifetime");
 }
 
+std::shared_ptr<void> service_provider_t::own_dispatch_instance (std::shared_ptr<void> instance)
+{
+    if (is_closed ()) {
+        throw detail::make_boundary_exception (detail::boundary_error_t::shutdown,
+                                               "service provider is closed");
+    }
+    return _scope->instances.track (std::move (instance));
+}
+
 std::shared_ptr<void> service_provider_t::try_resolve (std::type_index type)
 {
     if (is_closed ()) {

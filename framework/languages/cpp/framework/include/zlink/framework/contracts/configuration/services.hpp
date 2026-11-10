@@ -16,6 +16,8 @@
 namespace zlink::framework
 {
 
+class service_provider_t;
+
 namespace detail
 {
 class service_registry_t;
@@ -32,6 +34,7 @@ template <typename TCategory> struct logger_dependency_t<logger_t<TCategory>> : 
 };
 
 template <typename THandler> struct ctor_injector_t;
+template <typename T> T &create_dispatch_instance (service_provider_t &provider);
 } // namespace detail
 
 enum class service_lifetime_t
@@ -73,12 +76,14 @@ class service_provider_t
     friend class service_collection_t;
     friend class detail::service_scope_access_t;
     template <typename THandler> friend struct detail::ctor_injector_t;
+    template <typename T> friend T &detail::create_dispatch_instance (service_provider_t &);
 
     service_provider_t (std::shared_ptr<detail::service_registry_t> registry,
                         std::shared_ptr<detail::service_scope_state_t> scope);
 
     std::shared_ptr<void> resolve (std::type_index type);
     std::shared_ptr<void> try_resolve (std::type_index type);
+    std::shared_ptr<void> own_dispatch_instance (std::shared_ptr<void> instance);
     std::shared_ptr<void> cached_framework_dependency (std::type_index type);
     std::shared_ptr<void> cache_framework_dependency (std::type_index type,
                                                       std::shared_ptr<void> instance);
@@ -311,31 +316,14 @@ template <typename T> std::shared_ptr<T> make_injected_shared (service_provider_
 }
 
 // Spec 06 §10: every dispatch creates its handler, filter and channel owner from the
-// constructor, with dependencies from the dispatch scope. How the application registered
-// the type does not change that. The instance is a local of the dispatch invoker, on the
-// stack or in its coroutine frame, and is destroyed exactly once when the dispatch ends.
-template <typename T> class dispatch_instance_t
+// constructor in the dispatch scope, which owns it until the scope closes. How the
+// application registered the type does not change that.
+template <typename T> T &create_dispatch_instance (service_provider_t &provider)
 {
-  public:
-    explicit dispatch_instance_t (service_provider_t &provider) :
-        dispatch_instance_t (provider, std::make_index_sequence<injected_constructor_arity<T> ()>{})
-    {
-    }
-
-    dispatch_instance_t (const dispatch_instance_t &) = delete;
-    dispatch_instance_t &operator= (const dispatch_instance_t &) = delete;
-
-    T &get () noexcept { return _value; }
-
-  private:
-    template <std::size_t... I>
-    dispatch_instance_t (service_provider_t &provider, std::index_sequence<I...>) :
-        _value ((static_cast<void> (I), ctor_injector_t<T>{provider})...)
-    {
-    }
-
-    T _value;
-};
+    auto instance = make_injected_shared<T> (provider);
+    provider.own_dispatch_instance (instance);
+    return *instance;
+}
 
 } // namespace detail
 

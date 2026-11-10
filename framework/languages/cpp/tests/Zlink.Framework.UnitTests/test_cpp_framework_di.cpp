@@ -352,9 +352,8 @@ int main ()
     }
     auto handler_logging_provider = handler_logging_services.build_provider ();
     const auto records_before_handler = logging.captured_records ().size ();
-    zlink::framework::detail::dispatch_instance_t<inferred_logger_handler_t> (
+    zlink::framework::detail::create_dispatch_instance<inferred_logger_handler_t> (
       handler_logging_provider)
-      .get ()
       .write ();
     if (logging.captured_records ().size () != records_before_handler + 1) {
         return 16;

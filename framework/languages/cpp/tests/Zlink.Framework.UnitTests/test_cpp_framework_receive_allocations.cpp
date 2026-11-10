@@ -425,9 +425,9 @@ TEST (ReceiveAllocations, AutomaticClientServerSendRecordHasFixedAllocationCount
 #if defined(__GLIBCXX__)
             // Spec-independent regression budget measured with libstdc++, not a spec property.
             // dto_traits removed one ready state from the former budget of 24 (#2751).
-            // The per-dispatch handler is a local of the invoker instead of a transient
-            // unique_ptr, its shared_ptr control block and its scope entry (#4145).
-            EXPECT_EQ (actual.count, 20u);
+            // The per-dispatch handler is one make_shared instead of a transient
+            // unique_ptr plus its shared_ptr control block (#4145).
+            EXPECT_EQ (actual.count, 22u);
 #endif
             EXPECT_EQ (receive_handler_t::calls, ++expected_calls);
             EXPECT_EQ (

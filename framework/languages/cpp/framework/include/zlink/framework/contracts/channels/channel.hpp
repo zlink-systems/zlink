@@ -222,8 +222,7 @@ class route_channel_builder_t
                     detail::handler_start_callback_ref_t before_application_handler)
             -> task_t<zlink::message_t> {
               try {
-                  detail::dispatch_instance_t<TOwner> owner_instance (services);
-                  auto &owner = owner_instance.get ();
+                  auto &owner = detail::create_dispatch_instance<TOwner> (services);
                   auto payload = detail::deserialize_typed_payload<TMessage> (
                     serializers, message, context.content_type.value_or (""));
                   detail::invoke_prepared_handler (before_application_handler, method, owner,
@@ -257,8 +256,7 @@ class route_channel_builder_t
                     detail::handler_start_callback_ref_t before_application_handler)
             -> task_t<zlink::message_t> {
               try {
-                  detail::dispatch_instance_t<TOwner> owner_instance (services);
-                  auto &owner = owner_instance.get ();
+                  auto &owner = detail::create_dispatch_instance<TOwner> (services);
                   auto payload = detail::deserialize_typed_payload<TMessage> (
                     serializers, message, context.content_type.value_or (""));
                   detail::invoke_prepared_handler (before_application_handler, method, owner,
@@ -292,8 +290,7 @@ class route_channel_builder_t
                     detail::handler_start_callback_ref_t before_application_handler)
             -> task_t<zlink::message_t> {
               try {
-                  detail::dispatch_instance_t<TOwner> owner_instance (services);
-                  auto &owner = owner_instance.get ();
+                  auto &owner = detail::create_dispatch_instance<TOwner> (services);
                   auto payload = detail::deserialize_typed_payload<TMessage> (
                     serializers, message, context.content_type.value_or (""));
                   co_await detail::invoke_prepared_handler (before_application_handler, method,
@@ -326,8 +323,7 @@ class route_channel_builder_t
                     detail::handler_start_callback_ref_t before_application_handler)
             -> task_t<zlink::message_t> {
               try {
-                  detail::dispatch_instance_t<TOwner> owner_instance (services);
-                  auto &owner = owner_instance.get ();
+                  auto &owner = detail::create_dispatch_instance<TOwner> (services);
                   auto request = detail::deserialize_typed_payload<TRequest> (
                     serializers, message, context.content_type.value_or (""));
                   auto reply = detail::invoke_prepared_handler (before_application_handler, method,
@@ -361,8 +357,7 @@ class route_channel_builder_t
                     detail::handler_start_callback_ref_t before_application_handler)
             -> task_t<zlink::message_t> {
               try {
-                  detail::dispatch_instance_t<TOwner> owner_instance (services);
-                  auto &owner = owner_instance.get ();
+                  auto &owner = detail::create_dispatch_instance<TOwner> (services);
                   auto request = detail::deserialize_typed_payload<TRequest> (
                     serializers, message, context.content_type.value_or (""));
                   auto reply = detail::invoke_prepared_handler (before_application_handler, method,
@@ -397,8 +392,7 @@ class route_channel_builder_t
                     detail::handler_start_callback_ref_t before_application_handler)
             -> task_t<zlink::message_t> {
               try {
-                  detail::dispatch_instance_t<TOwner> owner_instance (services);
-                  auto &owner = owner_instance.get ();
+                  auto &owner = detail::create_dispatch_instance<TOwner> (services);
                   auto request = detail::deserialize_typed_payload<TRequest> (
                     serializers, message, context.content_type.value_or (""));
                   auto reply = co_await detail::invoke_prepared_handler (before_application_handler,

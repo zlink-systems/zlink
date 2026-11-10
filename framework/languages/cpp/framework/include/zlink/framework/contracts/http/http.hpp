@@ -705,8 +705,7 @@ class http_options_builder_t
                                              "HTTP route serializer registry is not configured");
             }
             try {
-                detail::dispatch_instance_t<THandler> handler_instance (services);
-                auto &handler = handler_instance.get ();
+                auto &handler = detail::create_dispatch_instance<THandler> (services);
                 if constexpr (has_request_type_v<THandler>) {
                     using request_type = typename THandler::request_type;
                     using reply_type = typename THandler::reply_type;

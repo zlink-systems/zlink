@@ -459,11 +459,14 @@ bool verify_filter_snapshot_reuse (zlink::framework::service_provider_t &provide
 
 // Spec 06 §10: every dispatch gets its own handler and filter instances and scoped
 // dependencies, whatever lifetime the application registered for those types (#4145).
+// Instances are identified by creation order, not address: a freed instance's memory
+// can be reused by the next dispatch.
 struct lifetime_probe_t
 {
-    std::vector<const void *> handlers;
-    std::vector<const void *> handler_dependencies;
-    std::vector<const void *> filter_dependencies;
+    int dependencies_created = 0;
+    std::vector<int> handlers;
+    std::vector<int> handler_dependencies;
+    std::vector<int> filter_dependencies;
     int handlers_destroyed = 0;
     int filters_destroyed = 0;
     int dependencies_destroyed = 0;
@@ -472,11 +475,17 @@ struct lifetime_probe_t
 class lifetime_dependency_t
 {
   public:
-    explicit lifetime_dependency_t (lifetime_probe_t &probe) : _probe (probe) {}
+    explicit lifetime_dependency_t (lifetime_probe_t &probe) :
+        _probe (probe), _id (++probe.dependencies_created)
+    {
+    }
     ~lifetime_dependency_t () { ++_probe.dependencies_destroyed; }
+
+    int id () const noexcept { return _id; }
 
   private:
     lifetime_probe_t &_probe;
+    int _id;
 };
 
 class lifetime_handler_t
@@ -484,8 +493,8 @@ class lifetime_handler_t
   public:
     lifetime_handler_t (lifetime_probe_t &probe, lifetime_dependency_t &dependency) : _probe (probe)
     {
-        _probe.handlers.push_back (this);
-        _probe.handler_dependencies.push_back (&dependency);
+        _probe.handlers.push_back (static_cast<int> (_probe.handlers.size ()) + 1);
+        _probe.handler_dependencies.push_back (dependency.id ());
     }
     ~lifetime_handler_t () { ++_probe.handlers_destroyed; }
 
@@ -508,7 +517,7 @@ class lifetime_filter_t
   public:
     lifetime_filter_t (lifetime_probe_t &probe, lifetime_dependency_t &dependency) : _probe (probe)
     {
-        _probe.filter_dependencies.push_back (&dependency);
+        _probe.filter_dependencies.push_back (dependency.id ());
     }
     ~lifetime_filter_t () { ++_probe.filters_destroyed; }
 
