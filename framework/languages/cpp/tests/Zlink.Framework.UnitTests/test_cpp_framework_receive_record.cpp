@@ -472,7 +472,7 @@ TEST_F (ReceiveRecord, EmptyLogicalSourceKeepsNativeContextButRejectsReplies)
     ASSERT_TRUE (record->reply_token ());
     record->source_routing_id.clear ();
     const auto retained = record->reply_source ();
-    const wire::user_spot_close_reply_t close_reply{{*record->correlation, 1, 0}, false};
+    const wire::user_spot_close_reply_t close_reply{{*record->correlation, 0, 0}, false};
     const auto reply_payload = payload ();
     const auto check = [&] (mesh::service_mailbox_reply_view_t request) {
         EXPECT_FALSE (target.reply (request, reply_payload));
@@ -480,7 +480,7 @@ TEST_F (ReceiveRecord, EmptyLogicalSourceKeepsNativeContextButRejectsReplies)
         EXPECT_FALSE (target.prepare_relocation_ready_reply (request, wire::relocation_ready_t{})
                         .result ()
                         .value ());
-        EXPECT_THROW (target.reply_failure (request, 1, 0), std::invalid_argument);
+        EXPECT_THROW (target.reply_failure (request, 106, 15), std::invalid_argument);
         EXPECT_THROW (target.reply_user_spot_close (request, close_reply), std::invalid_argument);
         EXPECT_FALSE (target.reply_actor_join (request, wire::actor_join_result_t::rejected,
                                                std::nullopt, 0, 0, 1, 0));
@@ -520,9 +520,9 @@ TEST_F (ReceiveRecord, LocalReplyDecisionsUseLogicalIdentityDespiteDifferentNati
             const auto source = retained ? record->reply_source () : nullptr;
             const auto request = source ? mesh::service_mailbox_reply_view_t (*source)
                                         : mesh::service_mailbox_reply_view_t (*record);
-            const wire::reply_header_t header{operation->low, 1, 0};
+            const wire::reply_header_t header{operation->low, 0, 0};
             if (kind == 0) {
-                EXPECT_TRUE (target.reply_failure (request, 1, 0));
+                EXPECT_TRUE (target.reply_failure (request, 106, 15));
             } else if (kind == 1) {
                 EXPECT_TRUE (target.reply_user_spot_close (
                   request, wire::user_spot_close_reply_t{header, false}));
@@ -563,7 +563,7 @@ TEST_F (ReceiveRecord, RetainedLocalReplyDoesNotRequireNativeContext)
     const auto source = record.reply_source ();
     EXPECT_FALSE (source->routing_id ());
     EXPECT_FALSE (source->reply_token ());
-    EXPECT_TRUE (target.reply_failure (*source, 1, 0));
+    EXPECT_TRUE (target.reply_failure (*source, 106, 15));
     EXPECT_FALSE (target.operation_pending (*operation));
     (void) target.unregister_local_operation (*operation);
 }
