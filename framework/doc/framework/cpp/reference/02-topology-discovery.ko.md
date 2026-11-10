@@ -315,7 +315,7 @@ options.handler_coroutine_workers(8);
 
 | Modifier | 기본값 | 의미 |
 | --- | --- | --- |
-| `.services()` | — | `service_collection_t`. Handler와 hosted component의 service lifetime(`add_singleton`/`add_scoped`/`add_transient`/`add_factory`) 등록 |
+| `.services()` | — | `service_collection_t`. Service와 hosted component를 lifetime(`add_singleton`/`add_scoped`/`add_transient`/`add_factory`)과 함께 등록. Handler·filter·channel owner는 등록과 관계없이 dispatch마다 만든다([Activation과 수명](../guide/server/34-activation-lifetime.ko.md)) |
 | `.metadata().allow_session_to_actor(key)` / `.allow_actor_to_session(key)` | 지정하지 않은 key는 forward 안 함 | STREAM session↔Actor relay로 넘길 metadata key를 방향별 allowlist에 추가 |
 | `.configure_network()` | `bind_host()`는 `127.0.0.1` | 개별 listen 호출이 override하지 않는 한 사용하는 기본 bind·advertise host |
 | `.worker()` | `worker_options_t` 기본값 | worker pool의 최소·최대 thread 수와 idle timeout(`RunCpuWorker`/`RunIoWorker`가 사용하는 pool) |

@@ -346,15 +346,15 @@ int main ()
     zlink::framework::service_collection_t handler_logging_services;
     handler_logging_services.add_singleton<zlink::framework::logger_factory_t> (
       std::make_unique<zlink::framework::logger_factory_t> (logging.factory ()));
-    zlink::framework::detail::injected_handler_registrar_t<inferred_logger_handler_t>::add (
-      handler_logging_services);
     if (handler_logging_services.contains (
           std::type_index (typeid (zlink::framework::logger_t<inferred_logger_handler_t>)))) {
         return 15;
     }
     auto handler_logging_provider = handler_logging_services.build_provider ();
     const auto records_before_handler = logging.captured_records ().size ();
-    handler_logging_provider.get_required<inferred_logger_handler_t> ().write ();
+    zlink::framework::detail::create_dispatch_instance<inferred_logger_handler_t> (
+      handler_logging_provider)
+      .write ();
     if (logging.captured_records ().size () != records_before_handler + 1) {
         return 16;
     }

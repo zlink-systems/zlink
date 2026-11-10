@@ -657,22 +657,26 @@ struct owner_lease_node_send_message_t
     std::string value;
 };
 
+struct owner_lease_node_send_state_t
+{
+    std::shared_ptr<std::promise<void>> dispatched;
+};
+
 class owner_lease_node_send_handler_t
 {
   public:
-    explicit owner_lease_node_send_handler_t (std::shared_ptr<std::promise<void>> dispatched) :
-        _dispatched (std::move (dispatched))
+    explicit owner_lease_node_send_handler_t (owner_lease_node_send_state_t &state) : _state (state)
     {
     }
 
     void handle (const owner_lease_node_send_message_t &,
                  const zlink::framework::route_message_context_t &)
     {
-        _dispatched->set_value ();
+        _state.dispatched->set_value ();
     }
 
   private:
-    std::shared_ptr<std::promise<void>> _dispatched;
+    owner_lease_node_send_state_t &_state;
 };
 
 void enqueue_application_route (
@@ -786,8 +790,8 @@ void verify_route_internal_packets_precede_application_dispatch ()
       });
     service_collection_t services;
     services.add_singleton<actor_gateway_runtime_t> ();
-    services.add_singleton<owner_lease_node_send_handler_t> (
-      std::make_unique<owner_lease_node_send_handler_t> (node_send_dispatched));
+    services.add_singleton<owner_lease_node_send_state_t> (
+      std::make_unique<owner_lease_node_send_state_t> (node_send_dispatched));
     auto owned_store = std::make_unique<runtime::in_memory_location_repository_t> ();
     auto &location_store = *owned_store;
     services.add_singleton<location_repository_t> (
@@ -1341,34 +1345,31 @@ struct local_route_probe_state_t
 class local_route_probe_handler_t
 {
   public:
-    explicit local_route_probe_handler_t (std::shared_ptr<local_route_probe_state_t> state) :
-        _state (std::move (state))
-    {
-    }
+    explicit local_route_probe_handler_t (local_route_probe_state_t &state) : _state (state) {}
 
     void handle (const local_route_probe_message_t &message,
                  const zlink::framework::route_message_context_t &context)
     {
-        std::unique_lock lock (_state->mutex);
-        ++_state->entered;
+        std::unique_lock lock (_state.mutex);
+        ++_state.entered;
         // v11 MessageContext: node-direct dispatch has no ChannelName, so the router channel
         // identity travels in the Mesh name and only the source node RID is added.
-        _state->last_mesh_name = context.mesh_name.value_or ("<none>");
-        _state->last_channel_name = context.channel_name.value_or ("<none>");
-        _state->last_packet_name = context.packet_name;
-        _state->last_content_type = context.content_type.value_or ("<none>");
-        _state->last_source_node_rid = context.source_node_rid.to_string ();
-        _state->values.push_back (message.value);
-        _state->changed.notify_all ();
+        _state.last_mesh_name = context.mesh_name.value_or ("<none>");
+        _state.last_channel_name = context.channel_name.value_or ("<none>");
+        _state.last_packet_name = context.packet_name;
+        _state.last_content_type = context.content_type.value_or ("<none>");
+        _state.last_source_node_rid = context.source_node_rid.to_string ();
+        _state.values.push_back (message.value);
+        _state.changed.notify_all ();
         if (message.value == "throw")
             throw std::runtime_error ("local route probe failure");
-        _state->changed.wait (lock, [this] { return _state->gate_open; });
-        ++_state->completed;
-        _state->changed.notify_all ();
+        _state.changed.wait (lock, [this] { return _state.gate_open; });
+        ++_state.completed;
+        _state.changed.notify_all ();
     }
 
   private:
-    std::shared_ptr<local_route_probe_state_t> _state;
+    local_route_probe_state_t &_state;
 };
 
 void verify_local_node_submit_bridge ()
@@ -1393,8 +1394,9 @@ void verify_local_node_submit_bridge ()
       });
     auto probe = std::make_shared<local_route_probe_state_t> ();
     zlink::framework::service_collection_t services;
-    services.add_singleton<local_route_probe_handler_t> (
-      std::make_unique<local_route_probe_handler_t> (probe));
+    services.add_factory<local_route_probe_state_t> (
+      [probe] (zlink::framework::service_provider_t &) { return probe; },
+      zlink::framework::service_lifetime_t::singleton);
     // v11: the MeshNode host resolves the Location store from the provider, so
     // a vertical check registers the in-memory store like any application.
     auto owned_store =

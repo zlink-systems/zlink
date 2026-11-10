@@ -79,22 +79,11 @@ template <> struct zlink::json::dto_traits<reply_t>
 namespace
 {
 
-class gated_request_handler_t
+struct gated_request_state_t
 {
   public:
     // Request 1 holds its application job until released; every other
     // request answers at once.
-    reply_t handle (const request_t &request)
-    {
-        if (request.value == 1) {
-            std::unique_lock lock (_mutex);
-            _entered = true;
-            _changed.notify_all ();
-            _changed.wait (lock, [this] { return _released; });
-        }
-        return {request.value + 100};
-    }
-
     bool wait_until_entered (std::chrono::milliseconds timeout)
     {
         std::unique_lock lock (_mutex);
@@ -108,11 +97,30 @@ class gated_request_handler_t
         _changed.notify_all ();
     }
 
-  private:
     std::mutex _mutex;
     std::condition_variable _changed;
     bool _entered = false;
     bool _released = false;
+};
+
+class gated_request_handler_t
+{
+  public:
+    explicit gated_request_handler_t (gated_request_state_t &state) : state (state) {}
+
+    reply_t handle (const request_t &request)
+    {
+        if (request.value == 1) {
+            std::unique_lock lock (state._mutex);
+            state._entered = true;
+            state._changed.notify_all ();
+            state._changed.wait (lock, [this] { return state._released; });
+        }
+        return {request.value + 100};
+    }
+
+  private:
+    gated_request_state_t &state;
 };
 
 std::string unique_inproc_endpoint ()
@@ -209,9 +217,9 @@ TEST (ChannelCoreAdmission, WeightZeroServerStillRunsRequestsItAlreadyReceived)
     runtime.bind_serializers (serializers);
 
     zlink::framework::service_collection_t services;
-    services.add_singleton<gated_request_handler_t> ();
+    services.add_singleton<gated_request_state_t> ();
     auto provider = services.build_provider ();
-    auto &handler = provider.get_required<gated_request_handler_t> ();
+    auto &handler = provider.get_required<gated_request_state_t> ();
     zlink::framework::handler_registry_t handlers;
     handlers.on_request<gated_request_handler_t, request_t, reply_t> (
       channel, "request", &gated_request_handler_t::handle,
@@ -293,9 +301,9 @@ TEST (ChannelCoreAdmission, ServerDeliversRepliesWhileItWaitsForAPermit)
     runtime.bind_serializers (serializers);
 
     zlink::framework::service_collection_t services;
-    services.add_singleton<gated_request_handler_t> ();
+    services.add_singleton<gated_request_state_t> ();
     auto provider = services.build_provider ();
-    auto &handler = provider.get_required<gated_request_handler_t> ();
+    auto &handler = provider.get_required<gated_request_state_t> ();
     zlink::framework::handler_registry_t handlers;
     handlers.on_request<gated_request_handler_t, request_t, reply_t> (
       channel, "request", &gated_request_handler_t::handle,
@@ -374,7 +382,7 @@ TEST (ChannelCoreAdmission, ClientRequestWaitsOnCoreAdmissionNotFrameworkReadine
     zlink::framework::serializer_registry_t serializers;
     add_serializers (serializers);
     zlink::framework::service_collection_t services;
-    services.add_singleton<gated_request_handler_t> ();
+    services.add_singleton<gated_request_state_t> ();
     auto provider = services.build_provider ();
     zlink::framework::handler_registry_t handlers;
     handlers.on_request<gated_request_handler_t, request_t, reply_t> (
@@ -442,9 +450,9 @@ TEST (ChannelCoreAdmission, RequestTimeoutIncludesCoreAdmission)
     zlink::framework::serializer_registry_t serializers;
     add_serializers (serializers);
     zlink::framework::service_collection_t services;
-    services.add_singleton<gated_request_handler_t> ();
+    services.add_singleton<gated_request_state_t> ();
     auto provider = services.build_provider ();
-    auto &handler = provider.get_required<gated_request_handler_t> ();
+    auto &handler = provider.get_required<gated_request_state_t> ();
     zlink::framework::handler_registry_t handlers;
     handlers.on_request<gated_request_handler_t, request_t, reply_t> (
       channel, "request", &gated_request_handler_t::handle,
@@ -508,10 +516,16 @@ TEST (ChannelCoreAdmission, MissingServerExpiresAtRequestTimeout)
     EXPECT_LT (elapsed, 1s);
 }
 
-struct counted_send_handler_t
+struct counted_send_state_t
 {
     std::atomic_size_t calls{0};
-    void handle (const request_t &) { calls.fetch_add (1, std::memory_order_relaxed); }
+};
+
+struct counted_send_handler_t
+{
+    explicit counted_send_handler_t (counted_send_state_t &state) : state (state) {}
+    void handle (const request_t &) { state.calls.fetch_add (1, std::memory_order_relaxed); }
+    counted_send_state_t &state;
 };
 
 TEST (ChannelCoreAdmission, SendWaitsBeyondThreeSecondsAndAdmitsExactlyOnce)
@@ -532,9 +546,9 @@ TEST (ChannelCoreAdmission, SendWaitsBeyondThreeSecondsAndAdmitsExactlyOnce)
     server_runtime.bind_core_context (context);
     server_runtime.bind_serializers (serializers);
     zlink::framework::service_collection_t services;
-    services.add_singleton<counted_send_handler_t> ();
+    services.add_singleton<counted_send_state_t> ();
     auto provider = services.build_provider ();
-    auto &handler = provider.get_required<counted_send_handler_t> ();
+    auto &handler = provider.get_required<counted_send_state_t> ();
     zlink::framework::handler_registry_t handlers;
     handlers.on_send<counted_send_handler_t, request_t> (
       channel, "command", &counted_send_handler_t::handle, {.packet_name = request_t::packet_name});

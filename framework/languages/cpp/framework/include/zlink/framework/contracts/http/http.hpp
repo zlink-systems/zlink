@@ -689,7 +689,6 @@ class http_options_builder_t
                            "HTTP handler cannot expose both typed request_type and raw "
                            "http_request_t route shapes");
         }
-        register_handler_service<THandler> ();
         register_route_serializers<THandler> ();
         path = validate_system_path (std::move (path));
         http_route_t route;
@@ -706,7 +705,7 @@ class http_options_builder_t
                                              "HTTP route serializer registry is not configured");
             }
             try {
-                auto &handler = services.get_required<THandler> ();
+                auto &handler = detail::create_dispatch_instance<THandler> (services);
                 if constexpr (has_request_type_v<THandler>) {
                     using request_type = typename THandler::request_type;
                     using reply_type = typename THandler::reply_type;
@@ -733,20 +732,6 @@ class http_options_builder_t
         };
         _snapshot.routes.push_back (std::move (route));
         return *this;
-    }
-
-    template <typename THandler> void register_handler_service ()
-    {
-        if (_services == nullptr) {
-            return;
-        }
-        if (!_handler_service_types.emplace (std::type_index (typeid (THandler))).second) {
-            return;
-        }
-        if (_services->contains (std::type_index (typeid (THandler)))) {
-            return;
-        }
-        detail::injected_handler_registrar_t<THandler>::add (*_services);
     }
 
     /* Fulfills route DTO serializer registration at map_* time instead of
@@ -792,7 +777,6 @@ class http_options_builder_t
     http_options_snapshot_t _snapshot;
     service_collection_t *_services = nullptr;
     serializer_registry_t *_serializers = nullptr;
-    std::set<std::type_index> _handler_service_types;
     std::set<std::type_index> _json_serializer_types;
 };
 

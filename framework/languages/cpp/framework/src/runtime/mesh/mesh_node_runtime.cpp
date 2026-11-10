@@ -462,47 +462,6 @@ mesh_node_builder_state_t::mesh_node_builder_state_t (std::string name) :
       "tcp://" + mesh_endpoint_notation::bracket_ipv6_host (bind_host) + ":0");
 }
 
-void bind_mesh_handler_services (std::shared_ptr<mesh_node_builder_state_t> state,
-                                 service_collection_t &services)
-{
-    if (!state) {
-        throw configuration_error ("MeshNode registration is required");
-    }
-    std::vector<std::function<void (service_collection_t &)>> registrars;
-    state->lane
-      .run ([&] {
-          state->services = &services;
-          registrars.swap (state->pending_handler_service_registrars);
-      })
-      .get ();
-    for (auto &registrar : registrars) {
-        registrar (services);
-    }
-}
-
-void register_mesh_handler_service (std::shared_ptr<mesh_node_builder_state_t> state,
-                                    std::function<void (service_collection_t &)> registrar)
-{
-    if (!state || !registrar) {
-        throw configuration_error ("MeshNode handler service registration is invalid");
-    }
-    service_collection_t *services = nullptr;
-    services =
-      state->lane
-        .run ([&] {
-            services = state->services;
-            if (services == nullptr) {
-                state->pending_handler_service_registrars.push_back (std::move (registrar));
-                return static_cast<service_collection_t *> (nullptr);
-            }
-            return services;
-        })
-        .get ();
-    if (services == nullptr)
-        return;
-    registrar (*services);
-}
-
 mesh_node_runtime_t::mesh_node_runtime_t (std::shared_ptr<mesh_node_builder_state_t> state) :
     _state (std::move (state))
 {
