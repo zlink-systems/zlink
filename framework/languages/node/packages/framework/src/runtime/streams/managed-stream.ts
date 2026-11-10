@@ -19,6 +19,7 @@ import {
 import type { Message } from '../../contracts/Common/Message';
 import { throwIfAborted } from '../abort';
 import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
+import { remainingRequestTimeout } from '../messaging/request-deadline';
 import type {
   ZLinkBackendActorRef,
   ZLinkBackendSendFlags,
@@ -194,6 +195,8 @@ export class ZLinkManagedStream implements ZLinkStream {
     ) => void,
     authorityFence?: ZLinkActorSessionAuthorityFence
   ): Promise<void> {
+    const deadlineMs = performance.now() + timeoutMs;
+    const operationName = `Actor '${actor.actorId}' native session bind`;
     throwIfAborted(signal);
     if (this.transportClosed) {
       throw createInternalFrameworkException(
@@ -207,7 +210,12 @@ export class ZLinkManagedStream implements ZLinkStream {
       if (route.service.status().state === 1) {
         route.service.start();
       }
-      await this.ensureNativeActorRoute(route, actor, timeoutMs, signal);
+      await this.ensureNativeActorRoute(
+        route,
+        actor,
+        remainingRequestTimeout(operationName, deadlineMs)!,
+        signal
+      );
       if (this.isTransportClosed()) {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.RouteNotConnected,
@@ -220,7 +228,7 @@ export class ZLinkManagedStream implements ZLinkStream {
             route.service.bindActor(
               this.backendRoutingId(),
               nativeActor,
-              timeoutMs,
+              remainingRequestTimeout(operationName, deadlineMs)!,
               onBindingReplaced === undefined
                 ? undefined
                 : (_actorId, retiredSession, replacedActor) => {
@@ -231,7 +239,7 @@ export class ZLinkManagedStream implements ZLinkStream {
             ),
           signal
         ),
-        `Actor '${actor.actorId}' native session bind`
+        operationName
       );
       const binding = route.service
         .bindings(this.backendRoutingId())
@@ -282,7 +290,7 @@ export class ZLinkManagedStream implements ZLinkStream {
     await this.socket.bindActor(
       this.backendRoutingId(),
       toBackendActorRef(actor),
-      timeoutMs,
+      remainingRequestTimeout(operationName, deadlineMs)!,
       signal
     );
     this.nativeActorBindings.set(actor.actorId, { actor: nativeActor });
