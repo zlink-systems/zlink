@@ -109,6 +109,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - **Trace·log 인도를 유휴 상태로 보지 않는다.** Trace나 log가 도착했다는 사실은 작업이 끝났거나 queue가
   비었다는 증거가 아니다. 유휴·완료는 공개 API로 관측할 수 있는 완료·상태 이벤트로 판정한다.
 - 매일 밤 worker 1개 실행과 sanitizer(ASan·UBSan) 실행이 main에서 돈다(`.github/workflows/nightly-stress.yml`).
+  C++ worker 1개 job은 etcd Location Store 4×4 교차언어 conformance도 실행한다.
   여기서 드러난 실패는 병렬·실제 시계 실행에서 드물게 보이던 결함으로 다루며, 재실행 통과로 닫지 않는다.
 - 알려진 load flake: `test_single_lane_flow_snapshot_accounting`(병렬 suite에서 드물게 즉시 실패 →
   단독 재실행 1회로 판정), C++ 바인딩 테스트의 exit 86/134(재링크 직후 → 1회 재실행).
