@@ -172,7 +172,13 @@ async function up(options, run) {
       await writeJson(configFile(run), state);
       for (const network of state.networks) await command('docker', ['network', 'create', '--label', `${LIMITS.label}=${runId}`, network]);
       const network = JSON.parse(await command('docker', ['network', 'inspect', state.networks[1]]))[0];
-      const [base, prefix] = network.IPAM.Config[0].Subnet.split('/');
+      const subnet = network.IPAM.Config[0].Subnet;
+      // Newer engines (the hosted ubuntu-24.04 image) accept `connect --ip` only on networks
+      // created with --subnet, so recreate
+      // the peer network with the subnet Docker just chose for it.
+      await command('docker', ['network', 'rm', state.networks[1]]);
+      await command('docker', ['network', 'create', '--label', `${LIMITS.label}=${runId}`, '--subnet', subnet, state.networks[1]]);
+      const [base, prefix] = subnet.split('/');
       if (Number(prefix) > 28 || base.includes(':')) throw new Error('peer network requires an IPv4 subnet with room for members');
       peerBase = base.split('.').reduce((n, octet) => n * 256 + Number(octet), 0);
     } else { Object.assign(state, await nativeBinary(run)); }
