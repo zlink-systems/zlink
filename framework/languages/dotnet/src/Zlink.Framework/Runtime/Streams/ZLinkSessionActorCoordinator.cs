@@ -32,6 +32,7 @@ internal sealed class ZLinkSessionActorCoordinator(
     internal delegate ValueTask<ZLinkSessionBindingIdentity> BindingConfirmation(
         ZLinkSessionContext context,
         ActorRef actor,
+        long started,
         CancellationToken cancellationToken
     );
 
@@ -75,6 +76,7 @@ internal sealed class ZLinkSessionActorCoordinator(
         CancellationToken cancellationToken
     )
     {
+        var started = runtime.Registration.TimeProvider.GetTimestamp();
         if (!actorDispatchEnabled)
             throw new ZLinkConfigurationException(
                 "STREAM Actor dispatch requires EnableActorDispatch()."
@@ -87,7 +89,13 @@ internal sealed class ZLinkSessionActorCoordinator(
         try
         {
             lease = await operation.AcquireAsync(cancellationToken).ConfigureAwait(false);
-            return await BindActorWithinGateAsync(context, actor, confirmation, cancellationToken)
+            return await BindActorWithinGateAsync(
+                    context,
+                    actor,
+                    confirmation,
+                    started,
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
         }
         finally
@@ -229,6 +237,7 @@ internal sealed class ZLinkSessionActorCoordinator(
         ZLinkSessionContext context,
         ActorRef actor,
         BindingConfirmation confirmation,
+        long started,
         CancellationToken cancellationToken
     )
     {
@@ -241,7 +250,7 @@ internal sealed class ZLinkSessionActorCoordinator(
         // BindAsync replaces a previous table entry only after the new exact owner has
         // acknowledged. Until then the previous binding remains the terminal route for this
         // session.
-        return await BindActorCoreAsync(context, actor, confirmation, cancellationToken)
+        return await BindActorCoreAsync(context, actor, confirmation, started, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -249,11 +258,13 @@ internal sealed class ZLinkSessionActorCoordinator(
         ZLinkSessionContext context,
         ActorRef actor,
         BindingConfirmation confirmation,
+        long started,
         CancellationToken cancellationToken
     )
     {
         EnsureConcreteActorRef(actor);
-        var identity = await confirmation(context, actor, cancellationToken).ConfigureAwait(false);
+        var identity = await confirmation(context, actor, started, cancellationToken)
+            .ConfigureAwait(false);
         return await _bindings
             .BindAsync(
                 context,
@@ -280,6 +291,7 @@ internal sealed class ZLinkSessionActorCoordinator(
     private async ValueTask<ZLinkSessionBindingIdentity> ConfirmBindingAsync(
         ZLinkSessionContext context,
         ActorRef actor,
+        long started,
         CancellationToken cancellationToken
     )
     {
@@ -354,7 +366,13 @@ internal sealed class ZLinkSessionActorCoordinator(
             await sender
                 .BindBoundSessionAsync(
                     request,
-                    runtime.Registration.DefaultRequestTimeout,
+                    ZLinkActorClient
+                        .RemainingTimeout(
+                            runtime.Registration.DefaultRequestTimeout,
+                            started,
+                            runtime.Registration.TimeProvider
+                        )!
+                        .Value,
                     cancellationToken
                 )
                 .ConfigureAwait(false)

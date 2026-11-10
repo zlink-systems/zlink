@@ -25,6 +25,8 @@ import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.locations.ZLinkLocationOptions;
+import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorBindOperation;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
@@ -34,7 +36,19 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamReceiv
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
+import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseFound;
+import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocation;
+import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
+import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
+import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
+import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
@@ -62,6 +76,120 @@ import java.util.concurrent.TimeUnit;
 final class ZLinkSessionActorBindingContractTest {
     private static final int MIXED_RELAY_ATTEMPTS = 1000;
     private static final int MIXED_PARALLEL_RELAYS = 64;
+
+    @ParameterizedTest
+    @ValueSource(ints = {10, 30})
+    void bindUsesOnlyEntryBudgetAfterAuthorityLookup(int lookupSeconds) {
+        var clock = new java.util.concurrent.atomic.AtomicLong();
+        var reads = new java.util.concurrent.atomic.AtomicInteger();
+        var lookup = new CompletableFuture<ZLinkAuthorityReadResult>();
+        var codec = new ZLinkActorAuthorityPayloadCodec();
+        var snapshot =
+                new ZLinkAuthoritySnapshot(
+                        "v1",
+                        codec.encode(
+                                ZLinkActorAuthorityPayloadCodec.State.READY,
+                                "test",
+                                "actor-1",
+                                "entry-spot",
+                                1,
+                                1,
+                                "owner",
+                                1,
+                                MESH,
+                                NODE_A,
+                                3),
+                        7,
+                        5,
+                        "owner",
+                        1,
+                        new ZLinkPlacementAllocation(
+                                ZLinkPlacementAllocationState.ACTIVE,
+                                ZLinkPlacementObjectKind.ACTOR,
+                                "test",
+                                new ZLinkMeshNodeDescriptorKey(MESH, NODE_A),
+                                3,
+                                ZLinkPlacementCapacityBundle.actor(1)),
+                        java.time.Instant.now());
+        var store =
+                (ZLinkLocationRepository)
+                        Proxy.newProxyInstance(
+                                getClass().getClassLoader(),
+                                new Class<?>[] {ZLinkLocationRepository.class},
+                                (proxy, method, arguments) ->
+                                        switch (method.getName()) {
+                                            case "read" -> {
+                                                reads.incrementAndGet();
+                                                yield lookup;
+                                            }
+                                            case "readOwnerLease" ->
+                                                    CompletableFuture.completedFuture(
+                                                            new ZLinkOwnerLeaseFound(
+                                                                    new ZLinkLocationOwnerToken(
+                                                                            "owner", 1),
+                                                                    java.time.Instant.now()
+                                                                            .plusSeconds(60),
+                                                                    java.time.Instant.now()));
+                                            default ->
+                                                    throw new UnsupportedOperationException(
+                                                            method.getName());
+                                        });
+        var node = authoritySpotNode(Map.of(NODE_A, new ActorAuthority(3, 5, 1)));
+        var actors =
+                new ZLinkActorRuntime(node, Map.of(), Duration.ofSeconds(30), new RawSerializer());
+        var locations =
+                new ZLinkStoreLocationResolvers(
+                        ZLinkRegisteredLocationStores.fromUnified(store),
+                        new ZLinkLocationOptions());
+        actors.setStoreLocationResolvers(locations);
+        var stream = new FakeStream();
+        var acknowledgement = new CompletableFuture<Void>();
+        var rejection = new IllegalStateException("bind rejected after budget capture");
+        stream.bindingAcknowledgement = acknowledgement;
+        var runtime =
+                new ZLinkSessionActorsRuntime(
+                        node,
+                        stream,
+                        SESSION,
+                        actors,
+                        new RawSerializer(),
+                        null,
+                        true,
+                        ZLinkStreamCodec.RAW,
+                        null,
+                        Duration.ofSeconds(30),
+                        new java.util.concurrent.atomic.AtomicLong()::incrementAndGet,
+                        clock::get);
+        stream.runtime = runtime;
+        try {
+            var binding =
+                    runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture();
+            assertEquals(1, reads.get());
+            assertTrue(stream.binds.isEmpty());
+            clock.set(Duration.ofSeconds(lookupSeconds).toNanos());
+            lookup.complete(snapshot);
+            if (lookupSeconds == 30) {
+                acknowledgement.completeExceptionally(rejection);
+                var failure = assertThrows(CompletionException.class, binding::join);
+                assertEquals(
+                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                        assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+                assertTrue(stream.binds.isEmpty());
+                assertTrue(runtime.bound().isEmpty());
+            } else {
+                Duration submittedTimeout = stream.bindSubmitted.join();
+                acknowledgement.completeExceptionally(rejection);
+                var failure = assertThrows(CompletionException.class, binding::join);
+                assertSame(rejection, failure.getCause());
+                assertEquals(List.of("actor-1"), stream.binds);
+                assertEquals(Duration.ofSeconds(20), submittedTimeout);
+                assertTrue(runtime.bound().isEmpty());
+            }
+        } finally {
+            acknowledgement.completeExceptionally(rejection);
+            locations.close();
+        }
+    }
 
     @org.junit.jupiter.api.RepeatedTest(100)
     void confirmedActorLeaseUpdatesBothCopiesOnlyInTheCurrentSessionGate() {
@@ -1570,6 +1698,7 @@ final class ZLinkSessionActorBindingContractTest {
     }
 
     private static final class FakeStream implements ZLinkBackendStreamSocket {
+        private final CompletableFuture<Duration> bindSubmitted = new CompletableFuture<>();
         private long nativeBindingGeneration = BINDING_GENERATION;
         private String disconnectPacketName;
         private ZLinkStreamCodec disconnectCodec;
@@ -1775,7 +1904,10 @@ final class ZLinkSessionActorBindingContractTest {
                 RoutingId sessionRid, ZLinkBackendActorRef actor) {
             binds.add(actor.actorId());
             bindingEvents.add("prepare:" + actor.actorId());
-            return timeout -> bindingAcknowledgement;
+            return timeout -> {
+                bindSubmitted.complete(timeout);
+                return bindingAcknowledgement;
+            };
         }
 
         @Override
