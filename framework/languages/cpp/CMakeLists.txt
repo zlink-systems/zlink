@@ -670,6 +670,11 @@ if(ZLINK_FRAMEWORK_CPP_WITH_ETCD)
   # The extension and its parent-directory test target share the transport targets.
   find_package(gRPC CONFIG REQUIRED)
   add_subdirectory(extensions/framework-locations-etcd)
+  # Built on request by scripts/etcd/build-and-run-4x4.sh, not by the default build.
+  add_executable(zlink_location_store_provider_adapter EXCLUDE_FROM_ALL
+    tests/location-store-provider-adapter/main.cpp)
+  target_link_libraries(zlink_location_store_provider_adapter PRIVATE
+    zlink::framework_locations_etcd nlohmann_json::nlohmann_json)
   string(CONCAT ZLINK_FRAMEWORK_ETCD_EXPORT_DEPENDENCIES
     "if(EXISTS \"\${CMAKE_CURRENT_LIST_DIR}/zlink_framework_cppLocationsEtcdTargets.cmake\")\n"
     "  find_dependency(gRPC CONFIG)\n"

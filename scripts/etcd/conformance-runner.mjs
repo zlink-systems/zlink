@@ -17,6 +17,7 @@ const {
   buildMutationProvider,
 } = require("./build-node-provider.cjs");
 const { buildManagedProvider } = require("./build-managed-provider.cjs");
+const { buildCppProvider } = require("./build-cpp-provider.cjs");
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const mutationCases = {
   "split-record-transaction": "spi.exact-read-observation",
@@ -62,7 +63,7 @@ export async function runConformance({
       env: { ZLINK_ETCD_PROVIDER_DIST: baseline },
     };
     adapters ??= { node: nodeConfig };
-    for (const language of ["dotnet", "jvm"]) {
+    for (const language of ["dotnet", "jvm", "cpp"]) {
       const config = adapters[language];
       if (!config) continue;
       const artifact =
@@ -79,9 +80,7 @@ export async function runConformance({
     const { cases, Unverified, inventory } = require("./conformance-cases.cjs");
     require("./conformance-oracle.cjs").verifyGolden();
     const languages = Object.keys(adapters);
-    const mutationLanguages = languages.filter((language) =>
-      ["node", "dotnet", "jvm"].includes(language),
-    );
+    const mutationLanguages = languages;
     if (
       !languages.length ||
       languages.some((l) => !inventory.languages.includes(l))
@@ -191,6 +190,8 @@ export async function runConformance({
       if (firstFailure) break;
     }
     async function mutationAdapter(language, directory, mutation) {
+      if (language === "cpp")
+        return buildCppProvider(directory, mutation, adapters[language]);
       if (language !== "node")
         return buildManagedProvider(
           language,
