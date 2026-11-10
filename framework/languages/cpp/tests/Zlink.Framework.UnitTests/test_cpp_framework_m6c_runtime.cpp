@@ -4729,8 +4729,8 @@ void test_relocation_request_source_registration (test_context_t &test,
                         "both saved and boundary requests must be registered before cutover");
           auto matching = relay;
           matching.participant_id = aggregate ? 2 : 1;
-          message.parts () = framework::detail::backend::materialize_binding_parts (
-            {protocol::encode_reply_relay (matching)});
+          message.replace_parts (framework::detail::backend::materialize_binding_parts (
+            {protocol::encode_reply_relay (matching)}));
           test.require (await_task (replies.process (message))
                           == raw_relocation_replay_result_t::persistence_failed,
                         "matching identity must reach the original pending request owner");

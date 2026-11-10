@@ -512,13 +512,12 @@ void verify_reply_source_snapshot ()
     original.application.emplace ();
     const auto source = original.reply_source ();
     require (source->source_routing_id == request_source
+               && source->routing_id () == original.routing_id ()
                && source->correlation == request_correlation
                && source->reply_token ().has_value () == original.reply_token ().has_value (),
              "reply source snapshot changed routing metadata");
-    require (!source->application && source->parts ().empty () && !source->transferred
-               && !source->application_permit && !source->before_application_handler
-               && !source->source_original,
-             "reply source snapshot retained owned application work");
+    require (source->route_generation () == original.route_generation (),
+             "reply source snapshot changed route generation");
     require (original.application && original.parts ().size () == 1,
              "reply source snapshot consumed the owned original");
 }
@@ -864,12 +863,12 @@ void verify_suspended_actor (bool local)
         first.application->record.operation_id = {1, 1};
         first.application->parts.push_back (zlink::message_t::from (std::string ("ok")));
     } else {
-        first.parts ().push_back (zlink::message_t::from (protocol::encode_actor_message_header (
-          protocol::command::actorSend, std::nullopt, fence, {1, 1})));
         protocol::application_payload_t::multipart_t parts;
         parts.push_back (zlink::message_t::from (std::string ("ok")));
-        first.parts ().push_back (zlink::message_t::from (protocol::encode_application_payload (
-          protocol::application_payload_t::from_parts (std::move (parts)))));
+        first.replace_parts ({zlink::message_t::from (protocol::encode_actor_message_header (
+                                protocol::command::actorSend, std::nullopt, fence, {1, 1})),
+                              zlink::message_t::from (protocol::encode_application_payload (
+                                protocol::application_payload_t::from_parts (std::move (parts))))});
     }
     require (mailbox.try_enqueue (std::move (first)), "suspended Actor enqueue failed");
     mesh::service_mailbox_record_t suffix;

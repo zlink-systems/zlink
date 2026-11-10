@@ -128,9 +128,6 @@ struct actor_join_wire_outcome_t
 
 class raw_mesh_node_owner_t
 {
-#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
-    friend struct receive_record_test_access_t;
-#endif
     friend state_lane_t &auto_connect_owner_lane (raw_mesh_node_owner_t &owner)
     {
         return owner._lane;
@@ -253,9 +250,9 @@ class raw_mesh_node_owner_t
                                      std::chrono::milliseconds timeout,
                                      foundation::operation_registry_t::callback_t callback,
                                      std::optional<std::uint64_t> correlation = std::nullopt);
-    bool reply (const service_mailbox_record_t &request,
+    bool reply (service_mailbox_reply_view_t request,
                 const protocol::application_payload_t &application_payload);
-    bool reply_failure (const service_mailbox_record_t &request,
+    bool reply_failure (service_mailbox_reply_view_t request,
                         std::uint32_t terminal_result,
                         std::uint32_t failure_code);
     task_t<std::size_t> expire_requests (foundation::operation_registry_t::clock_t::time_point now);
@@ -404,11 +401,11 @@ class raw_mesh_node_owner_t
                                           std::chrono::steady_clock::time_point deadline,
                                           foundation::operation_registry_t::callback_t callback);
     bool reply_user_spot_create (
-      const service_mailbox_record_t &request,
+      service_mailbox_reply_view_t request,
       result_t<protocol::user_spot_create_reply_t> reply,
       std::optional<protocol::application_payload_t> application_reply = std::nullopt);
     bool reply_user_spot_create (
-      const service_mailbox_record_t &request,
+      service_mailbox_reply_view_t request,
       const protocol::user_spot_create_reply_t &reply,
       std::optional<protocol::application_payload_t> application_reply = std::nullopt)
     {
@@ -417,15 +414,15 @@ class raw_mesh_node_owner_t
           std::move (application_reply));
     }
     bool reply_actor_create (
-      const service_mailbox_record_t &request,
+      service_mailbox_reply_view_t request,
       const protocol::actor_create_reply_t &reply,
       std::optional<protocol::application_payload_t> application_reply = std::nullopt);
     bool reply_instance_spot_activation (
-      const service_mailbox_record_t &request,
+      service_mailbox_reply_view_t request,
       std::uint32_t terminal_result,
       std::uint32_t failure_code,
       std::optional<protocol::application_payload_t> application_reply = std::nullopt);
-    bool reply_user_spot_close (const service_mailbox_record_t &request,
+    bool reply_user_spot_close (service_mailbox_reply_view_t request,
                                 const protocol::user_spot_close_reply_t &reply);
     task_t<bool> send_session_relocation_route (const std::vector<std::uint8_t> &target_routing_id,
                                                 const protocol::session_relocation_route_t &route);
@@ -454,9 +451,9 @@ class raw_mesh_node_owner_t
                                 const protocol::relocation_prepare_t &prepare,
                                 std::chrono::milliseconds timeout);
     task_t<std::function<bool ()>>
-    prepare_relocation_ready_reply (const service_mailbox_record_t &request,
+    prepare_relocation_ready_reply (service_mailbox_reply_view_t request,
                                     const protocol::relocation_ready_t &ready);
-    bool reply_relocation_failed (const service_mailbox_record_t &request,
+    bool reply_relocation_failed (service_mailbox_reply_view_t request,
                                   const protocol::relocation_failed_t &failure);
     // actorJoin(28): durable admission over the ROUTER port.
     // The durable sender preserves this correlation and the encoded request
@@ -469,7 +466,7 @@ class raw_mesh_node_owner_t
                         const std::optional<protocol::application_payload_t> &payload,
                         std::chrono::milliseconds timeout);
     bool reply_actor_join (
-      const service_mailbox_record_t &request,
+      service_mailbox_reply_view_t request,
       const protocol::actor_join_result_t &join_result,
       const std::optional<protocol::actor_join_reply_spot_ref_t> &spot,
       std::uint64_t membership_epoch,
@@ -688,7 +685,7 @@ class raw_mesh_node_owner_t
                                std::uint64_t route_generation) const;
     void
     end_peer_operations_if_disconnected_locked (const std::vector<std::uint8_t> &node_routing_id);
-    bool reply_infrastructure (const service_mailbox_record_t &request,
+    bool reply_infrastructure (service_mailbox_reply_view_t request,
                                std::vector<std::uint8_t> header);
     raw_mesh_pump_result_t enqueue_received (service_mailbox_record_t record,
                                              raw_mesh_pump_result_t accepted_result);

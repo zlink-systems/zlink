@@ -69,15 +69,20 @@ std::optional<host::record_kind_t> service_mailbox_record_t::application_kind ()
     return _application_kind;
 }
 
-std::shared_ptr<const service_mailbox_record_t> service_mailbox_record_t::reply_source () const
+service_mailbox_reply_target_t::service_mailbox_reply_target_t (
+  const service_mailbox_record_t &record) :
+    source_routing_id (record.source_routing_id),
+    correlation (record.correlation),
+    _routing_id (record.routing_id ()),
+    _token (record.reply_token ()),
+    _route_generation (record.route_generation ())
 {
-    auto source = std::make_shared<service_mailbox_record_t> ();
-    source->domain = service_mailbox_domain_t::infrastructure;
-    source->received = received;
-    source->received.close ();
-    source->source_routing_id = source_routing_id;
-    source->correlation = correlation;
-    return source;
+}
+
+std::shared_ptr<const service_mailbox_reply_target_t>
+service_mailbox_record_t::reply_source () const
+{
+    return std::make_shared<service_mailbox_reply_target_t> (*this);
 }
 
 bool service_mailbox_settlement_t::operator() () const

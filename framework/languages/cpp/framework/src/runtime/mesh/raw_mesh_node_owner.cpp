@@ -2014,7 +2014,7 @@ task_t<relocation_prepare_response_t> raw_mesh_node_owner_t::request_relocation_
 }
 
 task_t<std::function<bool ()>>
-raw_mesh_node_owner_t::prepare_relocation_ready_reply (const service_mailbox_record_t &request,
+raw_mesh_node_owner_t::prepare_relocation_ready_reply (service_mailbox_reply_view_t request,
                                                        const protocol::relocation_ready_t &ready)
 {
     if (request.source_routing_id.empty () || !request.reply_token ())
@@ -2028,7 +2028,7 @@ raw_mesh_node_owner_t::prepare_relocation_ready_reply (const service_mailbox_rec
          ready)}] () mutable { return port->reply (source, *token, std::move (parts)); }};
 }
 
-bool raw_mesh_node_owner_t::reply_relocation_failed (const service_mailbox_record_t &request,
+bool raw_mesh_node_owner_t::reply_relocation_failed (service_mailbox_reply_view_t request,
                                                      const protocol::relocation_failed_t &failure)
 {
     if (request.source_routing_id.empty () || !request.reply_token ())
@@ -2040,7 +2040,7 @@ bool raw_mesh_node_owner_t::reply_relocation_failed (const service_mailbox_recor
     return port->reply (request.source_rid (), *request.reply_token (), std::move (parts));
 }
 
-bool raw_mesh_node_owner_t::reply (const service_mailbox_record_t &request,
+bool raw_mesh_node_owner_t::reply (service_mailbox_reply_view_t request,
                                    const protocol::application_payload_t &application_payload)
 {
     if (request.source_routing_id.empty () || !request.reply_token ())
@@ -2058,7 +2058,7 @@ bool raw_mesh_node_owner_t::reply (const service_mailbox_record_t &request,
     return port->reply (request.source_rid (), *request.reply_token (), std::move (parts));
 }
 
-bool raw_mesh_node_owner_t::reply_failure (const service_mailbox_record_t &request,
+bool raw_mesh_node_owner_t::reply_failure (service_mailbox_reply_view_t request,
                                            std::uint32_t terminal_result,
                                            std::uint32_t failure_code)
 {
@@ -3045,7 +3045,7 @@ task_t<bool> raw_mesh_node_owner_t::request_infrastructure (
       ended->task ());
 }
 
-bool raw_mesh_node_owner_t::reply_infrastructure (const service_mailbox_record_t &request,
+bool raw_mesh_node_owner_t::reply_infrastructure (service_mailbox_reply_view_t request,
                                                   std::vector<std::uint8_t> header)
 {
     if (request.source_routing_id.empty () || !request.correlation) {
@@ -3072,7 +3072,7 @@ bool raw_mesh_node_owner_t::reply_infrastructure (const service_mailbox_record_t
 }
 
 bool raw_mesh_node_owner_t::reply_user_spot_create (
-  const service_mailbox_record_t &request,
+  service_mailbox_reply_view_t request,
   result_t<protocol::user_spot_create_reply_t> outcome,
   std::optional<protocol::application_payload_t> application_reply)
 {
@@ -3120,7 +3120,7 @@ bool raw_mesh_node_owner_t::reply_user_spot_create (
 }
 
 bool raw_mesh_node_owner_t::reply_actor_create (
-  const service_mailbox_record_t &request,
+  service_mailbox_reply_view_t request,
   const protocol::actor_create_reply_t &reply,
   std::optional<protocol::application_payload_t> application_reply)
 {
@@ -3149,7 +3149,7 @@ bool raw_mesh_node_owner_t::reply_actor_create (
 }
 
 bool raw_mesh_node_owner_t::reply_actor_join (
-  const service_mailbox_record_t &request,
+  service_mailbox_reply_view_t request,
   const protocol::actor_join_result_t &join_result,
   const std::optional<protocol::actor_join_reply_spot_ref_t> &spot,
   std::uint64_t membership_epoch,
@@ -3180,7 +3180,7 @@ bool raw_mesh_node_owner_t::reply_actor_join (
 }
 
 bool raw_mesh_node_owner_t::reply_instance_spot_activation (
-  const service_mailbox_record_t &request,
+  service_mailbox_reply_view_t request,
   std::uint32_t terminal_result,
   std::uint32_t failure_code,
   std::optional<protocol::application_payload_t> application_reply)
@@ -3218,7 +3218,7 @@ bool raw_mesh_node_owner_t::reply_instance_spot_activation (
     return port->reply (request.source_rid (), *request.reply_token (), std::move (parts));
 }
 
-bool raw_mesh_node_owner_t::reply_user_spot_close (const service_mailbox_record_t &request,
+bool raw_mesh_node_owner_t::reply_user_spot_close (service_mailbox_reply_view_t request,
                                                    const protocol::user_spot_close_reply_t &reply)
 {
     if (!request.correlation || reply.header.correlation != *request.correlation) {
@@ -3298,7 +3298,7 @@ raw_mesh_node_owner_t::enqueue_received (service_mailbox_record_t record,
                         header.flow_origin = flow_context_t::current ()->origin;
                         auto updated = std::move (encoded).take_items ();
                         updated[0] = messaging::envelope_codec_t{}.encode_header (header);
-                        record.parts ()[1] =
+                        record.body_parts ()[0] =
                           zlink::message_t::from (protocol::encode_application_payload (
                             protocol::application_payload_t::from_parts (std::move (updated))));
                     }
@@ -3602,7 +3602,7 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
     // until it reports no record (08-messaging-hot-path I2).
     service_mailbox_record_t ingress;
     auto *received = &ingress;
-    if (!port->receive_if_ready (received->received, zlink::poll_event_flag_t::pollin)) {
+    if (!port->receive_if_ready (received->_received, zlink::poll_event_flag_t::pollin)) {
         return raw_mesh_pump_result_t::no_data;
     }
 #if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
@@ -3618,7 +3618,7 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
                                      ? protocol::recover_request_correlation (
                                          protocol::message_bytes (received->parts ().front ()))
                                      : std::nullopt;
-    const auto reply_source = received->received.routing_id ();
+    const auto reply_source = received->routing_id ();
     const auto reply_token = received->reply_token ();
     const auto reject = [&] {
         if (reply_correlation) {
@@ -3656,14 +3656,14 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
                                        || header.kind == protocol::command::update;
         const bool handshake = (descriptor_record && header.kind != protocol::command::update)
                                || header.kind == protocol::command::reject;
-        const auto &source_rid = *received->received.routing_id ();
+        const auto &source_rid = *received->routing_id ();
         const auto admitted = _topology.peer ({source_rid.data (), source_rid.size ()});
         received->source_routing_id =
           admitted ? admitted->descriptor.node_routing_id : source_rid.to_bytes ();
         if (!handshake
             && (!admitted
-                || !detail::backend::is_route_connection (
-                  admitted->connection_id, received->received.route_generation ()))) {
+                || !detail::backend::is_route_connection (admitted->connection_id,
+                                                          received->route_generation ()))) {
             if (mesh_trace_enabled ())
                 trace_mesh ("record-drop reason=route-not-admitted kind="
                             + std::to_string (static_cast<int> (header.kind)));
@@ -3674,7 +3674,7 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
                 return reject ();
             }
             return admit_descriptor_record (
-              received->source_routing_id, received->received.route_generation (), header.kind,
+              received->source_routing_id, received->route_generation (), header.kind,
               protocol::message_bytes (received->parts ().front ()), now);
         }
         if (header.kind == protocol::command::reject) {
@@ -3714,8 +3714,8 @@ raw_mesh_node_owner_t::receive_next (const receive_turn_t &turn,
             }
             const auto record =
               protocol::decode_liveness (protocol::message_bytes (received->parts ().front ()));
-            std::array<std::uint8_t, sizeof (received->received.route_generation ())> connection_id;
-            detail::backend::encode_route_connection_id (received->received.route_generation (),
+            std::array<std::uint8_t, sizeof (received->route_generation ())> connection_id;
+            detail::backend::encode_route_connection_id (received->route_generation (),
                                                          connection_id);
             if (record.kind == protocol::command::livenessProbe) {
                 const auto ack = _lane.run_sync ([this, &received, &connection_id, &record] {

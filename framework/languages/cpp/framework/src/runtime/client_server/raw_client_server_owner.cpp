@@ -512,7 +512,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
                 if (peer == _connections.end () || !peer->second)
                     return false;
                 if (detail::backend::is_route_connection (peer->second->connection_id,
-                                                          rejected.received.route_generation ()))
+                                                          rejected.route_generation ()))
                     peer->second->record_received (now);
                 return true;
             });

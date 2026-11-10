@@ -5172,7 +5172,7 @@ public_host_runtime_t::stage_relocation_record (const stateful::object_ref_t &ta
 
 task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
   protocol::instance_activation_recovery_t command,
-  std::shared_ptr<const mesh::service_mailbox_record_t> mailbox_record,
+  std::shared_ptr<const mesh::service_mailbox_reply_target_t> mailbox_record,
   std::function<void (instance_spot_activation_result_t)> done)
 {
     auto lifetime = shared_from_this ();
@@ -5457,7 +5457,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
 
 task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
   std::shared_ptr<protocol::instance_activation_recovery_t> owned_command,
-  std::shared_ptr<const mesh::service_mailbox_record_t> mailbox_record,
+  std::shared_ptr<const mesh::service_mailbox_reply_target_t> mailbox_record,
   std::function<void (instance_spot_activation_result_t)> done,
   std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> admission,
   std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> previous_admission)
@@ -7288,8 +7288,8 @@ public_host_runtime_t::dispatch_user_spot_batch (
                              correlation = request.correlation] (std::uint32_t terminal_result,
                                                                  std::uint32_t failure_code,
                                                                  bool closed) {
-                std::vector<
-                  std::pair<std::shared_ptr<const mesh::service_mailbox_record_t>, std::uint64_t>>
+                std::vector<std::pair<std::shared_ptr<const mesh::service_mailbox_reply_target_t>,
+                                      std::uint64_t>>
                   waiting;
                 _user_spot_terminal_lane.run_sync ([&] {
                     auto &stored = _user_spot_terminals[operation_key];
@@ -8006,7 +8006,7 @@ task_t<bool> public_host_runtime_t::dispatch_native_spot (
             record.source_node_rid = original->source_rid ();
             record.operation_id = {header.operation.high, header.operation.low};
             record.reply_route_id = header.correlation.value_or (0);
-            original->parts ().clear ();
+            original->replace_parts ({});
             if (header.correlation)
                 record.reply_token = {
                   weak_from_this (),
@@ -8322,8 +8322,8 @@ public_host_runtime_t::dispatch_application_claim (
                     ? std::shared_ptr<const std::vector<std::uint8_t>>{}
                     : std::make_shared<const std::vector<std::uint8_t>> (
                         mailbox_record.parts ()[1].to_bytes ());
-                auto parts =
-                  protocol::decode_application_parts (std::move (mailbox_record.parts ().back ()));
+                auto parts = protocol::decode_application_parts (
+                  std::move (mailbox_record.body_parts ().back ()));
                 auto before = std::move (mailbox_record.before_application_handler);
                 auto pending = std::make_shared<task_t<void>> (enqueue_local_multicast (
                   std::move (targets), std::move (multicast.channelName.value),
@@ -8421,8 +8421,8 @@ public_host_runtime_t::dispatch_application_claim (
             } else {
                 owner.owner_kind = owner_kind_t::node;
             }
-            auto parts = protocol::decode_application_parts (std::move (mailbox_record.parts ()[1]),
-                                                             capture_flow ());
+            auto parts = protocol::decode_application_parts (
+              std::move (mailbox_record.body_parts ()[0]), capture_flow ());
             trace_mesh_host (
               "dispatch",
               std::string ("kind=") + std::to_string (static_cast<int> (kind)) + " source="

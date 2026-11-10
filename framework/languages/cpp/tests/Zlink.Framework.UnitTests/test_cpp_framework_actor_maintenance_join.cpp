@@ -3896,7 +3896,7 @@ TEST (NativeIntake, LocalAcceptedRecordReleasesAfterNativeTerminal)
     auto actor = fixture.host->create_actor (actor_type, actor_id);
     auto wire = fixture.actor_record (1);
     auto parts =
-      fw::runtime::protocol::decode_application_parts (std::move (wire.parts ().back ()));
+      fw::runtime::protocol::decode_application_parts (std::move (wire.body_parts ().back ()));
     const auto sent = actor.send_to (actor.ref (), parts).result ();
     ASSERT_TRUE (sent);
     ASSERT_EQ (sent.value (), zlink::submit_result_t::ok);
@@ -3941,7 +3941,7 @@ TEST (NativeIntake, LocalSourceAwaitKeepsCanonicalOriginalAndIgnoresStaleComplet
     auto host = fixture.host;
     auto actor = host->create_actor (actor_type, actor_id);
     auto wire = fixture.actor_record (1);
-    auto parts = rt::protocol::decode_application_parts (std::move (wire.parts ().back ()));
+    auto parts = rt::protocol::decode_application_parts (std::move (wire.body_parts ().back ()));
     ASSERT_TRUE (actor.send_to (actor.ref (), parts).result ());
     auto &mailbox = host->transport ().mailbox ();
     const auto key =
@@ -4334,7 +4334,7 @@ TEST (NativeIntake, LocalSourceRejectionSettlesOnlyOwnedOriginal)
     auto host = fixture.host;
     auto actor = host->create_actor (actor_type, actor_id);
     auto wire = fixture.actor_record (1);
-    auto parts = rt::protocol::decode_application_parts (std::move (wire.parts ().back ()));
+    auto parts = rt::protocol::decode_application_parts (std::move (wire.body_parts ().back ()));
     rt::host::pending_operation_t operation;
     ASSERT_EQ (
       actor.request_to (actor.ref (), parts, operation, zlink::send_flags_t::none, wait_budget)

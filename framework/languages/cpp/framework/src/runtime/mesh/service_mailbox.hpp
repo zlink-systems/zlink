@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <type_traits>
 #include <utility>
 #include <string>
@@ -143,14 +144,32 @@ class service_mailbox_application_t
       _original;
 };
 
+struct service_mailbox_record_t;
+
+// A deferred reply owns its target, never the received frames or mailbox state.
+class service_mailbox_reply_target_t
+{
+  public:
+    explicit service_mailbox_reply_target_t (const service_mailbox_record_t &record);
+    const std::optional<zlink::routing_id_t> &routing_id () const noexcept { return _routing_id; }
+    const std::optional<zlink::reply_token_t> &reply_token () const noexcept { return _token; }
+    std::uint64_t route_generation () const noexcept { return _route_generation; }
+    std::vector<std::uint8_t> source_routing_id;
+    std::optional<std::uint64_t> correlation;
+
+  private:
+    std::optional<zlink::routing_id_t> _routing_id;
+    std::optional<zlink::reply_token_t> _token;
+    std::uint64_t _route_generation;
+};
+
 struct service_mailbox_record_t
 {
     std::string owner;
     // Same value as value-initialisation, so default-constructed records are never indeterminate.
     service_mailbox_domain_t domain = service_mailbox_domain_t::application;
-    zlink::received_t received;
     // Logical peer identity used by topology and location lookups. Native reply routing
-    // always uses received.routing_id() and received.reply_token().
+    // always uses routing_id() and reply_token().
     std::vector<std::uint8_t> source_routing_id{};
     std::optional<std::uint64_t> correlation = std::nullopt;
     std::uint64_t source_node_generation = 0;
@@ -180,7 +199,7 @@ struct service_mailbox_record_t
         service_mailbox_record_t record{};
         record.owner = std::move (owner);
         record.domain = domain;
-        record.parts () = std::move (parts);
+        record.replace_parts (std::move (parts));
         record.source_routing_id = std::move (source);
         record.correlation = correlation;
         record.source_node_generation = generation;
@@ -195,31 +214,86 @@ struct service_mailbox_record_t
         service_mailbox_record_t record{};
         record.owner = std::move (owner);
         record.domain = domain;
-        record.received = std::move (received);
-        if (record.received.routing_id ())
-            record.source_routing_id = record.received.routing_id ()->to_bytes ();
+        record._received = std::move (received);
+        if (record._received.routing_id ())
+            record.source_routing_id = record._received.routing_id ()->to_bytes ();
         return record;
     }
-    std::vector<zlink::message_t> &parts () { return received.parts (); }
-    const std::vector<zlink::message_t> &parts () const { return received.parts (); }
+    const std::vector<zlink::message_t> &parts () const { return _received.parts (); }
+    // The service prefix stays immutable between whole-parts replacements.
+    std::span<zlink::message_t> body_parts ()
+    {
+        auto &parts = _received.parts ();
+        return parts.empty () ? std::span<zlink::message_t>{}
+                              : std::span<zlink::message_t> (parts).subspan (1);
+    }
+    void replace_parts (std::vector<zlink::message_t> parts)
+    {
+        _received.parts () = std::move (parts);
+        _service_header.reset ();
+        _application_kind.reset ();
+    }
+    std::vector<zlink::message_t> take_parts ()
+    {
+        auto parts = std::move (_received.parts ());
+        replace_parts ({});
+        return parts;
+    }
+    const std::optional<zlink::routing_id_t> &routing_id () const noexcept
+    {
+        return _received.routing_id ();
+    }
+    std::uint64_t route_generation () const noexcept { return _received.route_generation (); }
     const std::optional<zlink::reply_token_t> &reply_token () const noexcept
     {
-        return received.reply_token ();
+        return _received.reply_token ();
     }
     zlink::routing_id_t source_rid () const
     {
-        return received.routing_id () ? *received.routing_id ()
-                                      : zlink::routing_id_t::from (source_routing_id);
+        return routing_id () ? *routing_id () : zlink::routing_id_t::from (source_routing_id);
     }
     const protocol::service_wire_header_t &service_header () const;
     std::optional<host::record_kind_t> application_kind () const;
 
-    std::shared_ptr<const service_mailbox_record_t> reply_source () const;
+    std::shared_ptr<const service_mailbox_reply_target_t> reply_source () const;
+
+  private:
+    zlink::received_t _received;
+    // Only native ingress writes received storage, before classification or publication.
+    friend class raw_mesh_node_owner_t;
 
     // Wire ingress fills these before publication. Local wire producers use the
     // same classifier on first consumption; application originals carry their own kind.
     mutable std::optional<protocol::service_wire_header_t> _service_header;
     mutable std::optional<host::record_kind_t> _application_kind;
+};
+
+// Borrowed only for the duration of a reply; retaining a reply uses reply_source().
+class service_mailbox_reply_view_t
+{
+  public:
+    service_mailbox_reply_view_t (const service_mailbox_record_t &record) noexcept :
+        source_routing_id (record.source_routing_id),
+        correlation (record.correlation),
+        _routing_id (record.routing_id ()),
+        _token (record.reply_token ())
+    {
+    }
+    service_mailbox_reply_view_t (const service_mailbox_reply_target_t &target) noexcept :
+        source_routing_id (target.source_routing_id),
+        correlation (target.correlation),
+        _routing_id (target.routing_id ()),
+        _token (target.reply_token ())
+    {
+    }
+    const std::optional<zlink::reply_token_t> &reply_token () const noexcept { return _token; }
+    const zlink::routing_id_t &source_rid () const { return _routing_id.value (); }
+    const std::vector<std::uint8_t> &source_routing_id;
+    const std::optional<std::uint64_t> &correlation;
+
+  private:
+    const std::optional<zlink::routing_id_t> &_routing_id;
+    const std::optional<zlink::reply_token_t> &_token;
 };
 
 // A claimed slot: the claim and the slot's position in the claimed prefix.

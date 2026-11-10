@@ -223,7 +223,7 @@ mesh::service_mailbox_record_t native_spot_record (host::public_host_runtime_t &
     std::vector<zlink::message_t> parts;
     parts.push_back (runtime::messaging::envelope_codec_t{}.encode_header (envelope));
     parts.push_back (zlink::message_t::from ("{}"));
-    wire.parts ().back () = detail::backend::materialize_binding_part (
+    wire.body_parts ().back () = detail::backend::materialize_binding_part (
       protocol::encode_application_payload (protocol::application_payload_t::from_parts (parts)));
     return wire;
 }
@@ -245,8 +245,8 @@ mesh::service_mailbox_record_t local_native_spot_record (host::public_host_runti
       zlink::routing_id_t::from (original.source_routing_id);
     original.application->record.spot_route = header.target;
     original.application->parts =
-      protocol::decode_application_parts (std::move (original.parts ().back ()));
-    original.parts ().clear ();
+      protocol::decode_application_parts (std::move (original.body_parts ().back ()));
+    original.replace_parts ({});
     return original;
 }
 
@@ -2377,7 +2377,7 @@ TEST (FrameworkRelocationSealContract, native_spot_fallback_rereads_remote_and_l
                   protocol::decode_application_parts (protocol::decode_application_payload (
                     protocol::message_bytes (original.parts ().back ())));
                 original.application.emplace (std::move (*application));
-                original.parts ().clear ();
+                original.replace_parts ({});
             }
             const auto slot = zlink::framework::test::publish_stateful_claim (
               host->transport (), spot, std::move (original));
@@ -3715,7 +3715,7 @@ TEST (FrameworkRelocationSealContract, native_protocol_rejection_preserves_follo
               std::make_shared<serial_application_target_t> ()));
       });
     auto invalid = native_spot_record (*host, spot, 1, std::nullopt);
-    invalid.parts ().back () = zlink::message_t::from ("invalid wire payload");
+    invalid.body_parts ().back () = zlink::message_t::from ("invalid wire payload");
     std::vector<mesh::service_mailbox_record_t> originals;
     originals.push_back (std::move (invalid));
     originals.push_back (native_spot_record (*host, spot, 2, std::nullopt));

@@ -365,7 +365,7 @@ raw_stateful_dispatch_t::register_accepted_ingress (const object_ref_t &owner,
     // Pending owns terminal identity and reply routing; the native turn owns body bytes.
     pending.frozen.application.reset ();
     pending.frozen.canonical_bytes.clear ();
-    pending.transport.parts ().clear ();
+    pending.transport.replace_parts ({});
     try {
         _pending.emplace (admission.pending_key, std::move (pending));
     }
@@ -1265,7 +1265,7 @@ task_t<bool> raw_stateful_dispatch_t::complete_relocated_source_async (
   const std::optional<protocol::application_payload_t> &reply)
 {
     std::function<bool (const std::optional<protocol::application_payload_t> &)> relocated_terminal;
-    std::shared_ptr<const mesh::service_mailbox_record_t> reply_source;
+    std::shared_ptr<const mesh::service_mailbox_reply_target_t> reply_source;
     delivery_key_t pending_key{owner.kind, owner.key, sequence};
     {
         std::unique_lock lock (_mutex);
@@ -1358,7 +1358,7 @@ void raw_stateful_dispatch_t::release_relocated_payloads (
             // the source's already committed application payload.
             pending.frozen.application.reset ();
             pending.frozen.canonical_bytes.clear ();
-            pending.transport.parts ().clear ();
+            pending.transport.replace_parts ({});
         }
     }
     for (auto &[claim, initial_reservation] : reservations) {

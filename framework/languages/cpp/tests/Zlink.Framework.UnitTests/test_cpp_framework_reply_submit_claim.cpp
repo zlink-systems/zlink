@@ -452,7 +452,7 @@ void verify_partial_prefix_and_stale_claim (bool local)
             record.application.emplace ();
             record.application->parts.push_back (zlink::message_t::from ("body"));
         } else
-            record.parts ().push_back (zlink::message_t::from ("body"));
+            record.replace_parts ({zlink::message_t::from ("body")});
         assert (mailbox.try_enqueue (std::move (record)));
     }
     auto claim =

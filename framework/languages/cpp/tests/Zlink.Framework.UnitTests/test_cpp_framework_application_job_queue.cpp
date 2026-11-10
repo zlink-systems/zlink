@@ -484,14 +484,14 @@ TEST (ZLinkFrameworkStatefulDispatch, RetainedIngressExceptionLeavesTerminalWith
     namespace protocol = framework::runtime::protocol;
     auto &wire = (*claim->records.front ());
     ASSERT_TRUE (wire.correlation);
-    wire.parts () = framework::detail::backend::materialize_binding_parts (
+    wire.replace_parts (framework::detail::backend::materialize_binding_parts (
       {protocol::encode_actor_message_header (
          protocol::command::actorRequest, std::nullopt,
          {owner->key, owner->object_generation, native->status ().routing_id ().to_bytes (),
           native->status ().lifecycle_generation (), owner->authority_owner_generation, 1},
          {operation.id.high, operation.id.low}, wire.correlation),
        protocol::encode_application_payload (
-         protocol::application_payload_t::from_parts (request.items ()))});
+         protocol::application_payload_t::from_parts (request.items ()))}));
     wire.source_node_generation = native->status ().lifecycle_generation ();
     wire.application.reset ();
     const auto dispatched =

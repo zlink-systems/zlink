@@ -3638,7 +3638,7 @@ void verify_actor_join_waits_for_admit_without_replay ()
             assert (claim && claim->records.size () == 1);
             return claim;
         };
-        std::shared_ptr<const mesh::service_mailbox_record_t> first;
+        std::shared_ptr<const mesh::service_mailbox_reply_target_t> first;
         std::vector<zlink::message_t> first_parts;
         if (handover) {
             auto claim = receive ();
@@ -4074,7 +4074,7 @@ void verify_actor_join_mismatched_correlation_reply_classifies_protocol_error ()
     assert (claim && claim->records.size () == 1);
     // Reply through the raw route (so the frame reaches the pending
     // request), but stamp a correlation that does not identify it.
-    auto misrouted = std::const_pointer_cast<mesh::service_mailbox_record_t> (
+    auto misrouted = std::const_pointer_cast<mesh::service_mailbox_reply_target_t> (
       claim->records.front ()->reply_source ());
     misrouted->correlation = request.correlation + 2;
     assert (target.reply_actor_join (*misrouted, protocol::actor_join_result_t::accepted,
