@@ -327,7 +327,7 @@ options.handler_coroutine_workers(8);
 
 | Modifier | Default | Meaning |
 | --- | --- | --- |
-| `.services()` | — | `service_collection_t`. Registers the service lifetime (`add_singleton`/`add_scoped`/`add_transient`/`add_factory`) of handlers and hosted components |
+| `.services()` | — | `service_collection_t`. Registers services and hosted components with their lifetime (`add_singleton`/`add_scoped`/`add_transient`/`add_factory`). Handlers, filters and channel owners are created per dispatch whatever their registration ([Activation and Lifetime](../guide/server/34-activation-lifetime.en.md)) |
 | `.metadata().allow_session_to_actor(key)` / `.allow_actor_to_session(key)` | Keys not specified are not forwarded | Adds a metadata key to forward across the STREAM session↔Actor relay to a direction-specific allowlist |
 | `.configure_network()` | `bind_host()` is `127.0.0.1` | The default bind/advertise host used unless an individual listen call overrides it |
 | `.worker()` | `worker_options_t` default | The worker pool's minimum/maximum thread count and idle timeout (the pool `RunCpuWorker`/`RunIoWorker` use) |
