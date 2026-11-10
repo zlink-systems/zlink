@@ -1083,24 +1083,7 @@ cases["spi.snapshot-validity"] = async (h, f) => {
     { kind: "expired" },
   );
 };
-cases["spi.snapshot-clock"] = async (h, f) => {
-  // Unverified until the host clock VM exists; the steps below are the check it will run.
-  await hostClock(h, f);
-  await h.put(f, "clock/a", Buffer.from("a"), 60000);
-  await h.put(f, "clock/b", Buffer.from("b"), 60000);
-  const first = await f.store.scan({ prefix: "clock/", limit: 1 });
-  const expected = await found(f.store, "clock/b");
-  await h.setClock(f, BigInt(expected.expiresAt.getTime()) + 1n);
-  const second = await f.store.scan({
-    prefix: "clock/",
-    limit: 1,
-    cursor: first.value.nextCursor,
-  });
-  assert.equal(second.kind, "page");
-  assert.equal(second.value.items.length, 1);
-  assert.equal(second.value.storeNow.getTime(), first.value.storeNow.getTime());
-  await missing(f.store, "clock/b");
-};
+cases["spi.snapshot-clock"] = hostClock;
 cases["spi.cursor-page-bounds"] = async (h, f) => {
   for (let i = 0; i < 5; i++)
     await h.put(f, `page/${i}`, Buffer.alloc(1048576, i));
