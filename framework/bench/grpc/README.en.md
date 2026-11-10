@@ -711,6 +711,7 @@ difference doesn't show in the result table.
   Manual verification also accepts `send-saturation` and payload sizes `1024,4096`.
 - If a value is outside these ranges, the runner rejects it before the measurement starts.
 - `TARGET_RATE`, `SOURCE_CPUS`, and `TARGET_CPUS` are optional C++ runner inputs. CPU lists use Linux `taskset -c` syntax.
+  The C++ runner records them in the cell JSON `metadata` as `targetRate` (`0` is unpaced), `sourceCpus`, and `targetCpus` (`unpinned` when unset).
 
 Values outside the table aren't inputs. Send concurrency 8 and the 30-second drain
 limit (§3), and ports (§9) are set by the runner and recorded in the `metadata` of the cell JSON.

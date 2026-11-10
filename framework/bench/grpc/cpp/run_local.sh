@@ -28,6 +28,25 @@ a_pid=""
 b_pid=""
 trap cleanup_cell EXIT
 
+# The paced rate and CPU lists are measurement conditions; keep them with each result.
+record_cell_controls() {
+  python3 - "$1" "${TARGET_RATE:-0}" "${SOURCE_CPUS:-}" "${TARGET_CPUS:-}" <<'PY'
+import json, os, sys
+path, rate, source_cpus, target_cpus = sys.argv[1:]
+with open(path, encoding="utf-8") as handle:
+    result = json.load(handle)
+metadata = result.setdefault("metadata", {})
+metadata["targetRate"] = rate
+metadata["sourceCpus"] = source_cpus or "unpinned"
+metadata["targetCpus"] = target_cpus or "unpinned"
+temporary = path + ".controls"
+with open(temporary, "w", encoding="utf-8") as handle:
+    json.dump(result, handle, indent=2)
+    handle.write("\n")
+os.replace(temporary, path)
+PY
+}
+
 for run in $(seq 1 "${RUNS}"); do
   run_id="${RUN_STAMP}-run${run}"
   for implementation in "${implementations[@]}"; do
@@ -96,6 +115,7 @@ for run in $(seq 1 "${RUNS}"); do
           "${run_id}" "${cell_id}" "${implementation}" "${pattern}" "${payload}" \
           "$((WARMUP_SECONDS * 1000))" "${cell_dir}/results.json" "${target_stats_file}" \
           "${target_stats_url}"
+        record_cell_controls "${cell_dir}/results.json"
 
         cleanup_cell
         wait_for_ports_free 5280 5299
