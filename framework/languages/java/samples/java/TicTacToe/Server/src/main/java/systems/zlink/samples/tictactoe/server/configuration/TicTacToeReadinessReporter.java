@@ -9,6 +9,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.monitoring.ZLinkPeerState;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -20,6 +21,7 @@ public final class TicTacToeReadinessReporter implements ApplicationRunner, Auto
     private final String peerNodeId;
     private final RoutingId expectedPeerRoutingId;
     private final ZLinkRouteMeshRuntime meshes;
+    private final ZLinkFrameworkRuntime host;
     private final ScheduledExecutorService reporter =
             Executors.newSingleThreadScheduledExecutor(
                     runnable -> {
@@ -32,22 +34,27 @@ public final class TicTacToeReadinessReporter implements ApplicationRunner, Auto
             String nodeId,
             String peerNodeId,
             RoutingId expectedPeerRoutingId,
-            ZLinkRouteMeshRuntime meshes) {
+            ZLinkRouteMeshRuntime meshes,
+            ZLinkFrameworkRuntime host) {
         this.nodeId = nodeId;
         this.peerNodeId = peerNodeId;
         this.expectedPeerRoutingId = expectedPeerRoutingId;
         this.meshes = meshes;
+        this.host = host;
     }
 
     public static TicTacToeReadinessReporter peerRoute(
-            String nodeId, String peerNodeId, ZLinkRouteMeshRuntime meshes) {
+            String nodeId,
+            String peerNodeId,
+            ZLinkRouteMeshRuntime meshes,
+            ZLinkFrameworkRuntime host) {
         return new TicTacToeReadinessReporter(
-                nodeId, peerNodeId, RoutingId.from("tictactoe-" + peerNodeId), meshes);
+                nodeId, peerNodeId, RoutingId.from("tictactoe-" + peerNodeId), meshes, host);
     }
 
     public static TicTacToeReadinessReporter spotRoute(
             String nodeId, ZLinkRouteMeshRuntime meshes) {
-        return new TicTacToeReadinessReporter(nodeId, null, null, meshes);
+        return new TicTacToeReadinessReporter(nodeId, null, null, meshes, null);
     }
 
     @Override
@@ -57,6 +64,8 @@ public final class TicTacToeReadinessReporter implements ApplicationRunner, Auto
 
     private void report() {
         try {
+            // User Spot placement requires this host's published descriptor.
+            if (expectedPeerRoutingId != null && !host.status().isReady()) return;
             var snapshot = meshes.snapshot(SampleNames.SpotMesh);
             boolean ready =
                     expectedPeerRoutingId == null
