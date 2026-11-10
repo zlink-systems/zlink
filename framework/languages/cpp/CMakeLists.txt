@@ -2378,7 +2378,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       target_compile_definitions(test_cpp_framework_scheduler_drain PRIVATE ZLINK_TEST_WRAP_NOTIFY_ONE)
       target_link_options(test_cpp_framework_scheduler_drain PRIVATE
         "LINKER:--wrap=_ZNSt18condition_variable10notify_oneEv")
-      foreach(_negative IN ITEMS items wakes terminal spot-gate actor-gate)
+      foreach(_negative IN ITEMS items wakes stream-wakes terminal spot-gate actor-gate)
         zlink_framework_cpp_add_test(
           NAME test_cpp_framework_scheduler_drain_negative_${_negative}
           COMMAND ${CMAKE_COMMAND}
@@ -2404,7 +2404,18 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
     zlink_framework_cpp_add_boost_headers(test_cpp_framework_mailbox_owner_dispatch)
     target_link_options(test_cpp_framework_mailbox_owner_dispatch PRIVATE
+      "LINKER:--wrap=_ZN5zlink9framework7runtime18offload_executor_t10start_roleESt10shared_ptrINS2_6role_tEE"
+      "LINKER:--wrap=_ZNSt18condition_variable10notify_oneEv"
       "LINKER:--wrap=zlink_router_recv")
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_mailbox_owner_dispatch_negative_extra-notify
+      COMMAND ${CMAKE_COMMAND}
+        "-DPROGRAM=$<TARGET_FILE:test_cpp_framework_mailbox_owner_dispatch>"
+        "-DMODE=extra-notify"
+        -P "${ZLINK_FRAMEWORK_CPP_DIR}/tests/support/expect_scheduler_rejection.cmake"
+      LABELS "framework-unit;framework-regression;execution;negative-control"
+      TIER unit
+      TIMEOUT 30)
     set(ZLINK_TEST_RECEIVE_WAIT_SYMBOL
       "_ZN5zlink9framework7runtime4host21public_host_runtime_t33wait_for_hosted_dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE")
     target_compile_definitions(test_cpp_framework_receive_role_completion PRIVATE

@@ -9,18 +9,56 @@
 #include "runtime/messaging/client_call_codec.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include <zlink.h>
+#include <algorithm>
 #include <array>
 #include <cassert>
+#include <condition_variable>
 #include <future>
 #include <iostream>
 #include <mutex>
+#include <set>
+#include <string_view>
 
 namespace fw = zlink::framework;
 namespace rt = fw::runtime;
 using namespace std::chrono_literals;
+namespace zlink::framework::runtime
+{
+struct offload_executor_test_access_t
+{
+    static std::size_t max_worker_count (offload_executor_t &executor)
+    {
+        std::lock_guard lock (executor._mutex);
+        return executor._max_worker_count;
+    }
+    static bool is_worker_ready (offload_executor_t &executor, const std::condition_variable *ready)
+    {
+        std::lock_guard lock (executor._mutex);
+        return std::any_of (executor._workers.begin (), executor._workers.end (),
+                            [&] (const auto &worker) { return &worker->ready == ready; });
+    }
+    // Negative control only: a spurious wake is harmless because workers wait on their phase.
+    static void notify_any_worker (offload_executor_t &executor)
+    {
+        std::condition_variable *ready = nullptr;
+        {
+            std::lock_guard lock (executor._mutex);
+            if (!executor._workers.empty ())
+                ready = &executor._workers.front ()->ready;
+        }
+        if (ready)
+            ready->notify_one ();
+    }
+};
+}
 namespace
 {
+std::atomic<rt::offload_executor_t *> application_executor{nullptr};
+std::atomic_bool watch_notifications{false};
+std::atomic_size_t worker_notifications{0};
 std::mutex observation_mutex;
+std::mutex participation_mutex;
+std::set<std::thread::id> participating_workers;
 std::thread::id received_on;
 std::promise<std::thread::id> handled;
 std::atomic_bool handler_blocked{false};
@@ -46,6 +84,10 @@ struct handler_t
         if (probe.value.starts_with ("queued-probe-")) {
             const auto index = std::stoul (probe.value.substr (13));
             assert (index < queued_records && !queued_seen[index].exchange (true));
+            {
+                std::lock_guard lock (participation_mutex);
+                participating_workers.insert (std::this_thread::get_id ());
+            }
             if (handled_queued.fetch_add (1) + 1 == queued_records)
                 queue_drained.set_value ();
             return;
@@ -89,14 +131,48 @@ extern "C" zlink_recv_result_t __wrap_zlink_router_recv (void *socket,
     }
     return result;
 }
-int main ()
+extern "C" bool real_start_role (
+  rt::offload_executor_t *,
+  std::shared_ptr<rt::offload_executor_t::
+                    role_t>) __asm__ ("__real__ZN5zlink9framework7runtime18offload_executor_"
+                                      "t10start_roleESt10shared_ptrINS2_6role_tEE");
+extern "C" bool wrapped_start_role (
+  rt::offload_executor_t *,
+  std::shared_ptr<rt::offload_executor_t::
+                    role_t>) __asm__ ("__wrap__ZN5zlink9framework7runtime18offload_executor_"
+                                      "t10start_roleESt10shared_ptrINS2_6role_tEE");
+extern "C" bool wrapped_start_role (rt::offload_executor_t *executor,
+                                    std::shared_ptr<rt::offload_executor_t::role_t> role)
 {
+    application_executor = executor;
+    return real_start_role (executor, std::move (role));
+}
+extern "C" void real_notify_one (std::condition_variable *) __asm__ (
+  "__real__ZNSt18condition_variable10notify_oneEv");
+extern "C" void wrapped_notify_one (std::condition_variable *) __asm__ (
+  "__wrap__ZNSt18condition_variable10notify_oneEv");
+extern "C" void wrapped_notify_one (std::condition_variable *ready)
+{
+    const auto executor = application_executor.load ();
+    if (watch_notifications && executor
+        && rt::offload_executor_test_access_t::is_worker_ready (*executor, ready))
+        ++worker_notifications;
+    real_notify_one (ready);
+}
+int main (int argc, char **argv)
+{
+    const bool negative_extra_notify =
+      argc > 1 && std::string_view (argv[1]) == "--negative-extra-notify";
+    if (argc > 1 && !negative_extra_notify)
+        return 2;
     bool correct = true;
     {
         fw::completion_owner_t completion;
         handled = {};
         received_queued = 0;
         handled_queued = 0;
+        worker_notifications = 0;
+        participating_workers.clear ();
         for (auto &seen : queued_seen)
             seen.store (false);
         queue_drained = {};
@@ -194,6 +270,8 @@ int main ()
         }
         const auto handler = invocation.get ();
         const bool same = receiver == handler;
+        worker_notifications = 0;
+        watch_notifications = true;
         {
             for (std::size_t index = 0; index < queued_records; ++index) {
                 auto queued = codec.encode_envelope_parts (
@@ -210,9 +288,39 @@ int main ()
                 assert (std::chrono::steady_clock::now () < receive_deadline);
                 std::this_thread::yield ();
             }
+            // A plus 128 queued records is the 129-record busy window.
+            {
+                std::lock_guard lock (participation_mutex);
+                participating_workers.insert (handler);
+            }
             // S02: the same Node must progress while its earlier handler blocks.
             const bool same_owner = drained.wait_for (5s) == std::future_status::ready;
             correct = correct && same_owner;
+            const auto executor = application_executor.load ();
+            assert (executor != nullptr);
+            const auto max_workers =
+              rt::offload_executor_test_access_t::max_worker_count (*executor);
+            // A occupies one worker, so the other max_workers - 1 reservations are the limit.
+            const auto wake_bound = max_workers - 1;
+            if (negative_extra_notify) {
+                // Raise the count to exactly one over the bound through counted worker CV wakes.
+                const auto observed = worker_notifications.load ();
+                const auto extra = observed <= wake_bound ? wake_bound - observed + 1 : 0;
+                std::cout << "negative_observed_notifications=" << observed << '\n'
+                          << "negative_extra_notifications=" << extra << '\n';
+                for (std::size_t index = 0; index < extra; ++index)
+                    rt::offload_executor_test_access_t::notify_any_worker (*executor);
+            }
+            watch_notifications = false;
+            const auto notifications = worker_notifications.load ();
+            std::size_t participants;
+            {
+                std::lock_guard lock (participation_mutex);
+                participants = participating_workers.size ();
+            }
+            std::cout << "worker_notifications_for_129_records=" << notifications << '\n'
+                      << "workers_participating=" << participants << '\n';
+            correct = correct && notifications <= wake_bound && participants <= max_workers;
             std::cout << "blocked_handler_same_node_progress=" << same_owner << '\n';
             auto completed = std::make_shared<std::promise<void>> ();
             auto terminal = completed->get_future ();

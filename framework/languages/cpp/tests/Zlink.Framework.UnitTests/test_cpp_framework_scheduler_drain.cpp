@@ -13,7 +13,10 @@
 #include <cstdio>
 #include <future>
 #include <latch>
+#include <mutex>
+#include <set>
 #include <stdexcept>
+#include <thread>
 
 namespace fw = zlink::framework;
 namespace rt = fw::runtime;
@@ -223,6 +226,47 @@ bool burst (std::string_view negative)
     return items == 1 && notifications <= workers && queued == 1;
 }
 
+bool steady_stream (bool notify_every_publication)
+{
+    constexpr std::size_t count = 1000, workers = 4;
+    rt::offload_executor_t executor (workers);
+    await ([&] { return rt::offload_executor_test_access_t::idle (executor).size () == workers; });
+    worker_conditions = rt::offload_executor_test_access_t::idle (executor);
+    mesh::service_mailbox_t mailbox;
+    auto source = std::make_shared<source_t> (executor, mailbox);
+    std::mutex participants_mutex;
+    std::set<std::thread::id> participants;
+    source->handle = [&] (std::size_t) {
+        {
+            std::lock_guard lock (participants_mutex);
+            participants.insert (std::this_thread::get_id ());
+        }
+        std::this_thread::sleep_for (500us);
+    };
+    mailbox.begin_application_receive_turn ();
+    wakes = 0;
+    count_wakes = true;
+    for (std::size_t id = 0; id != count; ++id) {
+        enqueue (mailbox, "node", id);
+        require (executor.try_submit_drain (source), "stream publication rejected");
+        if (notify_every_publication)
+            worker_conditions[id % worker_conditions.size ()]->notify_one ();
+        std::this_thread::sleep_for (50us);
+    }
+    await ([&] { return source->completed.load () == count; });
+    await ([&] { return executor.drained (); });
+    count_wakes = false;
+    const auto notifications = wakes.load ();
+    const auto distinct_workers = participants.size ();
+    executor.drain ();
+    std::fprintf (stderr,
+                  "steady_stream records=%zu worker_notifications=%zu notifications_per_record="
+                  "%zu/%zu workers_participating=%zu workers_per_record=%zu/%zu bound=%zu\n",
+                  count, notifications, notifications, count, distinct_workers, distinct_workers,
+                  count, workers);
+    return notifications <= workers && distinct_workers != 0 && distinct_workers <= workers;
+}
+
 bool independent (bool wait_for_terminal, const std::string &owner)
 {
     rt::offload_executor_t executor (2);
@@ -412,6 +456,8 @@ int main (int argc, char **argv)
             return burst ("items") ? 0 : 1;
         if (mode == "--negative-wakes")
             return burst ("wakes") ? 0 : 1;
+        if (mode == "--negative-stream-wakes")
+            return steady_stream (true) ? 0 : 1;
         if (mode == "--negative-terminal")
             return independent (true, "node") ? 0 : 1;
         if (mode == "--negative-spot-gate")
@@ -419,6 +465,7 @@ int main (int argc, char **argv)
         if (mode == "--negative-actor-gate")
             return gated (true, true) ? 0 : 1;
         require (burst (""), "burst exceeded item/wake bound");
+        require (steady_stream (false), "steady stream exceeded wake/worker bound");
         require (independent (false, "node"), "same Node waited for A terminal");
         require (independent (false, "channel:test"), "same Channel waited for A terminal");
         shutdown (false);
