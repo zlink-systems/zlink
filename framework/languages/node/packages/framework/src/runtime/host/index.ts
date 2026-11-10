@@ -7,6 +7,7 @@ import { ZLinkProviderRelocationRepository } from '../locations/relocation-blob'
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import { currentApplicationJobOrigin } from '../application-jobs/application-job-queue-scope';
 import { listAllMeshNodeDescriptors } from '../locations/location-store-pages';
+import { ZLinkLiveRowFilter } from '../locations/lease-tracker';
 import { ZLinkDescriptorPublicationUnconfirmedError } from '../locations/descriptor-publication';
 import { ZLinkOwnerLeaseReleaseDelayPendingError } from '../locations/owner-lease-release-delay';
 import { ZLinkMeshNodeDescriptorConflictException } from '../spots/spot-node-runtime-manager';
@@ -2545,9 +2546,11 @@ export class ZLinkFrameworkRuntimeHost
       }
       return meshName;
     };
+    const liveRows = new ZLinkLiveRowFilter();
+    const leaseTracker = this.locationOwner.currentLeaseTracker!;
     const coordinator = (this.userSpotCoordinator = new ZLinkUserSpotCreationCoordinator({
       store: locationStore,
-      leaseTracker: this.locationOwner.currentLeaseTracker!,
+      leaseTracker,
       relocationPolicy: (meshName, stableType) => {
         const node = this.options.registration.spotNodes.get(selectUserSpotMesh(meshName));
         return node?.spotFactoryRegistrations?.[stableType]?.relocation.kind;
@@ -2590,7 +2593,11 @@ export class ZLinkFrameworkRuntimeHost
       target: async (request, signal, excludedNodeRids) => {
         const meshName = selectUserSpotMesh(request.meshName);
         const meshNode = this.spotNodeRuntime?.meshNode(meshName);
-        const descriptors = await listAllMeshNodeDescriptors(locationStore, meshName, signal);
+        const descriptors = await liveRows.filter(
+          await listAllMeshNodeDescriptors(locationStore, meshName, signal),
+          (descriptor, signal) => leaseTracker.isOwnerTokenLive(descriptor, signal),
+          signal
+        );
         const selected = await selectReadyLocationPlacementDescriptor(
           descriptors,
           meshNode,
