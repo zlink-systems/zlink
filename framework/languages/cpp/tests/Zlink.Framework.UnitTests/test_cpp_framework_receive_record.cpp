@@ -529,13 +529,13 @@ TEST_F (ReceiveRecord, LocalReplyDecisionsUseLogicalIdentityDespiteDifferentNati
             } else if (kind == 2) {
                 EXPECT_TRUE (target.reply_user_spot_create (
                   request, wire::user_spot_create_reply_t{
-                             header, wire::user_spot_create_result_t::rejected, {}, 0}));
+                             header, wire::user_spot_create_result_t::rejected, {}, 1}));
             } else if (kind == 3) {
                 EXPECT_TRUE (target.reply_actor_create (
                   request, wire::actor_create_reply_t{
                              header, wire::actor_create_result_t::rejected, {}, {}, 0}));
             } else {
-                EXPECT_TRUE (target.reply_instance_spot_activation (request, 1, 0));
+                EXPECT_TRUE (target.reply_instance_spot_activation (request, 106, 15));
             }
             EXPECT_FALSE (target.operation_pending (*operation));
             (void) target.unregister_local_operation (*operation);
