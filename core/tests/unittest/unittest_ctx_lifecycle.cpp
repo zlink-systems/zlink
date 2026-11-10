@@ -1447,7 +1447,12 @@ void test_transport_owner_start_waits_for_explicit_async_quiesce ()
 
 void test_socket_creation_rejects_invalid_mailbox ()
 {
-#if defined(HAVE_FORK) && !defined(ZLINK_HAVE_WINDOWS)
+#if defined(ZLINK_TEST_UBSAN_VPTR)
+    // With RLIMIT_NOFILE exhausted, UBSan's IsAccessibleMemoryRange fails at
+    // pipe2() with EMFILE and reports a valid vptr as invalid while the failed
+    // socket is destroyed (#4149). The case runs in non-UBSan builds.
+    TEST_IGNORE_MESSAGE ("UBSan vptr check needs free descriptors; see #4149");
+#elif defined(HAVE_FORK) && !defined(ZLINK_HAVE_WINDOWS)
     const pid_t child = fork ();
     TEST_ASSERT_TRUE_MESSAGE (child >= 0, "fork failed");
     if (child == 0) {
