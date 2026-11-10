@@ -2385,7 +2385,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
             "-DPROGRAM=$<TARGET_FILE:test_cpp_framework_scheduler_drain>"
             "-DMODE=${_negative}"
             -P "${ZLINK_FRAMEWORK_CPP_DIR}/tests/support/expect_scheduler_rejection.cmake"
-          LABELS "framework-unit;framework-contract;execution;negative-control"
+          LABELS "framework-unit;framework-contract;execution"
           TIER unit
           TIMEOUT 30)
       endforeach()
@@ -2413,7 +2413,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
         "-DPROGRAM=$<TARGET_FILE:test_cpp_framework_mailbox_owner_dispatch>"
         "-DMODE=extra-notify"
         -P "${ZLINK_FRAMEWORK_CPP_DIR}/tests/support/expect_scheduler_rejection.cmake"
-      LABELS "framework-unit;framework-regression;execution;negative-control"
+      LABELS "framework-unit;framework-regression;execution"
       TIER unit
       TIMEOUT 30)
     set(ZLINK_TEST_RECEIVE_WAIT_SYMBOL
