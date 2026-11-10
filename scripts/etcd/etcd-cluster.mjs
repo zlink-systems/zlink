@@ -207,7 +207,10 @@ async function up(options, run) {
     }
     for (const member of state.members) {
       if (backend === 'docker') {
-        member.containerId = await command('docker', ['create', '--name', member.name, '--label', `${LIMITS.label}=${runId}`,
+        // On a Linux host the data bind mount keeps the container's file owner; run as the
+        // caller so the run directory can be removed without root.
+        const user = process.getuid ? ['--user', `${process.getuid()}:${process.getgid()}`] : [];
+        member.containerId = await command('docker', ['create', '--name', member.name, '--label', `${LIMITS.label}=${runId}`, ...user,
           '--network', state.networks[0], '-p', `127.0.0.1::${LIMITS.containerClientPort}`,
           '--mount', `type=bind,source=${member.dataDir},target=/data`, '--entrypoint', '/usr/local/bin/etcd', VERSION.image, ...memberArgs(state, member)]);
         await writeJson(configFile(run), state);
