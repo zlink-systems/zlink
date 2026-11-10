@@ -301,6 +301,87 @@ jobs:
           ctest --preset linux-ninja-release "${parallel_args[@]}" \
             -L '^(unit|contract)$'
 
+      # Nightly only (#4082): the etcd Location Store 4x4 cross-language
+      # conformance run reuses this job's etcd-enabled static build on the
+      # hosted image. The three host-clock cases stay unverified without a VM.
+      - name: Setup .NET 8 SDK for the etcd 4x4 run
+        if: ${{ !inputs.skip_tests && inputs.single_worker }}
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Setup Java 25 for the etcd 4x4 run
+        if: ${{ !inputs.skip_tests && inputs.single_worker }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Fetch the Core release for the etcd 4x4 Node workspace
+        id: etcd-core
+        if: ${{ !inputs.skip_tests && inputs.single_worker }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The Node binding package needs the verified release runtime and its
+          # provenance, as in framework-node.yml; the Core built above has neither.
+          set -euo pipefail
+          core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)"
+          core_prefix="$(bash scripts/local-package/core/fetch-release.sh \
+            --version "${core_version}" \
+            --platform linux-x64 \
+            --cache-dir .artifacts/core-release)"
+          echo "prefix=${core_prefix}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build the checkout Node binding package for the etcd 4x4 run
+        if: ${{ !inputs.skip_tests && inputs.single_worker }}
+        uses: ./.github/actions/node-binding-package
+        env:
+          ZLINK_CORE_SOURCE: release
+          ZLINK_CORE_PACKAGE_PREFIX: ${{ steps.etcd-core.outputs.prefix }}
+        with:
+          core-prefix: ${{ steps.etcd-core.outputs.prefix }}
+
+      - name: Install the Node workspace for the etcd 4x4 run
+        if: ${{ !inputs.skip_tests && inputs.single_worker }}
+        env:
+          ZLINK_CORE_SOURCE: release
+          ZLINK_CORE_PACKAGE_PREFIX: ${{ steps.etcd-core.outputs.prefix }}
+        run: |
+          # Same install as framework-node.yml: the workspace manifest pins
+          # http-client and the binding to tarballs built from this checkout
+          # under .artifacts/wsl, not this job's C++ package root.
+          set -euo pipefail
+          env -u ZLINK_LOCAL_PACKAGE_ROOT bash scripts/local-package/http-client/build-wsl.sh node
+          cd framework/languages/node
+          binding_version=$(node -p "require('./packages/framework/package.json').dependencies['@zlink-systems/zlink']")
+          BINDING_VERSION="${binding_version}" node - <<'NODE'
+          const fs = require('node:fs');
+          const file = 'package.json';
+          const packageJson = JSON.parse(fs.readFileSync(file, 'utf8'));
+          packageJson.dependencies['@zlink-systems/zlink'] = `file:../../../.artifacts/wsl/npm/zlink-systems-zlink-${process.env.BINDING_VERSION}.tgz`;
+          fs.writeFileSync(file, `${JSON.stringify(packageJson, null, 2)}\n`);
+          NODE
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          npm ci
+
+      - name: Run the etcd 4x4 cross-language conformance
+        if: ${{ !inputs.skip_tests && inputs.single_worker }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${ZLINK_LOCAL_PACKAGE_ROOT}/nuget" "${ZLINK_LOCAL_PACKAGE_ROOT}/maven"
+          CMAKE_BUILD_PARALLEL_LEVEL="${BUILD_PARALLEL}" bash scripts/etcd/build-and-run-4x4.sh \
+            framework/languages/cpp/build/linux-ninja-release "${RUNNER_TEMP}/etcd-4x4" \
+            --allow-unverified
+
+      - name: Upload etcd 4x4 logs
+        if: ${{ always() && !inputs.skip_tests && inputs.single_worker }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: etcd-4x4-conformance-logs
+          path: ${{ runner.temp }}/etcd-4x4/logs
+          if-no-files-found: ignore
+
   framework-cpp-windows:
     name: win-x64 / Framework C++ unit and contract tests
     # Windows runs on schedule, manual and release runs; queue batches and queue checks use Linux only.
