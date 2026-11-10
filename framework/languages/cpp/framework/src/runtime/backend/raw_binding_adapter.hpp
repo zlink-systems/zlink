@@ -1,3 +1,4 @@
+#include <zlink/framework/detail/path_counters.hpp>
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
@@ -56,7 +57,12 @@ struct request_submission_stages_t
 
 template <typename TSubmit> request_submission_stages_t submit_request_once (TSubmit &&submit)
 {
+    ZLINK_PATH_COUNT(path_counters::increment(path_counters::request_attempt);)
     auto submission = std::forward<TSubmit> (submit) ();
+    ZLINK_PATH_COUNT(path_counters::sample(path_counters::request_pending,
+        submission.result == ZLINK_SUBMIT_BACKPRESSURED);
+        if(submission.result == ZLINK_SUBMIT_BACKPRESSURED)
+            path_counters::increment(path_counters::request_snapshot_pending);)
     auto admission = take_submission_admission (submission);
     return {std::move (admission), std::move (submission.reply)};
 }

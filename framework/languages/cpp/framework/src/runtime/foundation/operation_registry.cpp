@@ -1,3 +1,4 @@
+#include <zlink/framework/detail/path_counters.hpp>
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/foundation/operation_registry.hpp"
@@ -278,8 +279,10 @@ void post_completions (operation_completion_chain_t completions) noexcept
         const auto *owner = completion->drain_state.get ();
         // The existing reservation owns the callback and drain lifetime.
         // Capture one raw pointer; the independent turn immediately reclaims it.
+        ZLINK_PATH_COUNT(path_counters::increment(path_counters::registry_post);)
         detail::dispatch_completion (
           [item = completion.get ()] {
+              ZLINK_PATH_COUNT(path_counters::completed();)
               // Keep the TLS drain identity valid through callback-capture destruction.
               const auto drain_lifetime = item->drain_state;
               const completion_item_ptr_t completion (item);

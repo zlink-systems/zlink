@@ -1,3 +1,4 @@
+#include <zlink/framework/detail/path_counters.hpp>
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/execution/task_result.hpp"
@@ -7540,6 +7541,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready_impl (
           co_await _objects.application_owner_refs_async (std::move (local_node_id));
     }
     auto next_stateful_owner = stateful_owners.begin ();
+    ZLINK_PATH_COUNT(struct path_rotation_t {
+        std::uint64_t records=0;
+        ~path_rotation_t() { path_counters::sample(path_counters::rotation,records); }
+    } path_rotation;)
     receive_batch_budget_t budget;
     // One poll per receive turn; the turn then reads records until the ROUTER
     // reports none or the budget ends (08-messaging-hot-path I2).
@@ -7559,6 +7564,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready_impl (
           : receive_ready
             ? _transport->receive_next (mesh::service_liveness_registry_t::clock_t::now ())
             : mesh::raw_mesh_pump_result_t::no_data;
+        ZLINK_PATH_COUNT(if(pumped == mesh::raw_mesh_pump_result_t::application) ++path_rotation.records;)
         budget.account (_transport->last_pump_bytes ());
         trace_mesh_host ("pump", std::string ("result=") + pump_result_name (pumped) + " pending="
                                    + std::to_string (_transport->mailbox ().pending_messages (

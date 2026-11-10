@@ -24,6 +24,10 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 find_package(Threads REQUIRED)
 
+option(ZLINK_FRAMEWORK_CPP_PATH_COUNTERS "Measurement-only C++ path counters" OFF)
+if(ZLINK_FRAMEWORK_CPP_PATH_COUNTERS)
+  add_compile_definitions(ZLINK_FRAMEWORK_CPP_PATH_COUNTERS)
+endif()
 option(ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE "Build bindings/cpp from the workspace (explicit opt-in)" OFF)
 option(ZLINK_FRAMEWORK_CPP_BUILD_TESTS "Build C++ framework tests" ON)
 option(ZLINK_FRAMEWORK_CPP_TEST_PROBES "Enable creation probes for C++ framework tests (not installable)" OFF)
@@ -249,6 +253,9 @@ include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-shared-library.cmake")
 
 add_library(zlink_framework_provider_abstractions ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   framework/src/runtime/dispatch/provider_task_context.cpp)
+if(ZLINK_FRAMEWORK_CPP_PATH_COUNTERS)
+  target_compile_definitions(zlink_framework_provider_abstractions PUBLIC ZLINK_FRAMEWORK_CPP_PATH_COUNTERS)
+endif()
 add_library(zlink::framework_provider_abstractions ALIAS
   zlink_framework_provider_abstractions)
 set_target_properties(zlink_framework_provider_abstractions PROPERTIES

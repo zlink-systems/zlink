@@ -1,3 +1,4 @@
+#include <zlink/framework/detail/path_counters.hpp>
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 // Target B: public RouteMesh typed protobuf echo/count handlers.
 #include "bench_metric_reader.hpp"
@@ -40,6 +41,7 @@ struct command_handler_t
 
 int main (int argc, char **argv)
 {
+    ZLINK_PATH_COUNT(zlink::framework::path_counters::dump_at_exit_t path_dump;)
     const auto endpoint = arg_value (argc, argv, "--endpoint", "tcp://127.0.0.1:5294");
     const int port = std::stoi (arg_value (argc, argv, "--stats-port", "5295"));
     try {

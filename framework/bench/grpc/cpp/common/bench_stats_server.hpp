@@ -1,3 +1,4 @@
+#include <zlink/framework/detail/path_counters.hpp>
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #ifndef ZLINK_CPP_BENCH_STATS_SERVER_HPP
 #define ZLINK_CPP_BENCH_STATS_SERVER_HPP
@@ -33,6 +34,7 @@ class server_metrics_t
 
     void reset ()
     {
+        ZLINK_PATH_COUNT(zlink::framework::path_counters::active_phase.store(1u, std::memory_order_relaxed);)
         std::lock_guard<std::mutex> lock (_gate);
         _active_messages = 0;
         _all_phase_messages = 0;

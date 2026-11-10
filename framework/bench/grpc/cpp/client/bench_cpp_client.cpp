@@ -1,3 +1,4 @@
+#include <zlink/framework/detail/path_counters.hpp>
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 // Source A: HTTP-triggered logical streams. The runner owns process isolation and settle.
 #include "../common/bench_async.hpp"
@@ -953,6 +954,7 @@ class framework_driver_t final : public driver_t
             for (const size_t slot : completed_slots) {
                 if (slot == admission_notification)
                     continue;
+                ZLINK_PATH_COUNT(zlink::framework::path_counters::increment(zlink::framework::path_counters::app_completed);)
                 auto &item = *pending[slot];
                 const auto &result = item.task.result ();
                 bool valid = static_cast<bool> (result);
@@ -1199,6 +1201,7 @@ class source_t
     void run_phase (const std::string &phase, int64_t duration, const json &trigger)
     {
         const bool active = phase == "active";
+        ZLINK_PATH_COUNT(zlink::framework::path_counters::active_phase.store(active ? 1u : 0u, std::memory_order_relaxed);)
         if (!active) {
             _warmup_throughput.clear ();
             for (int segment = 0; segment < _options.warmup_segments; ++segment) {
@@ -1354,6 +1357,7 @@ void source_signal (int)
 
 int main (int argc, char **argv)
 {
+    ZLINK_PATH_COUNT(zlink::framework::path_counters::dump_at_exit_t path_dump;)
     try {
         options_t options;
         options.implementation = arg_value (argc, argv, "--implementation", "grpc-cpp");

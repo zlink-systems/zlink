@@ -1,3 +1,4 @@
+#include <zlink/framework/detail/path_counters.hpp>
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "../utils/available_processor_count.hpp"
@@ -2350,6 +2351,7 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
               accept_application_receive, next_application_receive, readiness))
             .result ()
             .value ();
+        ZLINK_PATH_COUNT(path_counters::sample(path_counters::rotation_activity,count);)
         auto ready = mailbox.take_application_receive_turn ();
         receive_turn.dismiss ();
         application_permit.reset ();
@@ -3356,6 +3358,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             mesh::service_mailbox_t::application_ready_t submit_owner =
               [this, executor = _application_dispatch, node,
                registration] (const std::string &owner) {
+                  ZLINK_PATH_COUNT(path_counters::increment(path_counters::owner_post);)
                   auto start = make_application_owner_work (node, registration, owner);
                   if (!executor->try_submit_internal ([start] { start (false); }))
                       start (true);
@@ -3776,6 +3779,8 @@ void mesh_node_host_service_t::dispatch_application (
   offload_executor_t *executor,
   application_job_queue_t::permit_t application_permit)
 {
+    ZLINK_PATH_COUNT(if(record.kind == host::record_kind_t::node_send ||
+        record.kind == host::record_kind_t::node_request) path_counters::record();)
     const bool admitted = static_cast<bool> (application_permit);
     if (record.retain_mailbox_reservation)
         record.retain_mailbox_reservation ();
@@ -3874,6 +3879,10 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
     auto owned_node = std::move (node);
     auto owned_registration = std::move (registration);
     auto &mailbox = owned_node->native_node ().transport ().mailbox ();
+    ZLINK_PATH_COUNT(struct path_drain_t {
+        std::uint64_t records=0;
+        ~path_drain_t() { path_counters::sample(path_counters::owner_drain,records); }
+    } path_drain;)
     if (!mailbox.begin_application_drain (owner))
         co_return;
     const auto deadline = std::chrono::steady_clock::now () + dispatch_limits::owner_time_budget;
@@ -3881,6 +3890,7 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
         const mesh::service_mailbox_t::application_dispatch_t dispatch =
           [&] (const host::ready_record_t &ready, const host::receive_record_t &record,
                std::vector<zlink::message_t> parts, application_job_queue_t::permit_t permit) {
+              ZLINK_PATH_COUNT(++path_drain.records;)
               dispatch_application (owned_node, owned_registration, ready, record,
                                     std::move (parts), reject_only, services, serializers, filters,
                                     dispatch_options, {}, executor, std::move (permit));

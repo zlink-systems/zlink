@@ -1,3 +1,4 @@
+#include <zlink/framework/detail/path_counters.hpp>
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "../utils/available_processor_count.hpp"
@@ -104,6 +105,7 @@ bool offload_executor_t::try_submit_internal (std::function<void ()> work)
         }
         _queue.push (work_item_t{std::move (work), std::nullopt});
     }
+    ZLINK_PATH_COUNT(if(_thread_name == "zlink-mesh-app") path_counters::increment(path_counters::worker_notify);)
     _ready.notify_one ();
     return true;
 }
@@ -165,6 +167,7 @@ bool offload_executor_t::try_submit_application (work_t work)
         }
         _queue.push (work_item_t{std::move (work), std::stop_source{}});
     }
+    ZLINK_PATH_COUNT(if(_thread_name == "zlink-mesh-app") path_counters::increment(path_counters::worker_notify);)
     _ready.notify_one ();
     return true;
 }
@@ -177,6 +180,7 @@ bool offload_executor_t::start_role (std::shared_ptr<role_t> role)
             return false;
         _roles.push (std::move (role));
     }
+    ZLINK_PATH_COUNT(if(_thread_name == "zlink-mesh-app") path_counters::increment(path_counters::worker_notify);)
     _ready.notify_one ();
     return true;
 }
@@ -327,11 +331,14 @@ void offload_executor_t::worker_loop ()
                       << " executor=" << this << std::endl;
         }
     };
+    ZLINK_PATH_COUNT(path_counters::wake_t path_wake(_thread_name == "zlink-mesh-app");)
     while (true) {
         work_item_t work;
         std::shared_ptr<role_t> role;
         {
             std::unique_lock lock (_mutex);
+            ZLINK_PATH_COUNT(const bool path_wait = !_stopping && _roles.empty() && _queue.empty();
+                if(path_wait && path_wake.enabled) { path_wake.sleep(); path_counters::increment(path_counters::worker_wait); })
             ++_idle_workers;
             bool ready = false;
             if (_idle_timeout.count () == 0) {
@@ -343,6 +350,7 @@ void offload_executor_t::worker_loop ()
                     return _stopping || !_roles.empty () || !_queue.empty ();
                 });
             }
+            ZLINK_PATH_COUNT(if(path_wait) path_wake.woke(ready);)
             --_idle_workers;
             if (!ready && _roles.empty () && _queue.empty ()) {
                 if (_live_workers > _min_worker_count) {
@@ -375,6 +383,7 @@ void offload_executor_t::worker_loop ()
         if (role) {
             role->run ();
         } else {
+            ZLINK_PATH_COUNT(path_counters::turn_t path_turn(path_wake.enabled);)
             run_application_turn ([&] {
                 std::visit (
                   [&] (auto &callback) {

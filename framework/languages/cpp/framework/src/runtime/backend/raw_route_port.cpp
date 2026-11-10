@@ -1,3 +1,4 @@
+#include <zlink/framework/detail/path_counters.hpp>
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/backend/raw_route_port.hpp"
@@ -210,7 +211,10 @@ raw_send_submission_t raw_route_port_t::submit_send_impl (
             for (std::size_t index = 1; index < parts.size (); ++index) {
                 std::move (operation).message (take_part (parts[index]));
             }
+            ZLINK_PATH_COUNT(path_counters::increment(path_counters::send_attempt);)
             auto submission = std::move (operation).async ();
+            ZLINK_PATH_COUNT(path_counters::sample(path_counters::send_pending,
+                submission.result == ZLINK_SUBMIT_BACKPRESSURED);)
             pending = take_submission_admission (submission);
         }
         if (!pending) {

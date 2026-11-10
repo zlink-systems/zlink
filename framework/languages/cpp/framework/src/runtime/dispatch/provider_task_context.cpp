@@ -1,3 +1,4 @@
+#include <zlink/framework/detail/path_counters.hpp>
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "../utils/available_processor_count.hpp"
@@ -76,6 +77,7 @@ class completion_dispatcher_t : public std::enable_shared_from_this<completion_d
         if (_context.stopped ())
             throw framework_exception_t (framework_error_kind_t::shutting_down,
                                          registered_execution_context_shutting_down_message);
+        ZLINK_PATH_COUNT(path_counters::increment(path_counters::dispatcher_post);)
         boost::asio::post (_context, std::forward<Work> (work));
     }
     std::size_t worker_count () const noexcept { return _workers.size (); }
@@ -185,6 +187,8 @@ void dispatch_completion (std::function<void ()> work,
     if (!dispatcher)
         dispatcher = borrow_completion_dispatcher ();
     dispatcher->post ([work = std::move (work), owner, dispatcher] {
+        ZLINK_PATH_COUNT(path_counters::increment(path_counters::dispatcher_run);
+            path_counters::completion_t path_completion;)
         const completion_turn_scope_t scope{owner != nullptr ? owner : &process_completion_owner,
                                             dispatcher};
         work ();

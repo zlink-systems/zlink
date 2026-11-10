@@ -1,3 +1,4 @@
+#include <zlink/framework/detail/path_counters.hpp>
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 // Completion notifications and single-threaded coroutine driving for C++ bench rows.
 //
@@ -43,8 +44,10 @@ class completion_signal_t
                  std::vector<size_t> &completed,
                  const std::shared_ptr<completion_signal_t> &self)
     {
-        if (task.await_ready ())
+        if (task.await_ready ()) {
+            ZLINK_PATH_COUNT(zlink::framework::path_counters::increment(zlink::framework::path_counters::app_immediate);)
             completed.push_back (slot);
+        }
         else
             zlink::framework::detail::observe_task_completion (
               task, [self, slot] (const auto &) { self->notify (slot); });
@@ -56,6 +59,9 @@ class completion_signal_t
             std::lock_guard<std::mutex> lock (_mutex);
             _completed.push_back (slot);
         }
+        ZLINK_PATH_COUNT(if(slot == std::numeric_limits<size_t>::max())
+            zlink::framework::path_counters::increment(zlink::framework::path_counters::app_admission_notify);
+            else zlink::framework::path_counters::application_notified();)
         _ready.notify_one ();
     }
 
@@ -64,6 +70,9 @@ class completion_signal_t
         std::lock_guard<std::mutex> lock (_mutex);
         completed.assign (_completed.begin (), _completed.end ());
         _completed.clear ();
+        ZLINK_PATH_COUNT(std::uint64_t count=0;
+            for(auto slot:completed) if(slot != std::numeric_limits<size_t>::max()) ++count;
+            zlink::framework::path_counters::sample(zlink::framework::path_counters::application_batch,count);)
     }
 
     void wait_until (std::chrono::steady_clock::time_point deadline)
