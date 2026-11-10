@@ -9,6 +9,7 @@
 #include "runtime/messaging/client_call_codec.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include <zlink.h>
+#include <array>
 #include <cassert>
 #include <future>
 #include <iostream>
@@ -17,21 +18,8 @@
 namespace fw = zlink::framework;
 namespace rt = fw::runtime;
 using namespace std::chrono_literals;
-namespace zlink::framework::runtime
-{
-struct offload_executor_test_access_t
-{
-    static std::condition_variable *ready (offload_executor_t &executor)
-    {
-        return &executor._ready;
-    }
-};
-}
 namespace
 {
-std::atomic<std::condition_variable *> application_ready{nullptr};
-std::atomic_size_t worker_notifications{0};
-std::atomic_bool watch_notifications{false};
 std::mutex observation_mutex;
 std::thread::id received_on;
 std::promise<std::thread::id> handled;
@@ -39,6 +27,7 @@ std::atomic_bool handler_blocked{false};
 constexpr std::size_t queued_records = 128;
 std::atomic_size_t received_queued{0};
 std::atomic_size_t handled_queued{0};
+std::array<std::atomic_bool, queued_records> queued_seen{};
 std::promise<void> queue_drained;
 std::promise<void> parallel_started;
 std::shared_future<void> release_handler_turn;
@@ -56,8 +45,8 @@ struct handler_t
         }
         if (probe.value.starts_with ("queued-probe-")) {
             const auto index = std::stoul (probe.value.substr (13));
-            assert (handled_queued.fetch_add (1) == index);
-            if (index + 1 == queued_records)
+            assert (index < queued_records && !queued_seen[index].exchange (true));
+            if (handled_queued.fetch_add (1) + 1 == queued_records)
                 queue_drained.set_value ();
             return;
         }
@@ -95,40 +84,11 @@ extern "C" zlink_recv_result_t __wrap_zlink_router_recv (void *socket,
                 && std::string_view (data, bytes).find (marker) != std::string_view::npos) {
                 std::lock_guard lock (observation_mutex);
                 received_on = std::this_thread::get_id ();
-                watch_notifications = true;
             }
         }
     }
     return result;
 }
-extern "C" bool real_start_role (
-  rt::offload_executor_t *,
-  std::shared_ptr<rt::offload_executor_t::
-                    role_t>) __asm__ ("__real__ZN5zlink9framework7runtime18offload_executor_"
-                                      "t10start_roleESt10shared_ptrINS2_6role_tEE");
-extern "C" bool wrapped_start_role (
-  rt::offload_executor_t *,
-  std::shared_ptr<rt::offload_executor_t::
-                    role_t>) __asm__ ("__wrap__ZN5zlink9framework7runtime18offload_executor_"
-                                      "t10start_roleESt10shared_ptrINS2_6role_tEE");
-extern "C" bool wrapped_start_role (rt::offload_executor_t *executor,
-                                    std::shared_ptr<rt::offload_executor_t::role_t> role)
-{
-    application_ready = rt::offload_executor_test_access_t::ready (*executor);
-    return real_start_role (executor, std::move (role));
-}
-
-extern "C" void
-real_notify (std::condition_variable *) __asm__ ("__real__ZNSt18condition_variable10notify_oneEv");
-extern "C" void wrapped_notify (std::condition_variable *) __asm__ (
-  "__wrap__ZNSt18condition_variable10notify_oneEv");
-extern "C" void wrapped_notify (std::condition_variable *ready)
-{
-    if (watch_notifications.load () && ready == application_ready.load ())
-        ++worker_notifications;
-    real_notify (ready);
-}
-
 int main ()
 {
     bool correct = true;
@@ -137,6 +97,8 @@ int main ()
         handled = {};
         received_queued = 0;
         handled_queued = 0;
+        for (auto &seen : queued_seen)
+            seen.store (false);
         queue_drained = {};
         auto drained = queue_drained.get_future ();
         handler_blocked = false;
@@ -248,11 +210,10 @@ int main ()
                 assert (std::chrono::steady_clock::now () < receive_deadline);
                 std::this_thread::yield ();
             }
-            assert (handled_queued.load () == 0);
-            const auto notifications_while_busy = worker_notifications.load ();
-            std::cout << "worker_notifications_for_129_records=" << notifications_while_busy
-                      << std::endl;
-            correct = correct && notifications_while_busy == 1;
+            // S02: the same Node must progress while its earlier handler blocks.
+            const bool same_owner = drained.wait_for (5s) == std::future_status::ready;
+            correct = correct && same_owner;
+            std::cout << "blocked_handler_same_node_progress=" << same_owner << '\n';
             auto completed = std::make_shared<std::promise<void>> ();
             auto terminal = completed->get_future ();
             const auto operation =

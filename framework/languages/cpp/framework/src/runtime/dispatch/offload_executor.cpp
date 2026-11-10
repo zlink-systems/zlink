@@ -91,21 +91,148 @@ bool offload_executor_t::try_submit (std::function<void ()> work)
 
 bool offload_executor_t::try_submit_internal (std::function<void ()> work)
 {
+    notifications_t notifications;
     {
         std::lock_guard lock (_mutex);
-        // Already-admitted owner queues keep draining through scheduler
-        // continuations. Teardown closes this path only after quiescence;
-        // public work submission remains sealed as soon as stopping begins.
-        if (_stopping && _active == _role_active && _queue.empty ()) {
+        // Continuations of admitted work may publish until application quiescence.
+        if (_stopping && _active == _role_active && _queue.empty ())
             return false;
-        }
-        if (_idle_workers <= _queue.size () + _roles.size () && _live_workers < _max_worker_count) {
-            start_worker_locked ();
-        }
-        _queue.push (work_item_t{std::move (work), std::nullopt});
+        _queue.push_back (work_item_t{std::move (work), std::nullopt});
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+        ++_submitted_items;
+#endif
+        notifications = reserve_workers_locked (true);
     }
-    _ready.notify_one ();
+    notify_workers (notifications);
     return true;
+}
+
+bool offload_executor_t::try_submit_drain (std::shared_ptr<drain_source_t> source)
+{
+    notifications_t notifications;
+    {
+        std::lock_guard lock (_mutex);
+        if (_stopping && _active == _role_active && _queue.empty ())
+            return false;
+        const auto found = find_drain_locked (*source);
+        if (found == _queue.end ()) {
+            _queue.push_back (work_item_t{std::move (source), std::nullopt});
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+            ++_submitted_items;
+#endif
+        }
+        notifications = reserve_workers_locked (true);
+    }
+    notify_workers (notifications);
+    return true;
+}
+
+std::deque<offload_executor_t::work_item_t>::iterator
+offload_executor_t::find_drain_locked (const drain_source_t &source)
+{
+    return std::find_if (_queue.begin (), _queue.end (), [&] (const auto &entry) {
+        const auto existing = std::get_if<std::shared_ptr<drain_source_t>> (&entry.work);
+        return existing && (*existing)->group == source.group && (*existing)->owner == source.owner;
+    });
+}
+
+offload_executor_t::drain_source_t::record_t
+offload_executor_t::take_drain_locked (std::deque<work_item_t>::iterator entry)
+{
+    drain_source_t::record_t record;
+    try {
+        record = std::get<std::shared_ptr<drain_source_t>> (entry->work)->take ();
+    }
+    catch (...) {
+        _queue.erase (entry);
+        throw;
+    }
+    if (!record.more)
+        _queue.erase (entry);
+    else
+        std::rotate (entry, entry + 1, _queue.end ());
+    return record;
+}
+
+offload_executor_t::drain_source_t::record_t
+offload_executor_t::try_take_drain (const std::shared_ptr<drain_source_t> &source)
+{
+    // Retain captures outside the lock even if a later publication replaced this
+    // running turn's exhausted source with another entry for the same owner.
+    std::shared_ptr<drain_source_t> selected;
+    drain_source_t::record_t record;
+    {
+        std::lock_guard lock (_mutex);
+        const auto found = find_drain_locked (*source);
+        if (found != _queue.end ()) {
+            selected = std::get<std::shared_ptr<drain_source_t>> (found->work);
+            record = take_drain_locked (found);
+        }
+    }
+    return record;
+}
+
+// Only publication can grow the existing elastic pool. A take never wakes or
+// starts another worker. The worker phase is the sole wake-reservation state.
+offload_executor_t::notifications_t offload_executor_t::reserve_workers_locked (bool grow,
+                                                                                worker_t *current)
+{
+    std::size_t demand = std::min (_max_worker_count, _roles.size ());
+    for (const auto &entry : _queue) {
+        if (demand == _max_worker_count)
+            break;
+        const auto source = std::get_if<std::shared_ptr<drain_source_t>> (&entry.work);
+        // An exhausted entry still needs one selection to release its captures.
+        const auto count = source ? std::max<std::size_t> (1, (*source)->pending ()) : 1;
+        demand += std::min (count, _max_worker_count - demand);
+    }
+    std::size_t available = 0, reserved = 0;
+    for (const auto &worker : _workers) {
+        if (worker->phase == worker_phase_t::reserved) {
+            ++available;
+            ++reserved;
+        } else if (worker->phase == worker_phase_t::idle)
+            ++available;
+    }
+    if (grow && available < demand && _live_workers < _max_worker_count) {
+        start_worker_locked ();
+        ++reserved;
+    }
+    demand -= std::min (demand, reserved);
+    // A worker about to wait first rechecks ready work for itself.
+    if (current && demand != 0) {
+        current->phase = worker_phase_t::reserved;
+        --demand;
+    }
+    notifications_t notifications;
+    for (const auto &worker : _workers) {
+        if (demand == 0)
+            break;
+        if (worker->phase == worker_phase_t::idle) {
+            notifications.push_back (worker);
+            worker->phase = worker_phase_t::reserved;
+            --demand;
+        }
+    }
+    return notifications;
+}
+
+offload_executor_t::notifications_t offload_executor_t::stop_workers_locked ()
+{
+    notifications_t notifications;
+    for (const auto &worker : _workers) {
+        if (worker->phase == worker_phase_t::idle || worker->phase == worker_phase_t::reserved) {
+            notifications.push_back (worker);
+            worker->phase = worker_phase_t::reserved;
+        }
+    }
+    return notifications;
+}
+
+void offload_executor_t::notify_workers (const notifications_t &notifications)
+{
+    for (const auto &worker : notifications)
+        worker->ready.notify_one ();
 }
 
 offload_executor_t::retained_work_t::retained_work_t (offload_executor_t &executor) noexcept :
@@ -155,40 +282,45 @@ bool offload_executor_t::try_submit_cancellable (std::function<void (std::stop_t
 
 bool offload_executor_t::try_submit_application (work_t work)
 {
+    notifications_t notifications;
     {
         std::lock_guard lock (_mutex);
-        if (_stopping) {
+        if (_stopping)
             return false;
-        }
-        if (_idle_workers <= _queue.size () + _roles.size () && _live_workers < _max_worker_count) {
-            start_worker_locked ();
-        }
-        _queue.push (work_item_t{std::move (work), std::stop_source{}});
+        _queue.push_back (work_item_t{std::move (work), std::stop_source{}});
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+        ++_submitted_items;
+#endif
+        notifications = reserve_workers_locked (true);
     }
-    _ready.notify_one ();
+    notify_workers (notifications);
     return true;
 }
 
 bool offload_executor_t::start_role (std::shared_ptr<role_t> role)
 {
+    notifications_t notifications;
     {
         std::lock_guard lock (_mutex);
         if (_stopping)
             return false;
         _roles.push (std::move (role));
+        notifications = reserve_workers_locked (false);
     }
-    _ready.notify_one ();
+    notify_workers (notifications);
     return true;
 }
 
 void offload_executor_t::drain_application ()
 {
+    notifications_t notifications;
     {
         std::lock_guard lock (_mutex);
         _stopping = true;
+        notifications = stop_workers_locked ();
     }
     request_stop ();
-    _ready.notify_all ();
+    notify_workers (notifications);
     std::unique_lock lock (_mutex);
     _empty.wait (lock, [this] { return _queue.empty () && _active == _role_active; });
 }
@@ -224,12 +356,14 @@ bool offload_executor_t::drain_until (std::chrono::steady_clock::time_point dead
         std::cerr << "zlink-cpp-host-stop stage=offload-drain-begin name=" << _thread_name
                   << " workers=" << _workers.size () << std::endl;
     }
+    notifications_t notifications;
     {
         std::unique_lock lock (_mutex);
         _stopping = true;
+        notifications = stop_workers_locked ();
     }
     request_stop ();
-    _ready.notify_all ();
+    notify_workers (notifications);
     {
         std::unique_lock lock (_mutex);
         if (!_empty.wait_until (lock, deadline, [this] {
@@ -273,18 +407,19 @@ std::size_t offload_executor_t::owned_thread_count () const
 void offload_executor_t::start_worker_locked ()
 {
     join_retired_workers_locked ();
-    _workers.emplace_back ([this] { worker_loop (); });
+    auto worker = std::make_shared<worker_t> ();
+    worker->thread = std::thread ([this, worker] { worker_loop (worker); });
+    _workers.push_back (std::move (worker));
     ++_live_workers;
 }
 
 // A returning worker leaves the running range. It no longer needs the mutex,
 // so joining it while holding the mutex waits only for its thread exit.
-void offload_executor_t::retire_current_worker_locked ()
+void offload_executor_t::retire_current_worker_locked (worker_t &worker)
 {
     const auto running = _workers.begin () + static_cast<std::ptrdiff_t> (_live_workers);
-    const auto self = std::find_if (_workers.begin (), running, [] (const std::thread &worker) {
-        return worker.get_id () == std::this_thread::get_id ();
-    });
+    const auto self = std::find_if (_workers.begin (), running,
+                                    [&] (const auto &entry) { return entry.get () == &worker; });
     std::iter_swap (self, running - 1);
     --_live_workers;
     _empty.notify_all ();
@@ -294,7 +429,7 @@ void offload_executor_t::join_retired_workers_locked ()
 {
     const auto retired = _workers.begin () + static_cast<std::ptrdiff_t> (_live_workers);
     for (auto worker = retired; worker != _workers.end (); ++worker)
-        worker->join ();
+        (*worker)->thread.join ();
     _workers.erase (retired, _workers.end ());
 }
 
@@ -305,7 +440,7 @@ void offload_executor_t::complete_work_locked ()
         _empty.notify_all ();
 }
 
-void offload_executor_t::worker_loop ()
+void offload_executor_t::worker_loop (const std::shared_ptr<worker_t> &worker)
 {
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
     struct current_worker_scope_t
@@ -329,46 +464,68 @@ void offload_executor_t::worker_loop ()
     };
     while (true) {
         work_item_t work;
+        drain_source_t::record_t record;
+        std::exception_ptr preparation_failure;
         std::shared_ptr<role_t> role;
+        notifications_t notifications;
         {
             std::unique_lock lock (_mutex);
-            ++_idle_workers;
-            bool ready = false;
-            if (_idle_timeout.count () == 0) {
-                _ready.wait (lock,
-                             [this] { return _stopping || !_roles.empty () || !_queue.empty (); });
-                ready = true;
-            } else {
-                ready = _ready.wait_for (lock, _idle_timeout, [this] {
-                    return _stopping || !_roles.empty () || !_queue.empty ();
-                });
-            }
-            --_idle_workers;
+            worker->phase = worker_phase_t::idle;
+            notifications = reserve_workers_locked (false, worker.get ());
+            const auto reserved = [&] {
+                return _stopping || worker->phase == worker_phase_t::reserved;
+            };
+            bool ready = true;
+            if (_idle_timeout.count () == 0)
+                worker->ready.wait (lock, reserved);
+            else
+                ready = worker->ready.wait_for (lock, _idle_timeout, reserved);
+            worker->phase = worker_phase_t::running;
             if (!ready && _roles.empty () && _queue.empty ()) {
                 if (_live_workers > _min_worker_count) {
-                    retire_current_worker_locked ();
+                    retire_current_worker_locked (*worker);
                     trace_exit ();
                     return;
                 }
                 continue;
             }
             if (_stopping && _roles.empty () && _queue.empty ()) {
-                retire_current_worker_locked ();
+                retire_current_worker_locked (*worker);
                 trace_exit ();
                 return;
             }
+            // Another reserved worker can have consumed the last ready record.
+            if (_roles.empty () && _queue.empty ())
+                continue;
             if (!_roles.empty ()) {
                 role = std::move (_roles.front ());
                 _roles.pop ();
                 ++_role_active;
+            } else if (const auto source =
+                         std::get_if<std::shared_ptr<drain_source_t>> (&_queue.front ().work)) {
+                // This entry stays scheduled while an untaken record remains.
+                work.work = *source;
+                // Capture turn entry before W1 preparation. The owner drain
+                // retains its existing budget and deadline decision.
+                const auto turn_started = std::chrono::steady_clock::now ();
+                try {
+                    record = take_drain_locked (_queue.begin ());
+                    record.turn_started = turn_started;
+                }
+                catch (...) {
+                    // Preserve application failure isolation even when preparing
+                    // a claim allocates. Report through its owner after unlock.
+                    preparation_failure = std::current_exception ();
+                }
             } else {
                 work = std::move (_queue.front ());
-                _queue.pop ();
+                _queue.pop_front ();
                 if (work.cancellation)
                     _active_cancellations.push_back (&*work.cancellation);
             }
             ++_active;
         }
+        notify_workers (notifications);
 
         // A receive role is deliberately outside the application exception
         // boundary.
@@ -379,7 +536,14 @@ void offload_executor_t::worker_loop ()
                 std::visit (
                   [&] (auto &callback) {
                       if (callback) {
-                          if constexpr (std::is_invocable_v<decltype (callback), std::stop_token>)
+                          if constexpr (std::is_same_v<std::decay_t<decltype (callback)>,
+                                                       std::shared_ptr<drain_source_t>>) {
+                              if (preparation_failure)
+                                  callback->failed (std::move (preparation_failure));
+                              else if (record.value)
+                                  callback->run (std::move (record));
+                          } else if constexpr (std::is_invocable_v<decltype (callback),
+                                                                   std::stop_token>)
                               callback (work.cancellation ? work.cancellation->get_token ()
                                                           : std::stop_token{});
                           else

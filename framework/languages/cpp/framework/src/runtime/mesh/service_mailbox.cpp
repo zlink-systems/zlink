@@ -161,6 +161,13 @@ bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record,
     if (queue.phase == owner_phase_t::idle) {
         queue.phase = owner_phase_t::ready;
         target.ready.push_back (owner);
+    } else if (&target == &_state->application && concurrent_application_owner (owner)
+               && queue.phase != owner_phase_t::draining) {
+        // ready carries publication notifications. The executor's persistent
+        // entry retains ready membership after this notification list is taken.
+        queue.phase = owner_phase_t::ready;
+        if (std::find (target.ready.begin (), target.ready.end (), owner) == target.ready.end ())
+            target.ready.push_back (owner);
     }
     const bool notify = &target == &_state->application && !_state->application_receive_turn;
     lock.unlock ();
@@ -218,6 +225,69 @@ service_mailbox_t::try_claim_owner (service_mailbox_domain_t domain_value,
     if (found->second.phase != owner_phase_t::draining) {
         source.ready.erase (std::remove (source.ready.begin (), source.ready.end (), owner),
                             source.ready.end ());
+    }
+    return claim;
+}
+
+bool service_mailbox_t::concurrent_application_owner (std::string_view owner) noexcept
+{
+    return owner == "node" || owner.starts_with ("channel:");
+}
+
+std::size_t service_mailbox_t::pending_application_records (const std::string &owner) const
+{
+    std::lock_guard lock (_state->mutex);
+    const auto found = _state->application.owners.find (owner);
+    return found == _state->application.owners.end () ? 0 : found->second.messages;
+}
+
+std::shared_ptr<service_mailbox_claim_t> service_mailbox_t::try_claim_application_record (
+  const std::string &owner, bool &more, const claimed_t &claimed)
+{
+    if (!concurrent_application_owner (owner))
+        throw std::invalid_argument ("independent application take requires Node/Channel owner");
+    std::unique_lock lock (_state->mutex);
+    auto &source = _state->application;
+    const auto found = source.owners.find (owner);
+    more = false;
+    if (found == source.owners.end () || found->second.records.empty ())
+        return nullptr;
+    auto &queue = found->second;
+    auto claim = std::make_shared<service_mailbox_claim_t> ();
+    claim->owner = owner;
+    claim->domain = service_mailbox_domain_t::application;
+    claim->records.push_back (&queue.records.front ());
+    claim->claimed_messages = 1;
+    claim->claimed_bytes = retained_bytes (queue.records.front ());
+    claim->record_bytes.push_back (claim->claimed_bytes);
+    claim->_settled = std::make_unique<std::atomic_bool[]> (1);
+    claim->_remaining.store (1, std::memory_order_relaxed);
+    claim->_mailbox = _state;
+    // No new payload storage: splice the existing node. Later head claims cannot
+    // erase this node, and the settlement credit keeps the existing claim alive.
+    claim->_detached_records.splice (claim->_detached_records.end (), queue.records,
+                                     queue.records.begin ());
+    claim->records.front ()->transferred = service_mailbox_settlement_t (claim, 0);
+    --queue.messages;
+    queue.bytes -= claim->claimed_bytes;
+    --source.messages;
+    source.bytes -= claim->claimed_bytes;
+    ++queue.active_messages;
+    queue.active_bytes += claim->claimed_bytes;
+    ++source.active_messages;
+    source.active_bytes += claim->claimed_bytes;
+    more = !queue.records.empty ();
+    queue.phase = more ? owner_phase_t::ready : owner_phase_t::retained;
+    if (!more)
+        source.ready.remove (owner);
+    try {
+        if (claimed)
+            claimed (claim);
+    }
+    catch (...) {
+        lock.unlock ();
+        release (*claim);
+        throw;
     }
     return claim;
 }
@@ -461,13 +531,22 @@ bool service_mailbox_t::finish_locked (state_t &state, const service_mailbox_cla
     if (found == target.owners.end ())
         return false;
     auto &queue = found->second;
-    // Every slot of the prefix was taken or discarded before its credit settled.
-    queue.records.erase (queue.records.begin (),
-                         std::next (queue.records.begin (), claim.claimed_messages));
+    // Every claimed slot was taken or discarded before its credit settled.
+    const bool detached = !claim._detached_records.empty ();
+    if (!detached)
+        queue.records.erase (queue.records.begin (),
+                             std::next (queue.records.begin (), claim.claimed_messages));
     queue.active_messages -= claim.claimed_messages;
     queue.active_bytes -= claim.claimed_bytes;
     target.active_messages -= claim.claimed_messages;
     target.active_bytes -= claim.claimed_bytes;
+    if (detached) {
+        if (queue.records.empty () && queue.active_messages == 0)
+            target.owners.erase (found);
+        // Publication already registered any remaining runnable records. A
+        // terminal credit neither resubmits the source nor wakes a worker.
+        return false;
+    }
     if (queue.phase != owner_phase_t::draining) {
         if (queue.records.empty ())
             target.owners.erase (found);

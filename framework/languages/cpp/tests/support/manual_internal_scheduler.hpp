@@ -13,7 +13,9 @@
 #include <functional>
 #include <mutex>
 #include <optional>
-#include <queue>
+#include <deque>
+#include <variant>
+#include <algorithm>
 
 namespace zlink::framework::test
 {
@@ -28,9 +30,49 @@ class manual_internal_scheduler_t final : public runtime::offload_executor_t
         std::lock_guard lock (_wake->mutex);
         if (!_accepting)
             return false;
-        _ready.push (std::move (work));
+        _ready.emplace_back (std::move (work));
         _wake->ready_changed.notify_all ();
         return true;
+    }
+
+    bool try_submit_drain (std::shared_ptr<drain_source_t> source) override
+    {
+        std::lock_guard lock (_wake->mutex);
+        if (!_accepting)
+            return false;
+        const auto found = std::find_if (_ready.begin (), _ready.end (), [&] (const auto &entry) {
+            const auto existing = std::get_if<std::shared_ptr<drain_source_t>> (&entry);
+            return existing && (*existing)->group == source->group
+                   && (*existing)->owner == source->owner;
+        });
+        if (found == _ready.end ())
+            _ready.emplace_back (std::move (source));
+        _wake->ready_changed.notify_all ();
+        return true;
+    }
+
+    drain_source_t::record_t try_take_drain (const std::shared_ptr<drain_source_t> &source) override
+    {
+        std::shared_ptr<drain_source_t> selected;
+        drain_source_t::record_t record;
+        {
+            std::lock_guard lock (_wake->mutex);
+            const auto found =
+              std::find_if (_ready.begin (), _ready.end (), [&] (const auto &entry) {
+                  const auto existing = std::get_if<std::shared_ptr<drain_source_t>> (&entry);
+                  return existing && (*existing)->group == source->group
+                         && (*existing)->owner == source->owner;
+              });
+            if (found != _ready.end ()) {
+                selected = std::get<std::shared_ptr<drain_source_t>> (*found);
+                record = selected->take ();
+                if (record.more)
+                    std::rotate (found, found + 1, _ready.end ());
+                else
+                    _ready.erase (found);
+            }
+        }
+        return record;
     }
 
     std::size_t pending_work () const
@@ -50,14 +92,32 @@ class manual_internal_scheduler_t final : public runtime::offload_executor_t
     bool run_one ()
     {
         std::function<void ()> work;
+        std::shared_ptr<drain_source_t> source;
+        drain_source_t::record_t record;
         {
             std::lock_guard lock (_wake->mutex);
             if (_ready.empty ())
                 return false;
-            work = std::move (_ready.front ());
-            _ready.pop ();
+            if (const auto drain =
+                  std::get_if<std::shared_ptr<drain_source_t>> (&_ready.front ())) {
+                source = *drain;
+                const auto turn_started = std::chrono::steady_clock::now ();
+                record = source->take ();
+                record.turn_started = turn_started;
+                if (record.more)
+                    std::rotate (_ready.begin (), _ready.begin () + 1, _ready.end ());
+                else
+                    _ready.pop_front ();
+            } else {
+                work = std::move (std::get<std::function<void ()>> (_ready.front ()));
+                _ready.pop_front ();
+            }
         }
-        work ();
+        if (source) {
+            if (record.value)
+                source->run (std::move (record));
+        } else
+            work ();
         if (_publication_fence)
             _publication_fence ();
         return true;
@@ -128,7 +188,7 @@ class manual_internal_scheduler_t final : public runtime::offload_executor_t
         std::condition_variable ready_changed;
     };
     std::shared_ptr<wake_state_t> _wake = std::make_shared<wake_state_t> ();
-    std::queue<std::function<void ()>> _ready;
+    std::deque<std::variant<std::function<void ()>, std::shared_ptr<drain_source_t>>> _ready;
     bool _accepting = true;
 };
 // Preserve the original single available worker precondition on the shared pool.

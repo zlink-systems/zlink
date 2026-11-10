@@ -2365,6 +2365,32 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_receive_role_completion PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   zlink_framework_cpp_add_boost_headers(test_cpp_framework_receive_role_completion)
+  if(ZLINK_FRAMEWORK_CPP_TEST_PROBES)
+    add_zlink_framework_test(
+      test_cpp_framework_scheduler_drain
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_scheduler_drain.cpp
+      "framework-unit;framework-contract;execution;resource"
+      unit)
+    target_include_directories(test_cpp_framework_scheduler_drain PRIVATE
+      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+    zlink_framework_cpp_add_boost_headers(test_cpp_framework_scheduler_drain)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+      target_compile_definitions(test_cpp_framework_scheduler_drain PRIVATE ZLINK_TEST_WRAP_NOTIFY_ONE)
+      target_link_options(test_cpp_framework_scheduler_drain PRIVATE
+        "LINKER:--wrap=_ZNSt18condition_variable10notify_oneEv")
+      foreach(_negative IN ITEMS items wakes terminal spot-gate actor-gate)
+        zlink_framework_cpp_add_test(
+          NAME test_cpp_framework_scheduler_drain_negative_${_negative}
+          COMMAND ${CMAKE_COMMAND}
+            "-DPROGRAM=$<TARGET_FILE:test_cpp_framework_scheduler_drain>"
+            "-DMODE=${_negative}"
+            -P "${ZLINK_FRAMEWORK_CPP_DIR}/tests/support/expect_scheduler_rejection.cmake"
+          LABELS "framework-unit;framework-contract;execution;negative-control"
+          TIER unit
+          TIMEOUT 30)
+      endforeach()
+    endif()
+  endif()
   # The wait-entry hook uses GNU's 64-bit libstdc++ chrono ABI.
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux"
      AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
@@ -2378,8 +2404,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
     zlink_framework_cpp_add_boost_headers(test_cpp_framework_mailbox_owner_dispatch)
     target_link_options(test_cpp_framework_mailbox_owner_dispatch PRIVATE
-      "LINKER:--wrap=_ZN5zlink9framework7runtime18offload_executor_t10start_roleESt10shared_ptrINS2_6role_tEE"
-      "LINKER:--wrap=_ZNSt18condition_variable10notify_oneEv"
       "LINKER:--wrap=zlink_router_recv")
     set(ZLINK_TEST_RECEIVE_WAIT_SYMBOL
       "_ZN5zlink9framework7runtime4host21public_host_runtime_t33wait_for_hosted_dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE")

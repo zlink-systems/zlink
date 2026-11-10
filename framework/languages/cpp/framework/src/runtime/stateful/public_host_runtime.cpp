@@ -8530,7 +8530,8 @@ public_host_runtime_t::dispatch_application_owner (
   std::string owner,
   mesh::service_mailbox_t::application_dispatch_t dispatch,
   std::function<void ()> started,
-  std::function<void ()> rejected)
+  std::function<void ()> rejected,
+  std::shared_ptr<mesh::service_mailbox_claim_t> prepared)
 {
     std::shared_ptr<application_claim_batch_t> batch;
     std::size_t claimed = 0;
@@ -8546,10 +8547,23 @@ public_host_runtime_t::dispatch_application_owner (
     };
     try {
         // Account the accepted claim even if its consumer storage cannot be allocated.
-        auto claim = _transport->mailbox ().try_claim_owner (
-          mesh::service_mailbox_domain_t::application, owner,
-          dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes,
-          std::ref (transfer));
+        std::shared_ptr<mesh::service_mailbox_claim_t> claim;
+        if (prepared) {
+            // Scheduler ownership excludes relocation for this detached Node/
+            // Channel node. No other consumer can access its original.
+            claim = prepared;
+            transfer (claim);
+            prepared.reset ();
+        } else if (mesh::service_mailbox_t::concurrent_application_owner (owner)) {
+            bool more;
+            claim = _transport->mailbox ().try_claim_application_record (owner, more,
+                                                                         std::ref (transfer));
+        } else {
+            claim = _transport->mailbox ().try_claim_owner (
+              mesh::service_mailbox_domain_t::application, owner,
+              dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes,
+              std::ref (transfer));
+        }
         if (!claim)
             return false;
         auto result = dispatch_application_claim (batch);
@@ -8564,6 +8578,8 @@ public_host_runtime_t::dispatch_application_owner (
         }(std::get<task_t<std::size_t>> (std::move (result)));
     }
     catch (...) {
+        if (prepared)
+            _transport->mailbox ().release (*prepared);
         if (batch) {
             batch->finish ();
             recycle_application_claim_batch (batch);

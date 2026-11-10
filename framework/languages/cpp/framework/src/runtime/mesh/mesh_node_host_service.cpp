@@ -2127,18 +2127,74 @@ auto mesh_node_host_service_t::make_application_owner_work (
   std::shared_ptr<detail::mesh_node_builder_state_t> registration,
   std::string owner)
 {
-    return [node = std::move (node), registration = std::move (registration),
-            owner = std::move (owner), services = _services, serializers = _serializers,
-            filters = _filters, failures = _runtime_failures, options = _dispatch_options,
-            executor = _application_dispatch.get ()] (bool reject_only) {
-        detail::ambient_context_scope_t infrastructure (nullptr, nullptr, {}, false, true);
-        auto pending = drain_application_owner (node, registration, owner, reject_only, services,
-                                                serializers, filters, options, executor);
-        detail::observe_task_terminal (pending, [failures] (const result_t<void> &result) {
-            failures->capture ([&] { result.value (); });
-        });
-    };
+    return
+      [node = std::move (node), registration = std::move (registration), owner = std::move (owner),
+       services = _services, serializers = _serializers, filters = _filters,
+       failures = _runtime_failures, options = _dispatch_options,
+       executor = _application_dispatch.get ()] (
+        bool reject_only, std::shared_ptr<mesh::service_mailbox_claim_t> prepared = {},
+        std::shared_ptr<offload_executor_t::drain_source_t> source = {},
+        std::exception_ptr failure = {}, std::chrono::steady_clock::time_point turn_started = {}) {
+          if (failure) {
+              failures->report (std::move (failure));
+              return;
+          }
+          detail::ambient_context_scope_t infrastructure (nullptr, nullptr, {}, false, true);
+          auto pending = drain_application_owner (
+            node, registration, owner, reject_only, services, serializers, filters, options,
+            executor, std::move (prepared), std::move (source), turn_started);
+          detail::observe_task_terminal (pending, [failures] (const result_t<void> &result) {
+              failures->capture ([&] { result.value (); });
+          });
+      };
 }
+
+struct mesh_node_host_service_t::application_owner_drain_t final
+    : offload_executor_t::drain_source_t
+{
+    using start_t = std::function<void (bool,
+                                        std::shared_ptr<mesh::service_mailbox_claim_t>,
+                                        std::shared_ptr<offload_executor_t::drain_source_t>,
+                                        std::exception_ptr,
+                                        std::chrono::steady_clock::time_point)>;
+    application_owner_drain_t (std::shared_ptr<detail::mesh_node_runtime_t> node,
+                               std::string owner,
+                               start_t start) :
+        drain_source_t (node.get (), std::move (owner)),
+        node (std::move (node)),
+        start (std::move (start))
+    {
+    }
+    std::size_t pending () const override
+    {
+        return node->native_node ().transport ().mailbox ().pending_application_records (owner);
+    }
+    record_t take () override
+    {
+        bool more;
+        auto claim =
+          node->native_node ().transport ().mailbox ().try_claim_application_record (owner, more);
+        return {std::move (claim), more};
+    }
+    void run (record_t record) override
+    {
+        auto claim =
+          std::static_pointer_cast<mesh::service_mailbox_claim_t> (std::move (record.value));
+        try {
+            start (false, claim, shared_from_this (), {}, record.turn_started);
+        }
+        catch (...) {
+            node->native_node ().transport ().mailbox ().release (*claim);
+            throw;
+        }
+    }
+    void failed (std::exception_ptr error) override
+    {
+        start (false, {}, {}, std::move (error), {});
+    }
+    std::shared_ptr<detail::mesh_node_runtime_t> node;
+    start_t start;
+};
 
 struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t::role_t
 {
@@ -3357,7 +3413,12 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
               [this, executor = _application_dispatch, node,
                registration] (const std::string &owner) {
                   auto start = make_application_owner_work (node, registration, owner);
-                  if (!executor->try_submit_internal ([start] { start (false); }))
+                  if (mesh::service_mailbox_t::concurrent_application_owner (owner)) {
+                      auto source =
+                        std::make_shared<application_owner_drain_t> (node, owner, start);
+                      if (!executor->try_submit_drain (std::move (source)))
+                          start (true);
+                  } else if (!executor->try_submit_internal ([start] { start (false); }))
                       start (true);
               };
             auto role =
@@ -3867,16 +3928,23 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
   serializer_registry_t *serializers,
   const handler_registry_t *filters,
   detail::retained_dispatch_options_t dispatch_options,
-  offload_executor_t *executor)
+  offload_executor_t *executor,
+  std::shared_ptr<mesh::service_mailbox_claim_t> prepared,
+  std::shared_ptr<offload_executor_t::drain_source_t> source,
+  std::chrono::steady_clock::time_point turn_started)
 {
     offload_executor_t::retained_work_t physical_work;
     // Move parameter dependencies into locals so they are destroyed before credit.
+    auto owned_source = std::move (source);
+    auto prepared_claim = std::move (prepared);
     auto owned_node = std::move (node);
     auto owned_registration = std::move (registration);
     auto &mailbox = owned_node->native_node ().transport ().mailbox ();
-    if (!mailbox.begin_application_drain (owner))
+    const bool concurrent = mesh::service_mailbox_t::concurrent_application_owner (owner);
+    if (!concurrent && !mailbox.begin_application_drain (owner))
         co_return;
-    const auto deadline = std::chrono::steady_clock::now () + dispatch_limits::owner_time_budget;
+    const auto deadline = (owned_source ? turn_started : std::chrono::steady_clock::now ())
+                          + dispatch_limits::owner_time_budget;
     try {
         const mesh::service_mailbox_t::application_dispatch_t dispatch =
           [&] (const host::ready_record_t &ready, const host::receive_record_t &record,
@@ -3892,8 +3960,16 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
             owned_node->application_work_finished ();
         };
         while (true) {
+            if (owned_source && !prepared_claim) {
+                auto record = executor->try_take_drain (owned_source);
+                prepared_claim = std::static_pointer_cast<mesh::service_mailbox_claim_t> (
+                  std::move (record.value));
+                if (!prepared_claim)
+                    break;
+            }
             auto pending = owned_node->native_node ().dispatch_application_owner (
-              owner, dispatch, started, rejected);
+              owner, dispatch, started, rejected, prepared_claim);
+            prepared_claim.reset ();
             bool claimed;
             if (const auto ready = std::get_if<bool> (&pending))
                 claimed = *ready;
@@ -3910,10 +3986,14 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
         }
     }
     catch (...) {
-        mailbox.end_application_drain (owner);
+        if (prepared_claim)
+            mailbox.release (*prepared_claim);
+        if (!concurrent)
+            mailbox.end_application_drain (owner);
         throw;
     }
-    mailbox.end_application_drain (owner);
+    if (!concurrent)
+        mailbox.end_application_drain (owner);
 }
 
 task_t<zlink::submit_result_t>

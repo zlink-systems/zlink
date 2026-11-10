@@ -5,14 +5,17 @@
 #include <condition_variable>
 #include <cstddef>
 #include <functional>
+#include <exception>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <deque>
 #include <queue>
 #include <stop_token>
 #include <string>
 #include <thread>
 #include <variant>
+#include <utility>
 #include <vector>
 
 namespace zlink::framework::runtime
@@ -28,6 +31,33 @@ class offload_executor_t
         // Exceptions preserve the dedicated receive thread's terminate policy.
         virtual void run () = 0;
     };
+
+    // One queue entry represents a ready owner, independently of its running turns.
+    // take() only transfers ownership; run() executes outside scheduler state.
+    class drain_source_t : public std::enable_shared_from_this<drain_source_t>
+    {
+      public:
+        struct record_t
+        {
+            std::shared_ptr<void> value;
+            bool more = false;
+            std::chrono::steady_clock::time_point turn_started{};
+        };
+        drain_source_t (const void *group, std::string owner) :
+            group (group), owner (std::move (owner))
+        {
+        }
+        virtual ~drain_source_t () = default;
+        virtual std::size_t pending () const = 0;
+        virtual record_t take () = 0;
+        virtual void run (record_t record) = 0;
+        virtual void failed (std::exception_ptr error) { std::rethrow_exception (error); }
+        const void *const group;
+        const std::string owner;
+    };
+    virtual bool try_submit_drain (std::shared_ptr<drain_source_t> source);
+    // The running owner's existing W5 loop uses the same take/membership step.
+    virtual drain_source_t::record_t try_take_drain (const std::shared_ptr<drain_source_t> &source);
 
     template <typename Work> static void run_application_turn (Work &&work) noexcept
     {
@@ -99,7 +129,9 @@ class offload_executor_t
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
     static thread_local const offload_executor_t *_current_worker_executor;
 #endif
-    using work_t = std::variant<std::function<void ()>, std::function<void (std::stop_token)>>;
+    using work_t = std::variant<std::function<void ()>,
+                                std::function<void (std::stop_token)>,
+                                std::shared_ptr<drain_source_t>>;
     struct work_item_t
     {
         work_t work;
@@ -107,19 +139,36 @@ class offload_executor_t
     };
 
     bool try_submit_application (work_t work);
-    void worker_loop ();
+    std::deque<work_item_t>::iterator find_drain_locked (const drain_source_t &source);
+    drain_source_t::record_t take_drain_locked (std::deque<work_item_t>::iterator entry);
+    enum class worker_phase_t
+    {
+        idle,
+        reserved,
+        running
+    };
+    struct worker_t
+    {
+        std::thread thread;
+        std::condition_variable ready;
+        worker_phase_t phase = worker_phase_t::reserved;
+    };
+    using notifications_t = std::vector<std::shared_ptr<worker_t>>;
+    notifications_t reserve_workers_locked (bool grow, worker_t *current = nullptr);
+    notifications_t stop_workers_locked ();
+    static void notify_workers (const notifications_t &notifications);
+    void worker_loop (const std::shared_ptr<worker_t> &worker);
     void complete_work_locked ();
     void start_worker_locked ();
-    void retire_current_worker_locked ();
+    void retire_current_worker_locked (worker_t &worker);
     void join_retired_workers_locked ();
 
     mutable std::mutex _mutex;
-    std::condition_variable _ready;
     std::condition_variable _empty;
-    std::queue<work_item_t> _queue;
+    std::deque<work_item_t> _queue;
     std::queue<std::shared_ptr<role_t>> _roles;
     // [0, _live_workers) run worker_loop; the rest have returned.
-    std::vector<std::thread> _workers;
+    std::vector<std::shared_ptr<worker_t>> _workers;
     std::vector<std::stop_source *> _active_cancellations;
     std::size_t _min_worker_count = 1;
     std::size_t _max_worker_count = 1;
@@ -128,8 +177,11 @@ class offload_executor_t
     bool _stopping = false;
     std::size_t _active = 0;
     std::size_t _role_active = 0;
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+    // Counts queue publications, including entries already consumed by workers.
+    std::size_t _submitted_items = 0;
+#endif
     std::size_t _live_workers = 0;
-    std::size_t _idle_workers = 0;
 };
 
 // Runtimes share one process pool and retain it until their lanes have drained.

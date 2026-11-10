@@ -62,6 +62,36 @@ class channel_host_service_t::server_loop_t
   public:
     friend struct manual_channel_server_test_access_t;
 
+    struct owner_drain_t final : offload_executor_t::drain_source_t
+    {
+        owner_drain_t (server_loop_t &server, std::string owner) :
+            drain_source_t (&server, std::move (owner)), server (server)
+        {
+        }
+        std::size_t pending () const override
+        {
+            return server._source->mailbox ().pending_application_records (owner);
+        }
+        record_t take () override
+        {
+            bool more;
+            auto claim = server._source->mailbox ().try_claim_application_record (owner, more);
+            return {std::move (claim), more};
+        }
+        void run (record_t record) override
+        {
+            server.drain_owner (
+              owner,
+              std::static_pointer_cast<mesh::service_mailbox_claim_t> (std::move (record.value)),
+              false, shared_from_this (), record.turn_started);
+        }
+        void failed (std::exception_ptr error) override
+        {
+            server._runtime.runtime_failures ()->report (std::move (error));
+        }
+        server_loop_t &server;
+    };
+
     static std::unique_ptr<offload_executor_t> make_handler_executor ()
     {
         const auto workers = static_cast<std::size_t> (
@@ -135,40 +165,14 @@ class channel_host_service_t::server_loop_t
         _source->start (*_router);
         _source->mailbox ().bind_application_dispatch ({}, [this] (const std::string &owner) {
             try {
-                if (_handler_executor->try_submit_internal ([this, owner] { drain_owner (owner); }))
+                if (_handler_executor->try_submit_drain (
+                      std::make_shared<owner_drain_t> (*this, owner)))
                     return;
             }
             catch (...) {
                 _runtime.runtime_failures ()->report (std::current_exception ());
             }
-            // A rejected work item accepted no invocation. The mailbox remains the
-            // sole claim/settlement owner; each queued permit dies with its record.
-            auto &mailbox = _source->mailbox ();
-            if (!mailbox.begin_application_drain (owner))
-                return;
-            try {
-                while (auto claim =
-                         mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application,
-                                                  owner, dispatch_limits::receive_batch_messages,
-                                                  dispatch_limits::receive_batch_bytes)) {
-                    try {
-                        for (std::size_t index = 0; index != claim->claimed_messages; ++index) {
-                            if (auto record = mailbox.take ({claim, index}))
-                                report_dispatch_rejection (
-                                  messaging::message_parts_t (record->take_parts ()));
-                        }
-                    }
-                    catch (...) {
-                        mailbox.release (*claim);
-                        throw;
-                    }
-                    mailbox.release (*claim);
-                }
-            }
-            catch (...) {
-                _runtime.runtime_failures ()->report (std::current_exception ());
-            }
-            mailbox.end_application_drain (owner);
+            drain_owner (owner, {}, true);
         });
         if (_listener_statuses)
             _listener_statuses->update (
@@ -376,39 +380,49 @@ class channel_host_service_t::server_loop_t
             report_dispatch_rejection (messaging::message_parts_t (record.take_parts ()));
     }
 
-    void drain_owner (const std::string &owner)
+    void drain_owner (const std::string &owner,
+                      std::shared_ptr<mesh::service_mailbox_claim_t> claim = {},
+                      bool reject_only = false,
+                      std::shared_ptr<offload_executor_t::drain_source_t> source = {},
+                      std::chrono::steady_clock::time_point turn_started = {})
     {
         auto &mailbox = _source->mailbox ();
-        if (!mailbox.begin_application_drain (owner))
-            return;
-        const auto deadline =
-          std::chrono::steady_clock::now () + dispatch_limits::owner_time_budget;
-        std::shared_ptr<mesh::service_mailbox_claim_t> claim;
+        const auto deadline = (source ? turn_started : std::chrono::steady_clock::now ())
+                              + dispatch_limits::owner_time_budget;
         try {
             do {
-                claim = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, owner,
-                                                 dispatch_limits::receive_batch_messages,
-                                                 dispatch_limits::receive_batch_bytes);
+                if (!claim) {
+                    if (source) {
+                        auto record = _handler_executor->try_take_drain (source);
+                        claim = std::static_pointer_cast<mesh::service_mailbox_claim_t> (
+                          std::move (record.value));
+                    } else {
+                        bool more;
+                        claim = mailbox.try_claim_application_record (owner, more);
+                    }
+                }
                 if (!claim)
                     break;
                 for (std::size_t index = 0; index != claim->claimed_messages; ++index) {
                     if (auto record = mailbox.take ({claim, index})) {
-                        // An ordinary Channel claim reserves FIFO entry, not terminal lifetime.
                         // Preserve the drain ambient while a suspended pipeline keeps its own.
                         flow_context_t::scope_t flow_scope (flow_context_t::current ());
-                        dispatch_application (std::move (*record));
+                        if (reject_only)
+                            report_dispatch_rejection (
+                              messaging::message_parts_t (record->take_parts ()));
+                        else
+                            dispatch_application (std::move (*record));
                     }
                 }
                 mailbox.release (*claim);
                 claim.reset ();
-            } while (std::chrono::steady_clock::now () < deadline);
+            } while (reject_only || std::chrono::steady_clock::now () < deadline);
         }
         catch (...) {
             if (claim)
                 mailbox.release (*claim);
             _runtime.runtime_failures ()->report (std::current_exception ());
         }
-        mailbox.end_application_drain (owner);
     }
 
     void dispatch_application (mesh::service_mailbox_record_t record)

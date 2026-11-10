@@ -5,6 +5,7 @@
 #include "runtime/dispatch/offload_executor.hpp"
 #include "allocation_counter.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <cstdio>
@@ -20,11 +21,17 @@ using namespace std::chrono_literals;
 
 #ifdef ZLINK_TEST_WRAP_NOTIFY_ONE
 std::atomic_bool suppress_notify_one{false};
+std::mutex suppressed_mutex;
+std::vector<std::condition_variable *> suppressed;
 extern "C" void __real__ZNSt18condition_variable10notify_oneEv (std::condition_variable *);
 extern "C" void __wrap__ZNSt18condition_variable10notify_oneEv (std::condition_variable *condition)
 {
     if (!suppress_notify_one.load ())
         __real__ZNSt18condition_variable10notify_oneEv (condition);
+    else {
+        std::lock_guard lock (suppressed_mutex);
+        suppressed.push_back (condition);
+    }
 }
 #endif
 
@@ -35,14 +42,16 @@ struct offload_executor_test_access_t
     static std::size_t idle (offload_executor_t &executor)
     {
         std::lock_guard lock (executor._mutex);
-        return executor._idle_workers;
+        return std::count_if (executor._workers.begin (), executor._workers.end (),
+                              [] (const auto &worker) {
+                                  return worker->phase == offload_executor_t::worker_phase_t::idle;
+                              });
     }
     static bool stopping (offload_executor_t &executor)
     {
         std::lock_guard lock (executor._mutex);
         return executor._stopping;
     }
-    static void wake_workers (offload_executor_t &executor) { executor._ready.notify_all (); }
 };
 }
 
@@ -88,7 +97,12 @@ void queued_work_reserves_independent_workers (bool internal_first)
     }
     const auto workers = executor.live_worker_count ();
     suppress_notify_one.store (false);
-    rt::offload_executor_test_access_t::wake_workers (executor);
+    {
+        std::lock_guard lock (suppressed_mutex);
+        for (auto *condition : suppressed)
+            __real__ZNSt18condition_variable10notify_oneEv (condition);
+        suppressed.clear ();
+    }
     const bool progressed = second.wait_for (5s) == std::future_status::ready;
     release.set_value ();
     executor.drain ();

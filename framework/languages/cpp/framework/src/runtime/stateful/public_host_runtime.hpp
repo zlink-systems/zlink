@@ -913,7 +913,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     dispatch_application_owner (std::string owner,
                                 const mesh::service_mailbox_t::application_dispatch_t dispatch,
                                 std::function<void ()> started,
-                                std::function<void ()> rejected);
+                                std::function<void ()> rejected,
+                                std::shared_ptr<mesh::service_mailbox_claim_t> prepared = {});
     std::optional<zlink::poll_event_flag_t> wait_for_dispatch_activity (
       std::chrono::milliseconds timeout,
       bool accept_application_receive,

@@ -21,6 +21,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <future>
@@ -552,6 +553,15 @@ void check_native_fifo (bool held_worker, bool async_filter, bool reject = false
         EXPECT_EQ (3u, server.pending_messages ());
         held->run_all ();
     }
+    // S02 §2 orders mailbox takes, not pipeline entry on different workers.
+    // The manual single-worker adapter still has a deterministic entry order.
+    const auto expect_entries = [held_worker] (std::vector<int> expected, std::vector<int> actual) {
+        if (!held_worker) {
+            std::sort (expected.begin (), expected.end ());
+            std::sort (actual.begin (), actual.end ());
+        }
+        EXPECT_EQ (expected, actual);
+    };
     {
         std::unique_lock lock (handler.mutex);
         ASSERT_TRUE (handler.changed.wait_for (lock, 2s, [&] {
@@ -560,9 +570,9 @@ void check_native_fifo (bool held_worker, bool async_filter, bool reject = false
                                 : handler.entries.size () == 3;
         }));
         if (async_filter)
-            EXPECT_EQ ((std::vector<int>{1, 2, 3}), handler.pipeline_entries);
+            expect_entries ({1, 2, 3}, handler.pipeline_entries);
         else
-            EXPECT_EQ ((std::vector<int>{1, 2, 3}), handler.entries);
+            expect_entries ({1, 2, 3}, handler.entries);
     }
     EXPECT_FALSE (executor->drain_until (std::chrono::steady_clock::now ()))
       << "an actual native invocation must retain physical-terminal drain ownership";
@@ -575,7 +585,8 @@ void check_native_fifo (bool held_worker, bool async_filter, bool reject = false
         std::unique_lock lock (handler.mutex);
         ASSERT_TRUE (
           handler.changed.wait_for (lock, 2s, [&] { return handler.entries.size () == 3; }));
-        EXPECT_EQ ((std::vector<int>{2, 3, 1}), handler.entries);
+        EXPECT_EQ (1, handler.entries.back ());
+        expect_entries ({2, 3, 1}, handler.entries);
     }
     EXPECT_FALSE (replies[0].await_ready ());
     EXPECT_EQ (0u, jobs->snapshot ().queued_application_jobs);
@@ -611,7 +622,7 @@ TEST (ManualDispatchOwner, AsyncFilterRetainsPermitAndScopeWhileLaterPipelinesEn
     check_native_fifo (true, true);
 }
 
-TEST (ManualDispatchOwner, NativeMultiworkerDrainStartsPipelinesInFifo)
+TEST (ManualDispatchOwner, NativeMultiworkerDrainStartsIndependentPipelines)
 {
     check_native_fifo (false, true);
 }

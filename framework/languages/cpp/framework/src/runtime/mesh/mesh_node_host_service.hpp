@@ -163,7 +163,11 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
                              serializer_registry_t *serializers,
                              const handler_registry_t *filters,
                              detail::retained_dispatch_options_t dispatch_options,
-                             offload_executor_t *executor);
+                             offload_executor_t *executor,
+                             std::shared_ptr<mesh::service_mailbox_claim_t> prepared = {},
+                             std::shared_ptr<offload_executor_t::drain_source_t> source = {},
+                             std::chrono::steady_clock::time_point turn_started = {});
+    struct application_owner_drain_t;
 
     std::vector<std::shared_ptr<detail::mesh_node_builder_state_t>> _registrations;
     serializer_registry_t *_serializers;

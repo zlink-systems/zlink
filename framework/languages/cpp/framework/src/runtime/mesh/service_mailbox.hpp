@@ -358,6 +358,12 @@ class service_mailbox_t
                                                               std::size_t message_budget,
                                                               std::size_t byte_budget,
                                                               const claimed_t &claimed = {});
+    // Scheduler-only Node/Channel take. The original list node stays in its
+    // existing claim until settlement, independently of later owner records.
+    static bool concurrent_application_owner (std::string_view owner) noexcept;
+    std::shared_ptr<service_mailbox_claim_t> try_claim_application_record (
+      const std::string &owner, bool &more, const claimed_t &claimed = {});
+    std::size_t pending_application_records (const std::string &owner) const;
     using claim_handle_t = service_mailbox_slot_t;
     // A missing source belongs to its original. Claims and cut share one lookup; the
     // existing producer mutex transfers its starter, and Store work runs outside it.
@@ -434,8 +440,8 @@ class service_mailbox_t
         retained
     };
 
-    // A claim is the front prefix of records; it leaves the FIFO when its last
-    // credit settles.
+    // Gated claims retain their prefix here until settlement. Independent
+    // Node/Channel claims transfer the taken list node into the claim.
     struct owner_queue_t
     {
         std::list<service_mailbox_record_t> records;
@@ -494,8 +500,9 @@ class service_mailbox_t
     utc_clock_t _utc_clock = [] { return std::chrono::system_clock::now (); };
 };
 
-// One claim of an owner's FIFO prefix. records views the claimed slots until the
-// claim settles; read them only before their take. Each slot credit settles once.
+// records views claimed slots until settlement: a gated prefix stays in its
+// FIFO; an independent Node/Channel take keeps the same list node in this claim.
+// Read a slot only before its take. Each credit settles once.
 struct service_mailbox_claim_t
 {
     std::string owner;
@@ -514,6 +521,7 @@ struct service_mailbox_claim_t
   private:
     friend class service_mailbox_t;
     std::weak_ptr<service_mailbox_t::state_t> _mailbox;
+    std::list<service_mailbox_record_t> _detached_records;
     std::unique_ptr<std::atomic_bool[]> _settled;
     std::atomic_size_t _remaining{0};
 };
