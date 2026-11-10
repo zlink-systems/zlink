@@ -174,8 +174,7 @@ async function up(options, run) {
       const network = JSON.parse(await command('docker', ['network', 'inspect', state.networks[1]]))[0];
       const subnet = network.IPAM.Config[0].Subnet;
       // Newer engines (the hosted ubuntu-24.04 image) accept `connect --ip` only on networks
-      // created with --subnet, so recreate
-      // the peer network with the subnet Docker just chose for it.
+      // created with --subnet, so recreate the peer network with the subnet Docker chose.
       await command('docker', ['network', 'rm', state.networks[1]]);
       await command('docker', ['network', 'create', '--label', `${LIMITS.label}=${runId}`, '--subnet', subnet, state.networks[1]]);
       const [base, prefix] = subnet.split('/');
