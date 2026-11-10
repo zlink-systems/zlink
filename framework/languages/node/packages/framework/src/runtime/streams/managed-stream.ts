@@ -19,7 +19,6 @@ import {
 import type { Message } from '../../contracts/Common/Message';
 import { throwIfAborted } from '../abort';
 import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
-import { remainingRequestTimeout } from '../messaging/request-deadline';
 import type {
   ZLinkBackendActorRef,
   ZLinkBackendSendFlags,
@@ -210,12 +209,7 @@ export class ZLinkManagedStream implements ZLinkStream {
       if (route.service.status().state === 1) {
         route.service.start();
       }
-      await this.ensureNativeActorRoute(
-        route,
-        actor,
-        remainingRequestTimeout(operationName, deadlineMs)!,
-        signal
-      );
+      await this.ensureNativeActorRoute(route, actor, timeoutMs, signal);
       if (this.isTransportClosed()) {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.RouteNotConnected,
@@ -228,7 +222,7 @@ export class ZLinkManagedStream implements ZLinkStream {
             route.service.bindActor(
               this.backendRoutingId(),
               nativeActor,
-              remainingRequestTimeout(operationName, deadlineMs)!,
+              Math.max(0, Math.ceil(deadlineMs - performance.now())),
               onBindingReplaced === undefined
                 ? undefined
                 : (_actorId, retiredSession, replacedActor) => {
@@ -290,7 +284,7 @@ export class ZLinkManagedStream implements ZLinkStream {
     await this.socket.bindActor(
       this.backendRoutingId(),
       toBackendActorRef(actor),
-      remainingRequestTimeout(operationName, deadlineMs)!,
+      Math.max(0, Math.ceil(deadlineMs - performance.now())),
       signal
     );
     this.nativeActorBindings.set(actor.actorId, { actor: nativeActor });

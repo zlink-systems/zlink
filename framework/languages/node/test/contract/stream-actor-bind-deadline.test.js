@@ -83,14 +83,16 @@ test('STREAM Actor lookup and bind together consume only one deadline', async (t
 });
 
 for (const lookupElapsedMs of [80, 81]) {
-  test(`STREAM Actor bind does not submit after lookup exhausts the deadline (${lookupElapsedMs} ms)`, async (t) => {
+  test(`STREAM Actor bind submits zero remaining budget after lookup takes ${lookupElapsedMs} ms`, async (t) => {
     const fixture = bindFixture(t, lookupElapsedMs, 0);
     const deadlineKind = wireReplyFailureException(RequestResult.TimedOut, 0, 'bind deadline').kind;
     await assert.rejects(fixture.bind(), (error) => {
       assert.equal(error.kind, deadlineKind);
       return true;
     });
-    assert.deepEqual(fixture.bindTimeouts, []);
+    assert.deepEqual(fixture.lookupTimeouts, [80]);
+    assert.deepEqual(fixture.bindTimeouts, [0]);
+    assert.equal(fixture.elapsedMs(), lookupElapsedMs);
     assert.equal(fixture.bindings.length, 0);
   });
 }
