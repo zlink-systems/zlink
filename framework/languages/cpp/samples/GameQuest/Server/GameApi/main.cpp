@@ -348,7 +348,7 @@ class gamequest_session_t final : public packet_stream_session_t
                 if (error.kind () == framework_error_kind_t::unavailable) {
                     const std::string line = std::format ("gamequest-owner unavailable player={}\n",
                                                           request.player_id);
-                    std::cerr << line;
+                    std::cout << line;
                 }
                 throw;
             }
@@ -417,7 +417,7 @@ class gamequest_session_t final : public packet_stream_session_t
         _store.record_event (event);
         const std::string line = std::format ("gamequest-api event-routed player={}\n",
                                               event.player_id);
-        std::cerr << line;
+        std::cout << line;
         co_return;
     }
 

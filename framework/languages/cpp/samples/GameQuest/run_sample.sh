@@ -102,7 +102,8 @@ dump_logs() {
 start_role() {
   local name="$1"
   shift
-  stdbuf -oL -eL "$@" >"$LOG_DIR/${name}.log" 2>&1 &
+  # Markers are read from stdout; framework trace on stderr must not split them.
+  stdbuf -oL -eL "$@" >"$LOG_DIR/${name}.log" 2>"$LOG_DIR/${name}.trace.log" &
   local pid=$!
   PIDS+=("$pid")
   zlink_cpp_sample_log_step "process start: $name pid=$pid"
