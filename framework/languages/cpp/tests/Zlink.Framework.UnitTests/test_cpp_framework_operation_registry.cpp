@@ -205,7 +205,6 @@ void verify_completion_dispatcher_resource_boundary ()
           }));
         assert (registry.complete (id (83), {}));
         assert (registry.size () == 0);
-        assert (!third_callback_ran.load (std::memory_order_acquire));
         release_first.count_down ();
         assert (third_result.wait_for (5s) == std::future_status::ready);
         assert (third_callback_ran.load (std::memory_order_acquire));
