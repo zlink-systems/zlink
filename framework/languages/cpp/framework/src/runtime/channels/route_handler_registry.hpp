@@ -72,7 +72,7 @@ class route_handler_registry_t
                             detail::handler_start_callback_ref_t before_application_handler)
             -> task_t<zlink::message_t> {
               try {
-                  auto &owner = services.get_required<TOwner> ();
+                  auto &owner = detail::create_dispatch_instance<TOwner> (services);
                   auto payload =
                     codecs->deserialize (serializers, message, context.content_type.value_or (""));
                   detail::invoke_prepared_handler (before_application_handler, method, owner,
@@ -107,7 +107,7 @@ class route_handler_registry_t
                             detail::handler_start_callback_ref_t before_application_handler)
             -> task_t<zlink::message_t> {
               try {
-                  auto &owner = services.get_required<TOwner> ();
+                  auto &owner = detail::create_dispatch_instance<TOwner> (services);
                   auto payload =
                     codecs->deserialize (serializers, message, context.content_type.value_or (""));
                   co_await detail::invoke_prepared_handler (before_application_handler, method,
@@ -141,7 +141,7 @@ class route_handler_registry_t
                             detail::handler_start_callback_ref_t before_application_handler)
             -> task_t<zlink::message_t> {
               try {
-                  auto &owner = services.get_required<TOwner> ();
+                  auto &owner = detail::create_dispatch_instance<TOwner> (services);
                   auto request =
                     codecs->deserialize (serializers, message, context.content_type.value_or (""));
                   return serialize_handler_result (
@@ -178,7 +178,7 @@ class route_handler_registry_t
             -> task_t<zlink::message_t> {
               const auto plan = codecs;
               try {
-                  auto &owner = services.get_required<TOwner> ();
+                  auto &owner = detail::create_dispatch_instance<TOwner> (services);
                   auto request =
                     plan->deserialize (serializers, message, context.content_type.value_or (""));
                   auto reply = co_await detail::invoke_prepared_handler (

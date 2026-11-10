@@ -44,7 +44,8 @@ int main (int argc, char **argv)
     const int port = std::stoi (arg_value (argc, argv, "--stats-port", "5295"));
     try {
         bench_metric_reader_t metric_reader;
-        server_metrics_t metrics (std::nullopt);
+        auto metrics_instance = std::make_unique<server_metrics_t> (std::nullopt);
+        auto &metrics = *metrics_instance;
         stats_http_server_t server (metrics, port, [&] {
             const auto rejected = metric_reader.collect_cumulative_sum (
               "zlink.mesh_node.messages.dropped", {{"mesh_name", "bench"},
@@ -56,10 +57,7 @@ int main (int argc, char **argv)
         server.app ().logging ().disable_record_capture ();
         auto &options = server.app ().add_zlink_framework ();
         options.codecs ().use (zlink::framework_codecs::protobuf ());
-        options.services ().add_singleton<echo_handler_t> (
-          std::make_unique<echo_handler_t> (metrics));
-        options.services ().add_singleton<command_handler_t> (
-          std::make_unique<command_handler_t> (metrics));
+        options.services ().add_singleton<server_metrics_t> (std::move (metrics_instance));
         auto mesh = options.add_route_mesh ("bench");
         mesh.set_object_role (fw::object_role_t::none)
           .listen (endpoint)

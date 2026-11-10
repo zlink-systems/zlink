@@ -2541,7 +2541,6 @@ mesh_node_builder_t zlink_builder_t::add_route_mesh (std::string mesh_name)
 mesh_node_builder_t zlink_framework_options_t::add_route_mesh (std::string mesh_name)
 {
     auto builder = _zlink->add_route_mesh (std::move (mesh_name));
-    detail::bind_mesh_handler_services (builder._state, *_services);
     builder._state->framework_options = _options;
     builder._state->handler_groups = _handler_groups;
     std::weak_ptr<detail::framework_options_state_t> options = _options;

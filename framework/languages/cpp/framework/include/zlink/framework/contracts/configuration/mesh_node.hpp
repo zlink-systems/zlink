@@ -48,21 +48,6 @@ struct mesh_handler_registration_t
     std::function<void (serializer_registry_t &)> bind_codecs;
 };
 
-void bind_mesh_handler_services (std::shared_ptr<mesh_node_builder_state_t> state,
-                                 service_collection_t &services);
-void register_mesh_handler_service (std::shared_ptr<mesh_node_builder_state_t> state,
-                                    std::function<void (service_collection_t &)> registrar);
-
-template <typename THandler>
-void register_mesh_handler_service_for (std::shared_ptr<mesh_node_builder_state_t> state)
-{
-    register_mesh_handler_service (std::move (state), [] (service_collection_t &services) {
-        if (services.contains (std::type_index (typeid (THandler)))) {
-            return;
-        }
-        injected_handler_registrar_t<THandler>::add (services);
-    });
-}
 } // namespace detail
 
 struct mesh_peer_connection_t
@@ -544,7 +529,6 @@ mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler (bool 
                                                                            std::string packet_name)
 {
     static_assert (!std::is_same_v<TMessage, void>);
-    detail::register_mesh_handler_service_for<THandler> (_state);
     constexpr auto method = [] {
         if constexpr (requires {
                           static_cast<void (THandler::*) (
@@ -578,7 +562,7 @@ mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler (bool 
                      detail::handler_start_callback_ref_t before_application_handler)
                      -> task_t<zlink::message_t> {
                 try {
-                    auto &owner = services.get_required<THandler> ();
+                    auto &owner = detail::create_dispatch_instance<THandler> (services);
                     auto payload = codecs->deserialize (serializers, message,
                                                         context.content_type.value_or (""));
                     if constexpr (std::is_invocable_v<decltype (target), THandler &,
@@ -605,7 +589,7 @@ mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler (bool 
                      detail::handler_start_callback_ref_t before_application_handler)
                      -> task_t<zlink::message_t> {
                 try {
-                    auto &owner = services.get_required<THandler> ();
+                    auto &owner = detail::create_dispatch_instance<THandler> (services);
                     auto payload = codecs->deserialize (serializers, message,
                                                         context.content_type.value_or (""));
                     if constexpr (std::is_invocable_v<decltype (target), THandler &,
@@ -635,7 +619,6 @@ template <typename THandler, typename TRequest, typename TReply>
 mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler (bool request,
                                                                            std::string packet_name)
 {
-    detail::register_mesh_handler_service_for<THandler> (_state);
     auto codecs = std::make_shared<detail::handler_codec_plan_t<TRequest, TReply>> ();
     return add_handler_registration (detail::mesh_handler_registration_t{
       request, _channel_name, std::move (packet_name), std::type_index (typeid (THandler)),
@@ -646,7 +629,7 @@ mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler (bool 
         -> task_t<zlink::message_t> {
           const auto plan = codecs;
           try {
-              auto &owner = services.get_required<THandler> ();
+              auto &owner = detail::create_dispatch_instance<THandler> (services);
               auto payload =
                 plan->deserialize (serializers, message, context.content_type.value_or (""));
               if constexpr (requires {
