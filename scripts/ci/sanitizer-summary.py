@@ -84,7 +84,7 @@ def parse_junit(path: Path, suite: str) -> list[dict[str, Any]]:
         output_parts = []
         case_failed = False
         for child in case:
-            if child.tag in {"failure", "error"}:
+            if child.tag in {"failure", "error", "skipped"}:
                 case_failed = True
             if child.text:
                 output_parts.append(child.text)
@@ -111,10 +111,14 @@ def run_suite(
     build_dir: Path,
     label: str | None,
     log_dir: Path,
+    *,
+    test_regex: str | None = None,
+    log_name: str | None = None,
 ) -> list[dict[str, Any]]:
     log_dir.mkdir(parents=True, exist_ok=True)
-    junit_path = log_dir / f"{suite}.junit.xml"
-    log_path = log_dir / f"{suite}.ctest.log"
+    junit_path = log_dir / f"{log_name or suite}.junit.xml"
+    log_path = log_dir / f"{log_name or suite}.ctest.log"
+    junit_path.unlink(missing_ok=True)
     command = [
         "ctest",
         "--test-dir",
@@ -128,6 +132,8 @@ def run_suite(
     ]
     if label:
         command.extend(["-L", label])
+    if test_regex:
+        command.extend(["-R", test_regex])
 
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
     output = completed.stdout + completed.stderr
@@ -195,7 +201,7 @@ def parse_args() -> argparse.Namespace:
         action="append",
         nargs=2,
         metavar=("NAME", "BUILD_DIR"),
-        required=True,
+        default=[],
         help="CTest build directory to run; may be supplied more than once.",
     )
     parser.add_argument(
@@ -208,6 +214,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--log-dir", type=Path, required=True)
+    parser.add_argument(
+        "--results", action="append", type=Path, default=[],
+        help="Merge a saved suite/shard summary without rerunning its tests.",
+    )
     return parser.parse_args()
 
 
@@ -215,10 +225,23 @@ def main() -> int:
     args = parse_args()
     labels = dict(args.label)
     results = []
+    if not args.suite and not args.results:
+        raise SystemExit("At least one --suite or --results is required.")
+    for path in args.results:
+        try:
+            results.extend(json.loads(path.read_text(encoding="utf-8"))["results"])
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            results.append({"test": f"summary::{path.name}", "returncode": 1,
+                            "assertions": [f"Could not read result file {path}: {error}"]})
     for name, build_dir in args.suite:
         results.extend(
             run_suite(name, Path(build_dir), labels.get(name), args.log_dir)
         )
+
+    names = [normalize_result(result)["test"] for result in results]
+    if len(names) != len(set(names)):
+        results.append({"test": "summary::duplicate-results", "returncode": 1,
+                        "assertions": ["A test result was reported more than once."]})
 
     summary = summarize(results)
     args.output.parent.mkdir(parents=True, exist_ok=True)
