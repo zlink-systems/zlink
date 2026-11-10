@@ -192,7 +192,6 @@ class handler_options_builder_t
         _state->add_handler_packet (group_name, detail::handler_group_kind_t::request, topic_name,
                                     detail::message_name<request_type> ());
 
-
         auto *handlers = _handlers;
         add_serializers<request_type> ();
         add_serializers<reply_type> ();
@@ -292,7 +291,6 @@ class handler_options_builder_t
         _state->add_handler_packet (group_name, detail::handler_group_kind_t::send, topic_name,
                                     detail::message_name<message_type> ());
 
-
         auto *handlers = _handlers;
         add_serializers<message_type> ();
         auto route_group_name = group_name;
@@ -384,7 +382,6 @@ class handler_options_builder_t
         using event_type = typename THandler::event_type;
         _state->add_handler_packet (group_name, detail::handler_group_kind_t::publish, "",
                                     detail::message_name<event_type> ());
-
 
         auto *handlers = _handlers;
         add_serializers<event_type> ();

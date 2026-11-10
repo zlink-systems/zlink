@@ -4,7 +4,6 @@
 #include "location_runtime_test_access.hpp"
 #include "manual_internal_scheduler.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
-#include "runtime/configuration/service_scope.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime_failure_fixture.hpp"
 #include "stateful_object_sync.hpp"
@@ -417,21 +416,16 @@ TEST (SendAllocations, SynchronousNodeHandlerDoesNotConstructSharedTaskStates)
     auto message = zlink::message_t::from ("7");
     fw::route_message_context_t context{{}, zlink::routing_id_t::from ("source")};
     context.content_type = "x/y";
-    // Each call runs in its own dispatch scope, as the runtime does (#4145).
-    std::optional<detail::service_scope_t> scope;
     const auto adapter = [&] {
-        handler->invoker (scope->provider (), serializers, message, context, {}).result ().value ();
+        handler->invoker (provider, serializers, message, context, {}).result ().value ();
     };
-    scope.emplace (detail::service_scope_t::create (provider));
     adapter ();
-    scope.emplace (detail::service_scope_t::create (provider));
     const std::array state_sites{fw::tests::shared_state_allocation_site<
       detail::coroutine_task_shared_state_t<zlink::message_t>> ()};
     const auto adapter_allocations =
       measure_ready_operation ("synchronous node handler", state_sites, adapter);
-    // The handler instance and its entry in the dispatch scope (#4145); no task state.
-    EXPECT_EQ (adapter_allocations, 2u);
-    scope.reset ();
+    // The per-dispatch handler is a local of the invoker and allocates nothing (#4145).
+    EXPECT_EQ (adapter_allocations, 0u);
     EXPECT_EQ (provider.get_required<synchronous_route_handler_state_t> ().calls, 2u);
 }
 

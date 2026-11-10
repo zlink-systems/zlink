@@ -562,7 +562,8 @@ mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler (bool 
                      detail::handler_start_callback_ref_t before_application_handler)
                      -> task_t<zlink::message_t> {
                 try {
-                    auto &owner = detail::create_dispatch_instance<THandler> (services);
+                    detail::dispatch_instance_t<THandler> owner_instance (services);
+                    auto &owner = owner_instance.get ();
                     auto payload = codecs->deserialize (serializers, message,
                                                         context.content_type.value_or (""));
                     if constexpr (std::is_invocable_v<decltype (target), THandler &,
@@ -589,7 +590,8 @@ mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler (bool 
                      detail::handler_start_callback_ref_t before_application_handler)
                      -> task_t<zlink::message_t> {
                 try {
-                    auto &owner = detail::create_dispatch_instance<THandler> (services);
+                    detail::dispatch_instance_t<THandler> owner_instance (services);
+                    auto &owner = owner_instance.get ();
                     auto payload = codecs->deserialize (serializers, message,
                                                         context.content_type.value_or (""));
                     if constexpr (std::is_invocable_v<decltype (target), THandler &,
@@ -629,7 +631,8 @@ mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler (bool 
         -> task_t<zlink::message_t> {
           const auto plan = codecs;
           try {
-              auto &owner = detail::create_dispatch_instance<THandler> (services);
+              detail::dispatch_instance_t<THandler> owner_instance (services);
+              auto &owner = owner_instance.get ();
               auto payload =
                 plan->deserialize (serializers, message, context.content_type.value_or (""));
               if constexpr (requires {
