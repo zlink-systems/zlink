@@ -101,7 +101,7 @@ bool offload_executor_t::try_submit_internal (std::function<void ()> work)
 #ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
         ++_submitted_items;
 #endif
-        notifications = reserve_workers_locked (true);
+        reserve_workers_locked (true, notifications);
     }
     notify_workers (notifications);
     return true;
@@ -109,30 +109,38 @@ bool offload_executor_t::try_submit_internal (std::function<void ()> work)
 
 bool offload_executor_t::try_submit_drain (std::shared_ptr<drain_source_t> source)
 {
+    const auto create = [&] { return source; };
+    return try_submit_drain (source->group, source->owner, std::ref (create));
+}
+
+bool offload_executor_t::try_submit_drain (const void *group,
+                                           const std::string &owner,
+                                           const drain_factory_t &create)
+{
     notifications_t notifications;
     {
         std::lock_guard lock (_mutex);
         if (_stopping && _active == _role_active && _queue.empty ())
             return false;
-        const auto found = find_drain_locked (*source);
+        const auto found = find_drain_locked (group, owner);
         if (found == _queue.end ()) {
-            _queue.push_back (work_item_t{std::move (source), std::nullopt});
+            _queue.push_back (work_item_t{create (), std::nullopt});
 #ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
             ++_submitted_items;
 #endif
         }
-        notifications = reserve_workers_locked (true);
+        reserve_workers_locked (true, notifications);
     }
     notify_workers (notifications);
     return true;
 }
 
 std::deque<offload_executor_t::work_item_t>::iterator
-offload_executor_t::find_drain_locked (const drain_source_t &source)
+offload_executor_t::find_drain_locked (const void *group, const std::string &owner)
 {
     return std::find_if (_queue.begin (), _queue.end (), [&] (const auto &entry) {
         const auto existing = std::get_if<std::shared_ptr<drain_source_t>> (&entry.work);
-        return existing && (*existing)->group == source.group && (*existing)->owner == source.owner;
+        return existing && (*existing)->group == group && (*existing)->owner == owner;
     });
 }
 
@@ -163,7 +171,7 @@ offload_executor_t::try_take_drain (const std::shared_ptr<drain_source_t> &sourc
     drain_source_t::record_t record;
     {
         std::lock_guard lock (_mutex);
-        const auto found = find_drain_locked (*source);
+        const auto found = find_drain_locked (source->group, source->owner);
         if (found != _queue.end ()) {
             selected = std::get<std::shared_ptr<drain_source_t>> (found->work);
             record = take_drain_locked (found);
@@ -174,8 +182,9 @@ offload_executor_t::try_take_drain (const std::shared_ptr<drain_source_t> &sourc
 
 // Only publication can grow the existing elastic pool. A take never wakes or
 // starts another worker. The worker phase is the sole wake-reservation state.
-offload_executor_t::notifications_t offload_executor_t::reserve_workers_locked (bool grow,
-                                                                                worker_t *current)
+void offload_executor_t::reserve_workers_locked (bool grow,
+                                                 notifications_t &notifications,
+                                                 worker_t *current)
 {
     std::size_t demand = std::min (_max_worker_count, _roles.size ());
     for (const auto &entry : _queue) {
@@ -204,34 +213,30 @@ offload_executor_t::notifications_t offload_executor_t::reserve_workers_locked (
         current->phase = worker_phase_t::reserved;
         --demand;
     }
-    notifications_t notifications;
     for (const auto &worker : _workers) {
         if (demand == 0)
             break;
         if (worker->phase == worker_phase_t::idle) {
-            notifications.push_back (worker);
+            notifications.workers.push_back (worker);
             worker->phase = worker_phase_t::reserved;
             --demand;
         }
     }
-    return notifications;
 }
 
-offload_executor_t::notifications_t offload_executor_t::stop_workers_locked ()
+void offload_executor_t::stop_workers_locked (notifications_t &notifications)
 {
-    notifications_t notifications;
     for (const auto &worker : _workers) {
         if (worker->phase == worker_phase_t::idle || worker->phase == worker_phase_t::reserved) {
-            notifications.push_back (worker);
+            notifications.workers.push_back (worker);
             worker->phase = worker_phase_t::reserved;
         }
     }
-    return notifications;
 }
 
 void offload_executor_t::notify_workers (const notifications_t &notifications)
 {
-    for (const auto &worker : notifications)
+    for (const auto &worker : notifications.workers)
         worker->ready.notify_one ();
 }
 
@@ -291,7 +296,7 @@ bool offload_executor_t::try_submit_application (work_t work)
 #ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
         ++_submitted_items;
 #endif
-        notifications = reserve_workers_locked (true);
+        reserve_workers_locked (true, notifications);
     }
     notify_workers (notifications);
     return true;
@@ -305,7 +310,7 @@ bool offload_executor_t::start_role (std::shared_ptr<role_t> role)
         if (_stopping)
             return false;
         _roles.push (std::move (role));
-        notifications = reserve_workers_locked (false);
+        reserve_workers_locked (false, notifications);
     }
     notify_workers (notifications);
     return true;
@@ -317,7 +322,7 @@ void offload_executor_t::drain_application ()
     {
         std::lock_guard lock (_mutex);
         _stopping = true;
-        notifications = stop_workers_locked ();
+        stop_workers_locked (notifications);
     }
     request_stop ();
     notify_workers (notifications);
@@ -360,7 +365,7 @@ bool offload_executor_t::drain_until (std::chrono::steady_clock::time_point dead
     {
         std::unique_lock lock (_mutex);
         _stopping = true;
-        notifications = stop_workers_locked ();
+        stop_workers_locked (notifications);
     }
     request_stop ();
     notify_workers (notifications);
@@ -471,7 +476,7 @@ void offload_executor_t::worker_loop (const std::shared_ptr<worker_t> &worker)
         {
             std::unique_lock lock (_mutex);
             worker->phase = worker_phase_t::idle;
-            notifications = reserve_workers_locked (false, worker.get ());
+            reserve_workers_locked (false, notifications, worker.get ());
             const auto reserved = [&] {
                 return _stopping || worker->phase == worker_phase_t::reserved;
             };

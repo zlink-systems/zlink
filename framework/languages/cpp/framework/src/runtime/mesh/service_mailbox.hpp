@@ -507,8 +507,8 @@ struct service_mailbox_claim_t
 {
     std::string owner;
     service_mailbox_domain_t domain = service_mailbox_domain_t::application;
-    std::vector<service_mailbox_record_t *> records;
-    std::vector<std::size_t> record_bytes;
+    std::span<service_mailbox_record_t *> records;
+    std::span<std::size_t> record_bytes;
     std::size_t claimed_messages = 0;
     std::size_t claimed_bytes = 0;
 
@@ -522,7 +522,13 @@ struct service_mailbox_claim_t
     friend class service_mailbox_t;
     std::weak_ptr<service_mailbox_t::state_t> _mailbox;
     std::list<service_mailbox_record_t> _detached_records;
-    std::unique_ptr<std::atomic_bool[]> _settled;
+    // A scheduler claim has one slot; its views use the ownership block itself.
+    service_mailbox_record_t *_record = nullptr;
+    std::atomic_bool _record_settled{false};
+    std::span<std::atomic_bool> _settled{&_record_settled, 1};
+    std::vector<service_mailbox_record_t *> _records;
+    std::vector<std::size_t> _record_bytes;
+    std::unique_ptr<std::atomic_bool[]> _settled_storage;
     std::atomic_size_t _remaining{0};
 };
 

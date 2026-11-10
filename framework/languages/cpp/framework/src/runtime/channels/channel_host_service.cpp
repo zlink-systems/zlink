@@ -165,8 +165,8 @@ class channel_host_service_t::server_loop_t
         _source->start (*_router);
         _source->mailbox ().bind_application_dispatch ({}, [this] (const std::string &owner) {
             try {
-                if (_handler_executor->try_submit_drain (
-                      std::make_shared<owner_drain_t> (*this, owner)))
+                const auto create = [&] { return std::make_shared<owner_drain_t> (*this, owner); };
+                if (_handler_executor->try_submit_drain (this, owner, std::ref (create)))
                     return;
             }
             catch (...) {

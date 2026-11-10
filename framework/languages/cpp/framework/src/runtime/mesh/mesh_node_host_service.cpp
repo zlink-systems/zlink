@@ -3412,14 +3412,18 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             mesh::service_mailbox_t::application_ready_t submit_owner =
               [this, executor = _application_dispatch, node,
                registration] (const std::string &owner) {
-                  auto start = make_application_owner_work (node, registration, owner);
                   if (mesh::service_mailbox_t::concurrent_application_owner (owner)) {
-                      auto source =
-                        std::make_shared<application_owner_drain_t> (node, owner, start);
-                      if (!executor->try_submit_drain (std::move (source)))
+                      const auto create = [&] {
+                          return std::make_shared<application_owner_drain_t> (
+                            node, owner, make_application_owner_work (node, registration, owner));
+                      };
+                      if (!executor->try_submit_drain (node.get (), owner, std::ref (create)))
+                          make_application_owner_work (node, registration, owner) (true);
+                  } else {
+                      auto start = make_application_owner_work (node, registration, owner);
+                      if (!executor->try_submit_internal ([start] { start (false); }))
                           start (true);
-                  } else if (!executor->try_submit_internal ([start] { start (false); }))
-                      start (true);
+                  }
               };
             auto role =
               std::make_shared<node_receive_role_t> (*this, node, registration, receive_permit);
@@ -3960,10 +3964,15 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
             owned_node->application_work_finished ();
         };
         while (true) {
-            if (owned_source && !prepared_claim) {
-                auto record = executor->try_take_drain (owned_source);
-                prepared_claim = std::static_pointer_cast<mesh::service_mailbox_claim_t> (
-                  std::move (record.value));
+            if (concurrent && !prepared_claim) {
+                if (owned_source) {
+                    auto record = executor->try_take_drain (owned_source);
+                    prepared_claim = std::static_pointer_cast<mesh::service_mailbox_claim_t> (
+                      std::move (record.value));
+                } else {
+                    bool more;
+                    prepared_claim = mailbox.try_claim_application_record (owner, more);
+                }
                 if (!prepared_claim)
                     break;
             }

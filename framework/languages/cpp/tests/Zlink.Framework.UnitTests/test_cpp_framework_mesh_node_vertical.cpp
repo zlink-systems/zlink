@@ -1463,9 +1463,8 @@ void verify_local_node_submit_bridge ()
         assert (capacity_while_handlers_are_pending.permits_in_use == 1);
     }
 
-    // A different node owns a different gate and must enter while the first
-    // handler is blocked. The same-node successor retains its permit until
-    // that node's first handler reaches terminal completion (02 §2).
+    // S02 §2: Node handlers have no execution gate. Both a different Node and
+    // the same Node must progress while the first handler is blocked.
     auto independent = encode ("independent-owner", "independent-mesh");
     assert (
       service.submit_local_node_send (independent_node, independent.items ()).result ().value ()
@@ -1480,15 +1479,15 @@ void verify_local_node_submit_bridge ()
             == zlink::submit_result_t::ok);
     {
         std::unique_lock lock (probe->mutex);
-        assert (!probe->changed.wait_for (lock, 1s, [&] { return probe->entered == 3; }));
+        assert (probe->changed.wait_for (lock, 1s, [&] { return probe->entered == 3; }));
         assert (probe->completed == 0);
-        assert (node->pending_application_callbacks () == 1);
-        assert (node->active_application_callbacks () == 1);
+        assert (node->pending_application_callbacks () == 0);
+        assert (node->active_application_callbacks () == 2);
         assert (independent_node->active_application_callbacks () == 1);
         const auto queued = application_jobs->snapshot ();
         assert (queued.effective_max_queued_application_jobs == 1);
-        assert (queued.queued_application_jobs == 1);
-        assert (queued.permits_in_use == 1);
+        assert (queued.queued_application_jobs == 0);
+        assert (queued.permits_in_use == queued.reserved_supply_permits);
     }
 
     {

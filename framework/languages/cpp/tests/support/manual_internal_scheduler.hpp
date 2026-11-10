@@ -51,6 +51,12 @@ class manual_internal_scheduler_t final : public runtime::offload_executor_t
         return true;
     }
 
+    bool
+    try_submit_drain (const void *, const std::string &, const drain_factory_t &create) override
+    {
+        return try_submit_drain (create ());
+    }
+
     drain_source_t::record_t try_take_drain (const std::shared_ptr<drain_source_t> &source) override
     {
         std::shared_ptr<drain_source_t> selected;

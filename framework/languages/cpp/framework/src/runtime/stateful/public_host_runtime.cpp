@@ -8554,10 +8554,6 @@ public_host_runtime_t::dispatch_application_owner (
             claim = prepared;
             transfer (claim);
             prepared.reset ();
-        } else if (mesh::service_mailbox_t::concurrent_application_owner (owner)) {
-            bool more;
-            claim = _transport->mailbox ().try_claim_application_record (owner, more,
-                                                                         std::ref (transfer));
         } else {
             claim = _transport->mailbox ().try_claim_owner (
               mesh::service_mailbox_domain_t::application, owner,

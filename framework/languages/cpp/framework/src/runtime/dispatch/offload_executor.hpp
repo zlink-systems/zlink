@@ -7,6 +7,7 @@
 #include <functional>
 #include <exception>
 #include <memory>
+#include <memory_resource>
 #include <mutex>
 #include <optional>
 #include <deque>
@@ -56,6 +57,10 @@ class offload_executor_t
         const std::string owner;
     };
     virtual bool try_submit_drain (std::shared_ptr<drain_source_t> source);
+    using drain_factory_t = std::function<std::shared_ptr<drain_source_t> ()>;
+    // Constructs an absent ready source synchronously; the factory is never retained.
+    virtual bool
+    try_submit_drain (const void *group, const std::string &owner, const drain_factory_t &create);
     // The running owner's existing W5 loop uses the same take/membership step.
     virtual drain_source_t::record_t try_take_drain (const std::shared_ptr<drain_source_t> &source);
 
@@ -139,7 +144,8 @@ class offload_executor_t
     };
 
     bool try_submit_application (work_t work);
-    std::deque<work_item_t>::iterator find_drain_locked (const drain_source_t &source);
+    std::deque<work_item_t>::iterator find_drain_locked (const void *group,
+                                                         const std::string &owner);
     drain_source_t::record_t take_drain_locked (std::deque<work_item_t>::iterator entry);
     enum class worker_phase_t
     {
@@ -153,9 +159,17 @@ class offload_executor_t
         std::condition_variable ready;
         worker_phase_t phase = worker_phase_t::reserved;
     };
-    using notifications_t = std::vector<std::shared_ptr<worker_t>>;
-    notifications_t reserve_workers_locked (bool grow, worker_t *current = nullptr);
-    notifications_t stop_workers_locked ();
+    struct notifications_t
+    {
+        // A single ready turn reserves at most one idle worker. Keep that
+        // notification in this call's storage, including its shared ownership.
+        alignas (std::shared_ptr<worker_t>) std::byte storage[sizeof (std::shared_ptr<worker_t>)];
+        std::pmr::monotonic_buffer_resource memory{storage, sizeof (storage)};
+        std::pmr::vector<std::shared_ptr<worker_t>> workers{&memory};
+    };
+    void
+    reserve_workers_locked (bool grow, notifications_t &notifications, worker_t *current = nullptr);
+    void stop_workers_locked (notifications_t &notifications);
     static void notify_workers (const notifications_t &notifications);
     void worker_loop (const std::shared_ptr<worker_t> &worker);
     void complete_work_locked ();

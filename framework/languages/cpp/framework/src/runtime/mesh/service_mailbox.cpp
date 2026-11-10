@@ -256,11 +256,11 @@ std::shared_ptr<service_mailbox_claim_t> service_mailbox_t::try_claim_applicatio
     auto claim = std::make_shared<service_mailbox_claim_t> ();
     claim->owner = owner;
     claim->domain = service_mailbox_domain_t::application;
-    claim->records.push_back (&queue.records.front ());
+    claim->_record = &queue.records.front ();
+    claim->records = {&claim->_record, 1};
     claim->claimed_messages = 1;
     claim->claimed_bytes = retained_bytes (queue.records.front ());
-    claim->record_bytes.push_back (claim->claimed_bytes);
-    claim->_settled = std::make_unique<std::atomic_bool[]> (1);
+    claim->record_bytes = {&claim->claimed_bytes, 1};
     claim->_remaining.store (1, std::memory_order_relaxed);
     claim->_mailbox = _state;
     // No new payload storage: splice the existing node. Later head claims cannot
@@ -311,14 +311,14 @@ service_mailbox_t::claim_owner_locked (domain_t &source,
     claim->owner = owner;
     claim->domain = domain_value;
     const auto limit = std::min (message_budget, queue.records.size ());
-    claim->records.reserve (limit);
-    claim->record_bytes.reserve (limit);
+    claim->_records.reserve (limit);
+    claim->_record_bytes.reserve (limit);
     // The claim stays the front prefix of the FIFO; list references survive push_back.
     for (auto &slot : queue.records) {
-        if (claim->records.size () == limit)
+        if (claim->_records.size () == limit)
             break;
         const auto next_bytes = retained_bytes (slot);
-        if (!claim->records.empty ()
+        if (!claim->_records.empty ()
             && (claim->claimed_bytes >= byte_budget
                 || next_bytes > byte_budget - claim->claimed_bytes)) {
             break;
@@ -327,12 +327,15 @@ service_mailbox_t::claim_owner_locked (domain_t &source,
             break;
         }
         claim->claimed_bytes += next_bytes;
-        claim->record_bytes.push_back (next_bytes);
-        claim->records.push_back (&slot);
+        claim->_record_bytes.push_back (next_bytes);
+        claim->_records.push_back (&slot);
     }
+    claim->records = claim->_records;
+    claim->record_bytes = claim->_record_bytes;
     claim->claimed_messages = claim->records.size ();
     claim->_mailbox = _state;
-    claim->_settled = std::make_unique<std::atomic_bool[]> (claim->claimed_messages);
+    claim->_settled_storage = std::make_unique<std::atomic_bool[]> (claim->claimed_messages);
+    claim->_settled = {claim->_settled_storage.get (), claim->claimed_messages};
     claim->_remaining.store (claim->claimed_messages, std::memory_order_relaxed);
     // Each slot holds its own credit; whichever take moves the original out holds it.
     for (std::size_t index = 0; index != claim->claimed_messages; ++index)
