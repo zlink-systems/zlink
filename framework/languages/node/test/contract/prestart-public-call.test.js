@@ -135,7 +135,8 @@ test('DI call admission is fixed before startup and hosted bootstrap can use a p
   }
 });
 
-test('every messaging call prepared before startup reaches its collaborator after runtime start', async t => {
+// The host owns real lifecycle admission; collaborators isolate messaging from peer discovery.
+function stubFixture() {
   const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
   const { ZLinkSubmitStatus } = require('../../packages/framework/dist/runtime/messaging/submission-result');
   const { ZLinkSpotSerialTurnExecutor } = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
@@ -147,7 +148,6 @@ test('every messaging call prepared before startup reaches its collaborator afte
     mesh.channel('events').client();
     builder.addFanoutChannel('fanout').enablePublisher('tcp://127.0.0.1:*').routingId('fanout');
   });
-  // The host owns real lifecycle admission; collaborators isolate messaging from peer discovery.
   const host = new framework.ZLinkFrameworkRuntimeHost({ registration: framework.createFrameworkRegistration() });
   const reply = { value: 'pong' };
   let submissions = 0;
@@ -181,28 +181,69 @@ test('every messaging call prepared before startup reaches its collaborator afte
       addressTransport: { sendToSpotAddress: send, requestToSpotAddress: async () => { submissions++; return reply; } }
     })
   };
+  return { host, clients, reply, submissions: () => submissions };
+}
+
+test('every messaging call prepared before startup reaches its collaborator after runtime start', async t => {
+  const { host, clients, reply, submissions: submitted } = stubFixture();
   const prepared = Object.entries(cases).map(([name, createCall]) => [name, createCall(clients)]);
   const rejected = Object.values(cases).map(createCall =>
     Promise.resolve(createCall(clients).submit()).then(value => ({ value }), error => ({ error })));
-  assert.equal(submissions, 0);
+  assert.equal(submitted(), 0);
   try {
     await host.start();
     assert.equal(host.isStarted, true);
     for (const result of await Promise.all(rejected)) {
       assert.equal(result.error?.kind, framework.ZLinkFrameworkErrorKind.InvalidOperation);
     }
-    assert.equal(submissions, 0);
+    assert.equal(submitted(), 0);
     const admission = t.mock.method(host.admission, 'requireCall');
     for (const [name, call] of prepared) {
       await t.test(name, async () => {
-        const before = submissions;
+        const before = submitted();
         const admissions = admission.mock.callCount();
         const result = await call.submit();
         assert.equal(admission.mock.callCount(), admissions + 1);
-        assert.equal(submissions, before + 1);
+        assert.equal(submitted(), before + 1);
         if (name.toLowerCase().includes('request')) assert.deepEqual(result, reply);
       });
     }
+  } finally {
+    await host.stop();
+  }
+});
+
+test('a stopped runtime ends every public call as shutting down, with or without a mesh', async () => {
+  const { host, clients, submissions } = stubFixture();
+  await host.start();
+  await host.stop();
+  assert.equal(host.isStarted, false);
+  for (const [name, createCall] of Object.entries(cases)) {
+    const result = await Promise.resolve()
+      .then(() => createCall(clients).submit())
+      .then(value => ({ value }), error => ({ error }));
+    assert.equal(result.error?.kind, framework.ZLinkFrameworkErrorKind.ShuttingDown, name);
+  }
+  assert.equal(submissions(), 0);
+});
+
+test('a prestart Spot call reports InvalidOperation before its configuration and is not consumed', async () => {
+  const { host, clients, submissions } = stubFixture();
+  const misconfigured = clients.spot.sendToSpot('spot', new Ping()).inMesh('mesh');
+  await assert.rejects(async () => misconfigured.submit(), error =>
+    error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation);
+  const send = clients.spot.sendToSpot('spot', new Ping());
+  const request = clients.spot.requestToSpot('spot', new Ping());
+  await assert.rejects(async () => send.submit(), error =>
+    error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation);
+  await assert.rejects(async () => request.submit(), error =>
+    error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation);
+  try {
+    await host.start();
+    await assert.rejects(async () => misconfigured.submit(), framework.ZLinkConfigurationException);
+    await send.submit();
+    await request.submit();
+    assert.equal(submissions(), 2);
   } finally {
     await host.stop();
   }

@@ -400,7 +400,15 @@ export class ZLinkFrameworkRuntimeHost
     this.admission = (
       factories?.createAdmissionGate ?? ((ownerOpen) => new ZLinkRuntimeAdmissionGate(ownerOpen))
     )(() => this.ownerAdmissionOpen());
-    this.admission.setRuntimeStarted(() => this.executionState !== undefined);
+    // Spec 06 §7 and §13: a runtime that has not started rejects public calls with
+    // InvalidOperation; one that stopped rejects them as shutting down.
+    this.admission.setRuntimeRefusal(() =>
+      this.executionState !== undefined
+        ? undefined
+        : this.runtimeState === ZLinkFrameworkRuntimeState.Preparing
+          ? ZLinkFrameworkInternalErrorKind.InvalidOperation
+          : ZLinkFrameworkInternalErrorKind.RuntimeShutdown
+    );
     this.admission.setExecutionRuntime(() => this.locationOwner.currentRuntime);
     this.backendAdapterFactory = resolveBackendAdapterFactory(internalOptions);
     this.lifecycleSink = options.lifecycleSink;

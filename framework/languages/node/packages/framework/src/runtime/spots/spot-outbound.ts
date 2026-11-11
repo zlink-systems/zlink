@@ -302,8 +302,7 @@ function createAddressedSpotSendCall(
       return this;
     },
     async submit(): Promise<void> {
-      markSubmitted(options);
-      admission?.requireCall();
+      markSubmitted(options, admission);
       const pending = startRequestOnSerial(serial, () => ({
         pending: transport.sendToSpotAddress(
           spotId,
@@ -331,7 +330,6 @@ function createAddressedSpotRequestCall(
 ): ZLinkSpotRequestCall {
   const options = newAddressCallOptions();
   const begin = <TReply>(signal?: AbortSignal, onAdmitted?: () => void) => {
-    admission?.requireCall();
     return startRequestOnSerial<TReply>(serial, () => ({
       pending: transport.requestToSpotAddress<TReply>(spotId, request, {
         ...freezeAddressCallOptions(options, sourceSpotProvider?.()),
@@ -378,17 +376,18 @@ function createAddressedSpotRequestCall(
       return this;
     },
     submit<TReply>(signal?: AbortSignal) {
-      markSubmitted(options);
       rejectSameSpotAsyncRequest(serial, spotId, 'async');
       return createZLinkRequest(
-        (onAdmitted) =>
-          prepareZLinkRequestReply(begin<TReply>(signal, onAdmitted), identityRequestReply),
+        (onAdmitted) => {
+          markSubmitted(options, admission);
+          return prepareZLinkRequestReply(begin<TReply>(signal, onAdmitted), identityRequestReply);
+        },
         (pending) => (serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending))
       );
     },
     yield<TReply>(signal?: AbortSignal) {
       const turn = requireZLinkYieldTurn();
-      markSubmitted(options);
+      markSubmitted(options, admission);
       rejectSameSpotAsyncRequest(serial, spotId, 'yield');
       const pending = begin<TReply>(signal);
       return turn.yieldFrameworkPromise(pending);
@@ -434,10 +433,18 @@ function addMetadata(
   }
 }
 
-function markSubmitted(options: MutableAddressCallOptions): void {
+/**
+ * Same terminal order as the channel calls: a submitted call is refused first, then the host
+ * lifecycle, then the call configuration. A refused call is not consumed.
+ */
+function markSubmitted(
+  options: MutableAddressCallOptions,
+  admission: ZLinkRuntimeAdmissionGate | undefined
+): void {
   if (options.submitted) {
     throwAlreadySubmitted('Spot call');
   }
+  admission?.requireCall();
   if (
     !options.instanceSpot &&
     (options.instanceSpotType !== undefined || options.initialMeshName !== undefined)
