@@ -400,6 +400,7 @@ export class ZLinkFrameworkRuntimeHost
     this.admission = (
       factories?.createAdmissionGate ?? ((ownerOpen) => new ZLinkRuntimeAdmissionGate(ownerOpen))
     )(() => this.ownerAdmissionOpen());
+    this.admission.setRuntimeStarted(() => this.executionState !== undefined);
     this.admission.setExecutionRuntime(() => this.locationOwner.currentRuntime);
     this.backendAdapterFactory = resolveBackendAdapterFactory(internalOptions);
     this.lifecycleSink = options.lifecycleSink;

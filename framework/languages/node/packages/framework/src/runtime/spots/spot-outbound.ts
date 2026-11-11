@@ -1,3 +1,4 @@
+import type { ZLinkRuntimeAdmissionGate } from '../admission';
 import type { PendingOperation, OperationObserver } from '../foundation/operation-registry';
 import {
   createZLinkRequest,
@@ -45,6 +46,7 @@ import type { ZLinkSpotRouteTarget } from './spot-routing-internal';
 import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 
 export interface DefaultZLinkSpotOutboundOptions {
+  readonly admission?: ZLinkRuntimeAdmissionGate;
   readonly serial: ZLinkSpotSerialTurnExecutor;
   readonly channelClient?: ZLinkChannelClient;
   readonly spotPublisherClient?: ZLinkSpotPublisherClient;
@@ -65,7 +67,7 @@ export class DefaultZLinkSpotOutbound implements ZLinkSpotOutbound {
   private readonly meshName: string | undefined;
   private readonly addressTransport: ZLinkSpotAddressTransport | undefined;
 
-  constructor(options: DefaultZLinkSpotOutboundOptions) {
+  constructor(private readonly options: DefaultZLinkSpotOutboundOptions) {
     this.serial = options.serial;
     this.channelClient = options.channelClient;
     this.spotPublisherClient = options.spotPublisherClient;
@@ -87,7 +89,8 @@ export class DefaultZLinkSpotOutbound implements ZLinkSpotOutbound {
         this.requireAddressTransport(),
         spot,
         message,
-        this.sourceSpotProvider
+        this.sourceSpotProvider,
+        this.options.admission
       );
     }
     return wrapRoutedSpotSendCall(
@@ -113,7 +116,8 @@ export class DefaultZLinkSpotOutbound implements ZLinkSpotOutbound {
         this.requireAddressTransport(),
         spot,
         request,
-        this.sourceSpotProvider
+        this.sourceSpotProvider,
+        this.options.admission
       );
     }
     return wrapRoutedSpotRequestCall(
@@ -267,7 +271,8 @@ function createAddressedSpotSendCall(
   transport: ZLinkSpotAddressTransport,
   spotId: RoutingId,
   message: unknown,
-  sourceSpotProvider?: () => ZLinkBackendSpot | undefined
+  sourceSpotProvider?: () => ZLinkBackendSpot | undefined,
+  admission?: ZLinkRuntimeAdmissionGate
 ): ZLinkSpotSendCall {
   const options = newAddressCallOptions();
   return {
@@ -298,6 +303,7 @@ function createAddressedSpotSendCall(
     },
     async submit(): Promise<void> {
       markSubmitted(options);
+      admission?.requireCall();
       const pending = startRequestOnSerial(serial, () => ({
         pending: transport.sendToSpotAddress(
           spotId,
@@ -320,10 +326,12 @@ function createAddressedSpotRequestCall(
   transport: ZLinkSpotAddressTransport,
   spotId: RoutingId,
   request: unknown,
-  sourceSpotProvider?: () => ZLinkBackendSpot | undefined
+  sourceSpotProvider?: () => ZLinkBackendSpot | undefined,
+  admission?: ZLinkRuntimeAdmissionGate
 ): ZLinkSpotRequestCall {
   const options = newAddressCallOptions();
   const begin = <TReply>(signal?: AbortSignal, onAdmitted?: () => void) => {
+    admission?.requireCall();
     return startRequestOnSerial<TReply>(serial, () => ({
       pending: transport.requestToSpotAddress<TReply>(spotId, request, {
         ...freezeAddressCallOptions(options, sourceSpotProvider?.()),

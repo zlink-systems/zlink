@@ -30,6 +30,21 @@ export function shouldCompactBackingArray(head: number, length: number): boolean
 }
 
 export class ZLinkRuntimeAdmissionGate {
+  private runtimeStarted?: () => boolean;
+
+  setRuntimeStarted(provider: () => boolean): void {
+    this.runtimeStarted = provider;
+  }
+
+  /** Samples host lifecycle once at public call admission, before any deferred work. */
+  requireCall(): void {
+    if (this.runtimeStarted?.() !== false) return;
+    throw createInternalFrameworkException(
+      this.firstSealedReason(ZLinkFrameworkInternalErrorKind.InvalidOperation),
+      'Public call requires a started Framework runtime.'
+    );
+  }
+
   private readonly meshes = new Map<string, ZLinkMeshAdmissionState>();
 
   /**
@@ -233,6 +248,7 @@ export class ZLinkRuntimeAdmissionGate {
   }
 
   requireRequest(operation: string, meshName?: string): void {
+    this.requireCall();
     if (meshName === undefined) {
       if (this.acceptsNewWork) return;
     } else if (this.accepts(meshName)) {
@@ -245,6 +261,7 @@ export class ZLinkRuntimeAdmissionGate {
   }
 
   requireActorCreate(actorId: string, meshName?: string): void {
+    this.requireCall();
     if (meshName === undefined) {
       if (this.acceptsNewWork) return;
     } else if (this.accepts(meshName)) {
@@ -269,11 +286,13 @@ export class ZLinkRuntimeAdmissionGate {
     );
   }
 
-  private firstSealedReason(): ZLinkFrameworkInternalErrorKind {
+  private firstSealedReason(
+    fallback = ZLinkFrameworkInternalErrorKind.RuntimeShutdown
+  ): ZLinkFrameworkInternalErrorKind {
     for (const state of this.meshes.values()) {
       if (state.sealed) return state.sealedReason;
     }
-    return ZLinkFrameworkInternalErrorKind.RuntimeShutdown;
+    return fallback;
   }
 }
 
