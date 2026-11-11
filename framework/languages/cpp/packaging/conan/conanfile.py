@@ -62,7 +62,7 @@ class ZlinkFrameworkConan(ConanFile):
                 setattr(self.options["grpc/*"], plugin + "_plugin", False)
 
     def requirements(self):
-        self.requires("zlink-cpp/1.25.0", transitive_headers=True,
+        self.requires("zlink-cpp/1.24.0", transitive_headers=True,
                       transitive_libs=True)
         for dependency in ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS:
             self.requires(dependency, transitive_headers=True, transitive_libs=True)
