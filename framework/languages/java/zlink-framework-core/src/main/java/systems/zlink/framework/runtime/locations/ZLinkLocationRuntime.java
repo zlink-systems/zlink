@@ -1644,6 +1644,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
 
     private static boolean unconfirmedRecovery(Throwable failure) {
         Throwable error = unwrap(failure);
+        if (error instanceof ZLinkLocationStoreFailure) return true;
         if (error instanceof ZLinkFrameworkException frameworkFailure)
             return frameworkFailure.kind() == ZLinkFrameworkErrorKind.UNAVAILABLE;
         return error instanceof TimeoutException
@@ -1651,8 +1652,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                 || error instanceof RecoveryUnconfirmedException
                 || error
                         instanceof
-                        ZLinkObjectServerDescriptorPublisher.UnconfirmedPublicationException
-                || error instanceof ZLinkLocationStoreFailure;
+                        ZLinkObjectServerDescriptorPublisher.UnconfirmedPublicationException;
     }
 
     private static ZLinkAuthoritySnapshot snapshot(ZLinkAuthorityStored stored) {
@@ -2414,10 +2414,13 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         }
     }
 
-    private static final class OwnerLeaseAdmissionClosedException extends IllegalStateException
+    /** The runtime takes no new admission once the owner lease deadline passes (ShuttingDown). */
+    private static final class OwnerLeaseAdmissionClosedException extends ZLinkFrameworkException
             implements ZLinkLocationStoreFailure {
         private OwnerLeaseAdmissionClosedException() {
-            super("The owner lease admission deadline has expired.");
+            super(
+                    ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                    "The owner lease admission deadline has expired.");
         }
     }
 

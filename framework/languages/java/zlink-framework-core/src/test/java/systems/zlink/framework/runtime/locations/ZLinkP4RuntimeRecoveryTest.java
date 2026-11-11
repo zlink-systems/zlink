@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.RepeatedTest;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locationprovider.*;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
@@ -653,13 +654,13 @@ final class ZLinkP4RuntimeRecoveryTest {
             var renewal = f.runtime.renewOwnerLeaseOnce();
             f.awaitWrites(2);
             assertEquals(2, f.writes);
-            assertThrows(IllegalStateException.class, () -> a.check(true));
-            assertThrows(IllegalStateException.class, () -> b.check(true));
+            assertThrows(ZLinkFrameworkException.class, () -> a.check(true));
+            assertThrows(ZLinkFrameworkException.class, () -> b.check(true));
             assertEquals(0, appliedB.get(), "CAS without descriptor confirmation cannot reopen");
             f.publication.complete(null);
             f.awaitCondition("b to resume", () -> appliedB.get() == 1 && !b.paused());
             b.check(true);
-            assertThrows(IllegalStateException.class, () -> a.check(true));
+            assertThrows(ZLinkFrameworkException.class, () -> a.check(true));
             f.heldWrites.get(key).complete(f.awaitSubmitted(key));
             assertTrue(await(renewal));
             a.check(true);
