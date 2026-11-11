@@ -248,6 +248,10 @@ jobs:
           fi
           echo "ZLINK_LIBRARY_PATH=${library}" >> "${GITHUB_ENV}"
 
+      - name: Verify the packaged public contract
+        if: ${{ matrix.target.name == 'linux-x64' }}
+        run: bash framework/languages/dotnet/scripts/verify_packaged_contract.sh
+
       - name: Restore framework solution
         run: dotnet restore ${{ env.FRAMEWORK_SOLUTION }}
 
