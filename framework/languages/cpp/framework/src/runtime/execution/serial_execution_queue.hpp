@@ -271,20 +271,25 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     using execution_operation_t =
       std::pair<execution_status_t, std::chrono::steady_clock::time_point>;
     void set_execution_operation (task_t<execution_operation_t> operation);
+    void execution_operation_changed ();
     std::optional<task_t<execution_operation_t>> pending_execution_operation () const;
     using ready_confirmation_t = std::function<void (std::chrono::steady_clock::time_point)>;
     ready_confirmation_t ready_confirmation () const;
     void confirm_execution_ready (std::chrono::steady_clock::time_point at);
     void invalidate_execution_ready ();
     std::optional<std::chrono::steady_clock::time_point> execution_ready_at () const;
+    // Keeps the last confirmed Ready time while a verification is in flight.
+    std::optional<std::chrono::steady_clock::time_point> confirmed_execution_ready_at () const;
     execution_status_t execution_status () const;
     bool fence_execution ();
     bool execution_allowed () const;
+    bool execution_paused () const;
     // Installs the SpotWide owner before an Actor mailbox accepts work.
     void attach_spot_gate (std::shared_ptr<serial_execution_queue_t> gate);
 
   private:
     friend class serial_turn_handle_impl_t;
+    friend struct serial_execution_queue_test_access_t;
 
     struct new_handler_t
     {
@@ -420,7 +425,6 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     void close (execution_status_t status);
     void close_locked (execution_status_t status = execution_status_t::stopped);
     void install_execution_policy_locked (execution_admission_t policy);
-    void execution_operation_changed ();
     void drain_loop ();
     void execute_item (work_item_t item);
     void complete_one (std::string name,
@@ -513,6 +517,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
           std::make_shared<const unsigned char> (0);
         std::atomic<std::chrono::steady_clock::rep> ready_at{
           std::chrono::steady_clock::time_point::min ().time_since_epoch ().count ()};
+        std::atomic<std::chrono::steady_clock::rep> confirmed_ready_at{unready};
     };
     // Published entries remain valid until queue destruction, including during replacement.
     // Ready callbacks independently retain the entry they were issued for.

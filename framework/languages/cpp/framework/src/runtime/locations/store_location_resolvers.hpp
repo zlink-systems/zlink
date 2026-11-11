@@ -138,27 +138,29 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         }
         if (const auto authority =
               co_await read_ready_authority (false, spot_id, instance_intent)) {
-            const auto projected_id = decode_spot_id (authority->payload);
+            const auto &snapshot = authority->snapshot;
+            const auto projected_id = decode_spot_id (snapshot.payload);
             if (!projected_id || *projected_id != spot_id)
                 co_return std::optional<spot_address_t>{};
-            auto address = spot_address_t{authority->allocation.target.mesh_name,
+            auto address = spot_address_t{snapshot.allocation.target.mesh_name,
                                           zlink::routing_id_t::from (std::string (
-                                            authority->allocation.target.node_rid.value ())),
-                                          *projected_id, authority->object_generation};
-            address.node_generation = authority->allocation.target.node_lifecycle_generation;
-            apply_authority (address, *authority);
-            if (authority->authority_owner_generation == 0) {
-                address.stable_type = authority->allocation.stable_type;
+                                            snapshot.allocation.target.node_rid.value ())),
+                                          *projected_id, snapshot.object_generation};
+            address.node_generation = snapshot.allocation.target.node_lifecycle_generation;
+            apply_authority (address, snapshot);
+            if (snapshot.authority_owner_generation == 0) {
+                address.stable_type = snapshot.allocation.stable_type;
                 co_return std::optional<spot_address_t>{std::move (address)};
             }
             // Closing retains its exact owner route, but is never a Ready cache entry.
-            const auto ready_user = decode_ready_user_spot_authority_payload (authority->payload);
+            const auto ready_user = decode_ready_user_spot_authority_payload (snapshot.payload);
             const auto instance = ready_user
                                     ? std::optional<instance_spot_authority_payload_t>{}
-                                    : decode_instance_spot_authority_payload (authority->payload);
+                                    : decode_instance_spot_authority_payload (snapshot.payload);
             if (ready_user
                 || (instance && instance->state == instance_spot_authority_state_t::ready))
-                co_await cache_ready_route (_spot_routes, spot_id, address);
+                co_await cache_ready_route (_spot_routes, spot_id, address,
+                                            authority->owner_admission_deadline);
             co_return std::optional<spot_address_t>{std::move (address)};
         }
         if (!mesh_name.empty ()) {
@@ -229,10 +231,12 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         if (auto cached = cached_route (_actor_routes, actor_id)) {
             co_return std::optional<spot_address_t>{std::move (*cached)};
         }
-        auto address = co_await read_actor_address (actor_id);
-        if (address)
-            co_await cache_ready_route (_actor_routes, actor_id, *address);
-        co_return address;
+        auto resolved = co_await read_actor_address (actor_id);
+        if (!resolved)
+            co_return std::optional<spot_address_t>{};
+        co_await cache_ready_route (_actor_routes, actor_id, resolved->address,
+                                    resolved->owner_admission_deadline);
+        co_return std::optional<spot_address_t>{std::move (resolved->address)};
     }
 
     task_t<std::optional<spot_address_t>>
@@ -247,11 +251,12 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
                    && address.owner.lease_generation > 0;
         };
         const auto actor_id = std::string (actor.actor_id ().value ());
-        auto address = co_await read_actor_address (actor_id);
-        if (!address || !matches_actor (*address))
+        auto resolved = co_await read_actor_address (actor_id);
+        if (!resolved || !matches_actor (resolved->address))
             co_return std::nullopt;
-        co_await cache_ready_route (_actor_routes, actor_id, *address);
-        co_return address;
+        co_await cache_ready_route (_actor_routes, actor_id, resolved->address,
+                                    resolved->owner_admission_deadline);
+        co_return std::optional<spot_address_t>{std::move (resolved->address)};
     }
 
     void invalidate_actor_address (std::string_view actor_id) override
@@ -310,23 +315,37 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         ++_store_recovery_generation;
     }
 
-    task_t<std::optional<spot_address_t>> read_actor_address (std::string actor_id)
+    struct ready_authority_t
+    {
+        authority_snapshot_t snapshot;
+        std::optional<std::chrono::steady_clock::time_point> owner_admission_deadline;
+    };
+
+    struct resolved_actor_address_t
+    {
+        spot_address_t address;
+        std::optional<std::chrono::steady_clock::time_point> owner_admission_deadline;
+    };
+
+    task_t<std::optional<resolved_actor_address_t>> read_actor_address (std::string actor_id)
     {
         const auto authority = co_await read_ready_authority (true, actor_id);
         if (!authority) {
-            co_return std::optional<spot_address_t>{};
+            co_return std::optional<resolved_actor_address_t>{};
         }
+        const auto &snapshot = authority->snapshot;
         const auto projection =
-          decode_actor_authority_payload (authority->payload, authority->object_generation);
+          decode_actor_authority_payload (snapshot.payload, snapshot.object_generation);
         if (!projection || projection->actor.actor_id ().value () != actor_id)
-            co_return std::optional<spot_address_t>{};
+            co_return std::optional<resolved_actor_address_t>{};
         auto address = spot_address_t{
-          authority->allocation.target.mesh_name,
-          zlink::routing_id_t::from (std::string (authority->allocation.target.node_rid.value ())),
+          snapshot.allocation.target.mesh_name,
+          zlink::routing_id_t::from (std::string (snapshot.allocation.target.node_rid.value ())),
           projection->spot_id, projection->spot_generation};
-        address.node_generation = authority->allocation.target.node_lifecycle_generation;
-        apply_authority (address, *authority);
-        co_return std::optional<spot_address_t>{std::move (address)};
+        address.node_generation = snapshot.allocation.target.node_lifecycle_generation;
+        apply_authority (address, snapshot);
+        co_return std::optional<resolved_actor_address_t>{
+          resolved_actor_address_t{std::move (address), authority->owner_admission_deadline}};
     }
 
     struct cached_address_t
@@ -358,40 +377,40 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
           .get ();
     }
 
-    task_t<void> cache_ready_route (std::map<std::string, cached_address_t> &routes,
-                                    std::string key,
-                                    spot_address_t address)
+    task_t<void> cache_ready_route (
+      std::map<std::string, cached_address_t> &routes,
+      std::string key,
+      spot_address_t address,
+      std::optional<std::chrono::steady_clock::time_point> owner_admission_deadline)
     {
         const auto max_age = _options.route_cache_max_age;
         if (max_age <= std::chrono::milliseconds::zero ()) {
             co_return;
         }
-        const auto measured_at = std::chrono::steady_clock::now ();
+        const auto now = std::chrono::steady_clock::now ();
         if (address.store_version.empty () || address.object_generation == 0
             || address.authority_owner_generation == 0 || address.owner.owner_id.empty ()
             || address.owner.lease_generation <= 0) {
             co_return;
         }
-        const auto lease_lifetime = co_await _store->owner_admission_lifetime (address.owner);
-        if (!lease_lifetime) {
+        if (!owner_admission_deadline) {
             co_return;
         }
-        const auto lifetime =
-          std::min (std::chrono::duration_cast<std::chrono::steady_clock::duration> (max_age),
-                    *lease_lifetime);
-        if (lifetime <= std::chrono::steady_clock::duration::zero ()) {
+        const auto expires_at =
+          std::min (now + std::chrono::duration_cast<std::chrono::steady_clock::duration> (max_age),
+                    *owner_admission_deadline);
+        if (expires_at <= now) {
             co_return;
         }
         _lane
           .run ([&] {
               routes.insert_or_assign (
-                std::move (key),
-                cached_address_t{address, measured_at + lifetime, _store_recovery_generation});
+                std::move (key), cached_address_t{address, expires_at, _store_recovery_generation});
           })
           .get ();
     }
 
-    task_t<std::optional<authority_snapshot_t>>
+    task_t<std::optional<ready_authority_t>>
     read_ready_authority (bool actor, std::string object_id, bool instance_intent = false)
     {
         const auto key = actor ? actor_authority_key (object_id) : spot_authority_key (object_id);
@@ -407,7 +426,14 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         }
         if (!actor)
             stateful::authority_relocation_payload_codec_t::project_application_payload (*snapshot);
-        if (!(co_await _store->owner_admission_lifetime (snapshot->owner))) {
+        const auto owner_admission_lifetime =
+          co_await _store->owner_admission_lifetime (snapshot->owner);
+        const auto owner_admission_deadline =
+          owner_admission_lifetime
+            ? std::optional<std::chrono::steady_clock::time_point>{std::chrono::steady_clock::now ()
+                                                                   + *owner_admission_lifetime}
+            : std::nullopt;
+        if (!owner_admission_lifetime) {
             const auto instance =
               instance_intent && !actor && expected_kind == placement_object_kind_t::instance_spot
                 ? decode_instance_spot_authority_payload (snapshot->payload)
@@ -417,12 +443,12 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
                 snapshot->object_generation = 0;
                 snapshot->authority_owner_generation = 0;
                 snapshot->owner = {};
-                co_return std::move (*snapshot);
+                co_return ready_authority_t{std::move (*snapshot), std::nullopt};
             }
             throw framework_exception_t (framework_error_kind_t::unavailable,
                                          "Location authority owner lease is unavailable");
         }
-        co_return std::move (*snapshot);
+        co_return ready_authority_t{std::move (*snapshot), owner_admission_deadline};
     }
 
     static void apply_authority (spot_address_t &address, const authority_snapshot_t &authority)

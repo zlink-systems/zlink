@@ -2424,10 +2424,17 @@ task_t<void> spot_context_state_t::complete_preparation (bool ready)
           });
 }
 
-bool spot_context_state_t::admit_timer_fire ()
+bool spot_context_state_t::admit_timer_fire (
+  const std::shared_ptr<runtime::serial_execution_queue_t> &queue)
 {
-    return state_sync (
-      [this] { return channel_runtime && channel_runtime->serializers && admit_core (true); });
+    return state_sync ([this, &queue] {
+        const auto &execution = queue ? queue : serial_queue;
+        return channel_runtime && channel_runtime->serializers
+               && (!execution
+                   || execution->execution_status ()
+                        == runtime::serial_execution_queue_t::execution_status_t::allowed)
+               && admit_core (true);
+    });
 }
 
 void spot_context_state_t::enter_callback ()
@@ -5744,7 +5751,9 @@ task_t<std::optional<zlink::message_t>> spot_manager_t::relay_actor_packet (
 
 spot_publisher_client_t::spot_publisher_client_t (spot_manager_t manager,
                                                   serializer_registry_t &serializers) :
-    _manager (std::move (manager)), _serializers (&serializers)
+    _manager (std::move (manager)),
+    _channel_runtime (_manager._state->channel_runtime),
+    _serializers (&serializers)
 {
 }
 
@@ -5764,42 +5773,50 @@ publish_call_t spot_publisher_client_t::publish_raw (std::string channel_name,
           framework_error_kind_t::protocol_error, "logical multicast topic must not be empty"));
     }
 
-    auto native_node =
-      _manager._state->lane.run_sync ([&] { return _manager._state->native_node.lock (); });
-    if (!native_node) {
-        return publish_call_t (result_t<void>::failure (
-          framework_error_kind_t::unavailable, "logical multicast route mesh is not connected"));
-    }
-
     const auto diagnostics_mode = detail::message_flow_tracer_t (_manager._state->dispatch).mode ();
     auto frame = encode_spot_publish_frame (channel_name, packet_name, topic,
                                             std::move (content_type), payload);
-    return publish_call_t ([native_node = std::move (native_node), state = _manager._state,
-                            channel_name = std::move (channel_name), topic = std::move (topic),
-                            frame = std::move (frame), diagnostics_mode] (
-                             const publish_call_t::metadata_map_t &metadata) -> task_t<void> {
-        const auto capture = detail::dispatch_error_reporter_t (state->dispatch).enabled ();
-        auto flow_scope = runtime::flow_context_t::enter_current_or_create (
-          flow_origin_t::application, diagnostics_mode);
-        std::vector<zlink::message_t> parts{frame};
-        auto publisher = native_node->entry_spot ();
-        auto encoded_metadata = detail::mesh_metadata_codec_t::encode (metadata);
-        if (capture) {
-            const auto mesh_name = state->lane.run_sync ([&] { return state->snapshot.name; });
-            co_await publisher.publish (
-              channel_name, topic, std::move (parts), std::move (encoded_metadata),
-              [state, channel_name, mesh_name, topic] (const zlink::routing_id_t &target,
-                                                       zlink::submit_result_t submitted) {
-                  detail::report_logical_multicast_failure (
-                    state, channel_name, mesh_name, topic, target.to_string (),
-                    detail::dispatch_reason_from_submit_result (submitted));
-              });
-        } else {
-            co_await publisher.publish (channel_name, topic, std::move (parts),
-                                        std::move (encoded_metadata));
+    auto call =
+      publish_call_t ([state = _manager._state, channel_name = std::move (channel_name),
+                       topic = std::move (topic), frame = std::move (frame), diagnostics_mode] (
+                        const publish_call_t::metadata_map_t &metadata) -> task_t<void> {
+          auto native_node = state->lane.run_sync ([&] { return state->native_node.lock (); });
+          if (!native_node)
+              throw framework_exception_t (framework_error_kind_t::unavailable,
+                                           "logical multicast route mesh is not connected");
+          const auto capture = detail::dispatch_error_reporter_t (state->dispatch).enabled ();
+          auto flow_scope = runtime::flow_context_t::enter_current_or_create (
+            flow_origin_t::application, diagnostics_mode);
+          std::vector<zlink::message_t> parts{frame};
+          auto publisher = native_node->entry_spot ();
+          auto encoded_metadata = detail::mesh_metadata_codec_t::encode (metadata);
+          if (capture) {
+              const auto mesh_name = state->lane.run_sync ([&] { return state->snapshot.name; });
+              co_await publisher.publish (
+                channel_name, topic, std::move (parts), std::move (encoded_metadata),
+                [state, channel_name, mesh_name, topic] (const zlink::routing_id_t &target,
+                                                         zlink::submit_result_t submitted) {
+                    detail::report_logical_multicast_failure (
+                      state, channel_name, mesh_name, topic, target.to_string (),
+                      detail::dispatch_reason_from_submit_result (submitted));
+                });
+          } else {
+              co_await publisher.publish (channel_name, topic, std::move (parts),
+                                          std::move (encoded_metadata));
+          }
+          co_return;
+      });
+    call._preflight = [admission = _channel_runtime] {
+        try {
+            if (admission)
+                detail::channel_runtime_t (admission).admit_outbound ();
+            return result_t<void>::success ();
         }
-        co_return;
-    });
+        catch (...) {
+            return detail::current_exception_result<void> ();
+        }
+    };
+    return call;
 }
 
 } // namespace zlink::framework
@@ -15162,6 +15179,29 @@ void spot_node_runtime_t::observe_location_authority (authority_key_t key,
     });
 }
 
+void spot_node_runtime_t::resume_location_execution ()
+{
+    const auto state = _state;
+    state->lane.try_post ([state] {
+        for (const auto &[_, context] : state->spot_contexts_by_id) {
+            const auto spot = context._state;
+            if (!spot || !spot->spot_serial_executor)
+                continue;
+            spot->spot_serial_executor->execution_operation_changed ();
+            for (const auto &timer : spot->timers) {
+                bool pending;
+                {
+                    std::lock_guard lock (timer->mutex);
+                    pending = !timer->disposed && !timer->pending_fire && !timer->running
+                              && timer->pending_fire_count != 0;
+                }
+                if (pending)
+                    timer_runtime_t::post_fire_count (spot, timer, timer->serial_queue, 0);
+            }
+        }
+    });
+}
+
 void spot_node_runtime_t::request_location_execution_discard (
   runtime::serial_execution_queue_t::execution_admission_t allowed)
 {
@@ -15173,8 +15213,11 @@ void spot_node_runtime_t::request_location_execution_discard (
           std::shared_ptr<spot_node_builder_state_t> state,
           std::shared_ptr<std::vector<discarded_spot_t>> spots,
           std::vector<std::pair<actor_ref_t, runtime::serial_execution_queue_t::execution_status_t>>
-            actors)
+            actors,
+          runtime::serial_execution_queue_t::execution_admission_t retained_fence)
         {
+            // Keep the discarded episode's fence until the existing cleanup continuation finishes.
+            (void) retained_fence;
             for (const auto &[actor, status] : actors) {
                 const auto result =
                   co_await spot_node_runtime_t (state).discard_local_actor_async (actor, status);
@@ -15229,6 +15272,7 @@ void spot_node_runtime_t::request_location_execution_discard (
                 if (executor
                     && allowed (*executor->queue ())
                          != runtime::serial_execution_queue_t::execution_status_t::allowed) {
+                    executor->queue ()->cancel_pending (allowed (*executor->queue ()));
                     actors.emplace_back (
                       ::zlink::framework::detail::actor_ref_access_t::make (
                         spot->node_rid, type, id, state->actor_generations.at (key)),
@@ -15240,8 +15284,10 @@ void spot_node_runtime_t::request_location_execution_discard (
             return;
         // Existing Close uses its infrastructure executor outside the owner turn.
         const auto submitted = state->worker_executor->try_submit_internal (
-          [state, spots = std::move (spots), actors = std::move (actors)] () mutable {
-              auto cleanup = cleanup_t::run (state, std::move (spots), std::move (actors));
+          [state, spots = std::move (spots), actors = std::move (actors),
+           allowed = std::move (allowed)] () mutable {
+              auto cleanup =
+                cleanup_t::run (state, std::move (spots), std::move (actors), std::move (allowed));
               detail::observe_task_terminal (cleanup, [state] (const result_t<void> &result) {
                   if (!result)
                       report_spot_close_diagnostic (state, {}, "location_discard_failed",
