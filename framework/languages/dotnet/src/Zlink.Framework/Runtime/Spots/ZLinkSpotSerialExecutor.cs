@@ -95,7 +95,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     private static bool AlwaysDisabled() => false;
 
     private bool IsApplicationStartAllowed(ZLinkSerialWorkItem item) =>
-        (item.Lane != ZLinkSerialWorkLane.Lifecycle || !IsTargetPreparing)
+        item.ExecutionStatus != ZLinkObjectExecutionStatus.Paused
+        && (item.Lane != ZLinkSerialWorkLane.Lifecycle || !IsTargetPreparing)
         && (
             item.Lane != ZLinkSerialWorkLane.Application
             || Volatile.Read(ref _preparation) is not { } preparation

@@ -26,6 +26,8 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
             reporter,
             CancellationToken.None,
             lanePolicy ?? ZLinkExecutionLanePolicy.Default,
+            applicationStartAllowed: static item =>
+                item.ExecutionStatus != ZLinkObjectExecutionStatus.Paused,
             executionAllowed: () => ExecutionAllowed?.Invoke() ?? ZLinkObjectExecutionStatus.Allowed
         );
     }
