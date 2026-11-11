@@ -21,6 +21,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongArray;
@@ -181,15 +182,20 @@ public final class BenchDrivers {
             SourceMetrics source,
             ClientResources resources)
             throws Exception {
+        int streamCount = switch (trigger.pattern()) {
+            case "request-backpressure", "send-saturation" -> trigger.submitConcurrency();
+            case "request-serial", "request-window" -> 1;
+            default -> throw new IllegalArgumentException("unknown pattern " + trigger.pattern());
+        };
         if (!"request-serial".equals(trigger.pattern())
                 && operation instanceof RawStack.RawOperation raw) {
             if ("send-saturation".equals(trigger.pattern())
                     && raw instanceof RawStack.RawSendOperation send) {
-                runRawSendSaturation(trigger, send, headerPhase, source, resources);
-                return trigger.sendConcurrency();
+                runRawSendSaturation(trigger, send, streamCount, headerPhase, source, resources);
+                return streamCount;
             }
-            runRaw(trigger, raw, headerPhase, source, resources);
-            return 1;
+            runRaw(trigger, raw, streamCount, headerPhase, source, resources);
+            return streamCount;
         }
         return switch (trigger.pattern()) {
             case "request-serial" -> {
@@ -201,18 +207,18 @@ public final class BenchDrivers {
                 yield 1;
             }
             case "request-backpressure" -> {
-                runBackpressure(trigger, operation, headerPhase, source, resources);
-                yield 1;
+                runBackpressure(trigger, operation, streamCount, headerPhase, source, resources);
+                yield streamCount;
             }
             case "send-saturation" -> {
                 runWorkers(
-                        trigger.sendConcurrency(),
+                        streamCount,
                         trigger,
                         operation,
                         headerPhase,
                         source,
                         resources);
-                yield trigger.sendConcurrency();
+                yield streamCount;
             }
             default -> throw new IllegalArgumentException("unknown pattern " + trigger.pattern());
         };
@@ -226,84 +232,116 @@ public final class BenchDrivers {
     private void runRaw(
             BenchHttpApplication.Trigger trigger,
             RawStack.RawOperation operation,
+            int count,
             byte phase,
             SourceMetrics source,
             ClientResources resources)
             throws InterruptedException {
-        long deadline = source.activeDeadline;
-        long sequence = 0;
-        long cpuStart = resources.beginSubmit();
-        Set<CompletableFuture<Void>> pending = ConcurrentHashMap.newKeySet();
-        CompletableFuture<Void> admissionPending = null;
-        while (BenchMetricHeader.nowNs() < deadline) {
-            if (admissionPending != null) {
+        List<SourceMetrics> streams = source.createStreams(count);
+        List<Thread> workers = new ArrayList<>(count);
+        AtomicBoolean pollerRunning = new AtomicBoolean(true);
+        AtomicReference<Throwable> pollerFailure = new AtomicReference<>();
+        Thread completionPoller = Thread.ofPlatform().name("bench-completion-poller").start(() -> {
+            while (pollerRunning.get()) {
                 try {
-                    if (!operation.await(
-                            admissionPending,
-                            Duration.ofNanos(
-                                    Math.min(
-                                            COMPLETION_POLL_INTERVAL_NS,
-                                            Math.max(1L, deadline - BenchMetricHeader.nowNs()))))) {
+                    operation.pollCompletions(Duration.ofMillis(20));
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (Throwable error) {
+                    pollerFailure.compareAndSet(null, error);
+                    break;
+                }
+            }
+        });
+        Set<CompletableFuture<Void>> pendingAll = ConcurrentHashMap.newKeySet();
+        for (int index = 0; index < count; index++) {
+            final int stream = index;
+            workers.add(Thread.ofPlatform().name("bench-stream-" + index).start(() -> {
+                SourceMetrics own = streams.get(stream);
+                long deadline = own.activeDeadline;
+                long sequence = 0;
+                long cpuStart = resources.beginSubmit();
+                Set<CompletableFuture<Void>> pending = ConcurrentHashMap.newKeySet();
+                CompletableFuture<Void> admissionPending = null;
+                while (BenchMetricHeader.nowNs() < deadline) {
+                    if (admissionPending != null) {
+                        try {
+                            admissionPending.get(Math.max(1L,
+                                    Math.min(deadline - BenchMetricHeader.nowNs(),
+                                            COMPLETION_POLL_INTERVAL_NS)), TimeUnit.NANOSECONDS);
+                        } catch (ExecutionException failed) {
+                            // The request completion callback owns error accounting.
+                        } catch (TimeoutException stillBlocked) {
+                            continue;
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+                        admissionPending = null;
+                    }
+                    long started = own.begin();
+                    RawStack.RawSubmission submission;
+                    try {
+                        submission = operation.submitRaw(trigger.payloadBytes(), phase,
+                                sequence(stream, sequence++));
+                    } catch (RuntimeException error) {
+                        own.complete(started, error);
                         continue;
                     }
-                } catch (ExecutionException failed) {
-                    // The request's completion callback records the failure.
-                }
-                admissionPending = null;
-            }
-            long started = source.begin();
-            RawStack.RawSubmission submission;
-            try {
-                submission = operation.submitRaw(trigger.payloadBytes(), phase, sequence++);
-            } catch (RuntimeException error) {
-                source.complete(started, error);
-                continue;
-            }
-
-            CompletableFuture<Void> completion = submission.completion();
-            pending.add(completion);
-            completion.whenComplete(
-                    (ignored, error) -> {
-                        source.complete(started, error);
+                    if (submission.result() != SubmitResult.OK
+                            && submission.result() != SubmitResult.BACKPRESSURED) {
+                        own.complete(started, new IllegalStateException(
+                                "raw submit returned " + submission.result()));
+                        continue;
+                    }
+                    CompletableFuture<Void> completion = submission.completion();
+                    pending.add(completion);
+                    pendingAll.add(completion);
+                    completion.whenComplete((ignored, error) -> {
+                        own.complete(started, error);
                         pending.remove(completion);
+                        pendingAll.remove(completion);
                     });
-
-            if (submission.result() == SubmitResult.BACKPRESSURED) {
-                admissionPending = submission.admitted();
-            } else if (submission.result() != SubmitResult.OK) {
-                throw new IllegalStateException("raw submit returned " + submission.result());
-            }
-            try {
-                operation.await(completion, Duration.ZERO);
-            } catch (ExecutionException failed) {
-                // The completion callback records the failed reply.
-            }
+                    if (submission.result() == SubmitResult.BACKPRESSURED) {
+                        admissionPending = submission.admitted();
+                    }
+                }
+                resources.addSubmitCpuNs(ClientResources.currentThreadCpuNs() - cpuStart);
+                List<CompletableFuture<Void>> outstanding = new ArrayList<>(pending);
+                if (admissionPending != null) outstanding.add(admissionPending);
+                if (!outstanding.isEmpty()) {
+                    try {
+                        CompletableFuture.allOf(outstanding.toArray(CompletableFuture[]::new))
+                                .get(options.drainBoundMs, TimeUnit.MILLISECONDS);
+                    } catch (ExecutionException | TimeoutException ignored) {
+                        // Per-operation callbacks own terminal accounting.
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }));
         }
-        resources.addSubmitCpuNs(ClientResources.currentThreadCpuNs() - cpuStart);
-
-        List<CompletableFuture<Void>> outstanding = new ArrayList<>(pending);
-        if (admissionPending != null) {
-            outstanding.add(admissionPending);
-        }
-        CompletableFuture<Void> settled =
-                CompletableFuture.allOf(outstanding.toArray(CompletableFuture[]::new));
-        try {
-            operation.await(settled, Duration.ofMillis(options.drainBoundMs));
-        } catch (ExecutionException ignored) {
-            // Per-operation callbacks own success/error accounting. A drain that
-            // is not done in time is recorded below as abandoned work.
+        for (Thread worker : workers) worker.join();
+        long drainDeadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(options.drainBoundMs);
+        while (!pendingAll.isEmpty() && System.nanoTime() < drainDeadline) Thread.sleep(1);
+        pollerRunning.set(false);
+        completionPoller.join();
+        if (pollerFailure.get() != null) {
+            throw new IllegalStateException("raw completion poller failed", pollerFailure.get());
         }
         source.freezeTerminal();
     }
 
-    /**
-     * Send-saturation uses one logical worker per configured stream. Socket submission and
-     * BACKPRESSURED admission are serialized by one gate; the caller thread owns the completion
-     * poller, as RawBenchTransport.DriveAsync does for the .NET raw row.
-     */
+    private static long sequence(int stream, long ordinal) {
+        return ((long) stream << 56) | (ordinal & 0x00ff_ffff_ffff_ffffL);
+    }
+
+    /** Each send stream submits on its own platform thread and owns its metrics. */
     private void runRawSendSaturation(
             BenchHttpApplication.Trigger trigger,
             RawStack.RawSendOperation operation,
+            int count,
             byte phase,
             SourceMetrics source,
             ClientResources resources)
@@ -311,25 +349,26 @@ public final class BenchDrivers {
         long deadline = source.activeDeadline;
         long drainDeadline =
                 deadline + TimeUnit.MILLISECONDS.toNanos(options.drainBoundMs);
-        long pollerCpuStart = resources.beginSubmit();
-        AtomicLong sequence = new AtomicLong();
-        AtomicInteger remainingWorkers = new AtomicInteger(trigger.sendConcurrency());
+        AtomicInteger remainingWorkers = new AtomicInteger(count);
         CompletableFuture<Void> workersDone = new CompletableFuture<>();
-        Semaphore submissionGate = new Semaphore(1);
         Set<CompletableFuture<Void>> pending = ConcurrentHashMap.newKeySet();
-        List<Thread> workers = new ArrayList<>(trigger.sendConcurrency());
+        List<Thread> workers = new ArrayList<>(count);
+        List<SourceMetrics> streams = source.createStreams(count);
 
-        for (int index = 0; index < trigger.sendConcurrency(); index++) {
+        for (int index = 0; index < count; index++) {
+            final int stream = index;
             Thread worker =
                     Thread.ofPlatform()
                             .name("bench-stream-" + index)
                             .start(
                                     () -> {
+                                        SourceMetrics own = streams.get(stream);
+                                        long ordinal = 0;
                                         long cpuStart = resources.beginSubmit();
                                         try {
                                             while (BenchMetricHeader.nowNs() < deadline) {
-                                                long value = sequence.getAndIncrement();
-                                                long started = source.begin();
+                                                long value = sequence(stream, ordinal++);
+                                                long started = own.begin();
                                                 RawStack.PreparedSend prepared = null;
                                                 try {
                                                     prepared =
@@ -337,77 +376,51 @@ public final class BenchDrivers {
                                                                     trigger.payloadBytes(),
                                                                     phase,
                                                                     value);
-                                                    long remaining =
-                                                            drainDeadline
-                                                                    - BenchMetricHeader.nowNs();
-                                                    if (remaining <= 0
-                                                            || !submissionGate.tryAcquire(
-                                                                    remaining,
-                                                                    TimeUnit.NANOSECONDS)) {
+                                                    if (drainDeadline - BenchMetricHeader.nowNs() <= 0) {
                                                         break;
                                                     }
-                                                    try {
-                                                        if (BenchMetricHeader.nowNs()
-                                                                >= drainDeadline) {
-                                                            break;
-                                                        }
-                                                        RawStack.PreparedSend preparedForSubmit =
-                                                                prepared;
-                                                        prepared = null;
-                                                        RawStack.RawSubmission submission =
-                                                                operation.submitRaw(
-                                                                        preparedForSubmit);
-                                                        if (submission.result()
-                                                                        != SubmitResult.OK
-                                                                && submission.result()
-                                                                        != SubmitResult.BACKPRESSURED) {
-                                                            source.complete(
-                                                                    started,
-                                                                    new IllegalStateException(
-                                                                            "raw send submit returned "
-                                                                                    + submission
-                                                                                            .result()));
-                                                            continue;
-                                                        }
+                                                    RawStack.PreparedSend preparedForSubmit = prepared;
+                                                    prepared = null;
+                                                    RawStack.RawSubmission submission =
+                                                            operation.submitRaw(preparedForSubmit);
+                                                    if (submission.result() != SubmitResult.OK
+                                                            && submission.result()
+                                                                    != SubmitResult.BACKPRESSURED) {
+                                                        own.complete(started, new IllegalStateException(
+                                                                "raw send submit returned "
+                                                                        + submission.result()));
+                                                        continue;
+                                                    }
 
-                                                        CompletableFuture<Void> completion =
-                                                                submission.completion();
-                                                        pending.add(completion);
-                                                        completion.whenComplete(
-                                                                (ignored, error) -> {
-                                                                    source.complete(started, error);
-                                                                    pending.remove(completion);
-                                                                });
+                                                    CompletableFuture<Void> completion =
+                                                            submission.completion();
+                                                    pending.add(completion);
+                                                    completion.whenComplete((ignored, error) -> {
+                                                        own.complete(started, error);
+                                                        pending.remove(completion);
+                                                    });
 
-                                                        if (submission.result()
-                                                                == SubmitResult.BACKPRESSURED) {
-                                                            long admissionWait =
-                                                                    drainDeadline
-                                                                            - BenchMetricHeader
-                                                                                    .nowNs();
-                                                            if (admissionWait > 0) {
-                                                                try {
-                                                                    submission
-                                                                            .admitted()
-                                                                            .get(
-                                                                                    admissionWait,
-                                                                                    TimeUnit.NANOSECONDS);
-                                                                } catch (ExecutionException
-                                                                        | TimeoutException
-                                                                        | CancellationException ignored) {
-                                                                    // The completion callback records errors; unresolved
-                                                                    // admission remains abandoned after the drain bound.
-                                                                }
+                                                    if (submission.result()
+                                                            == SubmitResult.BACKPRESSURED) {
+                                                        long admissionWait = drainDeadline
+                                                                - BenchMetricHeader.nowNs();
+                                                        if (admissionWait > 0) {
+                                                            try {
+                                                                submission.admitted().get(
+                                                                        admissionWait,
+                                                                        TimeUnit.NANOSECONDS);
+                                                            } catch (ExecutionException
+                                                                    | TimeoutException
+                                                                    | CancellationException ignored) {
+                                                                // Unresolved admission is abandoned after the drain bound.
                                                             }
                                                         }
-                                                    } finally {
-                                                        submissionGate.release();
                                                     }
                                                 } catch (InterruptedException interrupted) {
                                                     Thread.currentThread().interrupt();
                                                     break;
                                                 } catch (RuntimeException error) {
-                                                    source.complete(started, error);
+                                                    own.complete(started, error);
                                                 } finally {
                                                     if (prepared != null) {
                                                         prepared.close();
@@ -453,7 +466,6 @@ public final class BenchDrivers {
                 // Per-send callbacks own success/error accounting.
             }
         }
-        resources.addSubmitCpuNs(ClientResources.currentThreadCpuNs() - pollerCpuStart);
         source.freezeTerminal();
     }
 
@@ -466,18 +478,21 @@ public final class BenchDrivers {
             ClientResources resources)
             throws InterruptedException {
         long deadline = source.activeDeadline;
-        AtomicLong sequence = new AtomicLong();
         List<Thread> workers = new ArrayList<>(count);
+        List<SourceMetrics> streams = source.createStreams(count);
         for (int index = 0; index < count; index++) {
+            final int stream = index;
             Thread worker =
                     Thread.ofPlatform()
                             .name("bench-stream-" + index)
                             .start(
                                     () -> {
+                                        SourceMetrics own = streams.get(stream);
                                         long cpuStart = resources.beginSubmit();
+                                        long ordinal = 0;
                                         while (BenchMetricHeader.nowNs() < deadline) {
-                                            long value = sequence.getAndIncrement();
-                                            long started = source.begin();
+                                            long value = sequence(stream, ordinal++);
+                                            long started = own.begin();
                                             try {
                                                 if (!operation.await(
                                                         operation.invoke(
@@ -488,9 +503,9 @@ public final class BenchDrivers {
                                                                 options.requestTimeoutMs))) {
                                                     throw new TimeoutException("request timed out");
                                                 }
-                                                source.complete(started, null);
+                                                own.complete(started, null);
                                             } catch (Exception error) {
-                                                source.complete(started, error);
+                                                own.complete(started, error);
                                             }
                                         }
                                         resources.addSubmitCpuNs(
@@ -512,8 +527,8 @@ public final class BenchDrivers {
             throws InterruptedException {
         long deadline = source.activeDeadline;
         Semaphore slots = new Semaphore(trigger.requestWindow());
-        long sequence = 0;
         long cpuStart = resources.beginSubmit();
+        long sequence = 0;
         while (BenchMetricHeader.nowNs() < deadline) {
             if (!slots.tryAcquire(1, TimeUnit.MILLISECONDS)) {
                 continue;
@@ -544,64 +559,88 @@ public final class BenchDrivers {
     private void runBackpressure(
             BenchHttpApplication.Trigger trigger,
             BenchOperation operation,
+            int streamCount,
             byte phase,
             SourceMetrics source,
             ClientResources resources)
             throws InterruptedException {
-        long deadline = source.activeDeadline;
-        long sequence = 0;
-        int issuedSinceYield = 0;
-        long cpuStart = resources.beginSubmit();
-        Set<CompletableFuture<Void>> pending = ConcurrentHashMap.newKeySet();
-        BenchRequestOperation requests =
-                operation instanceof BenchRequestOperation requestOperation
-                        ? requestOperation
-                        : null;
-        while (BenchMetricHeader.nowNs() < deadline) {
-            long started = source.begin();
-            CompletableFuture<Void> future;
-            BenchRequestOperation.Submission submitted;
-            long requestSequence = sequence++;
-            try {
-                submitted =
-                        requests != null
-                                ? requests.submit(trigger.payloadBytes(), phase, requestSequence)
-                                : null;
-                future =
-                        submitted == null
-                                ? operation.invoke(trigger.payloadBytes(), phase, requestSequence)
-                                : submitted.reply();
-            } catch (Throwable error) {
-                source.complete(started, error);
-                continue;
-            }
-            pending.add(future);
-            future.whenComplete(
-                    (ignored, error) -> {
-                        source.complete(started, error);
-                        pending.remove(future);
-                    });
-            if (submitted != null) {
-                try {
-                    operation.await(
-                            submitted.admitted(),
-                            Duration.ofNanos(Math.max(0, deadline - BenchMetricHeader.nowNs())));
-                } catch (ExecutionException
-                        | java.util.concurrent.CancellationException admissionFailure) {
-                    // The reply callback owns the terminal error count for this request.
-                }
-            }
-            if (++issuedSinceYield == SUBMISSIONS_PER_YIELD) {
-                issuedSinceYield = 0;
-                Thread.yield();
-            }
+        List<SourceMetrics> streams = source.createStreams(streamCount);
+        List<Thread> workers = new ArrayList<>(streams.size());
+        for (int index = 0; index < streams.size(); index++) {
+            final int stream = index;
+            workers.add(
+                    Thread.ofPlatform()
+                            .name("bench-stream-" + index)
+                            .start(
+                                    () -> {
+                                        SourceMetrics own = streams.get(stream);
+                                        long deadline = own.activeDeadline;
+                                        long ordinal = 0;
+                                        int issuedSinceYield = 0;
+                                        long cpuStart = resources.beginSubmit();
+                                        Set<CompletableFuture<Void>> pending =
+                                                ConcurrentHashMap.newKeySet();
+                                        BenchRequestOperation requests =
+                                                operation instanceof BenchRequestOperation requestOperation
+                                                        ? requestOperation
+                                                        : null;
+                                        while (BenchMetricHeader.nowNs() < deadline) {
+                                            long started = own.begin();
+                                            CompletableFuture<Void> future;
+                                            BenchRequestOperation.Submission submitted;
+                                            long requestSequence = sequence(stream, ordinal++);
+                                            try {
+                                                submitted = requests != null
+                                                        ? requests.submit(trigger.payloadBytes(), phase,
+                                                                requestSequence)
+                                                        : null;
+                                                future = submitted == null
+                                                        ? operation.invoke(trigger.payloadBytes(), phase,
+                                                                requestSequence)
+                                                        : submitted.reply();
+                                            } catch (Throwable error) {
+                                                own.complete(started, error);
+                                                continue;
+                                            }
+                                            pending.add(future);
+                                            future.whenComplete((ignored, error) -> {
+                                                own.complete(started, error);
+                                                pending.remove(future);
+                                            });
+                                            if (submitted != null) {
+                                                try {
+                                                    operation.await(submitted.admitted(),
+                                                            Duration.ofNanos(Math.max(0,
+                                                                    deadline - BenchMetricHeader.nowNs())));
+                                                } catch (ExecutionException
+                                                        | CancellationException admissionFailure) {
+                                                    // The reply callback owns terminal error accounting.
+                                                } catch (InterruptedException interrupted) {
+                                                    Thread.currentThread().interrupt();
+                                                    break;
+                                                }
+                                            }
+                                            if (++issuedSinceYield == SUBMISSIONS_PER_YIELD) {
+                                                issuedSinceYield = 0;
+                                                Thread.yield();
+                                            }
+                                        }
+                                        resources.addSubmitCpuNs(
+                                                ClientResources.currentThreadCpuNs() - cpuStart);
+                                        long settleDeadline = System.nanoTime()
+                                                + TimeUnit.MILLISECONDS.toNanos(options.drainBoundMs);
+                                        while (!pending.isEmpty()
+                                                && System.nanoTime() < settleDeadline) {
+                                            try {
+                                                Thread.sleep(DRAIN_POLL_INTERVAL_MS);
+                                            } catch (InterruptedException interrupted) {
+                                                Thread.currentThread().interrupt();
+                                                break;
+                                            }
+                                        }
+                                    }));
         }
-        resources.addSubmitCpuNs(ClientResources.currentThreadCpuNs() - cpuStart);
-        long settleDeadline =
-                System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(options.drainBoundMs);
-        while (!pending.isEmpty() && System.nanoTime() < settleDeadline) {
-            Thread.sleep(DRAIN_POLL_INTERVAL_MS);
-        }
+        for (Thread worker : workers) worker.join();
         source.freezeTerminal();
     }
 
@@ -610,7 +649,7 @@ public final class BenchDrivers {
                 || !options.scenario.equals(trigger.pattern())
                 || options.payloadSizes.get(0) != trigger.payloadBytes()
                 || trigger.requestWindow() != options.requestWindow
-                || trigger.sendConcurrency() != options.sendConcurrency) {
+                || trigger.submitConcurrency() != options.submitConcurrency) {
             throw new IllegalArgumentException("trigger does not match the configured cell");
         }
     }
@@ -631,16 +670,37 @@ public final class BenchDrivers {
         private final AtomicLong otherErrors = new AtomicLong();
         private final AtomicReference<TerminalSnapshot> terminal = new AtomicReference<>();
         private final Latencies latencies;
+        private volatile List<SourceMetrics> streams = List.of();
+        private volatile Latencies.Summary mergedLatency;
+        private SourceMetrics owner;
 
         SourceMetrics(int sampleLimit, long activeDeadline) {
             latencies = new Latencies(sampleLimit);
             this.activeDeadline = activeDeadline;
         }
 
+        List<SourceMetrics> createStreams(int count) {
+            if (!streams.isEmpty()) {
+                throw new IllegalStateException("streams already created");
+            }
+            List<SourceMetrics> created = new ArrayList<>(count);
+            for (int i = 0; i < count; i++) {
+                SourceMetrics stream = new SourceMetrics(latencies.capacity(), activeDeadline);
+                stream.owner = this;
+                created.add(stream);
+            }
+            streams = List.copyOf(created);
+            return streams;
+        }
+
         long begin() {
             submitted.incrementAndGet();
             int depth = inFlight.incrementAndGet();
             peakInFlight.accumulateAndGet(depth, Math::max);
+            if (owner != null) {
+                int total = owner.inFlight.incrementAndGet();
+                owner.peakInFlight.accumulateAndGet(total, Math::max);
+            }
             return BenchMetricHeader.nowNs();
         }
 
@@ -662,6 +722,7 @@ public final class BenchDrivers {
                 latencies.add((now - started) / 1000.0);
             }
             inFlight.decrementAndGet();
+            if (owner != null) owner.inFlight.decrementAndGet();
         }
 
         private void recordError(Throwable original) {
@@ -709,18 +770,27 @@ public final class BenchDrivers {
         }
 
         List<Map<String, Object>> errorSummary() {
+            if (!streams.isEmpty()) {
+                Map<ErrorKey, Long> totals = new LinkedHashMap<>();
+                for (SourceMetrics stream : streams) {
+                    for (ErrorCount count : stream.errorCountsSnapshot()) {
+                        totals.merge(count.key(), count.count(), Long::sum);
+                    }
+                }
+                return errorMaps(totals);
+            }
             TerminalSnapshot current = terminal.get();
             List<ErrorCount> counts = current == null ? errorCountsSnapshot() : current.summary();
+            Map<ErrorKey, Long> totals = new LinkedHashMap<>();
+            for (ErrorCount count : counts) totals.put(count.key(), count.count());
+            return errorMaps(totals);
+        }
+
+        private static List<Map<String, Object>> errorMaps(Map<ErrorKey, Long> totals) {
             List<Map<String, Object>> summary = new ArrayList<>();
-            for (ErrorCount count : counts) {
-                summary.add(
-                        Map.of(
-                                "type",
-                                count.key().type(),
-                                "message",
-                                count.key().message(),
-                                "count",
-                                count.count()));
+            for (Map.Entry<ErrorKey, Long> entry : totals.entrySet()) {
+                summary.add(Map.of("type", entry.getKey().type(), "message",
+                        entry.getKey().message(), "count", entry.getValue()));
             }
             return summary;
         }
@@ -744,6 +814,39 @@ public final class BenchDrivers {
             if (terminal.get() != null) {
                 return;
             }
+            if (!streams.isEmpty()) {
+                Map<ErrorKey, Long> merged = new LinkedHashMap<>();
+                long frozenCompleted = 0;
+                long frozenErrors = 0;
+                long frozenAbandoned = 0;
+                long frozenOtherErrors = 0;
+                long frozenSubmitted = 0;
+                long frozenActiveCompleted = 0;
+                for (SourceMetrics stream : streams) {
+                    stream.freezeTerminal();
+                    TerminalSnapshot current = stream.terminal.get();
+                    frozenCompleted += current.completed();
+                    frozenErrors += current.errors();
+                    frozenAbandoned += current.abandoned();
+                    frozenOtherErrors += current.otherErrors();
+                    frozenSubmitted += stream.submitted.get();
+                    frozenActiveCompleted += stream.activeCompleted.get();
+                    for (ErrorCount count : current.summary()) merged.merge(
+                            count.key(), count.count(), Long::sum);
+                    latencies.merge(stream.latencies);
+                }
+                List<ErrorCount> summary = merged.entrySet().stream()
+                        .map(entry -> new ErrorCount(entry.getKey(), entry.getValue())).toList();
+                errors.set(frozenErrors);
+                completed.set(frozenCompleted);
+                activeCompleted.set(frozenActiveCompleted);
+                submitted.set(frozenSubmitted);
+                otherErrors.set(frozenOtherErrors);
+                terminal.set(new TerminalSnapshot(frozenCompleted, frozenErrors, summary,
+                        frozenOtherErrors, frozenAbandoned));
+                mergedLatency = latencies.summary();
+                return;
+            }
             long frozenCompleted = completed.get();
             List<ErrorCount> summary = errorCountsSnapshot();
             long frozenOtherErrors = otherErrors.get();
@@ -762,6 +865,16 @@ public final class BenchDrivers {
         }
 
         private BenchHttpApplication.Counters snapshot() {
+            if (!streams.isEmpty() && terminal.get() == null) {
+                long submitted = 0, completed = 0, errors = 0;
+                for (SourceMetrics stream : streams) {
+                    submitted += stream.submitted();
+                    completed += stream.completed();
+                    errors += stream.errors();
+                }
+                return new BenchHttpApplication.Counters(
+                        submitted, completed, errors, inFlight.get(), peakInFlight.get());
+            }
             TerminalSnapshot current = terminal.get();
             return new BenchHttpApplication.Counters(
                     submitted(),
@@ -772,20 +885,32 @@ public final class BenchDrivers {
         }
 
         private long submitted() {
+            if (!streams.isEmpty() && terminal.get() == null) {
+                return streams.stream().mapToLong(SourceMetrics::submitted).sum();
+            }
             return submitted.get();
         }
 
         long completed() {
+            if (!streams.isEmpty() && terminal.get() == null) {
+                return streams.stream().mapToLong(SourceMetrics::completed).sum();
+            }
             TerminalSnapshot current = terminal.get();
             return current == null ? completed.get() : current.completed();
         }
 
         long errors() {
+            if (!streams.isEmpty() && terminal.get() == null) {
+                return streams.stream().mapToLong(SourceMetrics::errors).sum();
+            }
             TerminalSnapshot current = terminal.get();
             return current == null ? errors.get() : current.errors();
         }
 
         long inFlight() {
+            if (!streams.isEmpty() && terminal.get() == null) {
+                return streams.stream().mapToLong(SourceMetrics::inFlight).sum();
+            }
             TerminalSnapshot current = terminal.get();
             return current == null ? inFlight.get() : current.abandoned();
         }
@@ -800,11 +925,20 @@ public final class BenchDrivers {
         }
 
         private long otherErrors() {
+            if (!streams.isEmpty() && terminal.get() == null) {
+                return streams.stream().mapToLong(SourceMetrics::otherErrors).sum();
+            }
             TerminalSnapshot current = terminal.get();
             return current == null ? otherErrors.get() : current.otherErrors();
         }
 
         private Latencies.Summary latencySummary() {
+            if (mergedLatency != null) return mergedLatency;
+            if (!streams.isEmpty() && terminal.get() == null) {
+                return streams.stream().map(SourceMetrics::latencySummary)
+                        .reduce(new Latencies.Summary(0, 0, 0, 0), (left, right) ->
+                                new Latencies.Summary(0, 0, 0, left.count() + right.count()));
+            }
             return latencies.summary();
         }
 
