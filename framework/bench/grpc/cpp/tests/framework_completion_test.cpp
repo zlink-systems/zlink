@@ -2,6 +2,7 @@
 #include "../common/bench_async.hpp"
 
 #include <barrier>
+#include <latch>
 #include <cstdio>
 #include <cstdlib>
 #include <new>
@@ -59,19 +60,17 @@ int main ()
     ::operator delete (calibration);
     expect (allocations == 1, "allocation counter detects an explicit allocation");
     allocations = 0;
-    auto signal = std::make_shared<zlink_cpp_bench::completion_signal_t> ();
     std::vector<size_t> completed;
     completed.reserve (8);
-    std::vector<size_t> remote;
-    remote.reserve (8);
     auto ready = fw::task_t<void> (fw::result_t<void>::success ());
     counting = true;
     expect (ready.await_ready (), "ready-task baseline is complete");
+    expect (static_cast<bool> (ready.result ()), "ready-task baseline is successful");
     counting = false;
     const size_t task_locks = locks;
     allocations = locks = 0;
     counting = true;
-    signal->notify (ready, 3, completed, signal);
+    zlink_cpp_bench::observe_framework (ready, [&] (const auto &) { completed.push_back (3); });
     counting = false;
     const auto ready_allocations = allocations;
     const auto ready_locks = locks;
@@ -83,44 +82,54 @@ int main ()
     expect (ready_locks == task_locks, "ready completion adds no fixture lock");
 #endif
     expect (completed == std::vector<size_t>{3}, "ready completion is consumed directly");
-    signal->take_completed (remote);
-    expect (remote.empty (), "ready completion does not enqueue a notification");
     expect (static_cast<bool> (ready.result ()), "ready success is preserved");
 
     auto failed = fw::task_t<void> (fw::result_t<void>::failure (
       fw::framework_error_kind_t::invalid_operation, "fixture failure"));
     completed.clear ();
-    signal->notify (failed, 4, completed, signal);
+    zlink_cpp_bench::observe_framework (failed, [&] (const auto &) { completed.push_back (4); });
     expect (completed == std::vector<size_t>{4}, "ready failure is consumed directly");
     expect (!failed.result (), "ready error remains an error for fixture counters");
-    signal->take_completed (remote);
-    expect (remote.empty (), "ready failure does not enqueue a notification");
 
     fw::task_completion_source_t<void> source;
     auto pending = source.task ();
     completed.clear ();
     allocations = locks = 0;
+    std::latch callbacks_done (2);
+    std::thread::id callback_thread, native_thread;
+    const auto submit_thread = std::this_thread::get_id ();
     counting = true;
-    signal->notify (pending, 5, completed, signal);
+    zlink_cpp_bench::observe_framework (pending, [&] (const auto &) {
+        completed.push_back (5);
+        callback_thread = std::this_thread::get_id ();
+        callbacks_done.count_down ();
+    });
     counting = false;
     std::printf ("pending observer: allocations=%zu locks=%zu\n", allocations, locks);
     expect (allocations > 0, "allocation counter detects a real pending registration");
     expect (completed.empty (), "pending task is not prematurely consumed");
-    signal->take_completed (remote);
-    expect (remote.empty (), "pending task is not prematurely notified");
     std::barrier rendezvous (2);
+    auto pending_thread = source.task ();
+    fw::detail::observe_task_completion (pending_thread, [&] (const auto &) {
+        native_thread = std::this_thread::get_id ();
+        callbacks_done.count_down ();
+    });
     std::thread producer ([&] {
         rendezvous.arrive_and_wait ();
         source.complete (fw::result_t<void>::success ());
     });
     rendezvous.arrive_and_wait ();
+    const auto producer_id = producer.get_id ();
     producer.join ();
-    signal->wait_until (std::chrono::steady_clock::time_point::max ());
-    signal->take_completed (remote);
-    expect (remote == std::vector<size_t>{5}, "remote completion is notified once");
+    callbacks_done.wait ();
+    expect (completed == std::vector<size_t>{5}, "remote completion is notified once");
+    // Submit/completion spec §11: Framework owns a shared completion dispatcher.
+    // Completing an application source does not make its producer that dispatcher.
+    expect (callback_thread != submit_thread && callback_thread != producer_id,
+            "bench observer stays on Framework completion resources");
+    expect (native_thread != submit_thread && native_thread != producer_id,
+            "native observer control uses Framework completion resources");
     expect (pending.await_ready () && pending.result (), "remote success is preserved");
-    signal->take_completed (remote);
-    expect (remote.empty (), "remote completion is removed after consumption");
     std::printf ("fixture completion failures=%d\n", failures);
     return failures == 0 ? 0 : 1;
 }
