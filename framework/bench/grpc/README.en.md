@@ -620,7 +620,7 @@ response are JSON and the five languages use the same fields.
 POST http://127.0.0.1:<A trigger>/bench/start
 { "runId": "...", "cellId": "...", "pattern": "request-backpressure",
   "payloadBytes": 1024, "phase": "warmup" | "active",
-  "durationMs": 5000, "requestWindow": 100, "sendConcurrency": 8 }
+  "durationMs": 5000, "requestWindow": 100, "submitConcurrency": 8 }
 → 200 { "accepted": true, "runId": "...", "cellId": "...", "phase": "active", "startedAt": <monotonic ns> }
 ```
 
@@ -657,8 +657,10 @@ The stream count and per-stream in-flight are recorded in the cell's raw file (�
 
 **One stream is one submitting thread.** A production server submits sends and requests from many
 handlers at once, so the bench measures concurrent submission from several OS threads. Languages with
-threads (C++, .NET, Java, Kotlin) give each stream its own thread, and that thread does both the
-submits and the completion observation for its stream. Node runs every stream on one event loop,
+threads (C++, .NET, Java, Kotlin) give each stream its own thread, and that thread owns the submits
+and the accounting (in-flight, counters, latency samples) of its stream. Completion callbacks run on
+the resource the language's completion model defines; the bench does not move them to the stream
+thread. Node runs every stream on one event loop,
 because that is its production execution model. The binding row and the framework row of a language
 use the same thread layout (§7.2).
 

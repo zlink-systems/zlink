@@ -576,7 +576,7 @@ admin 계약을 그대로 쓴다. 요청과 응답은 JSON이고 다섯 언어�
 POST http://127.0.0.1:<A trigger>/bench/start
 { "runId": "...", "cellId": "...", "pattern": "request-backpressure",
   "payloadBytes": 1024, "phase": "warmup" | "active",
-  "durationMs": 5000, "requestWindow": 100, "sendConcurrency": 8 }
+  "durationMs": 5000, "requestWindow": 100, "submitConcurrency": 8 }
 → 200 { "accepted": true, "runId": "...", "cellId": "...", "phase": "active", "startedAt": <monotonic ns> }
 ```
 
@@ -610,8 +610,9 @@ stream 수와 stream당 in-flight는 셀 원본에 기록한다(§4).
 
 **stream 하나는 제출 thread 하나다.** 실무의 서버는 여러 handler에서 동시에 send·request를
 제출하므로, bench도 여러 OS thread에서 동시에 제출하는 조건으로 잰다. thread를 쓰는 언어(C++,
-.NET, Java, Kotlin)는 stream마다 전용 thread를 두고, 그 thread가 자기 stream의 제출과 완료 관측을
-모두 한다. Node는 실무 실행 모델이 event loop 하나이므로 모든 stream을 event loop 하나에서 돌린다.
+.NET, Java, Kotlin)는 stream마다 전용 thread를 두고, 그 thread가 자기 stream의 제출과 집계(in-flight·
+counter·지연 표본)를 소유한다. 완료 callback은 그 언어의 완료 모델이 정한 자원에서 실행하며 bench가
+stream thread로 옮기지 않는다. Node는 실무 실행 모델이 event loop 하나이므로 모든 stream을 event loop 하나에서 돌린다.
 같은 언어의 binding 행과 framework 행은 같은 thread 구성으로 잰다(§7.2).
 
 ### 10.4 셀 순서
