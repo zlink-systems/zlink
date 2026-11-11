@@ -3937,10 +3937,18 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         } catch (RuntimeException | Error failure) {
             submitted = CompletableFuture.failedFuture(failure);
         }
-        return submitted.whenComplete(
+        CompletableFuture<Void> closed =
+                systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
+                        .newCancellationFuture();
+        systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
+                closed, submitted);
+        submitted.whenComplete(
                 (done, failure) -> {
                     if (ownership != null) ownership.close();
+                    if (failure == null) closed.complete(done);
+                    else closed.completeExceptionally(failure);
                 });
+        return closed;
     }
 
     public CompletionStage<ZLinkActorDispatchTarget.QueuedTurn> prepareTransferredActorDispatch(
