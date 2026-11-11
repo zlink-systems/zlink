@@ -83,25 +83,20 @@ class ExclusionTest(unittest.TestCase):
         """
         rows = build_rows(run_set_of(*numerator_cells, *denominator_cells))
         return judge_pair(
-            rows, f"{numerator} / zlink-c", numerator, "zlink-c", 1024, pattern
+            rows, f"{numerator} / zlink-c", numerator, "zlink-c", 1024, pattern, 0.80
         )
 
-    def test_default_judgement_pattern_is_backpressure(self):
-        """spec 7.2: the ratios reference the pattern with no imposed depth.
+    def test_layer_judgement_definitions_are_centralized(self):
+        from benchagg.model import BINDING_JUDGEMENT, FRAMEWORK_JUDGEMENT
 
-        A ratio taken at a depth the numerator never reaches reports the imposed
-        depth rather than the layer cost, so the default must not be the fixed
-        window.
-        """
-        from benchagg.model import JUDGEMENT_PATTERN
-
-        self.assertEqual(JUDGEMENT_PATTERN, "request-backpressure")
+        self.assertEqual(BINDING_JUDGEMENT, (0.80, ("request-backpressure",)))
+        self.assertEqual(FRAMEWORK_JUDGEMENT, (0.60, ("request-serial", "request-backpressure", "send-saturation")))
         steady = [cell("zlink-node", "request-backpressure", 1024, f"r{i}", 100.0)
                   for i in range(3)]
         baseline = [cell("zlink-c", "request-backpressure", 1024, f"c{i}", 110.0)
                     for i in range(3)]
         rows = build_rows(run_set_of(*steady, *baseline))
-        judgement = judge_pair(rows, "zlink-node / zlink-c", "zlink-node", "zlink-c", 1024)
+        judgement = judge_pair(rows, "zlink-node / zlink-c", "zlink-node", "zlink-c", 1024, "request-backpressure", 0.80)
         self.assertEqual(judgement.status, "published")
 
     def test_publishes_only_when_both_sides_pass_g5(self):
@@ -324,7 +319,7 @@ class ExclusionTest(unittest.TestCase):
         uncounted = [cell("zlink-c", "send-saturation", 1024, f"c{i}", 110.0) for i in range(3)]
         rows = build_rows(run_set_of(*counted, *uncounted))
         judgement = judge_pair(
-            rows, "zlink-node / zlink-c", "zlink-node", "zlink-c", 1024, pattern="send-saturation"
+            rows, "zlink-node / zlink-c", "zlink-node", "zlink-c", 1024, pattern="send-saturation", threshold=0.80
         )
         self.assertEqual(judgement.status, "unsupported")
         self.assertIn("client-counted", judgement.reason)
