@@ -1262,11 +1262,10 @@ bool zlink::socket_base_t::stop_unowned_async_command_processing ()
 #endif
 
         mailbox_t *const mailbox = static_cast<mailbox_t *> (_mailbox);
-        // The command turn and progress gate fence the complete transfer.
-        // Pending commands belong to the inline owner after detach; they do
-        // not extend a released lease. An acquire sees either the current
-        // executor or a completely detached mailbox.
-        mailbox->detach_io_context ();
+        // Check for pending commands and detach under the same publication
+        // lock, so a sender cannot post a callback between those operations.
+        if (!mailbox->detach_io_context (true))
+            return false;
         // An unretained command lease never publishes a completion owner.
         // The public poller's completion owner remains valid across this turn.
         lifecycle.stop_async_mailbox_processing (NULL);
