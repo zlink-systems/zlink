@@ -14,8 +14,17 @@ function scenario(t, ownerUsable) {
   admission.register('mesh');
   let ownerReads = 0;
   let dispatched = 0;
+  const wakes = new Set();
   host.locationOwner.runtime = {
-    get ownerLeaseUsable() { ownerReads++; return ownerUsable; }
+    get ownerLeaseUsable() { ownerReads++; return ownerUsable; },
+    get boundExecutionUsable() { return ownerUsable; },
+    executionAllowed() { ownerReads++; return ownerUsable; },
+    executionDecision(_owner, wake) {
+      if (ownerUsable) return 'allowed';
+      if (wake !== undefined) wakes.add(wake);
+      return 'paused';
+    },
+    executionFailure() { return framework.createInternalFrameworkException(framework.ZLinkFrameworkInternalErrorKind.RequestTargetNotFound, 'Actor execution was lost.'); }
   };
   const dispatch = () => { dispatched++; };
   const dispatchAdmitted = (...args) => args.at(-1)(dispatch);
@@ -29,7 +38,7 @@ function scenario(t, ownerUsable) {
   host.setSpotManager(spotManager);
   t.mock.method(host.serviceRelocation, 'tryHandleControl', () => false);
   t.mock.method(host, 'dispatchMeshSpotRecord', dispatchAdmitted);
-  return { host, admission, relay, meshRuntime, spotManager, ownerReads: () => ownerReads, dispatched: () => dispatched, setOwnerUsable: value => { ownerUsable = value; } };
+  return { host, admission, relay, meshRuntime, spotManager, ownerReads: () => ownerReads, dispatched: () => dispatched, setOwnerUsable: value => { ownerUsable = value; if (value) { const pending = [...wakes]; wakes.clear(); pending.forEach(wake => wake()); } } };
 }
 
 const directKinds = ['NodeSend', 'NodeRequest', 'ChannelSend', 'ChannelRequest'];
@@ -62,7 +71,8 @@ for (const kind of ['ActorSend', 'ActorRequest', 'SpotSend', 'SpotRequest', 'Spo
       kind: framework.ReceiveKind[kind], domain: framework.ReadyDomain.Application, parts: []
     }), /admission is closed/u);
     assert.equal(s.dispatched(), 0);
-    assert(s.ownerReads() > 0);
+    if (kind === 'InstanceSpotActivation') assert(s.ownerReads() > 0);
+    else assert.equal(s.ownerReads(), 0);
     assert.equal(s.admission.pending('mesh'), 0);
   });
 }
@@ -146,6 +156,9 @@ async function actorEndpoint(t, s, entry) {
     const registry = new ZLinkSpotActorHandlerRegistryRuntime();
     registry.addPacket({ kind: ZLinkActorPacketKind.Request, packetName: 'Probe', actorType: Actor, handlerType: Handler });
     const serial = new framework.ZLinkSpotSerialTurnExecutor(true, 'actor');
+    const barrier = new framework.ZLinkExecutionBarrier();
+    barrier.setExecutionPolicy(() => s.host.locationOwner.runtime);
+    serial.setExecutionBarrier(barrier);
     t.after(async () => { serial.closeAdmission(); await serial.whenIdle(); });
     const activation = {
       meshName: 'mesh', spotId: 'room', spot: { context: { meshName: 'mesh' } },
@@ -205,7 +218,8 @@ for (const entry of [true, false]) {
       });
       assert.equal(result.ok, ownerUsable);
       assert.equal(endpoint.actorCalls(), ownerUsable ? 1 : 0);
-      assert.equal(s.ownerReads(), 1);
+      assert.equal(s.ownerReads(), ownerUsable ? 1 : 0);
+      if (!ownerUsable) assert.equal(result.errorKind, framework.ZLinkFrameworkInternalErrorKind.RuntimeShutdown);
       assert.equal(s.admission.pending('mesh'), 0);
     });
   }
@@ -230,9 +244,13 @@ for (const entry of [true, false]) {
         if (closeOwner) s.setOwnerUsable(false);
         else s.admission.seal('mesh');
         release();
-        if (closeOwner) await assert.rejects(pending, /owner admission is closed/u);
-        else assert.equal(await pending, 'reply');
-        assert.equal(endpoint.actorCalls(), closeOwner ? 0 : 1);
+        if (closeOwner) {
+          await new Promise(resolve => setImmediate(resolve));
+          assert.equal(endpoint.actorCalls(), 0);
+          s.setOwnerUsable(true);
+        }
+        assert.equal(await pending, 'reply');
+        assert.equal(endpoint.actorCalls(), 1);
         assert.equal(s.ownerReads(), 1);
       } finally {
         release();

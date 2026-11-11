@@ -489,6 +489,89 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
         }
     }
 
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "false,false",
+        "false,true",
+        "true,false",
+        "true,true"
+    })
+    void pausedAcceptedRequestEndsOnDeadlineOrCancellation(boolean actor, boolean cancel)
+            throws Exception {
+        handled.set(0);
+        heldReply = new CompletableFuture<>();
+        heldEntered = new CompletableFuture<>();
+        var options = admissionOptions();
+        try (var runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
+            createLocalTargets(runtime);
+            var active = submitLocal(runtime, actor, Duration.ofSeconds(5), true);
+            heldEntered.get(2, TimeUnit.SECONDS);
+            var pending = submitLocal(runtime, actor, Duration.ofSeconds(1), false);
+            pending.admitted().toCompletableFuture().get(2, TimeUnit.SECONDS);
+            assertEquals(1, handled.get());
+            var locations = ZLinkFrameworkRuntimeTestAccess.locationRuntime(runtime);
+            systems.zlink.framework.runtime.locations.ZLinkTimerAdmissionTestRuntime
+                    .advanceToDeadline(locations);
+            heldReply.complete("released");
+            active.toCompletableFuture().get(2, TimeUnit.SECONDS);
+            assertEquals(1, handled.get());
+            var rejected = submitLocal(runtime, actor, Duration.ofSeconds(1), false);
+            var rejection =
+                    assertThrows(
+                            ExecutionException.class,
+                            () -> rejected.toCompletableFuture().get(2, TimeUnit.SECONDS));
+            assertEquals(
+                    ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                    assertInstanceOf(ZLinkFrameworkException.class, rejection.getCause()).kind());
+            var admissionRejection =
+                    assertThrows(
+                            ExecutionException.class,
+                            () ->
+                                    rejected.admitted()
+                                            .toCompletableFuture()
+                                            .get(2, TimeUnit.SECONDS));
+            assertSame(rejection.getCause(), admissionRejection.getCause());
+            assertEquals(1, options.registration().applicationJobQueue().snapshot().permitsInUse());
+            assertEquals(
+                    0, options.registration().applicationJobQueue().snapshot().capacityWaiters());
+            assertEquals(1, handled.get());
+            assertFalse(pending.toCompletableFuture().isDone());
+            var terminals = new AtomicInteger();
+            pending.whenComplete((value, failure) -> terminals.incrementAndGet());
+            if (cancel) {
+                assertTrue(pending.toCompletableFuture().cancel(false));
+                assertThrows(
+                        java.util.concurrent.CancellationException.class,
+                        () -> pending.toCompletableFuture().join());
+            } else {
+                var expired =
+                        assertThrows(
+                                ExecutionException.class,
+                                () -> pending.toCompletableFuture().get(2, TimeUnit.SECONDS));
+                assertEquals(
+                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                        assertInstanceOf(ZLinkFrameworkException.class, expired.getCause()).kind());
+            }
+            assertTrue(
+                    locations.renewOwnerLeaseOnce().toCompletableFuture().get(2, TimeUnit.SECONDS));
+            assertEquals(
+                    "reply",
+                    submitLocal(runtime, actor, Duration.ofSeconds(1), false)
+                            .toCompletableFuture()
+                            .get(2, TimeUnit.SECONDS));
+            assertEquals(
+                    2,
+                    handled.get(),
+                    "expired or cancelled work never enters the handler after resume");
+            assertEquals(1, terminals.get());
+        } finally {
+            heldReply.complete("cleanup");
+            heldEntered = null;
+        }
+    }
+
     private DefaultZLinkFrameworkOptions admissionOptions() {
         var options = new DefaultZLinkFrameworkOptions();
         options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
@@ -581,6 +664,7 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
     }
 
     private static CompletableFuture<String> heldReply;
+    private static CompletableFuture<Void> heldEntered;
 
     public record Probe(boolean hold) {
         public Probe() {
@@ -659,6 +743,7 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
         public CompletionStage<String> handle(
                 Entry spot, Actor actor, ZLinkMessageContext context, Probe request) {
             handled.incrementAndGet();
+            if (request.hold() && heldEntered != null) heldEntered.complete(null);
             return request.hold() ? heldReply : CompletableFuture.completedFuture("reply");
         }
     }
@@ -666,6 +751,7 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
     public static final class SpotHandler implements ZLinkSpotRequestHandler<Room, Probe, String> {
         public CompletionStage<String> handle(Room spot, Probe request) {
             handled.incrementAndGet();
+            if (request.hold() && heldEntered != null) heldEntered.complete(null);
             return request.hold() ? heldReply : CompletableFuture.completedFuture("reply");
         }
     }

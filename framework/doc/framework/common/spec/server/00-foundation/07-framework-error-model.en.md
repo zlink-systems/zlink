@@ -112,6 +112,7 @@ decides the kind of a failure a remote node sent. The cases this node decides it
 - `NotFound` if the target or handler doesn't exist.
 - `Unavailable` if the route, connection, or current owner is unavailable. It also means
   the selected receiver could not admit this operation after losing first-message `Reserve`.
+  When a request waits for connection readiness, and its result, follow [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification).
 - `DeadlineExceeded` if the reply isn't received within the deadline.
 - `ProtocolError` if the wire, payload, or reply type can't be processed.
 - `ShuttingDown` if the runtime is shutting down.
@@ -139,7 +140,8 @@ what is coming in is the `PAUSED` state of
   observer from holding work back, the newest may be kept or several coalesced. That is not
   throwing work away.
 - **Having nowhere to place something is different.** If no node can host the Spot, slowing
-  down does not produce one. That case completes with `Unavailable`
+  down does not produce one. The wait and the result when no candidate exists or none is ready
+  yet are owned by [MeshNode §5.2](../03-spot-actor/03-mesh-node.en.md#52-conditions-for-selecting-a-target-node)
   ([Spot Actor](../03-spot-actor/05-spot-actor-membership.en.md), [Spot address messaging](../03-spot-actor/06-spot-address-messaging.en.md)).
 - **The [Message Follow](02-glossary.en.md#message-follow) relay queue — the mechanism that
   forwards a message that arrives at the previous owner node, on behalf of the new owner,
@@ -224,7 +226,7 @@ item below leads to one contract test.
 **Bounded queue errors**
 
 - No Request ends because a Framework-owned queue had no room, whether that queue is in the same runtime or on another node.
-- When no node can host the Spot, the call ends with `Unavailable`.
+- The wait and the result when no node can host the Spot, or none is ready yet, match [MeshNode §5.2](../03-spot-actor/03-mesh-node.en.md#52-conditions-for-selecting-a-target-node).
 
 **Typed `Rejected` distinction**
 

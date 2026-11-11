@@ -4,6 +4,16 @@ import {
 } from './framework-errors-internal';
 import { isPromiseLike } from './abort';
 import { ReceiveKind, type ReceiveRecord } from './foundation/service-runtime-contracts';
+export type ZLinkExecutionDecision = 'allowed' | 'paused' | 'lost';
+
+export interface ZLinkExecutionPolicy {
+  executionDecision(
+    owner: object | undefined,
+    wake?: () => void
+  ): ZLinkExecutionDecision | undefined;
+  executionFailure(): Error;
+}
+
 const BACKING_ARRAY_COMPACTION_MIN_HEAD = 1024;
 
 /** Runs host admission inside the domain's request completion boundary. */
@@ -20,6 +30,25 @@ export function shouldCompactBackingArray(head: number, length: number): boolean
 }
 
 export class ZLinkRuntimeAdmissionGate {
+  private runtimeRefusal?: () => ZLinkFrameworkInternalErrorKind | undefined;
+
+  /** The host lifecycle owns the refusal kind; the gate only samples it. */
+  setRuntimeRefusal(provider: () => ZLinkFrameworkInternalErrorKind | undefined): void {
+    this.runtimeRefusal = provider;
+  }
+
+  /** Samples host lifecycle once at public call admission, before any deferred work. */
+  requireCall(): void {
+    const refusal = this.runtimeRefusal?.();
+    if (refusal === undefined) return;
+    throw createInternalFrameworkException(
+      refusal,
+      refusal === ZLinkFrameworkInternalErrorKind.InvalidOperation
+        ? 'Public call requires a started Framework runtime.'
+        : 'Public call was rejected because the Framework runtime stopped.'
+    );
+  }
+
   private readonly meshes = new Map<string, ZLinkMeshAdmissionState>();
 
   /**
@@ -31,7 +60,9 @@ export class ZLinkRuntimeAdmissionGate {
   private executionRuntime?: () =>
     | {
         readonly boundExecutionUsable: boolean;
-        executionAllowed?(owner: object | undefined): boolean;
+        executionAllowed(owner: object | undefined): boolean;
+        executionDecision(owner: object | undefined, wake?: () => void): ZLinkExecutionDecision;
+        executionFailure(): Error;
       }
     | undefined;
 
@@ -40,7 +71,19 @@ export class ZLinkRuntimeAdmissionGate {
   }
 
   executionAllowed(owner: object | undefined): boolean | undefined {
-    return this.executionRuntime?.()?.executionAllowed?.(owner);
+    return this.executionRuntime?.()?.executionAllowed(owner);
+  }
+
+  executionDecision(
+    owner: object | undefined,
+    wake?: () => void
+  ): ZLinkExecutionDecision | undefined {
+    const runtime = this.executionRuntime?.();
+    return runtime?.executionDecision(owner, wake);
+  }
+
+  executionFailure(): Error {
+    return this.executionRuntime!()!.executionFailure();
   }
 
   get acceptsNewWork(): boolean {
@@ -157,13 +200,13 @@ export class ZLinkRuntimeAdmissionGate {
         kind === ReceiveKind.NodeRequest ||
         kind === ReceiveKind.ChannelSend ||
         kind === ReceiveKind.ChannelRequest ||
-        ((kind === ReceiveKind.ActorSend ||
-          kind === ReceiveKind.ActorRequest ||
-          kind === ReceiveKind.SpotSend ||
-          kind === ReceiveKind.SpotRequest ||
-          kind === ReceiveKind.SpotMulticast) &&
-          this.executionRuntime?.()?.boundExecutionUsable === true) ||
-        this.ownerAdmissionOpen())
+        (kind === ReceiveKind.ActorSend ||
+        kind === ReceiveKind.ActorRequest ||
+        kind === ReceiveKind.SpotSend ||
+        kind === ReceiveKind.SpotRequest ||
+        kind === ReceiveKind.SpotMulticast
+          ? (this.executionRuntime?.()?.boundExecutionUsable ?? this.ownerAdmissionOpen())
+          : this.ownerAdmissionOpen()))
     );
   }
 
@@ -178,7 +221,7 @@ export class ZLinkRuntimeAdmissionGate {
       return state;
     }
     throw createInternalFrameworkException(
-      state.sealedReason,
+      state.sealed ? state.sealedReason : ZLinkFrameworkInternalErrorKind.RuntimeShutdown,
       `${operation} was rejected because framework admission is closed.`
     );
   }
@@ -209,6 +252,7 @@ export class ZLinkRuntimeAdmissionGate {
   }
 
   requireRequest(operation: string, meshName?: string): void {
+    this.requireCall();
     if (meshName === undefined) {
       if (this.acceptsNewWork) return;
     } else if (this.accepts(meshName)) {
@@ -221,6 +265,7 @@ export class ZLinkRuntimeAdmissionGate {
   }
 
   requireActorCreate(actorId: string, meshName?: string): void {
+    this.requireCall();
     if (meshName === undefined) {
       if (this.acceptsNewWork) return;
     } else if (this.accepts(meshName)) {
@@ -245,11 +290,13 @@ export class ZLinkRuntimeAdmissionGate {
     );
   }
 
-  private firstSealedReason(): ZLinkFrameworkInternalErrorKind {
+  private firstSealedReason(
+    fallback = ZLinkFrameworkInternalErrorKind.RuntimeShutdown
+  ): ZLinkFrameworkInternalErrorKind {
     for (const state of this.meshes.values()) {
       if (state.sealed) return state.sealedReason;
     }
-    return ZLinkFrameworkInternalErrorKind.RuntimeShutdown;
+    return fallback;
   }
 }
 

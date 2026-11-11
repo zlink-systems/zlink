@@ -277,7 +277,8 @@ Entry Spot은 Object Server node마다 하나로 고정하며 configurable Spot 
 
 상한 판정은 Active count와 factory가 완료되기 전에 확보한 reserved slot을 함께 계산한다. Location Store가
 reservation과 authority를 같은 transaction에서 확정하며 descriptor count는 후보 선택용 projection이다.
-받아 줄 수 있는 후보가 없으면 `Unavailable`로 끝난다.
+후보가 없거나 아직 준비되지 않았을 때의 대기와 결과는
+[MeshNode §5.2](../03-spot-actor/03-mesh-node.ko.md#52-target-node를-선택하는-조건)가 정한다.
 
 Pending activation 제한은 object population limit이 아니라 동시에 진행되는 activation을 보호하는 별도
 admission 제한이며 active·reserved population count를 바꾸지 않는다. 세는 작업, 세는 구간, 기본값과 허용 범위는
@@ -393,6 +394,10 @@ Operation별 call object는 해당 기능에 유효한 설정만 제공한다.
 - Create·lookup이 반환한 ref는 그 incarnation을 변경하거나 session에 bind할 때 사용하며 일반 message의
   target으로 사용하지 않는다.
 - STREAM 호출은 session identity와 packet correlation을 보존한다.
+- 구성으로 얻은 공개 client·manager를 Framework runtime이 시작되기 전에 호출하면 그 call은
+  terminal에서 `InvalidOperation`으로 끝난다. Framework는 runtime 시작을 기다리거나 시작을 유발하지 않는다.
+  Runtime 시작 뒤 hosted service 시작 중의 호출은 이 규칙의 대상이 아니다. Call은 admission이 받아들일 때
+  사용되므로, 이 거절과 shutdown 거절은 call을 사용하지 않으며 같은 call을 다시 submit할 수 있다.
 
 Server package의 one-way send·publish·명시적 STREAM reply는
 [비동기 실행 정책](../01-execution/01-submit-and-completion.ko.md)의 async-only admission 계약을 따른다. Public call은
@@ -925,7 +930,7 @@ RouteMesh·ClientServer select-one의 target 확정과 HWM 재시도 경계는
 | 해당 operation family의 source outbound admission이 operation을 수락함 | One-way 완료는 [Submit과 완료 §4](../01-execution/01-submit-and-completion.ko.md#4-one-way-submit--admission-경계)를 따르고 request는 pending completion으로 전환 |
 | 일반 one-way의 첫 submit | [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)의 HWM 재시도·완료 경계를 따른다 |
 | Logical Multicast를 시작한 뒤 일부 target에 제출하지 못함 | 이미 수락한 target은 유지한다. Target별 실패를 public 결과나 publish 전용 monitoring으로 만들지 않으며 전체 operation을 rollback하거나 자동으로 다시 시도하지 않음 |
-| 알려진 direct target의 route가 준비되지 않음 | `Unavailable` |
+| 알려진 direct target의 route가 준비되지 않음 | One-way는 `Unavailable`. Request의 연결 준비 대기와 결과는 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)를 따른다 |
 | Actor·Spot authority 또는 Node·Channel 송신 경로가 없음 | `NotFound` |
 | typed 결과가 없는 target admission seal, filter 또는 runtime policy가 거부함 | `Rejected` |
 | host [shutdown](02-glossary.ko.md#shutdown)으로 신규 admission이 닫힘 | `ShuttingDown` |
@@ -955,12 +960,15 @@ Global object message의 missing·route·incarnation 불일치 결과는 다음�
 | ActorRef로 직접 지정한 destroy | idempotent `false` | `Unavailable` | `InvalidOperation` | `Unavailable` |
 | SpotRef로 직접 지정한 close | idempotent `false` | `Unavailable` | `InvalidOperation` | `Unavailable` |
 
+`route unavailable`은 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)의 연결 준비 규칙이 `Unavailable`로 끝낸 경우다. 그 규칙의 대기 중
+request timeout이 끝나면 `DeadlineExceeded`다.
+
 Create·GetOrCreate의 실패 조건과 error kind는 다음과 같다.
 
 | 조건 | Error kind |
 |---|---|
-| 둘 수 있는 node가 하나도 없다 | `Unavailable` |
-| reservation을 확보한 owner route가 준비되지 않았다 | `Unavailable` |
+| 둘 수 있는 node가 없거나 아직 준비되지 않았다 | [MeshNode §5.2](../03-spot-actor/03-mesh-node.ko.md#52-target-node를-선택하는-조건)를 따른다 |
+| reservation을 확보한 owner route가 준비되지 않았다 | [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)의 연결 준비 규칙을 따른다 |
 | Store resolve·reservation·commit과 activation infrastructure가 실패했다 | `InternalFailure` |
 | Spot `Configure()`의 등록이 검사에 실패했다(§23) | `InvalidOperation` |
 | object kind·stable type이 충돌한다 | `TypeMismatch` |

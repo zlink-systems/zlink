@@ -7,7 +7,7 @@ BENCH_GRPC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Values fixed by the specification (README §3). They are not inputs.
 WINDOW=100
-SEND_CONCURRENCY=8
+SUBMIT_CONCURRENCY=8
 TIMEOUT_SECONDS=300
 COMMAND_SETTLE_MS=200
 DRAIN_BOUND_MS=30000
@@ -73,6 +73,11 @@ bench_init() {
 # bench_cell_dir <run> <implementation> <pattern> <payload>
 bench_cell_dir() {
   printf '%s/run%s/%s-%s-%s\n' "${OUTPUT_DIR}" "$1" "$2" "$3" "$4"
+}
+
+# gRPC has no admission signal, so request-backpressure is not a runnable cell.
+bench_skip_cell() {
+  [[ "$1" == grpc-* && "$2" == request-backpressure ]]
 }
 
 # bench_require_low_load: refuses to build while the machine is busy.
@@ -190,7 +195,7 @@ wait_for_idle() {
 trigger_phase() {
   local url="$1" run_id="$2" cell_id="$3" pattern="$4" payload="$5" phase="$6" duration_ms="$7"
   curl --silent --show-error --fail -H 'content-type: application/json' \
-    -d "{\"runId\":\"${run_id}\",\"cellId\":\"${cell_id}\",\"pattern\":\"${pattern}\",\"payloadBytes\":${payload},\"phase\":\"${phase}\",\"durationMs\":${duration_ms},\"requestWindow\":${WINDOW},\"sendConcurrency\":${SEND_CONCURRENCY}}" \
+    -d "{\"runId\":\"${run_id}\",\"cellId\":\"${cell_id}\",\"pattern\":\"${pattern}\",\"payloadBytes\":${payload},\"phase\":\"${phase}\",\"durationMs\":${duration_ms},\"requestWindow\":${WINDOW},\"submitConcurrency\":${SUBMIT_CONCURRENCY}}" \
     "${url}/bench/start"
   echo
 }

@@ -197,7 +197,7 @@ class channel_runtime_state_t
         {
             using request_encoder_t =
               runtime::messaging::message_parts_t (runtime::messaging::client_call_codec_t::*) (
-                runtime::messaging::envelope_header_t,
+                runtime::messaging::envelope_header_t &&,
                 encoded_payload_t,
                 std::shared_ptr<const request_type_plan_t>,
                 std::shared_ptr<const prepared_header_fragment_t>) const;

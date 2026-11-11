@@ -155,7 +155,7 @@ callback 없이 `existing`으로 반환한다. Creating이면 authority 변경�
 받고 cleanup 뒤 새 reservation을 경쟁하며 앞선 application reply를 공유하지 않는다.
 생성 terminal의 재전송과 보존은 [Framework API §15](../../../00-foundation/06-framework-api.ko.md)이 정한다. Callback exception은 `rejected`가 아니라
 typed creation failure다. 전체 deadline이
-끝나면 `DeadlineExceeded`, 둘 수 있는 node가 없으면 `Unavailable`이다. ActorRef의 object generation이
+끝나면 `DeadlineExceeded`이고, 둘 수 있는 node가 없거나 아직 준비되지 않았을 때는 [MeshNode §5.2](../../../03-spot-actor/03-mesh-node.ko.md#52-target-node를-선택하는-조건)를 따른다. ActorRef의 object generation이
 current와 다른 lifecycle operation은 `InvalidOperation`, 이동 중에는 `Unavailable`이다.
 
 Actor create는 선택한 owner MeshNode의 Entry Spot membership과 Ready barrier를 같은 lifecycle에서 완료한다.

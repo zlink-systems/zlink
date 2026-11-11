@@ -52,8 +52,14 @@ RESULT_METRICS: tuple[str, ...] = (
 #: G5 (plan 6): each run within +-10% of the median of the runs.
 G5_SPREAD_LIMIT_PERCENT = 10.0
 
-#: spec 7.2 / FB-003: the layer ratios pass at 0.80.
-JUDGEMENT_THRESHOLD = 0.80
+#: spec 7.2 binding judgement: one backpressure ratio per payload at 0.80.
+BINDING_JUDGEMENT = (0.80, ("request-backpressure",))
+
+#: spec 7.2 framework judgement: all three patterns per payload at 0.60.
+FRAMEWORK_JUDGEMENT = (0.60, PATTERNS)
+
+#: spec 10.5: languages whose cells are supplementary only (no spec 7.2 judgement).
+SUPPLEMENTARY_LANGUAGES = ("kotlin",)
 
 #: spec 5.1 / G6: at this fraction of the client parallelism ceiling the cell
 #: measured the client runtime, not the transport, so it may not decide a
@@ -62,12 +68,6 @@ JUDGEMENT_THRESHOLD = 0.80
 #: single-threaded client, which tops out near 5% on a 20-core machine.
 CLIENT_SATURATION_FRACTION = 0.95
 
-#: spec 7.2: the default reference pattern for the two ratios. The spec makes
-#: ``request-backpressure`` the reference, because a ratio taken under a depth
-#: the numerator never reaches reports that imposed depth rather than the layer
-#: cost. The 0.80 threshold, the G5 spread limit and the both-payloads rule do
-#: not change.
-JUDGEMENT_PATTERN = "request-backpressure"
 
 
 @dataclass(frozen=True, order=True)
@@ -101,6 +101,7 @@ class Cell:
     cell_id: str | None = None
     trigger: dict[str, Any] = field(default_factory=dict)
     streams: dict[str, Any] = field(default_factory=dict)
+    submit_concurrency: int | None = None
     target_stats: dict[str, Any] = field(default_factory=dict)
 
     #: A server-driven source is complete only when the runner embedded its
@@ -149,10 +150,9 @@ class Cell:
     #: ceiling: both are "the threads this harness offers its own submit path".
     #: GC and JIT threads are not JVM threads and never appear in ThreadMXBean, so
     #: they cannot inflate it.
-    #: The cpp row declares ``submit_thread_cores``: CPU charged to the single
-    #: application thread its drivers run submit and completion drain on
-    #: (CLOCK_THREAD_CPUTIME_ID), against a declared ceiling of 1. It is the same
-    #: correction for the third time and for a third reason (FB-037). Measured,
+    #: The cpp row declares ``submit_thread_cores``: summed CPU charged to its
+    #: dedicated submit threads (CLOCK_THREAD_CPUTIME_ID), against their count.
+    #: Earlier single-submitter results declared a ceiling of 1 (FB-037). Measured,
     #: ``zlink-cpp`` request-window reads 0.955 submit cores against 1.92 process
     #: cores -- the difference is Core's native I/O threads -- while ``grpc-cpp``
     #: reads 0.695 against 0.698. Process cores would divide unlike quantities

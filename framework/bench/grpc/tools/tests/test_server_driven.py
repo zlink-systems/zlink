@@ -11,7 +11,7 @@ _TOOLS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _TOOLS)
 
 from benchagg.analysis import build_rows, judge_pair  # noqa: E402
-from benchagg.model import PATTERNS, CellKey  # noqa: E402
+from benchagg.model import FRAMEWORK_JUDGEMENT, PATTERNS, CellKey  # noqa: E402
 from benchagg.readers import ReportError, cells_from_cell_json, read_run, read_runs  # noqa: E402
 from benchagg.render import (  # noqa: E402
     render_excluded,
@@ -102,6 +102,7 @@ class ServerDrivenCellTest(unittest.TestCase):
             "grpc-dotnet",
             1024,
             "request-serial",
+            FRAMEWORK_JUDGEMENT[0],
         )
         self.assertEqual(judgement.status, "unsupported")
         self.assertIn("incomplete", judgement.reason)
