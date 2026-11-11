@@ -249,6 +249,8 @@ class channel_runtime_state_t
     std::shared_ptr<zlink::context_t> core_context;
     std::map<std::string, std::string> fanout_publisher_advertise_hosts;
     // The host owns the start transition; standalone builders have no host boundary.
+    // Set once on the lane during configuration (add_zlink_framework, before run) and
+    // immutable afterwards, so callers read it without a lock.
     std::function<std::pair<bool, bool> ()> runtime_admission;
     void admit_outbound () const;
     void ensure_transport_open () const;
