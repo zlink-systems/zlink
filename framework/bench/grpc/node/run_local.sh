@@ -77,7 +77,7 @@ for run in $(seq 1 "${RUNS}"); do
           --scenario "${pattern}"
           --payload-size "${payload}"
           --request-window "${WINDOW}"
-          --send-concurrency "${SEND_CONCURRENCY}"
+          --submit-concurrency "${SUBMIT_CONCURRENCY}"
           --latency-sample-limit "${LATENCY_SAMPLE_LIMIT}"
           --warmup-seconds "${WARMUP_SECONDS}"
           --drain-bound-ms "${DRAIN_BOUND_MS}"

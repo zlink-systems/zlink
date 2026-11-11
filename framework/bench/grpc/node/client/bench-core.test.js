@@ -13,7 +13,7 @@ function activeTrigger(pattern, overrides = {}) {
     payloadBytes: 64,
     durationMs: 20,
     requestWindow: 100,
-    sendConcurrency: 2,
+    submitConcurrency: 2,
     ...overrides
   };
 }
@@ -110,6 +110,7 @@ test('request-backpressure pumps completions and observes admission without awai
   let closed = 0;
   const pollTimeouts = [];
   let submissions = 0;
+  const streams = new Set();
   const transport = {
     backpressuredResult: 'backpressured',
     requestCompletionPump: {
@@ -122,8 +123,9 @@ test('request-backpressure pumps completions and observes admission without awai
         closed += 1;
       }
     },
-    requestSubmission(_stream, payload) {
+    requestSubmission(stream, payload) {
       submissions += 1;
+      streams.add(stream);
       let resolveReply;
       const reply = new Promise((resolve) => {
         resolveReply = () => resolve(payload);
@@ -149,6 +151,7 @@ test('request-backpressure pumps completions and observes admission without awai
 
   assert.equal(closed, 0, 'the active phase does not close the transport-owned poller');
   assert.ok(submissions > 1, 'submission resumed after the separately observed admission');
+  assert.deepEqual([...streams].sort(), [0, 1], 'each logical stream submits independently');
   assert.ok(
     pollTimeouts.some((timeoutMs) => timeoutMs > 0),
     'blocked turn waited for completion'
@@ -176,18 +179,20 @@ test('native immediate admission polls without waiting for another admission sig
   assert.equal(result.errors, 0);
 });
 
-test('Framework request-backpressure awaits each admission while replies remain pending', async (t) => {
+test('Framework request-backpressure awaits each stream admission while replies remain pending', async (t) => {
   installTargetStats(t);
-  let admissionsPending = 0;
+  const admissionsPending = new Set();
   let submissions = 0;
   let repliesPending = 0;
+  const streams = new Set();
   const transport = {
-    requestSubmission(_stream, payload) {
-      assert.equal(admissionsPending, 0, 'previous admission must finish before submission');
+    requestSubmission(stream, payload) {
+      assert.equal(admissionsPending.has(stream), false, 'stream waits for its own admission');
       submissions++;
-      admissionsPending++;
+      streams.add(stream);
+      admissionsPending.add(stream);
       const admitted = new Promise(resolve => setImmediate(() => {
-        admissionsPending--;
+        admissionsPending.delete(stream);
         resolve();
       }));
       repliesPending++;
@@ -201,7 +206,8 @@ test('Framework request-backpressure awaits each admission while replies remain 
   const metrics = new core.SourceMetrics(100);
   const result = await core.runActive(transport, metrics, options, activeTrigger('request-backpressure'));
   assert.ok(submissions > 1);
-  assert.equal(admissionsPending, 0);
+  assert.deepEqual([...streams].sort(), [0, 1]);
+  assert.equal(admissionsPending.size, 0);
   assert.equal(repliesPending, 0);
   assert.equal(result.errors, 0);
 });
@@ -222,6 +228,17 @@ test('send-saturation yields so every logical stream starts work', async (t) => 
   await core.runActive(transport, metrics, options, activeTrigger('send-saturation'));
 
   assert.deepEqual([...streams].sort(), [0, 1]);
+});
+
+test('stream descriptions record submitConcurrency for both multi-stream patterns', () => {
+  assert.deepEqual(core.streamDescription('request-backpressure', 100, 8), {
+    count: 8,
+    inFlightPerStream: null,
+    implementation:
+      'Node event loop; one submit loop per logical stream; reply stages separate; pause each stream only on BACKPRESSURED admission'
+  });
+  assert.equal(core.streamDescription('send-saturation', 100, 8).count, 8);
+  assert.equal(core.streamDescription('request-serial', 100, 8).count, 1);
 });
 
 test('completion at the deadline is excluded even before the boundary timer runs', (t) => {
