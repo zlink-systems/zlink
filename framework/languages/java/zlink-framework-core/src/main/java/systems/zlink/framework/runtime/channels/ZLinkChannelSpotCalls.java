@@ -707,7 +707,15 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
             ZLinkRequestMetrics.start(metric);
             CompletableFuture<TReply> result =
                     systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
-                            .newCancellationFuture();
+                            .newCancellationFuture(
+                                    failure ->
+                                            ZLinkRequestMetrics.complete(
+                                                    metric,
+                                                    started == ZLinkRequestMetrics.NO_START
+                                                            ? -1L
+                                                            : ZLinkRequestMetrics.elapsed(
+                                                                    started, runtime.nanoTime()),
+                                                    failure));
             CompletionStage<TReply> stage;
             try {
                 var operationFlow =
@@ -767,15 +775,6 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
                         failure);
                 throw failure;
             }
-            result.whenComplete(
-                    (ignored, failure) ->
-                            ZLinkRequestMetrics.complete(
-                                    metric,
-                                    started == ZLinkRequestMetrics.NO_START
-                                            ? -1L
-                                            : ZLinkRequestMetrics.elapsed(
-                                                    started, runtime.nanoTime()),
-                                    failure));
             stage.whenComplete(
                     (value, failure) -> {
                         if (failure == null) result.complete(value);
