@@ -1208,24 +1208,6 @@ final class InstanceSpotRuntimeIntegrationTest {
                                                         .READY);
     }
 
-    /** Waits until the target's route scan has dropped the Closing Instance authority. */
-    private static void awaitClosingRouteDropped(
-            systems.zlink.framework.spots.ZLinkSpotManager spots, String spotId) throws Exception {
-        var mesh =
-                systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTesting.meshNode(
-                        spots, "game");
-        var spotNode = mesh.spotNode();
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (systems.zlink.framework.runtime.binding.ZLinkJavaReadyRouteTestAccess
-                .hasInstanceAuthority(spotNode, spotId)) {
-            if (System.nanoTime() > deadline) {
-                throw new java.util.concurrent.TimeoutException(
-                        "route scan kept the Closing Instance authority");
-            }
-            Thread.sleep(2);
-        }
-    }
-
     /** Waits until the Instance Spot owner queue holds an accepted message behind Close. */
     private static void awaitPendingMessage(String spotId) throws Exception {
         var context = EchoInstanceSpot.latestContext;
@@ -1483,12 +1465,6 @@ final class InstanceSpotRuntimeIntegrationTest {
                         "closing-verdict-target-" + suffix);
                 SourceEntrySpot.start.complete(null);
                 SourceEntrySpot.beforeClose.get(5, TimeUnit.SECONDS);
-                // Establish the scan-owned Ready projection before testing its Closing removal.
-                systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess
-                        .authorityRouteRuntime(target)
-                        .reconcile()
-                        .toCompletableFuture()
-                        .get(5, TimeUnit.SECONDS);
                 SourceEntrySpot.closeStart.complete(null);
                 EchoInstanceSpot.closingEntered.get(5, TimeUnit.SECONDS);
                 if (drain) {
@@ -1496,11 +1472,6 @@ final class InstanceSpotRuntimeIntegrationTest {
                             .beginDrain()
                             .toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
-                }
-                if (expectedKind == null) {
-                    // The target's background route scan drops the Closing authority before the
-                    // probe arrives, so the probe's admission cannot rely on that scan.
-                    awaitClosingRouteDropped(target.spotManager(), spotId);
                 }
                 SourceEntrySpot.probeStart.complete(null);
                 if (expectedKind == null) {

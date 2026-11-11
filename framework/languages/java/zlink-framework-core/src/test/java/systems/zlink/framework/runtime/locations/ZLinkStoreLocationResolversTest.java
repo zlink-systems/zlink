@@ -398,6 +398,62 @@ final class ZLinkStoreLocationResolversTest {
     }
 
     @Test
+    void objectQueryContinuesPastEmptyFilteredPage() {
+        var scans = new AtomicInteger();
+        ZLinkLocationRepository store =
+                repository(
+                        (method, arguments) ->
+                                switch (method) {
+                                    case "list" -> {
+                                        int index = scans.getAndIncrement();
+                                        assertEquals(
+                                                index == 0
+                                                        ? Optional.empty()
+                                                        : Optional.of(
+                                                                new ZLinkAuthorityScanCursor(
+                                                                        "next")),
+                                                arguments[1]);
+                                        yield CompletableFuture.completedFuture(
+                                                index == 0
+                                                        ? new ZLinkAuthorityPage(
+                                                                List.of(),
+                                                                Optional.of(
+                                                                        new ZLinkAuthorityScanCursor(
+                                                                                "next")))
+                                                        : new ZLinkAuthorityPage(
+                                                                List.of(
+                                                                        new ZLinkAuthorityEntry(
+                                                                                ZLinkAuthorityKeyCodec
+                                                                                        .spot(
+                                                                                                "room"),
+                                                                                readySpotSnapshot())),
+                                                                Optional.empty()));
+                                    }
+                                    case "readOwnerLease" ->
+                                            CompletableFuture.completedFuture(
+                                                    new ZLinkOwnerLeaseMissing());
+                                    default -> throw new UnsupportedOperationException(method);
+                                });
+        var stores = ZLinkRegisteredLocationStores.fromUnified(store);
+        try (var runtime =
+                new ZLinkLocationRuntime(stores, Duration.ofSeconds(30), Duration.ofSeconds(10))) {
+            var query =
+                    new ZLinkLocationRuntimeQueryService(
+                            stores, runtime, new ZLinkLocationOptions());
+            var page =
+                    query.listObjectLocations(
+                                    ZLinkLocationObjectFilter.of(
+                                            ZLinkPlacementObjectKind.USER_SPOT),
+                                    ZLinkPageRequest.firstPage())
+                            .toCompletableFuture()
+                            .join();
+            assertEquals(1, page.items().size());
+            assertNull(page.continuationToken());
+            assertEquals(2, scans.get());
+        }
+    }
+
+    @Test
     void firstPageUsesTheQueryDefaultSize() {
         assertEquals(100, ZLinkPageRequest.firstPage().pageSize());
     }

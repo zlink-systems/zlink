@@ -57,6 +57,285 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
 
 final class ZLinkProviderAuthorityRepositoryTest {
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {0, 32, 2048})
+    void idleAuthorityReadsDoNotScaleAfterStartupRecovery(int count) throws Exception {
+        var provider = seedReadyAuthorities(count, "idle-");
+        var reads = new AtomicLong();
+        var allReads = new AtomicLong();
+        var scans = new AtomicLong();
+        var rows = new AtomicLong();
+        ZLinkLocationStore counted =
+                new ZLinkLocationStore() {
+                    public CompletionStage<ZLinkStoreReadResult> read(
+                            ZLinkStoreKey key, ZLinkStoreCancellation cancellation) {
+                        allReads.incrementAndGet();
+                        if (key.value().startsWith("authority\0")) reads.incrementAndGet();
+                        return provider.read(key, cancellation);
+                    }
+
+                    public CompletionStage<ZLinkStoreWriteResult> write(
+                            ZLinkStoreWriteRequest request, ZLinkStoreCancellation cancellation) {
+                        return provider.write(request, cancellation);
+                    }
+
+                    public CompletionStage<ZLinkStoreScanResult> scan(
+                            ZLinkStoreScanRequest request, ZLinkStoreCancellation cancellation) {
+                        boolean authority = request.prefix().startsWith("authority\0");
+                        if (authority) scans.incrementAndGet();
+                        return provider.scan(request, cancellation)
+                                .thenApply(
+                                        result -> {
+                                            if (authority
+                                                    && result
+                                                            instanceof
+                                                            ZLinkStoreScanPageResult page)
+                                                rows.addAndGet(page.value().items().size());
+                                            return result;
+                                        });
+                    }
+                };
+        var options =
+                new systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions();
+        options.addLocationStore(counted);
+        options.configureLocations().setPollingInterval(Duration.ofMillis(20));
+        options.addRouteMesh("idle")
+                .listen("inproc://idle-" + UUID.randomUUID())
+                .objects()
+                .client();
+        try (var host =
+                systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.start(
+                        options)) {
+            systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.startupCompletion(
+                            host)
+                    .toCompletableFuture()
+                    .get(5, java.util.concurrent.TimeUnit.SECONDS);
+            long initialScans = scans.get(),
+                    initialRows = rows.get(),
+                    initialReads = reads.get(),
+                    initialAll = allReads.get();
+            assertTrue(initialScans > 0, "startup recovery must scan the real provider");
+            Thread.sleep(250);
+            System.out.printf(
+                    "idle N=%d scans=%d rows=%d authorityReads=%d allReads=%d%n",
+                    count,
+                    scans.get() - initialScans,
+                    rows.get() - initialRows,
+                    reads.get() - initialReads,
+                    allReads.get() - initialAll);
+            assertEquals(0, scans.get() - initialScans, "idle authority scans");
+            assertEquals(0, rows.get() - initialRows, "idle authority rows");
+            assertEquals(0, reads.get() - initialReads, "idle authority exact reads");
+        }
+    }
+
+    private static ZLinkInMemoryProviderLocationStore seedReadyAuthorities(
+            int count, String idPrefix) throws Exception {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                repository
+                                        .claimOwnerLease("idle-owner", Duration.ofHours(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
+        var capabilities = new ArrayList<ZLinkObjectCapability>();
+        for (var kind :
+                List.of(
+                        ZLinkPlacementObjectKind.ACTOR,
+                        ZLinkPlacementObjectKind.USER_SPOT,
+                        ZLinkPlacementObjectKind.INSTANCE_SPOT)) {
+            capabilities.add(
+                    new ZLinkObjectCapability(
+                            kind, "room", ZLinkObjectMaintenancePolicyKind.DISABLED, false, 0));
+        }
+        var descriptor =
+                capacityDescriptor(
+                        owner, "idle", RoutingId.from("idle-remote"), 4096, capabilities);
+        repository
+                .updateMeshNode(descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture()
+                .get();
+        var codec =
+                new systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec();
+        for (int i = 0; i < count; i++) {
+            var kind =
+                    i % 3 == 0
+                            ? ZLinkPlacementObjectKind.ACTOR
+                            : i % 3 == 1
+                                    ? ZLinkPlacementObjectKind.USER_SPOT
+                                    : ZLinkPlacementObjectKind.INSTANCE_SPOT;
+            String id = idPrefix + i;
+            String key =
+                    kind == ZLinkPlacementObjectKind.ACTOR
+                            ? ZLinkAuthorityKeyCodec.actor(id)
+                            : ZLinkAuthorityKeyCodec.spot(id);
+            var request =
+                    new ZLinkObjectReservationRequest(
+                            kind,
+                            key,
+                            "room",
+                            "inline:test",
+                            new byte[32],
+                            1,
+                            new ZLinkMeshNodeDescriptorKey(descriptor.meshName(), descriptor.rid()),
+                            1,
+                            owner,
+                            new byte[] {1},
+                            kind == ZLinkPlacementObjectKind.ACTOR
+                                    ? ZLinkPlacementCapacityBundle.actor(1)
+                                    : ZLinkPlacementCapacityBundle.spot(kind, "room", 1));
+            var reservation =
+                    assertInstanceOf(
+                                    ZLinkObjectReserved.class,
+                                    repository
+                                            .reserve(request, () -> false)
+                                            .toCompletableFuture()
+                                            .get())
+                            .reservation();
+            byte[] payload =
+                    kind == ZLinkPlacementObjectKind.ACTOR
+                            ? new ZLinkActorAuthorityPayloadCodec()
+                                    .encode(
+                                            ZLinkActorAuthorityPayloadCodec.State.READY,
+                                            "room",
+                                            id,
+                                            descriptor.entrySpotId().orElseThrow(),
+                                            1,
+                                            0,
+                                            owner.ownerId(),
+                                            owner.leaseGeneration(),
+                                            "idle",
+                                            descriptor.rid(),
+                                            1)
+                            : kind == ZLinkPlacementObjectKind.USER_SPOT
+                                    ? codec.encodeUser(
+                                            systems.zlink.framework.runtime.locations
+                                                    .ZLinkServiceAuthorityPayloadCodec.State.READY,
+                                            "room",
+                                            id,
+                                            owner.ownerId(),
+                                            owner.leaseGeneration(),
+                                            "idle",
+                                            descriptor.rid(),
+                                            1)
+                                    : codec.encodeInstance(
+                                            systems.zlink.framework.runtime.locations
+                                                    .ZLinkServiceAuthorityPayloadCodec.State.READY,
+                                            "room",
+                                            id,
+                                            owner.ownerId(),
+                                            owner.leaseGeneration(),
+                                            "idle",
+                                            descriptor.rid(),
+                                            1);
+            assertEquals(
+                    ZLinkObjectCommitResult.COMMITTED,
+                    repository
+                            .commit(reservation, payload, null, () -> false)
+                            .toCompletableFuture()
+                            .get());
+        }
+        return provider;
+    }
+
+    @Test
+    void kindScanUsesProviderPrefixAndPreservesCanonicalOrderAcrossPages() throws Exception {
+        var provider = seedReadyAuthorities(32, "idle-한글:%/😀-");
+        var broad = collectAuthorities(new ZLinkProviderLocationRepository(provider), "", 3);
+        assertEquals(32, broad.size());
+        for (String prefix : List.of("zla1:a:", "zla1:s:")) {
+            String expectedPrefix =
+                    "authority\0" + (prefix.equals("zla1:a:") ? "actor\0" : "spot\0");
+            var scannedRows = new AtomicLong();
+            ZLinkLocationStore narrow =
+                    new ZLinkLocationStore() {
+                        public CompletionStage<ZLinkStoreReadResult> read(
+                                ZLinkStoreKey key, ZLinkStoreCancellation cancellation) {
+                            return provider.read(key, cancellation);
+                        }
+
+                        public CompletionStage<ZLinkStoreWriteResult> write(
+                                ZLinkStoreWriteRequest request,
+                                ZLinkStoreCancellation cancellation) {
+                            return provider.write(request, cancellation);
+                        }
+
+                        public CompletionStage<ZLinkStoreScanResult> scan(
+                                ZLinkStoreScanRequest request,
+                                ZLinkStoreCancellation cancellation) {
+                            assertEquals(expectedPrefix, request.prefix());
+                            return provider.scan(request, cancellation)
+                                    .thenApply(
+                                            result -> {
+                                                if (result
+                                                        instanceof ZLinkStoreScanPageResult page) {
+                                                    for (var row : page.value().items())
+                                                        assertTrue(
+                                                                row.key()
+                                                                        .value()
+                                                                        .startsWith(
+                                                                                expectedPrefix));
+                                                    scannedRows.addAndGet(
+                                                            page.value().items().size());
+                                                }
+                                                return result;
+                                            });
+                        }
+                    };
+            var selected =
+                    collectAuthorities(new ZLinkProviderLocationRepository(narrow), prefix, 1);
+            var expected = broad.stream().filter(entry -> entry.key().startsWith(prefix)).toList();
+            assertEquals(
+                    expected.stream().map(ZLinkAuthorityEntry::key).toList(),
+                    selected.stream().map(ZLinkAuthorityEntry::key).toList());
+            assertEquals(
+                    expected.size(), scannedRows.get(), "provider must not scan the other kind");
+            for (int i = 0; i < expected.size(); i++) {
+                assertArrayEquals(
+                        expected.get(i).snapshot().payload(), selected.get(i).snapshot().payload());
+                assertEquals(
+                        expected.get(i).snapshot().storeVersion(),
+                        selected.get(i).snapshot().storeVersion());
+            }
+            var repository = new ZLinkProviderLocationRepository(provider);
+            var first =
+                    assertInstanceOf(
+                            ZLinkAuthorityPage.class,
+                            repository
+                                    .list("", Optional.empty(), 1, () -> false)
+                                    .toCompletableFuture()
+                                    .get());
+            assertTrue(first.nextCursor().isPresent());
+            assertInstanceOf(
+                    ZLinkAuthorityScanExpired.class,
+                    repository
+                            .list(prefix, first.nextCursor(), 1, () -> false)
+                            .toCompletableFuture()
+                            .get());
+        }
+    }
+
+    private static List<ZLinkAuthorityEntry> collectAuthorities(
+            ZLinkProviderLocationRepository repository, String prefix, int limit) throws Exception {
+        var entries = new ArrayList<ZLinkAuthorityEntry>();
+        Optional<ZLinkAuthorityScanCursor> cursor = Optional.empty();
+        do {
+            var page =
+                    assertInstanceOf(
+                            ZLinkAuthorityPage.class,
+                            repository
+                                    .list(prefix, cursor, limit, () -> false)
+                                    .toCompletableFuture()
+                                    .get());
+            entries.addAll(page.items());
+            cursor = page.nextCursor();
+        } while (cursor.isPresent());
+        return entries;
+    }
+
     @Test
     void expiredReadyCommitKeepsDeadlineMeaningAndDoesNotPublish() throws Exception {
         var fixture = reincarnationFixture("expired-ready");
@@ -870,15 +1149,11 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                     return CompletableFuture.completedFuture(
                                             ZLinkRelocationDeleteResult.DELETED);
                                 });
-        try (var runtime =
-                new systems.zlink.framework.runtime.locations.ZLinkStatefulAuthorityRouteRuntime(
-                        repository,
-                        roots,
-                        Map.of("game", node),
-                        Duration.ofHours(1),
-                        failure -> {
-                            throw new AssertionError(failure);
-                        })) {
+        {
+            var runtime =
+                    new systems.zlink.framework.runtime.locations
+                            .ZLinkInstanceActivationStartupRecovery(
+                            repository, roots, Map.of("game", node));
             assertTrue(rootExists.get());
             runtime.start().toCompletableFuture().get();
             assertFalse(rootExists.get());

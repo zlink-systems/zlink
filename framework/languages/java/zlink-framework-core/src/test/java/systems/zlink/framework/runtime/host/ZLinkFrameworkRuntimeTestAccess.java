@@ -19,7 +19,6 @@ import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDisp
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.locations.ZLinkLocationRuntime;
 import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
-import systems.zlink.framework.runtime.locations.ZLinkStatefulAuthorityRouteRuntime;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 
 import java.util.List;
@@ -280,11 +279,6 @@ public final class ZLinkFrameworkRuntimeTestAccess {
 
     public static ZLinkMeshDrainCoordinator meshDrains(ZLinkFrameworkRuntime runtime) {
         return runtime.meshDrains;
-    }
-
-    public static ZLinkStatefulAuthorityRouteRuntime authorityRouteRuntime(
-            ZLinkFrameworkRuntime runtime) {
-        return runtime.authorityRouteRuntime;
     }
 
     public static ZLinkLocationRuntime locationRuntime(ZLinkFrameworkRuntime runtime) {
