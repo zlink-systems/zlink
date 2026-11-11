@@ -68,7 +68,7 @@ for run in $(seq 1 "${RUNS}"); do
 
         source_args=(
           --implementation "${impl}" --scenario "${pattern}" --payload-size "${payload}"
-          --request-window "${WINDOW}" --send-concurrency "${SEND_CONCURRENCY}"
+          --request-window "${WINDOW}" --submit-concurrency "${SUBMIT_CONCURRENCY}"
           --latency-sample-limit "${LATENCY_SAMPLE_LIMIT}"
           --warmup-seconds "${WARMUP_SECONDS}" --drain-bound-ms "${DRAIN_BOUND_MS}"
           --trigger-url "${trigger_url}" --stats-url "${source_stats_url}"
