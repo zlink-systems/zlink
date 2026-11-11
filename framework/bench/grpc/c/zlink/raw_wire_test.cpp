@@ -63,11 +63,39 @@ void check_wire (size_t size)
              "protobuf body round trip failed");
     zlink_msg_close (&encoded);
 }
+#ifndef RAW_WIRE_SERVER_TEST
+void check_reply_validation ()
+{
+    auto stream = std::make_shared<callback_state_t> ();
+    request_context_t context{stream, 7, 123, 1024, zlink_c_bench::phase_active};
+    for (const bool corrupt : {false, true}) {
+        zlink_msg_t parts[2];
+        require (make_request_parts (context.size, context.run_id, context.phase,
+                                     context.seq + (corrupt ? 1 : 0), parts), "reply allocation failed");
+        zlink_completion_t completion{};
+        completion.kind = ZLINK_COMPLETION_REQUEST;
+        completion.request_result = ZLINK_REQUEST_OK;
+        completion.reply_parts = parts;
+        completion.reply_part_count = 2;
+        ++stream->outstanding;
+        on_reply (completion, context);
+        zlink_msg_close (&parts[0]);
+        zlink_msg_close (&parts[1]);
+    }
+    require (stream->completed == 1 && stream->errors == 1 && stream->outstanding == 0,
+             "correct sequence must pass and wrong sequence must fail");
+    std::puts ("reply validation: correct=1 wrong-sequence=1 outstanding=0");
+}
+#endif
+
 }
 
 int main ()
 {
     for (const size_t size : {29, 127, 128, 1024, 4096})
         check_wire (size);
+#ifndef RAW_WIRE_SERVER_TEST
+    check_reply_validation ();
+#endif
     std::puts ("raw wire: 29-byte frozen dump and 127/128/1024/4096-byte protobuf parity passed");
 }
