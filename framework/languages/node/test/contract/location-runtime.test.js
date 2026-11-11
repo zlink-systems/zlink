@@ -862,8 +862,10 @@ for (const failClaim of [false, true]) {
     });
     try {
       await runtime.start(rid('node-a'));
-      assert.equal(timers.length, 1);
-      assert.equal(timers[0].delayMs, 50);
+      const heartbeatTimers = failClaim ? timers : timers.slice(1);
+      if (!failClaim) assert.equal(timers[0].delayMs, 24_950);
+      assert.equal(heartbeatTimers.length, 1);
+      assert.equal(heartbeatTimers[0].delayMs, 50);
     } finally {
       storeUnavailable = false;
       await runtime.stop();
@@ -900,13 +902,13 @@ test('location runtime schedules heartbeats from the actual monotonic start afte
   });
 
   await runtime.start(rid('node-a'));
-  assert.equal(timers[0].delayMs, 100);
+  assert.equal(timers.at(-1).delayMs, 100);
 
   wallClockMs = -6_000;
   monotonicMs = 150;
-  timers.shift().callback();
+  timers.pop().callback();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(timers[0].delayMs, 100);
+  assert.equal(timers.at(-1).delayMs, 100);
 
   await runtime.stop();
 });
@@ -1074,7 +1076,7 @@ test('location runtime waits for an in-flight heartbeat before removing the owne
   });
 
   await runtime.start(rid('node-a'));
-  timers.shift().callback();
+  timers.pop().callback();
   await new Promise((resolve) => setImmediate(resolve));
 
   let stopped = false;
@@ -1139,7 +1141,7 @@ test('location runtime does not install a reclaimed lease after stop races with 
   });
 
   await runtime.start(rid('node-a'));
-  timers.shift().callback();
+  timers.pop().callback();
   await new Promise((resolve) => setImmediate(resolve));
 
   const stopping = runtime.stop();

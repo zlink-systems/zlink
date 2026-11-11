@@ -11,7 +11,6 @@ from __future__ import annotations
 from .analysis import Judgement, Row, ordered_keys
 from .model import (
     G5_SPREAD_LIMIT_PERCENT,
-    JUDGEMENT_THRESHOLD,
     PATTERNS,
     RESULT_METRICS,
     Cell,
@@ -310,8 +309,8 @@ def render_g5_table(rows: dict[CellKey, Row], payload_sizes, implementations=Non
 def render_judgement_table(judgements: list[Judgement]) -> str:
     """spec 7.2 ratios with the publication decision and the reason for it."""
     lines = [
-        f"| Formula | Payload | Value | Status | Verdict (>= {JUDGEMENT_THRESHOLD:.2f}) | Reason |",
-        "|---|---|---|---|---|---|",
+        "| Formula | Pattern | Payload | Value | Status | Verdict | Reason |",
+        "|---|---:|---:|---:|---|---|---|",
     ]
     for judgement in judgements:
         verdict = judgement.verdict or "—"
@@ -319,8 +318,14 @@ def render_judgement_table(judgements: list[Judgement]) -> str:
             verdict = "**fail**"
         status = judgement.status if judgement.published else "**unsupported**"
         lines.append(
-            f"| `{judgement.formula}` | {judgement.payload_size} | {judgement.value_text()} "
-            f"| {status} | {verdict} | {judgement.reason} |"
+            f"| `{judgement.formula}` | {judgement.numerator.pattern} | {judgement.payload_size} | {judgement.value_text()} "
+            f"| {status} | {verdict} | {judgement.reason} (threshold {judgement.threshold:.2f}) |"
+        )
+    sizes = sorted({j.payload_size for j in judgements})
+    for size in sizes:
+        lines.append(
+            f"| `grpc-<lang>` | request-backpressure | {size} | n/a | n/a | n/a | "
+            "gRPC does not measure request-backpressure |"
         )
     return "\n".join(lines)
 

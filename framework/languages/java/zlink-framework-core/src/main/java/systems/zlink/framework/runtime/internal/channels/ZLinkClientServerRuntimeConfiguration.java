@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.internal.channels;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.locations.ZLinkLiveLocationRows;
 
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -13,13 +14,21 @@ import java.util.function.Supplier;
 public final class ZLinkClientServerRuntimeConfiguration {
     private final ZLinkLocationRepository store;
     private final ZLinkLocationOptions options;
+    private final ZLinkLiveLocationRows liveRows;
     private volatile ZLinkLocationOwnerToken owner;
     private Lifecycle lifecycle;
 
     public ZLinkClientServerRuntimeConfiguration(
-            ZLinkLocationRepository store, ZLinkLocationOptions options) {
+            ZLinkLocationRepository store,
+            ZLinkLocationOptions options,
+            ZLinkLiveLocationRows liveRows) {
         this.store = store;
+        this.liveRows = Objects.requireNonNull(liveRows, "liveRows");
         this.options = Objects.requireNonNull(options, "options");
+    }
+
+    public ZLinkLiveLocationRows liveRows() {
+        return liveRows;
     }
 
     public ZLinkLocationRepository store() {

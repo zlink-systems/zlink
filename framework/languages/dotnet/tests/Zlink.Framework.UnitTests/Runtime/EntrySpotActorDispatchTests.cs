@@ -5907,6 +5907,72 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Theory]
+    [InlineData(40)]
+    [InlineData(120)]
+    public async Task Session_bind_uses_entry_budget_after_authority_read(int lookupMilliseconds)
+    {
+        var time = new ManualTimeProvider();
+        AdvancingActorReadStore? store = null;
+        var attempts = 0;
+        TimeSpan? submittedTimeout = null;
+        var node = new CapturingSpotNode
+        {
+            CanonicalBindHandler = (request, timeout, _) =>
+            {
+                attempts++;
+                submittedTimeout = timeout;
+                var active =
+                    (Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionBindingTransitionCase0)
+                        request.Binding;
+                return ValueTask.FromResult<Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.RequestSpecificTailCase2?>(
+                    new(active.BindingGeneration, request.Actor.ExpectedAuthorityOwnerGeneration)
+                );
+            },
+        };
+        var (runtime, actor) = await CreateStartedRuntimeAsync(
+            node,
+            defaultRequestTimeout: TimeSpan.FromMilliseconds(120),
+            joinTimeProvider: time,
+            locationStoreWrapper: inner => store = new AdvancingActorReadStore(inner, time)
+        );
+        try
+        {
+            store!.AdvanceOnRead = TimeSpan.FromMilliseconds(lookupMilliseconds);
+            var context = new ZLinkSessionContext(
+                runtime,
+                new RetainedOutboundCapturingStream(RoutingId.From("session-bind-budget")),
+                new RelaySessionHandlerRegistry(),
+                static () => ValueTask.CompletedTask,
+                static _ => ValueTask.CompletedTask
+            );
+            var binding = context.ActorCoordinator.BindActorAsync(
+                context,
+                new ActorRef(actor.ActorId, actor.Generation, "entry", actor.NodeRid),
+                CancellationToken.None
+            );
+            if (lookupMilliseconds == 120)
+            {
+                var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                    await binding
+                );
+                Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
+                Assert.Equal(0, attempts);
+            }
+            else
+            {
+                await binding;
+                Assert.Equal(1, attempts);
+                Assert.Equal(TimeSpan.FromMilliseconds(80), submittedTimeout);
+            }
+            Assert.Equal(1, store.AdvancedReadCount);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Theory]
     [InlineData(ZLinkFrameworkErrorKind.Unavailable, true)]
     [InlineData(ZLinkFrameworkErrorKind.NotFound, false)]
     public async Task Bind_Admission_Failure_Propagates_Without_Resubmission(
@@ -15781,6 +15847,42 @@ public sealed partial class EntrySpotActorDispatchTests
         ) => true;
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class AdvancingActorReadStore(IZLinkLocationStore inner, ManualTimeProvider time)
+        : IZLinkLocationStore
+    {
+        internal TimeSpan AdvanceOnRead { get; set; }
+        internal int AdvancedReadCount { get; private set; }
+
+        public async ValueTask<ZLinkStoreReadResult> ReadAsync(
+            ZLinkStoreKey key,
+            CancellationToken cancellationToken = default
+        )
+        {
+            var result = await inner.ReadAsync(key, cancellationToken);
+            if (
+                AdvanceOnRead > TimeSpan.Zero
+                && key.Value.StartsWith("authority\0actor\0", StringComparison.Ordinal)
+            )
+            {
+                var advance = AdvanceOnRead;
+                AdvanceOnRead = TimeSpan.Zero;
+                AdvancedReadCount++;
+                time.AdvanceMonotonicOnly(advance);
+            }
+            return result;
+        }
+
+        public ValueTask<ZLinkStoreWriteResult> WriteAsync(
+            ZLinkStoreWriteRequest request,
+            CancellationToken cancellationToken = default
+        ) => inner.WriteAsync(request, cancellationToken);
+
+        public ValueTask<ZLinkStoreScanResult> ScanAsync(
+            ZLinkStoreScanRequest request,
+            CancellationToken cancellationToken = default
+        ) => inner.ScanAsync(request, cancellationToken);
     }
 
     private sealed class DelayedLocationProviderStore(IZLinkLocationStore inner, TimeSpan delay)

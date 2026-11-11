@@ -315,8 +315,9 @@ limit. A per-Actor-stable-type limit isn't provided.
 
 Cap enforcement counts active count together with the reserved slots secured before the
 factory finishes. The Location Store confirms reservation and authority in the same
-transaction, and descriptor count is a projection for candidate selection. If no candidate
-can take it, the call ends with `Unavailable`.
+transaction, and descriptor count is a projection for candidate selection. The wait and the
+result when no candidate exists or none is ready yet are owned by
+[MeshNode §5.2](../03-spot-actor/03-mesh-node.en.md#52-conditions-for-selecting-a-target-node).
 
 The pending-activation limit isn't an object population limit — it's a separate admission
 limit protecting concurrently in-flight activations, and it doesn't change the active/reserved
@@ -451,6 +452,11 @@ A per-operation call object provides only the settings valid for that capability
 - the ref returned by Create/lookup is used to change that specific incarnation or bind to a
   session, and isn't used as the target of a regular message.
 - STREAM calls preserve session identity and packet correlation.
+- A call on a public client or manager obtained from configuration before the Framework runtime has
+  started ends at its terminal with `InvalidOperation`. The framework doesn't wait for the runtime to
+  start or trigger the start. Calls made during hosted-service startup, after the runtime has started,
+  aren't covered by this rule. A call is used when admission accepts it, so this rejection and a
+  shutdown rejection don't use the call, and the same call can be submitted again.
 
 The server package's one-way send/publish/explicit STREAM reply follows the async-only
 admission contract of the
@@ -1057,7 +1063,7 @@ The RouteMesh/ClientServer select-one target commitment and HWM retry boundary a
 | The source outbound admission of that operation family accepted the operation | One-way completion follows [Submit and completion §4](../01-execution/01-submit-and-completion.en.md#4-one-way-submit--the-admission-boundary); request transitions to pending completion |
 | A regular one-way's first submit | Follows the HWM retry and completion boundary in [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification) |
 | Submission to some targets fails after Logical Multicast has started | already-accepted targets are kept. Per-target failures aren't turned into a public result or publish-only monitoring, and the whole operation isn't rolled back or automatically retried |
-| A known direct target's route isn't ready | `Unavailable` |
+| A known direct target's route isn't ready | One-way: `Unavailable`. A request's connection-readiness wait and result follow [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification) |
 | No Actor/Spot authority, or no Node/Channel send path | `NotFound` |
 | Rejected by target admission seal, filter, or runtime policy with no typed result | `Rejected` |
 | New admission closed by host [shutdown](02-glossary.en.md#shutdown) | `ShuttingDown` |
@@ -1090,12 +1096,15 @@ follows.
 | ActorRef-addressed destroy | idempotent `false` | `Unavailable` | `InvalidOperation` | `Unavailable` |
 | SpotRef-addressed close | idempotent `false` | `Unavailable` | `InvalidOperation` | `Unavailable` |
 
+`route unavailable` is the case where the connection-readiness rules of [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification) end with
+`Unavailable`. If the request timeout expires during that wait, the result is `DeadlineExceeded`.
+
 The failure conditions of Create/GetOrCreate map to error kinds as follows.
 
 | Condition | Error kind |
 |---|---|
-| No node can host it | `Unavailable` |
-| An owner route that secured a reservation but isn't ready | `Unavailable` |
+| No node can host it, or none is ready yet | Follows [MeshNode §5.2](../03-spot-actor/03-mesh-node.en.md#52-conditions-for-selecting-a-target-node) |
+| An owner route that secured a reservation but isn't ready | Follows the connection-readiness rules of [Submit and completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification) |
 | Store resolve/reservation/commit and activation-infrastructure failures | `InternalFailure` |
 | A Spot `Configure()` registration fails its checks (§23) | `InvalidOperation` |
 | An object kind/stable-type conflict | `TypeMismatch` |

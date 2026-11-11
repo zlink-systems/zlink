@@ -25,7 +25,7 @@ runs inside the Spot that Actor belongs to now, so that Spot's state and the Act
 handled in one place.
 
 An Actor uses the same Location Store as a Spot. The registration code is the one in
-[Spot](21-spot.en.md#2-the-location-store--a-prerequisite-for-registering-a-spot).
+[Location](25-location.en.md#store-setup).
 
 ## 2. The Receiving Side — the Node That Hosts the Actor
 

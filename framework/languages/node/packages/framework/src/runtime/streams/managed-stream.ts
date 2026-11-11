@@ -19,6 +19,7 @@ import {
 import type { Message } from '../../contracts/Common/Message';
 import { throwIfAborted } from '../abort';
 import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
+import { remainingRequestTimeout } from '../messaging/request-deadline';
 import type {
   ZLinkBackendActorRef,
   ZLinkBackendSendFlags,
@@ -194,6 +195,11 @@ export class ZLinkManagedStream implements ZLinkStream {
     ) => void,
     authorityFence?: ZLinkActorSessionAuthorityFence
   ): Promise<void> {
+    const operationName = `Actor '${actor.actorId}' native session bind`;
+    // One deadline for lookup and bind. A timeout of 0 keeps the socket default for both
+    // stages; a positive timeout that runs out before bind fails without submitting it.
+    const deadlineMs = timeoutMs > 0 ? performance.now() + timeoutMs : undefined;
+    const bindTimeoutMs = () => remainingRequestTimeout(operationName, deadlineMs) ?? timeoutMs;
     throwIfAborted(signal);
     if (this.transportClosed) {
       throw createInternalFrameworkException(
@@ -220,7 +226,7 @@ export class ZLinkManagedStream implements ZLinkStream {
             route.service.bindActor(
               this.backendRoutingId(),
               nativeActor,
-              timeoutMs,
+              bindTimeoutMs(),
               onBindingReplaced === undefined
                 ? undefined
                 : (_actorId, retiredSession, replacedActor) => {
@@ -231,7 +237,7 @@ export class ZLinkManagedStream implements ZLinkStream {
             ),
           signal
         ),
-        `Actor '${actor.actorId}' native session bind`
+        operationName
       );
       const binding = route.service
         .bindings(this.backendRoutingId())
@@ -282,7 +288,7 @@ export class ZLinkManagedStream implements ZLinkStream {
     await this.socket.bindActor(
       this.backendRoutingId(),
       toBackendActorRef(actor),
-      timeoutMs,
+      bindTimeoutMs(),
       signal
     );
     this.nativeActorBindings.set(actor.actorId, { actor: nativeActor });

@@ -120,7 +120,7 @@ class quest_event_store_t
 
         const std::string line = std::format (
           "gamequest-mission processed player={} quest={}\n", event.player_id, rule->quest_id);
-        std::cerr << line;
+        std::cout << line;
         auto updated = replay_unlocked (event.player_id);
         _projections[event.player_id] = updated;
         return {std::move (updated),
@@ -314,14 +314,14 @@ class player_quest_spot_t : public instance_spot_t
         const auto projection = _store.projection (_player_id);
         const std::string owner_ready_line = std::format (
           "gamequest-owner ready player={} node={}\n", _player_id, _topology.mission_name);
-        std::cerr << owner_ready_line;
+        std::cout << owner_ready_line;
         if (!projection.empty ()) {
             const std::string replayed_line = std::format (
               "gamequest-mission replayed player={} generation={} objectGeneration={}\n",
               _player_id,
               generation,
               _context.object_generation ());
-            std::cerr << replayed_line;
+            std::cout << replayed_line;
         }
         co_return;
     }
@@ -333,7 +333,7 @@ class player_quest_spot_t : public instance_spot_t
           "gamequest-owner closing-entered player={} objectGeneration={}\n",
           _player_id,
           _context.object_generation ());
-        std::cerr << line;
+        std::cout << line;
         co_return;
     }
 
@@ -380,7 +380,7 @@ class player_quest_spot_t : public instance_spot_t
                   "gamequest-mission reconciled player={} quest={}\n",
                   request.player_id,
                   result.reconciled_quest_id);
-                std::cerr << line;
+                std::cout << line;
             }
             return {std::move (result.projection)};
         }

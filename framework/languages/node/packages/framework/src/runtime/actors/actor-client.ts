@@ -1,3 +1,4 @@
+import type { ZLinkRuntimeAdmissionGate } from '../admission';
 import { RequestRuntime } from '../foundation/request-runtime';
 import type { PendingOperation, OperationObserver } from '../foundation/operation-registry';
 import { isUtf8 } from 'node:buffer';
@@ -90,6 +91,7 @@ import {
 import type { ZLinkActorRoutedJoinTransport } from './actor-routed-join-transport';
 
 export interface ZLinkActorClientOptions {
+  readonly admission?: ZLinkRuntimeAdmissionGate;
   readonly requests?: RequestRuntime;
   readonly nodeProvider: (meshName: string) => ZLinkBackendMeshNode | undefined;
   readonly completionTableProvider: (meshName: string) => ZLinkMeshCompletionTable | undefined;
@@ -163,6 +165,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     message: unknown,
     metadata: ReadonlyMap<string, string>
   ): Promise<ZLinkSubmitResult> {
+    this.options.admission?.requireCall();
     const route = await this.resolveActorRoute(actorId);
     const { meshName, actorRef: actor } = route;
     this.throwIfKnownStale(route);
@@ -240,6 +243,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     waitPolicy: 'async' | 'yield' = 'async',
     onAdmitted?: () => void
   ): ZLinkRequestResult<TReply> {
+    this.options.admission?.requireCall();
     throwIfAborted(signal);
     const sourceSpotId = currentZLinkActorExecution()?.spotId ?? currentZLinkSpotSerialSourceId();
     const effectiveTimeoutMs = timeoutMs ?? this.options.defaultRequestTimeoutMs;

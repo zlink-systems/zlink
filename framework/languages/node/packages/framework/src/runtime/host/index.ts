@@ -7,6 +7,7 @@ import { ZLinkProviderRelocationRepository } from '../locations/relocation-blob'
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import { currentApplicationJobOrigin } from '../application-jobs/application-job-queue-scope';
 import { listAllMeshNodeDescriptors } from '../locations/location-store-pages';
+import { ZLinkLiveRowFilter } from '../locations/lease-tracker';
 import { ZLinkDescriptorPublicationUnconfirmedError } from '../locations/descriptor-publication';
 import { ZLinkOwnerLeaseReleaseDelayPendingError } from '../locations/owner-lease-release-delay';
 import { ZLinkMeshNodeDescriptorConflictException } from '../spots/spot-node-runtime-manager';
@@ -399,6 +400,15 @@ export class ZLinkFrameworkRuntimeHost
     this.admission = (
       factories?.createAdmissionGate ?? ((ownerOpen) => new ZLinkRuntimeAdmissionGate(ownerOpen))
     )(() => this.ownerAdmissionOpen());
+    // Spec 06 §7 and §13: a runtime that has not started rejects public calls with
+    // InvalidOperation; one that stopped rejects them as shutting down.
+    this.admission.setRuntimeRefusal(() =>
+      this.executionState !== undefined
+        ? undefined
+        : this.runtimeState === ZLinkFrameworkRuntimeState.Preparing
+          ? ZLinkFrameworkInternalErrorKind.InvalidOperation
+          : ZLinkFrameworkInternalErrorKind.RuntimeShutdown
+    );
     this.admission.setExecutionRuntime(() => this.locationOwner.currentRuntime);
     this.backendAdapterFactory = resolveBackendAdapterFactory(internalOptions);
     this.lifecycleSink = options.lifecycleSink;
@@ -733,6 +743,7 @@ export class ZLinkFrameworkRuntimeHost
       factories?.createBoundSessionRelay ??
       ((relayOptions: ZLinkBoundSessionRelayOptions) => new ZLinkBoundSessionRelay(relayOptions));
     this.boundSessionRelay = createBoundSessionRelay({
+      admission: this.admission,
       requestTimeoutMs: options.registration.requestTimeoutMs,
       sessionRelocationSealTimeoutMs:
         options.registration.locations.options.sessionRelocationSealTimeoutMs ??
@@ -2418,6 +2429,8 @@ export class ZLinkFrameworkRuntimeHost
     if (locationStore === undefined) {
       throw new ZLinkConfigurationException('User Spot creation requires a Location Store.');
     }
+    const liveRows = new ZLinkLiveRowFilter();
+    const leaseTracker = this.locationOwner.currentLeaseTracker!;
     this.actorPlacement ??= new ZLinkActorPlacementCoordinator({
       store: locationStore,
       actorRelocationPolicy: (meshName, stableType) =>
@@ -2469,7 +2482,11 @@ export class ZLinkFrameworkRuntimeHost
           );
         }
         const meshNode = this.spotNodeRuntime?.meshNode(meshName);
-        const descriptors = await listAllMeshNodeDescriptors(locationStore, meshName, signal);
+        const descriptors = await liveRows.filter(
+          await listAllMeshNodeDescriptors(locationStore, meshName, signal),
+          (descriptor, signal) => leaseTracker.isOwnerTokenLive(descriptor, signal),
+          signal
+        );
         const selected = await selectReadyLocationPlacementDescriptor(
           descriptors,
           meshNode,
@@ -2547,7 +2564,7 @@ export class ZLinkFrameworkRuntimeHost
     };
     const coordinator = (this.userSpotCoordinator = new ZLinkUserSpotCreationCoordinator({
       store: locationStore,
-      leaseTracker: this.locationOwner.currentLeaseTracker!,
+      leaseTracker,
       relocationPolicy: (meshName, stableType) => {
         const node = this.options.registration.spotNodes.get(selectUserSpotMesh(meshName));
         return node?.spotFactoryRegistrations?.[stableType]?.relocation.kind;
@@ -2590,7 +2607,11 @@ export class ZLinkFrameworkRuntimeHost
       target: async (request, signal, excludedNodeRids) => {
         const meshName = selectUserSpotMesh(request.meshName);
         const meshNode = this.spotNodeRuntime?.meshNode(meshName);
-        const descriptors = await listAllMeshNodeDescriptors(locationStore, meshName, signal);
+        const descriptors = await liveRows.filter(
+          await listAllMeshNodeDescriptors(locationStore, meshName, signal),
+          (descriptor, signal) => leaseTracker.isOwnerTokenLive(descriptor, signal),
+          signal
+        );
         const selected = await selectReadyLocationPlacementDescriptor(
           descriptors,
           meshNode,

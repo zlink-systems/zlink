@@ -827,6 +827,22 @@ Processing and cleanup of results from work already accepted into the local queu
 proceed within a separate deadline. But no new Store change is made with expired owner
 eligibility.
 
+**Temporarily closed versus permanently discarded.** While an object's execution is closed by the
+blocking above or by Store recovery confirmation in §5.1, the Location runtime's execution policy
+judges it temporarily closed, distinct from permanently discarded, and the existing execution gate
+and admission apply that judgment.
+
+- Unstarted work already accepted into the local queue, and timer ticks already in the queue, are
+  held. When the gate of the same incarnation reopens they run once and are not recreated or resent.
+- An operation that arrives while closed is not accepted into the queue and ends with `ShuttingDown`.
+- A timer tick not yet queued is not queued; it is kept and delivered after reopening under the
+  [Spot timer](../03-spot-actor/10-spot-timer.en.md) rules.
+- Holding does not extend an operation's deadline or cancellation. If the deadline passes or the
+  operation is cancelled while held, it ends once with that result and does not run when the gate
+  reopens.
+- `T` discard, loss of execution rights, and a confirmed different owner or incarnation are permanent
+  discard. Held work and ticks are cleaned up under the §5.1 cleanup rules and the gate does not reopen.
+
 The initial owner-lease claim at startup is a Store request like a renewal and
 finishes within the renew timeout. If a timeout or provider error happens after the
 request started, the Framework re-reads the same key to confirm the result, as in §10,
