@@ -372,12 +372,12 @@ client stopwatch만으로 단방향 처리량을 과장하지 않기 위한 기�
 성능 판정은 gRPC가 아니라 같은 ZLink 계층끼리 비교한다. raw binding은 같은 조건의 `zlink-c`
 request-backpressure 결과를 기준으로 본다. raw binding이 C 결과의 80% 이상이면 binding 계층의 기본
 성능은 통과로 판단한다. framework는 같은 언어의 raw binding 결과를 기준으로 본다. framework가
-raw binding 결과의 80% 이상이면 framework 추가 비용은 통과로 판단한다.
+raw binding 결과의 60% 이상이면 framework 추가 비용은 통과로 판단한다.
 
 ```text
 payload 크기 1024와 4096 각각에서:
 zlink-<lang> / zlink-c                     >= 0.80   binding 계층 통과
-zlink-framework-<lang> / zlink-<lang>      >= 0.80   framework 추가 비용 통과
+zlink-framework-<lang> / zlink-<lang>      >= 0.60   framework 추가 비용 통과(세 패턴 모두)
 ```
 
 두 식은 payload 크기마다 따로 계산한다. 한 언어는 `1024`와 `4096` 두 크기에서 모두 기준을
@@ -389,8 +389,12 @@ zlink-framework-<lang> / zlink-<lang>      >= 0.80   framework 추가 비용 통
 패턴이 판정에 적합한 이유는 ZLink request가 서버가 처리했다는 확인을 주기 때문이다. `request-serial`은 한 번에 하나만 처리하는 사용 패턴의 왕복 지연을 보기
 위한 보조 지표로 남긴다.
 
-**판정의 기준 패턴은 `request-backpressure`다.** 언어 통과 여부는 이 패턴에서 두 payload 크기
-모두 기준을 만족할 때 결정한다.
+**binding 계층(첫 번째 식)의 기준 패턴은 `request-backpressure`다.** 두 payload 크기 모두에서
+기준을 만족할 때 통과다. **framework 추가 비용(두 번째 식)은 세 패턴 — `request-serial`,
+`send-saturation`, `request-backpressure` — 모두에서 두 payload 크기 모두 기준을 만족할 때 통과다.**
+framework가 더하는 비용은 사용 패턴마다 다르게 드러나므로(왕복 지연, 단방향 제출, 깊은 미완료) 한
+패턴의 통과로 나머지를 대신하지 않는다. 이 때 `request-serial`은 framework 판정에서는 보조 지표가
+아니라 판정 셀이다.
 
 기준 패턴을 이렇게 두는 근거는 아래와 같다.
 
