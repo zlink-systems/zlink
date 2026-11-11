@@ -170,36 +170,27 @@ class AcceptanceTest(unittest.TestCase):
             self.assertEqual(row.g5_status, "fail", f"{impl} {pattern}@{size}")
 
     def test_summary_4_judgements(self):
-        """One published value, three unsupported, each naming the row that failed.
+        """Historical two-second warmup makes every comparison unjudgeable.
 
         The Phase 0 summary judged the fixed-window data, so the ratios are computed
         directly on ``request-window`` with each layer's current threshold; the
         current language judgement does not read that legacy pattern.
         """
         expected = [
-            ("zlink-dotnet / zlink-c", "zlink-dotnet", "zlink-c", BINDING_JUDGEMENT[0],
-             1024, "published", "fail", 0.084, None),
-            ("zlink-dotnet / zlink-c", "zlink-dotnet", "zlink-c", BINDING_JUDGEMENT[0],
-             4096, "unsupported", None, 0.111, ("denominator", "zlink-c", 25.7)),
+            ("zlink-dotnet / zlink-c", "zlink-dotnet", "zlink-c", BINDING_JUDGEMENT[0], 1024),
+            ("zlink-dotnet / zlink-c", "zlink-dotnet", "zlink-c", BINDING_JUDGEMENT[0], 4096),
             ("zlink-framework-dotnet / zlink-dotnet", "zlink-framework-dotnet", "zlink-dotnet",
-             FRAMEWORK_JUDGEMENT[0], 1024, "unsupported", None, 0.102,
-             ("numerator", "zlink-framework-dotnet", 29.6)),
+             FRAMEWORK_JUDGEMENT[0], 1024),
             ("zlink-framework-dotnet / zlink-dotnet", "zlink-framework-dotnet", "zlink-dotnet",
-             FRAMEWORK_JUDGEMENT[0], 4096, "unsupported", None, 0.071,
-             ("numerator", "zlink-framework-dotnet", 11.5)),
+             FRAMEWORK_JUDGEMENT[0], 4096),
         ]
-        for formula, numerator, denominator, threshold, size, status, verdict, value, blame in expected:
+        for formula, numerator, denominator, threshold, size in expected:
             judgement = judge_pair(
                 self.rows, formula, numerator, denominator, size, "request-window", threshold
             )
-            self.assertEqual(judgement.status, status, f"{formula}@{size}")
-            self.assertEqual(judgement.verdict, verdict, f"{formula}@{size}")
-            self.assertAlmostEqual(judgement.value, value, delta=0.0005, msg=f"{formula}@{size}")
-            if blame:
-                role, impl, spread = blame
-                self.assertIn(role, judgement.reason)
-                self.assertIn(impl, judgement.reason)
-                self.assertIn(f"{spread:.1f}%", judgement.reason)
+            self.assertEqual(judgement.status, "unsupported", f"{formula}@{size}")
+            self.assertIsNone(judgement.verdict)
+            self.assertIn("warmup missing, spec requires 30s", judgement.reason)
 
     def test_legacy_fixture_does_not_judge_request_window(self):
         self.assertEqual(len(self.judgements), 8)

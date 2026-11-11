@@ -57,7 +57,6 @@ _TRIGGER_FIELDS = (
     "pattern",
     "payloadBytes",
     "durationMs",
-    "warmup",
     "endpoint",
     "receivedAtUnixMs",
 )
@@ -84,6 +83,34 @@ def _server_identity(raw: dict[str, Any], source: str) -> tuple[dict[str, Any], 
     if pattern not in INPUT_PATTERNS:
         raise ReportError(f"{source}: unsupported server-driven pattern {pattern!r}")
     return trigger, CellKey(str(implementation), str(pattern), int(payload_size))
+
+
+def _warmup_seconds(payload: dict[str, Any], raw: dict[str, Any],
+                    trigger: dict[str, Any]) -> float | None:
+    """Read a recorded warmup and normalize producer seconds/milliseconds."""
+    metadata = payload.get("metadata", {})
+    values = (metadata.get("warmupSeconds"), raw.get("warmupSeconds"),
+              payload.get("warmupSeconds")) if isinstance(metadata, dict) else (
+                  raw.get("warmupSeconds"), payload.get("warmupSeconds"))
+    for value in values:
+        if value is not None:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+    value = trigger.get("warmup")
+    if value is None:
+        return None
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    unit = metadata.get("warmupUnit") if isinstance(metadata, dict) else None
+    if unit in ("millisecond", "milliseconds", "ms"):
+        return seconds / 1000.0
+    if unit in (None, "second", "seconds", "s"):
+        return seconds
+    return None
 
 
 def _target_stats(raw: Any, source: str, pattern: str) -> dict[str, Any]:
@@ -181,6 +208,7 @@ def cells_from_cell_json(payload: dict[str, Any], run: str, source: str = "") ->
             run_id=None if role is None else str(trigger["runId"]),
             cell_id=None if role is None else str(trigger["cellId"]),
             trigger=trigger,
+            warmup_seconds=_warmup_seconds(payload, raw, trigger),
             submit_concurrency=_submit_concurrency(payload.get("metadata", {}), trigger, origin),
         )
         for name in ("throughput_per_second", "bandwidth_mb_s"):

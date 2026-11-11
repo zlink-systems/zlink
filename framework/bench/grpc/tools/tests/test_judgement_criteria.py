@@ -30,6 +30,7 @@ class JudgementCriteriaTest(unittest.TestCase):
                         key=key,
                         run_count=3,
                         values={"throughput_per_second": throughput},
+                        warmup_seconds=[30.0, 30.0, 30.0],
                         spread_percent=0.0,
                         g5_status="pass",
                         abandoned=0,
@@ -48,6 +49,36 @@ class JudgementCriteriaTest(unittest.TestCase):
         rows = self.rows({("binding", 1024): 0.79})
         self.assertEqual(self.judgement(rows, "zlink-node", "request-backpressure", 1024).verdict, "fail")
         self.assertEqual(self.judgement(self.rows(), "zlink-node", "request-backpressure", 1024).verdict, "pass")
+
+    def test_thirty_second_warmup_is_judged(self):
+        judgement = self.judgement(self.rows(), "zlink-node", "request-backpressure", 1024)
+        self.assertEqual(judgement.status, "published")
+
+    def test_two_second_warmup_is_unsupported(self):
+        rows = self.rows()
+        rows[CellKey("zlink-node", "request-backpressure", 1024)].warmup_seconds = [2.0] * 3
+        judgement = self.judgement(rows, "zlink-node", "request-backpressure", 1024)
+        self.assertEqual(judgement.status, "unsupported")
+        self.assertIn("warmup 2s, spec requires 30s", judgement.reason)
+
+    def test_missing_warmup_is_unsupported(self):
+        rows = self.rows()
+        rows[CellKey("zlink-node", "request-backpressure", 1024)].warmup_seconds = [None] * 3
+        judgement = self.judgement(rows, "zlink-node", "request-backpressure", 1024)
+        self.assertEqual(judgement.status, "unsupported")
+        self.assertIn("warmup missing, spec requires 30s", judgement.reason)
+
+        rows[CellKey("zlink-node", "request-backpressure", 1024)].warmup_seconds = []
+        judgement = self.judgement(rows, "zlink-node", "request-backpressure", 1024)
+        self.assertEqual(judgement.status, "unsupported")
+        self.assertIn("warmup missing, spec requires 30s", judgement.reason)
+
+    def test_mixed_warmups_in_one_row_are_unsupported(self):
+        rows = self.rows()
+        rows[CellKey("zlink-node", "request-backpressure", 1024)].warmup_seconds = [30.0, 2.0, 30.0]
+        judgement = self.judgement(rows, "zlink-node", "request-backpressure", 1024)
+        self.assertEqual(judgement.status, "unsupported")
+        self.assertIn("warmup 2s, spec requires 30s", judgement.reason)
 
     def test_framework_threshold_boundary(self):
         rows = self.rows({("send-saturation", 1024): 0.59})

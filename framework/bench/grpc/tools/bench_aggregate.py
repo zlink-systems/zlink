@@ -156,6 +156,7 @@ def as_json(args, run_set, rows, sizes, judgements) -> dict:
                 "median": rows[key].values,
                 "g5_spread_percent": rows[key].spread_percent,
                 "g5_status": rows[key].g5_status,
+                "warmup_seconds": rows[key].warmup_seconds,
                 "peak_in_flight": rows[key].peak_in_flight,
                 "peak_in_flight_min": rows[key].peak_in_flight_min,
                 "request_window": rows[key].request_window,

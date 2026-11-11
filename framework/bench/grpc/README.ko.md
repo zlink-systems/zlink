@@ -144,8 +144,8 @@ bench에서 옳은 비교인 이유는 아래와 같다.
   runner 자체는 부하를 만들지 않는다.
 - loopback 주소(`127.0.0.1`)만 사용한다. 포트는 §9의 언어별 대역을 사용한다.
 - Release build로 실행한다.
-- warmup 뒤 정해진 시간의 measured active 구간을 실행한다. warmup은 모든 언어에서 같은 패턴으로
-  2초 실행하고 측정에서 제외한다(§8.2).
+- 30초 warmup 뒤 정해진 시간의 measured active 구간을 실행한다. 모든 언어와 패턴에서 같은 규칙을
+  적용하고, 기록된 값이 30초가 아닌 셀은 판정하지 않는다(§8.2).
 - 기본 payload 크기는 `1024,4096` bytes다.
 - `request-backpressure` 패턴에는 미완료 request 상한 설정이 없다. 이 패턴에서 깊이는
   설정하는 조건이 아니라 측정해 기록하는 결과다(§5.2). `request_window` 설정은 이 bench에 없다.
@@ -495,10 +495,9 @@ raw 직렬화 비용을 포함한 결과를 새 기준으로 사용한다. 직�
 `framework/raw` 비율과 성능 추세를 비교하지 않는다. raw 처리량이 낮아져 비율이 높아지는
 것은 측정 조건의 정정이며 framework 성능 개선을 뜻하지 않는다.
 
-### 8.2 언어마다 다르게 두되 반드시 기록하는 값
+### 8.2 모든 언어와 패턴에 같은 30초 warmup
 
-warmup은 공용 `WARMUP_SECONDS`(기본값 2초) 동안 같은 패턴을 warmup phase header로 실행하고, 미완료는 `warmup_abandoned`로 기록하며 active 결과에서 제외한다. 아래 두 값은 언어마다 다르게 설정한다. 같게 맞추는 것이 목적이 아니라, 사용한 값을 결과에
-남기는 것이 목적이다.
+warmup은 모든 언어와 패턴에서 같은 패턴으로 30초 실행한다. 기록된 warmup이 30초가 아닌 셀은 판정하지 않는다. 미완료는 `warmup_abandoned`로 기록하며 active 결과에서 제외한다. 사용한 값은 결과에 기록한다.
 
 | 항목 | 이유 |
 |------|------|
@@ -655,7 +654,7 @@ runner는 여섯 개다: `c/run_local.sh`, `cpp/run_local.sh`, `dotnet/run_local
 | `RUN_STAMP` | 시작 시각(`YYYYmmdd_HHMMSS`) | 기본 `OUTPUT_DIR`의 이름 |
 | `PAYLOAD_SIZES` | `1024,4096` | §2의 payload 크기 |
 | `DURATION_SECONDS` | `5` | 셀마다의 active 구간(§3) |
-| `WARMUP_SECONDS` | `2` | 모든 언어에서 같은 패턴의 warmup 시간(양의 정수 초, §8.2) |
+| `WARMUP_SECONDS` | `30` | 모든 언어와 패턴에서 같은 패턴의 warmup 시간(양의 정수 초, §8.2). 기록값이 30초가 아닌 셀은 판정하지 않는다 |
 | `PATTERNS` | `request-serial,request-backpressure,send-saturation` | §2의 패턴 |
 | `IMPLEMENTATIONS` | 그 언어의 구현 전부(§1.1, §1.2) | 측정할 구현 |
 | `RUNS` | `3` | run 수. G5 재현성 판정이 run 3개를 요구한다 |
