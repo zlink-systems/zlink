@@ -754,41 +754,46 @@ final class ZLinkActorDispatchSerials {
         } catch (RuntimeException | Error failure) {
             queued = CompletableFuture.failedFuture(failure);
         }
-        if (header != null && header.relocationRedirect() != null) {
-            return queued.handle(
-                            (ignored, error) -> {
-                                if (ownership != null) ownership.close();
-                                if (error == null) return COMPLETED;
-                                Throwable cause = error;
-                                while ((cause instanceof CompletionException
-                                                || cause instanceof ExecutionException)
-                                        && cause.getCause() != null) cause = cause.getCause();
-                                if (cause
-                                        instanceof
-                                        ZLinkSerialExecutionQueue.RelocatedOwnerException) {
-                                    // The local candidate never ran. Preserve its operation and
-                                    // reply route through Message Follow (routing spec §2.5), and
-                                    // complete admission only after the relay accepts the frames.
-                                    try {
-                                        if (header.relocationRedirect()
-                                                .redirect(header.message(), payload)) {
-                                            admission.complete(null);
-                                            return COMPLETED;
-                                        }
-                                    } catch (RuntimeException redirectFailure) {
-                                        cause.addSuppressed(redirectFailure);
-                                    }
-                                }
-                                admission.completeExceptionally(cause);
-                                return CompletableFuture.<Void>failedFuture(cause);
-                            })
-                    .thenCompose(stage -> stage);
-        }
-        return queued.whenComplete(
+        CompletableFuture<Void> closed =
+                systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
+                        .newCancellationFuture();
+        systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
+                closed, queued);
+        queued.whenComplete(
                 (ignored, error) -> {
                     if (ownership != null) ownership.close();
-                    if (error != null) admission.completeExceptionally(error);
+                    if (error == null) {
+                        closed.complete(null);
+                        return;
+                    }
+                    Throwable cause = error;
+                    while ((cause instanceof CompletionException
+                                    || cause instanceof ExecutionException)
+                            && cause.getCause() != null) cause = cause.getCause();
+                    if (header != null && header.relocationRedirect() != null) {
+                        if (cause instanceof ZLinkSerialExecutionQueue.RelocatedOwnerException) {
+                            // The local candidate never ran. Preserve its operation and reply route
+                            // through Message Follow (routing spec §2.5), and complete admission
+                            // only after the relay accepts the frames.
+                            try {
+                                if (header.relocationRedirect()
+                                        .redirect(header.message(), payload)) {
+                                    admission.complete(null);
+                                    closed.complete(null);
+                                    return;
+                                }
+                            } catch (RuntimeException redirectFailure) {
+                                cause.addSuppressed(redirectFailure);
+                            }
+                        }
+                        admission.completeExceptionally(cause);
+                        closed.completeExceptionally(cause);
+                        return;
+                    }
+                    admission.completeExceptionally(error);
+                    closed.completeExceptionally(error);
                 });
+        return closed;
     }
 
     private void startTeardown(
