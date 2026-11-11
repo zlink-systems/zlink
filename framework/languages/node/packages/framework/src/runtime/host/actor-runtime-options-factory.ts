@@ -266,6 +266,7 @@ export class ZLinkActorRuntimeOptionsFactory {
   createActorClientOptions(): ConstructorParameters<typeof DefaultZLinkActorClient>[0] {
     const locationResolver = this.options.createActorLocationResolver();
     return {
+      admission: this.options.admission,
       requests: this.options.requests,
       nodeProvider: this.options.meshNode,
       completionTableProvider: this.options.meshCompletions,
