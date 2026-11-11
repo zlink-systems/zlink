@@ -1,7 +1,4 @@
-import {
-  createInternalFrameworkException,
-  ZLinkFrameworkInternalErrorKind
-} from '../framework-errors-internal';
+import type { ZLinkExecutionPolicy } from '../admission';
 import { macrotaskBoundary } from '../abort';
 import {
   diagnosticWorkName,
@@ -91,22 +88,15 @@ export class ZLinkSerialExecutionQueue {
   private lifecycleDebt = false;
   private claimStartedAt?: number;
   private closed = false;
-  private executionPolicy?: (owner: object | undefined) => boolean | undefined;
+  private executionPolicy?: ZLinkExecutionPolicy;
   private captureExecutionOwner?: () => object | undefined;
 
   setExecutionPolicy(
-    capture: () => (owner: object | undefined) => boolean | undefined,
+    capture: () => ZLinkExecutionPolicy | undefined,
     captureOwner?: () => object | undefined
   ): void {
     this.executionPolicy = capture();
     this.captureExecutionOwner = captureOwner;
-  }
-  private requireExecution(record: SerialWorkRecord<unknown>): void {
-    if (record.lane === 'application' && this.executionPolicy?.(record.executionOwner) === false)
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RequestRejected,
-        'Object execution was rejected because Location owner admission is closed.'
-      );
   }
 
   readonly idleWaiters: Array<() => void> = [];
@@ -285,11 +275,12 @@ export class ZLinkSerialExecutionQueue {
         }
       }
     };
+    const executionOwner = lane === 'application' ? this.captureExecutionOwner?.() : undefined;
     const record: SerialWorkRecord<T> = {
       acceptedSequence: 0n,
       lane,
       operation,
-      executionOwner: lane === 'application' ? this.captureExecutionOwner?.() : undefined,
+      executionOwner,
       operationEnvelope,
       context,
       preparation,
@@ -399,7 +390,6 @@ export class ZLinkSerialExecutionQueue {
     // Actor claim remains held until terminal settlement returns to this gate.
     let terminal: Promise<unknown>;
     try {
-      this.requireExecution(record);
       terminal = Promise.resolve(record.operation());
     } catch (error) {
       terminal = Promise.reject(error);
@@ -465,7 +455,6 @@ export class ZLinkSerialExecutionQueue {
               record.fail(error);
             }
           } else {
-            this.requireExecution(record);
             await this.executeRecord(record);
           }
         } catch (error) {
@@ -503,6 +492,8 @@ export class ZLinkSerialExecutionQueue {
     return record.preparationState !== 'pending' && record.preparationState !== 'canceling';
   }
 
+  private readonly wakeExecution = (): void => this.scheduleDrain();
+
   selectNext(): SerialWorkRecord<unknown> | undefined {
     const lifecycleOwner = this.activeLifecycle?.context as ZLinkSerialLifecycleContext | undefined;
     let applicationRecord: SerialWorkRecord<unknown> | undefined;
@@ -514,6 +505,34 @@ export class ZLinkSerialExecutionQueue {
       applicationRecord = this.application.records.find((record) =>
         owner.canExecuteApplication(record)
       );
+    }
+    while (applicationRecord !== undefined && applicationRecord.mailbox === undefined) {
+      const context = applicationRecord.context as
+        | {
+            executionPolicy?: ZLinkExecutionPolicy;
+            executionOwner?: object;
+            release?(): void;
+          }
+        | undefined;
+      const policy = this.executionPolicy ?? context?.executionPolicy;
+      const decision = policy?.executionDecision(
+        applicationRecord.executionOwner ?? context?.executionOwner,
+        this.wakeExecution
+      );
+      if (decision === 'paused') {
+        applicationRecord = undefined;
+        break;
+      }
+      if (decision !== 'lost') break;
+      this.takeSelected(applicationRecord);
+      applicationRecord.preparationController?.abort();
+      applicationRecord.preparation?.cancel();
+      context?.release?.();
+      applicationRecord.fail(policy!.executionFailure());
+      applicationRecord =
+        lifecycleOwner === undefined
+          ? this.application.records[0]
+          : this.application.records.find((record) => lifecycleOwner.canExecuteApplication(record));
     }
     const applicationReady = applicationRecord !== undefined;
     const lifecycleReady = this.activeLifecycle === undefined && this.lifecycle.records.length > 0;

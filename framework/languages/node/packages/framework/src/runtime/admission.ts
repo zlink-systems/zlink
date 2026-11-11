@@ -4,6 +4,16 @@ import {
 } from './framework-errors-internal';
 import { isPromiseLike } from './abort';
 import { ReceiveKind, type ReceiveRecord } from './foundation/service-runtime-contracts';
+export type ZLinkExecutionDecision = 'allowed' | 'paused' | 'lost';
+
+export interface ZLinkExecutionPolicy {
+  executionDecision(
+    owner: object | undefined,
+    wake?: () => void
+  ): ZLinkExecutionDecision | undefined;
+  executionFailure(): Error;
+}
+
 const BACKING_ARRAY_COMPACTION_MIN_HEAD = 1024;
 
 /** Runs host admission inside the domain's request completion boundary. */
@@ -31,7 +41,9 @@ export class ZLinkRuntimeAdmissionGate {
   private executionRuntime?: () =>
     | {
         readonly boundExecutionUsable: boolean;
-        executionAllowed?(owner: object | undefined): boolean;
+        executionAllowed(owner: object | undefined): boolean;
+        executionDecision(owner: object | undefined, wake?: () => void): ZLinkExecutionDecision;
+        executionFailure(): Error;
       }
     | undefined;
 
@@ -40,7 +52,19 @@ export class ZLinkRuntimeAdmissionGate {
   }
 
   executionAllowed(owner: object | undefined): boolean | undefined {
-    return this.executionRuntime?.()?.executionAllowed?.(owner);
+    return this.executionRuntime?.()?.executionAllowed(owner);
+  }
+
+  executionDecision(
+    owner: object | undefined,
+    wake?: () => void
+  ): ZLinkExecutionDecision | undefined {
+    const runtime = this.executionRuntime?.();
+    return runtime?.executionDecision(owner, wake);
+  }
+
+  executionFailure(): Error {
+    return this.executionRuntime!()!.executionFailure();
   }
 
   get acceptsNewWork(): boolean {
@@ -157,13 +181,13 @@ export class ZLinkRuntimeAdmissionGate {
         kind === ReceiveKind.NodeRequest ||
         kind === ReceiveKind.ChannelSend ||
         kind === ReceiveKind.ChannelRequest ||
-        ((kind === ReceiveKind.ActorSend ||
-          kind === ReceiveKind.ActorRequest ||
-          kind === ReceiveKind.SpotSend ||
-          kind === ReceiveKind.SpotRequest ||
-          kind === ReceiveKind.SpotMulticast) &&
-          this.executionRuntime?.()?.boundExecutionUsable === true) ||
-        this.ownerAdmissionOpen())
+        (kind === ReceiveKind.ActorSend ||
+        kind === ReceiveKind.ActorRequest ||
+        kind === ReceiveKind.SpotSend ||
+        kind === ReceiveKind.SpotRequest ||
+        kind === ReceiveKind.SpotMulticast
+          ? (this.executionRuntime?.()?.boundExecutionUsable ?? this.ownerAdmissionOpen())
+          : this.ownerAdmissionOpen()))
     );
   }
 
@@ -178,7 +202,7 @@ export class ZLinkRuntimeAdmissionGate {
       return state;
     }
     throw createInternalFrameworkException(
-      state.sealedReason,
+      state.sealed ? state.sealedReason : ZLinkFrameworkInternalErrorKind.RuntimeShutdown,
       `${operation} was rejected because framework admission is closed.`
     );
   }

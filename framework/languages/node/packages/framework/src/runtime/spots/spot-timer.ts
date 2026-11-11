@@ -419,11 +419,14 @@ export class ZLinkSpotTimerRegistry {
                 callbackStarted = true;
                 return runWithFlow(timerFlow, () => binding.handler.handle(binding.spot, tick));
               });
-            await runOutsideZLinkActorExecution(() =>
-              this.executeTimer !== undefined
+            await runOutsideZLinkActorExecution(async () => {
+              const ready = this.executionBarrier?.waitForExecution();
+              if (ready !== undefined) await ready;
+              if (this.timers.get(name)?.timer !== timer) return;
+              await (this.executeTimer !== undefined
                 ? this.executeTimer(name, operation)
-                : binding.executionSerial!.execute(operation)
-            );
+                : binding.executionSerial!.execute(operation));
+            });
           },
           (tick, cause, event) => slot.binding?.reportFailure?.(tick, cause, event),
           () => callbackStarted,
