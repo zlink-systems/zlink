@@ -148,12 +148,7 @@ public sealed class PausedSerialExecutionTests
             sharedOwner: member ? owner : null,
             executionAllowed: () => status
         );
-        var gate = typeof(ZLinkSerialExecutionQueue)
-            .GetField(
-                "_admissionGate",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
-            )!
-            .GetValue(queue)!;
+        var gate = queue._admissionGate;
         var restored = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );

@@ -11,7 +11,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     private const int SharedGateIdle = 0;
     private const int SharedGateOwned = 1;
     private const int SharedGateNotified = 2;
-    private readonly object _admissionGate;
+    internal readonly object _admissionGate;
     private readonly object _disposeGate = new();
 
     private readonly TaskCompletionSource _drained = new(
