@@ -283,7 +283,7 @@ client의 제출 호출 수만으로 처리량을 계산하지 않는다.
 | `dotnet` | 프로세스 사용 core 수 | harness가 선언한 병렬도 |
 | `node` | `perf_hooks`의 `performance.eventLoopUtilization()` | `1.0` |
 | `java`·`kotlin` | 제출 스레드의 CPU (`ThreadMXBean`, `jvm_thread_cores`) | harness가 선언한 제출 병렬도 |
-| `cpp` | 제출과 완료 드레인을 실행하는 application thread의 CPU (`CLOCK_THREAD_CPUTIME_ID`, `submit_thread_cores`) | `1` |
+| `cpp` | 제출과 완료 드레인을 실행하는 stream thread들의 CPU 합 (`CLOCK_THREAD_CPUTIME_ID`, `submit_thread_cores`) | stream 수(§10.3) |
 
 프로세스 사용 core 수를 쓰는 것은 `dotnet` 하나뿐이다.
 
@@ -603,11 +603,16 @@ in-flight로 표현한다.
 | 패턴 | stream 수 | stream당 in-flight | 의미 |
 |------|-----------|--------------------|------|
 | `request-serial` | 1 | 1 | 요청 하나를 보내고 reply 뒤 다음 요청 |
-| `request-backpressure` | 1 | 상한 없음 | admission backpressure를 만날 때까지 제출 |
-| `send-saturation` | `send_concurrency`(기본 8) | 1 (send는 완료 통지까지) | reply 없는 command 경로 |
+| `request-backpressure` | `submit_concurrency`(기본 8) | 상한 없음 | stream마다 admission backpressure를 만날 때까지 제출 |
+| `send-saturation` | `submit_concurrency`(기본 8) | 1 (send는 완료 통지까지) | reply 없는 command 경로 |
 
-stream 수와 stream당 in-flight는 셀 원본에 기록한다(§4). 언어 harness가 stream을 어떻게
-구현하는지(thread, task, coroutine, event loop)는 언어마다 다르며 §8.2처럼 결과에 남긴다.
+stream 수와 stream당 in-flight는 셀 원본에 기록한다(§4).
+
+**stream 하나는 제출 thread 하나다.** 실무의 서버는 여러 handler에서 동시에 send·request를
+제출하므로, bench도 여러 OS thread에서 동시에 제출하는 조건으로 잰다. thread를 쓰는 언어(C++,
+.NET, Java, Kotlin)는 stream마다 전용 thread를 두고, 그 thread가 자기 stream의 제출과 완료 관측을
+모두 한다. Node는 실무 실행 모델이 event loop 하나이므로 모든 stream을 event loop 하나에서 돌린다.
+같은 언어의 binding 행과 framework 행은 같은 thread 구성으로 잰다(§7.2).
 
 ### 10.4 셀 순서
 
