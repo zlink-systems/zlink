@@ -110,8 +110,8 @@ ChannelName.
 
 - Only a node that registered `Server()` receives calls on that channel.
 - A node that registered only `Client()` can start a call but does not receive one.
-- **The `Server()` role includes the ability to send.** Do not register `Client()` again for the
-  same ChannelName.
+- **On a RouteMesh, the `Server()` role includes the ability to send.** Do not register `Client()`
+  again for the same ChannelName. ClientServer differs ([3.2](#32-clientserver--the-direction-is-fixed)).
 
 You can register several channels on one MeshNode, and each channel may carry a different role.
 
@@ -142,7 +142,9 @@ not receive a message the server sent first, without a client request.
 When a call in the reverse direction is needed, the node on the other side has to become a server
 that publishes its own endpoint, and that is a separate channel with a separate ChannelName.
 
-One process may register a Client and a Server once each for the same ChannelName. The
+One process may register a Client and a Server once each for the same ChannelName. To start a
+send or request on that channel from the same process, register `Client()` as well. With only
+`Server()`, the call does not invoke the local handler and ends with `NotConfigured`. The
 `client_and_server` value in a monitoring snapshot expresses that both registrations are present;
 it is not a role of its own.
 
