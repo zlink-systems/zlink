@@ -9,6 +9,7 @@ internal sealed partial class SocketKernel
     internal bool ReceiveStreamPacket(StreamPacket result, RecvFlags flags)
     {
         ArgumentNullException.ThrowIfNull(result);
+        using var call = _handle.ReserveReceive();
         result.BeginReceive();
 
         ZlinkMsg header = default;
@@ -27,7 +28,7 @@ internal sealed partial class SocketKernel
                 throw ZlinkException.CreateConfigException((ConfigResult)rc);
             bodyInitialized = true;
 
-            rc = NativeMethods.zlink_stream_recv_packet(Handle,
+            rc = NativeMethods.zlink_stream_recv_packet(call.Handle,
                 out var sourceRoutingId, ref header, ref body, (int)flags);
             if ((RecvResult)rc == RecvResult.NoData
                 && (flags & RecvFlags.DontWait) != 0)
