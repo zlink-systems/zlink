@@ -250,6 +250,10 @@ jobs:
 
       - name: Verify the packaged public contract
         if: ${{ matrix.target.name == 'linux-x64' }}
+        # release-dotnet.yml packs with the Directory.Build.props default target
+        # framework; check the same package that is published.
+        env:
+          ZLinkFrameworkTargetFrameworks: net8.0
         run: bash framework/languages/dotnet/scripts/verify_packaged_contract.sh
 
       - name: Restore framework solution
