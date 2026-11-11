@@ -45,11 +45,67 @@ lookup.**
 ## 2. The Store Requirement on a Node That Looks Up
 
 A lookup reads the Store, so the process doing the lookup has to have that Store registered
-**under the same prefix**. The registration code is the one in
-[Spot](21-spot.en.md#2-the-location-store--a-prerequisite-for-registering-a-spot).
+**under the same prefix**. See [Store plugin setup](#store-setup) for registration.
 
 A node that runs neither Spots nor Actors and only calls them needs the Location Store alone.
 The Relocation Store is required only on a node that registered a factory.
+
+### 2.1 Store Plugin Setup {#store-setup}
+
+Choose **Redis** or **Redis with etcd** using the [plugin comparison](../../../common/guide/server/store-plugins.en.md). Register each Store once through its existing API.
+
+Run the registration code in the server's Framework configuration callback. Place `using`, `import` and `#include` declarations at file scope. Processes share the Location prefix or etcd namespace; the two Redis Stores use distinct key prefixes.
+
+#### Redis
+
+Production Redis must meet the [durability condition that successful changes never roll back](../../../common/spec/server/05-location-relocation/02-location-store-redis.en.md#1-scope-and-audience). Both Stores use the same Redis server.
+
+Use the same version as Framework core. Kotlin installs the same Java packages.
+
+```kotlin
+implementation("systems.zlink:zlink-framework-locations-redis:$zlinkFrameworkVersion")
+```
+
+```java
+import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
+import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
+import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
+import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
+
+options.addLocationStore(new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions()
+    .setConnectionString("127.0.0.1:6379").setKeyPrefix("game:location:")));
+options.addRelocationStore(new ZLinkRedisRelocationStore(new ZLinkRedisRelocationOptions()
+    .setConnectionString("127.0.0.1:6379").setKeyPrefix("game:relocation:")));
+```
+
+The Framework owns Store lifetime after registration.
+
+#### Redis with etcd
+
+Use this choice for deployments needing automatic failover. Place the Location Store on three etcd voters on separate physical hosts and the Relocation Store on Redis. Install the Redis package as well. Initialize the namespace before use and run the Store management process as described in the [etcd operations requirements](../../../common/spec/server/05-location-relocation/07-location-store-etcd.en.md). The HTTP endpoints below assume a trusted development network; configure production TLS and authentication through the options in that document.
+
+Use the same version as Framework core. Kotlin installs the same Java packages.
+
+```kotlin
+implementation("systems.zlink:zlink-framework-locations-redis:$zlinkFrameworkVersion")
+implementation("systems.zlink:zlink-framework-locations-etcd:$zlinkFrameworkVersion")
+```
+
+```java
+import java.util.List;
+import systems.zlink.framework.locations.etcd.ZLinkEtcdLocationOptions;
+import systems.zlink.framework.locations.etcd.ZLinkEtcdLocationStore;
+import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
+import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
+
+options.addLocationStore(new ZLinkEtcdLocationStore(new ZLinkEtcdLocationOptions()
+    .setEndpoints(List.of("http://etcd-1:2379", "http://etcd-2:2379", "http://etcd-3:2379"))
+    .setNamespace("game")));
+options.addRelocationStore(new ZLinkRedisRelocationStore(new ZLinkRedisRelocationOptions()
+    .setConnectionString("127.0.0.1:6379").setKeyPrefix("game:relocation:")));
+```
+
+The Framework owns Store lifetime after registration.
 
 ## 3. Asking Where an Id Is
 

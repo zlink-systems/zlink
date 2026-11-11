@@ -183,13 +183,9 @@ options.http ()
 
 여러 Play 서버 인스턴스가 뜰 때 어느 서버로 연결할지, endpoint를 코드에
 하드코딩하지 않는다. Redis 기반 공용 Location Store가 주소를 관리하고, 각 서버는
-`add_location_store<redis::redis_location_store_t> ()`로 동적으로 찾는다.
+[Store plugin 설정](25-location.ko.md#store-setup)에서 plugin을 선택하고 두 Store를 등록한다.
 
 ```cpp
-options.add_location_store<redis::redis_location_store_t> ()
-  .set_connection_string (topology.redis_endpoint)
-  .set_key_prefix (topology.redis_key_prefix + "location:");
-
 auto room_mesh = options.add_route_mesh (sample_names_t::room_spot_mesh);
 room_mesh.set_routing_id (zlink::routing_id_t::from ("bingo-play-" + topology.play_node))
   .listen (topology.selected_play_spot_router_endpoint ());

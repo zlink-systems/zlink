@@ -27,11 +27,241 @@ lookup.**
 ## 2. The Store Requirement on a Node That Looks Up
 
 A lookup reads the Store, so the process doing the lookup has to have that Store registered
-**under the same prefix**. The registration code is the one in
-[Spot](21-spot.en.md#2-the-location-store--a-prerequisite-for-registering-a-spot).
+**under the same prefix**. See [Store plugin setup](#store-setup) for registration.
 
 A node that runs neither Spots nor Actors and only calls them needs the Location Store alone.
 The Relocation Store is required only on a node that registered a factory.
+
+### 2.1 Store Plugin Setup {#store-setup}
+
+Choose **Redis** or **Redis with etcd** using the [plugin comparison](../../../common/guide/server/store-plugins.en.md). Register each Store once through its existing API.
+
+Run the registration code in the server's Framework configuration callback. Place `using`, `import` and `#include` declarations at file scope. Processes share the Location prefix or etcd namespace; the two Redis Stores use distinct key prefixes.
+
+#### Redis
+
+Production Redis must meet the [durability condition that successful changes never roll back](../../../common/spec/server/05-location-relocation/02-location-store-redis.en.md#1-scope-and-audience). Both Stores use the same Redis server.
+
+=== "C#/.NET"
+
+    ```sh
+    dotnet add package Zlink.Framework.Locations.Redis
+    ```
+
+    ```csharp
+    using Zlink.Framework.Locations.Redis;
+
+    options.AddLocationStore(new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions
+    {
+        ConnectionString = "127.0.0.1:6379",
+        KeyPrefix = "game:location:"
+    }));
+    options.AddRelocationStore(new ZLinkRedisRelocationStore(new ZLinkRedisRelocationOptions
+    {
+        ConnectionString = "127.0.0.1:6379",
+        KeyPrefix = "game:relocation:"
+    }));
+    ```
+
+=== "C++"
+
+    Use the `framework-locations-redis` extension from the installed `zlink_framework` package.
+
+    ```cmake
+    find_package(zlink_framework CONFIG REQUIRED)
+    target_link_libraries(my_server PRIVATE zlink::framework zlink::framework_locations_redis)
+    ```
+
+    ```cpp
+    #include <zlink/locations/redis.hpp>
+    namespace fw = zlink::framework;
+
+    options.add_location_store<fw::redis::redis_location_store_t> ()
+      .set_connection_string ("127.0.0.1:6379")
+      .set_key_prefix ("game:location:");
+    options.add_relocation_store<fw::redis::redis_relocation_store_t> ()
+      .set_connection_string ("127.0.0.1:6379")
+      .set_key_prefix ("game:relocation:");
+    ```
+
+=== "Java"
+
+    Use the same version as Framework core. Kotlin installs the same Java packages.
+
+    ```kotlin
+    implementation("systems.zlink:zlink-framework-locations-redis:$zlinkFrameworkVersion")
+    ```
+
+    ```java
+    import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
+    import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
+    import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
+    import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
+
+    options.addLocationStore(new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions()
+        .setConnectionString("127.0.0.1:6379").setKeyPrefix("game:location:")));
+    options.addRelocationStore(new ZLinkRedisRelocationStore(new ZLinkRedisRelocationOptions()
+        .setConnectionString("127.0.0.1:6379").setKeyPrefix("game:relocation:")));
+    ```
+
+=== "Kotlin"
+
+    Use the same version as Framework core. Kotlin installs the same Java packages.
+
+    ```kotlin
+    implementation("systems.zlink:zlink-framework-locations-redis:$zlinkFrameworkVersion")
+    ```
+
+    ```kotlin
+    import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions
+    import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
+    import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions
+    import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore
+
+    options.addLocationStore(ZLinkRedisLocationStore(ZLinkRedisLocationOptions()
+        .setConnectionString("127.0.0.1:6379").setKeyPrefix("game:location:")))
+    options.addRelocationStore(ZLinkRedisRelocationStore(ZLinkRedisRelocationOptions()
+        .setConnectionString("127.0.0.1:6379").setKeyPrefix("game:relocation:")))
+    ```
+
+=== "Node/TypeScript"
+
+    ```sh
+    npm install @zlink-systems/framework-locations-redis
+    ```
+
+    ```typescript
+    import { ZLinkRedisLocationStore, ZLinkRedisRelocationStore }
+      from '@zlink-systems/framework-locations-redis';
+
+    builder.addLocationStore(new ZLinkRedisLocationStore({
+      url: 'redis://127.0.0.1:6379', keyPrefix: 'game:location:'
+    }));
+    builder.addRelocationStore(new ZLinkRedisRelocationStore({
+      url: 'redis://127.0.0.1:6379', keyPrefix: 'game:relocation:'
+    }));
+    ```
+
+The Framework owns Store lifetime after registration.
+
+#### Redis with etcd
+
+Use this choice for deployments needing automatic failover. Place the Location Store on three etcd voters on separate physical hosts and the Relocation Store on Redis. Install the Redis package as well. Initialize the namespace before use and run the Store management process as described in the [etcd operations requirements](../../../common/spec/server/05-location-relocation/07-location-store-etcd.en.md). The HTTP endpoints below assume a trusted development network; configure production TLS and authentication through the options in that document.
+
+=== "C#/.NET"
+
+    ```sh
+    dotnet add package Zlink.Framework.Locations.Redis
+    dotnet add package Zlink.Framework.Locations.Etcd
+    ```
+
+    ```csharp
+    using Zlink.Framework.Locations.Etcd;
+    using Zlink.Framework.Locations.Redis;
+
+    options.AddLocationStore(new ZLinkEtcdLocationStore(o =>
+    {
+        o.Endpoints.Add("http://etcd-1:2379");
+        o.Endpoints.Add("http://etcd-2:2379");
+        o.Endpoints.Add("http://etcd-3:2379");
+        o.Namespace = "game";
+    }));
+    options.AddRelocationStore(new ZLinkRedisRelocationStore(new ZLinkRedisRelocationOptions
+    {
+        ConnectionString = "127.0.0.1:6379",
+        KeyPrefix = "game:relocation:"
+    }));
+    ```
+
+=== "C++"
+
+    Use the `framework-locations-redis` extension from the installed `zlink_framework` package. Also install `framework-locations-etcd`; build the Framework with `-DZLINK_FRAMEWORK_CPP_WITH_ETCD=ON` and its gRPC dependencies.
+
+    ```cmake
+    find_package(zlink_framework CONFIG REQUIRED)
+    target_link_libraries(my_server PRIVATE zlink::framework zlink::framework_locations_redis zlink::framework_locations_etcd)
+    ```
+
+    ```cpp
+    #include <zlink/locations/etcd.hpp>
+    #include <zlink/locations/redis.hpp>
+    namespace fw = zlink::framework;
+
+    fw::etcd::etcd_location_options_t location;
+    location.endpoints = {"http://etcd-1:2379", "http://etcd-2:2379", "http://etcd-3:2379"};
+    location.key_namespace = "game";
+    options.add_location_store(
+      std::make_shared<fw::etcd::etcd_location_store_t>(location));
+    options.add_relocation_store<fw::redis::redis_relocation_store_t> ()
+      .set_connection_string ("127.0.0.1:6379")
+      .set_key_prefix ("game:relocation:");
+    ```
+
+=== "Java"
+
+    Use the same version as Framework core. Kotlin installs the same Java packages.
+
+    ```kotlin
+    implementation("systems.zlink:zlink-framework-locations-redis:$zlinkFrameworkVersion")
+    implementation("systems.zlink:zlink-framework-locations-etcd:$zlinkFrameworkVersion")
+    ```
+
+    ```java
+    import java.util.List;
+    import systems.zlink.framework.locations.etcd.ZLinkEtcdLocationOptions;
+    import systems.zlink.framework.locations.etcd.ZLinkEtcdLocationStore;
+    import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
+    import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
+
+    options.addLocationStore(new ZLinkEtcdLocationStore(new ZLinkEtcdLocationOptions()
+        .setEndpoints(List.of("http://etcd-1:2379", "http://etcd-2:2379", "http://etcd-3:2379"))
+        .setNamespace("game")));
+    options.addRelocationStore(new ZLinkRedisRelocationStore(new ZLinkRedisRelocationOptions()
+        .setConnectionString("127.0.0.1:6379").setKeyPrefix("game:relocation:")));
+    ```
+
+=== "Kotlin"
+
+    Use the same version as Framework core. Kotlin installs the same Java packages.
+
+    ```kotlin
+    implementation("systems.zlink:zlink-framework-locations-redis:$zlinkFrameworkVersion")
+    implementation("systems.zlink:zlink-framework-locations-etcd:$zlinkFrameworkVersion")
+    ```
+
+    ```kotlin
+    import systems.zlink.framework.locations.etcd.ZLinkEtcdLocationOptions
+    import systems.zlink.framework.locations.etcd.ZLinkEtcdLocationStore
+    import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions
+    import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore
+
+    options.addLocationStore(ZLinkEtcdLocationStore(ZLinkEtcdLocationOptions()
+        .setEndpoints(listOf("http://etcd-1:2379", "http://etcd-2:2379", "http://etcd-3:2379"))
+        .setNamespace("game")))
+    options.addRelocationStore(ZLinkRedisRelocationStore(ZLinkRedisRelocationOptions()
+        .setConnectionString("127.0.0.1:6379").setKeyPrefix("game:relocation:")))
+    ```
+
+=== "Node/TypeScript"
+
+    ```sh
+    npm install @zlink-systems/framework-locations-redis @zlink-systems/framework-locations-etcd
+    ```
+
+    ```typescript
+    import { ZLinkEtcdLocationStore } from '@zlink-systems/framework-locations-etcd';
+    import { ZLinkRedisRelocationStore } from '@zlink-systems/framework-locations-redis';
+
+    builder.addLocationStore(new ZLinkEtcdLocationStore({
+      endpoints: ['http://etcd-1:2379', 'http://etcd-2:2379', 'http://etcd-3:2379'],
+      namespace: 'game'
+    }));
+    builder.addRelocationStore(new ZLinkRedisRelocationStore({
+      url: 'redis://127.0.0.1:6379', keyPrefix: 'game:relocation:'
+    }));
+    ```
+
+The Framework owns Store lifetime after registration.
 
 ## 3. Asking Where an Id Is
 
