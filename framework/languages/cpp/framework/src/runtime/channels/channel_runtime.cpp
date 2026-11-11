@@ -1733,7 +1733,7 @@ void route_client_t::submit_request_reply_message_erased (
   std::string packet_name,
   node_payload_encoder_t encode_payload,
   std::chrono::milliseconds timeout,
-  std::map<std::string, std::string> metadata,
+  const std::map<std::string, std::string> &metadata,
   detail::request_receiver_t<encoded_payload_t> receiver)
 {
     const auto request_started = std::chrono::steady_clock::now ();
@@ -1858,7 +1858,7 @@ void route_client_t::submit_request_reply_message_erased (
         auto header = codec.create_envelope (
           runtime::messaging::message_kind_t::request, decode.router_channel_id, decode.packet_name,
           runtime::messaging::remaining_request_timeout (deadline), std::nullopt, std::nullopt, {});
-        header.metadata = std::move (metadata);
+        header.metadata = metadata;
         if (detail::message_flow_tracer_t (state->runtime->dispatch)
               .enabled_for (message_flow_outcome_t::sent)) {
             detail::message_flow_tracer_t (state->runtime->dispatch)
