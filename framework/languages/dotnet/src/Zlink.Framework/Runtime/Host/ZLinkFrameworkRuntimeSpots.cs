@@ -6,12 +6,7 @@ internal sealed partial class ZLinkFrameworkRuntime
 {
     internal ZLinkSpotNodeRuntime ResolveActorCreationSource(string? meshName)
     {
-        var state =
-            _state
-            ?? throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.InvalidOperation,
-                "Framework runtime is not started."
-            );
+        var state = GetOrStartState();
         var candidates = AwaitStateLane(
             state.RunStateAsync(() =>
                 state
