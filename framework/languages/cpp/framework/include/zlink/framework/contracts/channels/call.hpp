@@ -201,6 +201,8 @@ class channel_request_call_t
                                          "request call is not bound to a channel client"));
         }
         try {
+            if (_admit)
+                _admit ();
             if (const auto *submit = std::get_if<1> (&_submit)) {
                 // Prepare the final reply before submission. The receiver owns every
                 // decoder until physical delivery, including after admission failure.
@@ -274,6 +276,7 @@ class channel_request_call_t
     serializer_registry_t *serializers () const noexcept { return _serializers; }
 
   private:
+    friend class message_bus_t;
     friend class route_client_t;
     friend class spot_request_call_t;
     using receiver_submit_fn_t =
@@ -292,6 +295,7 @@ class channel_request_call_t
     {
     }
 
+    std::function<void ()> _admit;
     std::string _packet_name;
     std::chrono::milliseconds _timeout{0};
     metadata_map_t _metadata;

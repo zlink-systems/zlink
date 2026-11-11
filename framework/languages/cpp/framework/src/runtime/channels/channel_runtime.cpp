@@ -618,12 +618,6 @@ task_t<void> channel_runtime_t::dispatch_send_on_handler_executor (
 
 result_t<std::uint64_t> channel_runtime_t::reserve_outbound_request (std::string channel_name)
 {
-    try {
-        _state->admit_outbound ();
-    }
-    catch (...) {
-        return detail::current_exception_result<std::uint64_t> ();
-    }
     return _state->lane
       .run_checked ([&] {
           try {
@@ -1472,6 +1466,11 @@ route_client_t::route_client_t (std::shared_ptr<detail::route_client_state_t> st
 {
 }
 
+void route_client_t::admit_call (const std::shared_ptr<detail::route_client_state_t> &state)
+{
+    detail::route_client_state_t::admit_outbound (state);
+}
+
 route_client_t::~route_client_t () = default;
 
 route_client_t::route_client_t (route_client_t &&) noexcept = default;
@@ -1488,7 +1487,6 @@ route_client_t::submit_send_erased (const std::shared_ptr<detail::route_client_s
                                     const route_send_call_t::metadata_map_t &metadata)
 {
     try {
-        detail::route_client_state_t::admit_outbound (state);
         auto submit_flow = runtime::flow_context_t::enter_current_or_create (
           flow_origin_t::application,
           state && state->runtime ? detail::message_flow_tracer_t (state->runtime->dispatch).mode ()
@@ -1551,8 +1549,6 @@ route_client_t::submit_channel_send_erased (std::shared_ptr<detail::route_client
                                             payload_encoder_t encode_payload,
                                             const route_send_call_t::metadata_map_t &metadata)
 {
-    detail::route_client_state_t::admit_outbound (state);
-
     // The call can be destroyed while the sender suspends. Own the values used
     // by the sent trace after completion; metadata and the encoder are consumed before it.
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
@@ -1780,8 +1776,6 @@ void route_client_t::submit_request_reply_message_erased (
   std::map<std::string, std::string> metadata,
   detail::request_receiver_t<encoded_payload_t> receiver)
 {
-    detail::route_client_state_t::admit_outbound (state_ref);
-
     const auto request_started = std::chrono::steady_clock::now ();
     // Retain the runtime through the physical reply conversion.
     const auto state = state_ref;
@@ -1974,8 +1968,6 @@ request_task_t<zlink::message_t> route_client_t::submit_channel_request_reply_me
   std::chrono::milliseconds timeout,
   std::map<std::string, std::string> metadata)
 try {
-    detail::route_client_state_t::admit_outbound (state_ref);
-
     // The reply owns this copy: the referenced state lives in the call closure.
     const auto state = state_ref;
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
@@ -2347,8 +2339,6 @@ task_t<void> route_client_t::submit_spot_id_send_erased (
   payload_encoder_t encode_payload,
   route_send_call_t::metadata_map_t metadata)
 {
-    detail::route_client_state_t::admit_outbound (state_ref);
-
     const auto started_at = std::chrono::system_clock::now ();
     /* The state reference belongs to the call object's closure, which can
      * unwind while this coroutine is suspended: keep a frame-owned copy
@@ -2418,7 +2408,6 @@ task_t<void> route_client_t::submit_spot_id_request_reply_message_erased (
 {
     const auto request_started = std::chrono::steady_clock::now ();
     try {
-        detail::route_client_state_t::admit_outbound (state_ref);
         // The call closure can end while suspended; this frame owns the state copy.
         const auto state = state_ref;
         // Frame-owned resolver, as in submit_spot_id_send_erased.

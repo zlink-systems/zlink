@@ -244,6 +244,11 @@ TEST (PrestartCall, AdmissionPrecedesStoreAndTransportAndAllowsHostedStartup)
     bool visited = false;
     app.add_hosted_service (std::make_unique<startup_probe_t> ([&] (auto &) {
         visited = true;
+        std::size_t admissions = 0;
+        runtime.bind_runtime_admission ([&] {
+            ++admissions;
+            return std::pair{false, true};
+        });
         EXPECT_EQ (rejected.result ().error_kind (), framework_error_kind_t::invalid_operation);
         EXPECT_EQ (created_before_start.async<std::string> ().result ().value (), "ok");
         EXPECT_TRUE (route.send_to_node ("mesh", rid, std::string ("x")).async ().result ());
@@ -274,12 +279,15 @@ TEST (PrestartCall, AdmissionPrecedesStoreAndTransportAndAllowsHostedStartup)
         EXPECT_TRUE (publisher.publish ("channel", "topic", std::string ("x")).async ().result ());
         EXPECT_EQ (resolver->calls, 4u);
         EXPECT_EQ (transports, 11u);
+        EXPECT_EQ (admissions, 11u);
         EXPECT_TRUE (node_send.async ().result ());
         EXPECT_TRUE (route_send.async ().result ());
         EXPECT_TRUE (spot_send.async ().result ());
         EXPECT_TRUE (instance_send.async ().result ());
         EXPECT_TRUE (channel_send.async ().result ());
         EXPECT_TRUE (fanout_publish.async ().result ());
+        EXPECT_EQ (admissions, 17u);
+        runtime.bind_runtime_admission ({});
         app.stop ();
     }));
     EXPECT_EQ (app.run (0, nullptr), 0);
@@ -496,4 +504,73 @@ TEST (PrestartCall, ShutdownTakesPrecedenceOverNotStarted)
         co_return;
     };
     expect_shutdown ("shutdown before start", submit ());
+}
+
+
+TEST (PrestartCall, EachPublicTerminalChecksHostAdmissionOnce)
+{
+    auto app = app_t::create ();
+    auto store = std::make_shared<counting_store_t> ();
+    app.add_zlink_framework ([&] (auto &options) {
+        options.add_location_store (store);
+        options.add_route_mesh ("mesh")
+          .listen ("tcp://127.0.0.1:0")
+          .set_routing_id (zlink::routing_id_t::from ("source"))
+          .objects ()
+          .server ();
+    });
+    auto provider = app.advanced ().services ().build_provider ();
+    auto &route = provider.get_required<route_client_t> ();
+    auto &channel = provider.get_required<channel_client_t> ();
+    auto &fanout = provider.get_required<publisher_t> ();
+    auto &actor = provider.get_required<actor_client_t> ();
+    auto &logical = provider.get_required<spot_publisher_client_t> ();
+    auto runtime = detail::channel_runtime_t::from (app.advanced ().zlink ().message_bus ());
+    std::size_t admissions = 0;
+    runtime.bind_runtime_admission ([&] {
+        ++admissions;
+        return std::pair{false, true};
+    });
+    auto check = [&] (const char *name, auto submit) {
+        SCOPED_TRACE (name);
+        const auto before = admissions;
+        // Missing destinations terminate locally after the host accepts the call.
+        (void) submit ().result ();
+        EXPECT_EQ (admissions, before + 1);
+    };
+    const auto rid = zlink::routing_id_t::from ("missing");
+    const auto spot = spot_id_t ("missing");
+    check ("Node send",
+           [&] { return route.send_to_node ("missing", rid, std::string ("x")).async (); });
+    check ("Node request", [&] {
+        return route.request_to_node ("missing", rid, std::string ("x")).async<std::string> ();
+    });
+    check ("Route Channel send",
+           [&] { return route.send_to_channel ("missing", std::string ("x")).async (); });
+    check ("Route Channel request", [&] {
+        return route.request_to_channel ("missing", std::string ("x")).async<std::string> ();
+    });
+    check ("Spot send", [&] { return route.send_to_spot (spot, std::string ("x")).async (); });
+    check ("Spot request",
+           [&] { return route.request_to_spot (spot, std::string ("x")).async<std::string> (); });
+    check ("Instance send",
+           [&] { return route.send_to_spot (spot, std::string ("x")).instance_spot ().async (); });
+    check ("Instance request", [&] {
+        return route.request_to_spot (spot, std::string ("x"))
+          .instance_spot ()
+          .async<std::string> ();
+    });
+    check ("Channel send", [&] { return channel.send ("missing", std::string ("x")).async (); });
+    check ("Channel request",
+           [&] { return channel.request ("missing", std::string ("x")).async<std::string> (); });
+    check ("Fanout publish",
+           [&] { return fanout.publish ("missing", "topic", std::string ("x")).async (); });
+    check ("Actor send",
+           [&] { return actor.send (actor_id_t ("missing"), std::string ("x")).async (); });
+    check ("Actor request", [&] {
+        return actor.request (actor_id_t ("missing"), std::string ("x")).async<std::string> ();
+    });
+    check ("Logical Multicast",
+           [&] { return logical.publish ("missing", "topic", std::string ("x")).async (); });
+    EXPECT_EQ (admissions, 14u);
 }

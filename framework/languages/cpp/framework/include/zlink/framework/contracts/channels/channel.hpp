@@ -442,20 +442,11 @@ class message_bus_t
         auto state = _state;
         auto preflight = _preflight;
         auto request_value = std::make_shared<TRequest> (std::move (request));
-        return channel_request_call_t (
+        auto call = channel_request_call_t (
           detail::message_name<TRequest> (), serializers (),
-          [state, preflight = std::move (preflight), channel_name = std::move (channel_name),
+          [state, channel_name = std::move (channel_name),
            request_value] (const std::string &packet_name, std::chrono::milliseconds timeout,
                            const channel_request_call_t::metadata_map_t &metadata) {
-              if (preflight) {
-                  const auto admitted = preflight ();
-                  if (!admitted) {
-                      return request_task_t<zlink::message_t> (result_t<zlink::message_t>::failure (
-                        admitted.error_kind (), admitted.error ()
-                                                  ? admitted.error ()->what ()
-                                                  : "channel request preflight failed"));
-                  }
-              }
               auto bus = message_bus_t (state, {});
               const auto effective_timeout = timeout > std::chrono::milliseconds::zero ()
                                                ? timeout
@@ -468,6 +459,11 @@ class message_bus_t
                 },
                 effective_timeout, metadata);
           });
+        call._admit = [preflight = std::move (preflight)] {
+            if (preflight)
+                preflight ().value ();
+        };
+        return call;
     }
 
     template <typename TMessage> send_call_t send (std::string channel_name, TMessage message)
@@ -894,7 +890,7 @@ class route_client_t
                                             TRequest request)
     {
         auto state = _state;
-        return channel_request_call_t (
+        auto call = channel_request_call_t (
           detail::request_projection_t{}, detail::message_name<TRequest> (), _serializers,
           [state, router_channel_id = std::move (router_channel_id),
            target_node_rid = std::move (target_node_rid), request_value = std::move (request)] (
@@ -915,6 +911,8 @@ class route_client_t
                                                    packet_name, std::ref (encode_payload), timeout,
                                                    metadata, std::move (receiver));
           });
+        call._admit = [state] { admit_call (state); };
+        return call;
     }
 
     template <typename TRequest>
@@ -922,7 +920,7 @@ class route_client_t
     {
         auto state = _state;
         auto request_value = std::make_shared<TRequest> (std::move (request));
-        return channel_request_call_t (
+        auto call = channel_request_call_t (
           detail::message_name<TRequest> (), _serializers,
           [state, channel_name = std::move (channel_name),
            request_value] (const std::string &packet_name, std::chrono::milliseconds timeout,
@@ -937,6 +935,8 @@ class route_client_t
                 state, channel_name, packet_name, std::type_index (typeid (TRequest)),
                 std::ref (encode_payload), timeout, metadata);
           });
+        call._admit = [state] { admit_call (state); };
+        return call;
     }
 
     /* Direct Spot requests resolve the global SpotId once for this operation. */
@@ -946,7 +946,7 @@ class route_client_t
         auto state = _state;
         auto request_value = std::make_shared<TRequest> (std::move (request));
         auto intent = std::make_shared<detail::spot_activation_intent_t> ();
-        return spot_request_call_t (
+        auto call = spot_request_call_t (
           detail::message_name<TRequest> (), _serializers,
           [state, target = std::move (target), intent,
            request_value] (const std::string &packet_name, std::chrono::milliseconds timeout,
@@ -961,10 +961,13 @@ class route_client_t
                 timeout, metadata, std::move (receiver));
           },
           intent);
+        call._admit = [state] { admit_call (state); };
+        return call;
     }
 
   private:
     friend class zlink_builder_t;
+    static void admit_call (const std::shared_ptr<detail::route_client_state_t> &state);
     explicit route_client_t (std::shared_ptr<detail::route_client_state_t> state,
                              serializer_registry_t &serializers);
 

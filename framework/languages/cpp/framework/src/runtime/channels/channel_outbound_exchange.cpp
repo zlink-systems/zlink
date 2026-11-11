@@ -1068,7 +1068,6 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application, detail::message_flow_tracer_t (state->dispatch).mode ());
     const auto call_packet_name = std::move (packet_name);
-    state->admit_outbound ();
     state->lane.run_sync ([&] { state->ensure_transport_open (); });
     const auto *client = client_capability (*state, channel_name);
     if (client == nullptr || !client->enabled) {
@@ -1189,7 +1188,6 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application, detail::message_flow_tracer_t (state->dispatch).mode ());
     const auto call_packet_name = std::move (packet_name);
-    state->admit_outbound ();
     state->lane.run_sync ([&] { state->ensure_transport_open (); });
     const auto *publisher = publisher_capability (*state, channel_name);
     if (!has_connection (publisher)) {

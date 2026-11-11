@@ -339,6 +339,12 @@ task_t<message_t> actor_request_call_t::yield_message ()
 
 request_task_t<message_t> actor_request_call_t::start (bool release_turn)
 {
+    try {
+        _client->admit_call ();
+    }
+    catch (...) {
+        return request_task_t<message_t> (detail::current_exception_result<message_t> ());
+    }
     if (!runtime::current_actor_execution.actor_key.empty ()) {
         const auto separator = runtime::current_actor_execution.actor_key.rfind (':');
         const auto current_actor_id =
@@ -472,9 +478,6 @@ class actor_client_impl_t final : public actor_client_t,
                               message_t message,
                               const actor_send_call_t::metadata_map_t &metadata) override
     {
-        if (_admit_call)
-            _admit_call ();
-
         /* Frame-owned metadata copy before the first suspension: the reference
          * belongs to a caller-owned call object that can unwind while the
          * route lookup is suspended. */
@@ -509,9 +512,6 @@ class actor_client_impl_t final : public actor_client_t,
                     std::optional<std::chrono::milliseconds> timeout,
                     const actor_request_call_t::metadata_map_t &metadata) override
     {
-        if (_admit_call)
-            _admit_call ();
-
         /* The metadata reference belongs to a caller-owned call object that
          * can unwind while this coroutine is suspended: keep a frame-owned copy
          * before the first await so no resume reads through the dead reference
