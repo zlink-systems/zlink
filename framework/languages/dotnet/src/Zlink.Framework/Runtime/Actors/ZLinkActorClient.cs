@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Systems.Zlink.Stream.Connector.Runtime;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
+using Zlink.Framework.Runtime.Host;
 
 namespace Zlink.Framework.Runtime.Actors;
 
@@ -17,6 +18,9 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         return new ZLinkActorRequestCall<TRequest>(this, actorId, request);
     }
+
+    internal ValueTask<ZLinkFrameworkRuntime.ZLinkRuntimeOperationAdmission> AdmitSendOperationAsync() =>
+        runtime.AdmitOperationAsync(boundExecution: true);
 
     internal IZLinkActorRequestCall RequestToActorExact<TRequest>(
         string meshName,
@@ -540,17 +544,21 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
             return this;
         }
 
-        public ValueTask Async()
+        public async ValueTask Async()
         {
+            using var operation = (
+                await client.AdmitSendOperationAsync().ConfigureAwait(false)
+            ).Enter();
             _submission.Claim();
-            return client
+            await client
                 .SubmitSendAsync(
                     actorId,
                     ZLinkMessageNameResolver.ResolveFromMessage(message),
                     message,
                     _metadata
                 )
-                .EnsureAcceptedAsync("Actor send", ZLinkFrameworkErrorKind.NotFound);
+                .EnsureAcceptedAsync("Actor send", ZLinkFrameworkErrorKind.NotFound)
+                .ConfigureAwait(false);
         }
     }
 
