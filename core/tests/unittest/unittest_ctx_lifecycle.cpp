@@ -21,8 +21,10 @@
 #include <chrono>
 #include <climits>
 #include <condition_variable>
+#include <future>
 #include <mutex>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #if defined(HAVE_FORK) && !defined(ZLINK_HAVE_WINDOWS)
@@ -1213,28 +1215,32 @@ struct pending_command_handoff_t
     std::mutex sync;
     std::condition_variable changed;
     bool entered;
+    command_sync_probe_t *probe;
 };
 
-void refill_mailbox_at_handoff (
-  zlink::async_owner_transition_test_point_t point_, void *userdata_)
+void refill_mailbox_at_handoff (zlink::async_owner_transition_test_point_t point_, void *userdata_)
 {
     if (point_ != zlink::async_owner_test_idle_stop_gate_held)
         return;
-    pending_command_handoff_t &handoff =
-      *static_cast<pending_command_handoff_t *> (userdata_);
-    // Keep a command pending at every detach attempt. Progress must transfer
-    // with that command instead of depending on an empty mailbox.
+    pending_command_handoff_t &handoff = *static_cast<pending_command_handoff_t *> (userdata_);
+    std::lock_guard<std::mutex> lock (handoff.sync);
+    if (handoff.entered)
+        return;
+    {
+        std::lock_guard<std::mutex> probe_lock (handoff.probe->sync);
+        handoff.probe->observed = false;
+    }
+    // Publish once after the empty drain, while the retiring owner holds
+    // its gate. No later public call may be needed to apply this command.
     zlink::command_t command = {};
     command.destination = handoff.source;
     command.type = zlink::command_t::request_completion;
-    static_cast<zlink::mailbox_t *> (handoff.source->get_mailbox ())
-      ->send (command);
-    std::lock_guard<std::mutex> lock (handoff.sync);
+    static_cast<zlink::mailbox_t *> (handoff.source->get_mailbox ())->send (command);
     handoff.entered = true;
     handoff.changed.notify_all ();
 }
 
-void check_command_owner_handoff (bool with_completion_poller_)
+void check_command_owner_handoff (bool with_completion_poller_, bool unretained_ = false)
 {
     void *ctx = zlink_ctx_new ();
     TEST_ASSERT_NOT_NULL (ctx);
@@ -1242,45 +1248,65 @@ void check_command_owner_handoff (bool with_completion_poller_)
     TEST_ASSERT_NOT_NULL (source);
     socket_handle_t source_handle = as_socket_handle (source);
     zlink::socket_base_t *const core = source_handle.socket;
-    TEST_ASSERT_SUCCESS_ERRNO (core->acquire_transport_pair_owner_progress ());
-    pending_command_handoff_t handoff = {core, {}, {}, false};
+    TEST_ASSERT_SUCCESS_ERRNO (unretained_ ? core->ensure_async_command_processing ()
+                                           : core->acquire_transport_pair_owner_progress ());
+    command_sync_probe_t pending_probe (static_cast<int> (zlink::command_t::request_completion));
+    pending_command_handoff_t handoff = {core, {}, {}, false, &pending_probe};
     if (with_completion_poller_) {
         TEST_ASSERT_TRUE (core->acquire_completion_poller (&handoff));
     }
-    zlink::test_set_async_owner_transition_hook (
-      &refill_mailbox_at_handoff, &handoff);
-    core->release_transport_pair_owner_progress ();
+    core->test_set_receive_command_sync_probe_hook (&observe_command_sync_probe, &pending_probe);
+    zlink::test_set_async_owner_transition_hook (&refill_mailbox_at_handoff, &handoff);
+    if (unretained_)
+        core->request_unowned_async_command_processing_stop ();
+    else
+        core->release_transport_pair_owner_progress ();
     bool entered;
     {
         std::unique_lock<std::mutex> lock (handoff.sync);
-        entered = handoff.changed.wait_for (
-          lock, std::chrono::seconds (3), [&] { return handoff.entered; });
+        entered = handoff.changed.wait_for (lock, std::chrono::seconds (3),
+                                            [&] { return handoff.entered; });
     }
-    const bool still_active = zlink::session_termination_test_access_t::
-      async_owner_active_after_turn (core);
-    // Removal also fences the callback's final access to this fixture.
+    const bool pending_command_drained = wait_for_command_sync_probe (&pending_probe);
+    // Fence callback access before removing either test observer.
     zlink::session_termination_test_access_t::clear_async_owner_hook (core);
+    core->test_set_receive_command_sync_probe_hook (NULL, NULL);
+    const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (3);
+    bool still_active;
+    do {
+        still_active =
+          zlink::session_termination_test_access_t::async_owner_active_after_turn (core);
+        if (!still_active)
+            break;
+        std::this_thread::yield ();
+    } while (std::chrono::steady_clock::now () < deadline);
     if (with_completion_poller_)
         core->release_completion_poller (&handoff);
-    command_sync_probe_t pending_probe (
-      static_cast<int> (zlink::command_t::request_completion));
-    core->test_set_receive_command_sync_probe_hook (
-      &observe_command_sync_probe, &pending_probe);
-    const int drain_rc = core->test_process_commands_only ();
-    core->test_set_receive_command_sync_probe_hook (NULL, NULL);
-    bool pending_command_drained;
-    {
-        std::lock_guard<std::mutex> lock (pending_probe.sync);
-        pending_command_drained = pending_probe.observed;
-    }
-    TEST_ASSERT_SUCCESS_ERRNO (drain_rc);
     source_handle = socket_handle_t ();
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_close (source));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_term (ctx));
+    std::promise<int> terminated;
+    std::future<int> termination = terminated.get_future ();
+    std::thread terminator ([ctx, signal = std::move (terminated)] () mutable {
+        signal.set_value (zlink_ctx_term (ctx));
+    });
+    const bool ctx_term_completed =
+      termination.wait_for (std::chrono::seconds (3)) == std::future_status::ready;
+    if (ctx_term_completed)
+        terminator.join ();
+    else
+        terminator.detach ();
+    TEST_ASSERT_TRUE_MESSAGE (ctx_term_completed, "context termination did not complete");
+    TEST_ASSERT_EQUAL_INT (0, termination.get ());
     TEST_ASSERT_TRUE (entered);
     TEST_ASSERT_FALSE (still_active);
     TEST_ASSERT_TRUE (pending_command_drained);
 }
+}
+
+void test_unowned_async_owner_drains_command_before_idle_detach ()
+{
+    check_command_owner_handoff (false, true);
 }
 
 void test_unowned_command_handoff_preserves_pending_mailbox ()
@@ -1501,6 +1527,7 @@ int main ()
     RUN_CTX_DESTROY_TEST (test_routing_id_snapshot_is_consistent_during_publication);
     RUN_CTX_DESTROY_TEST (test_session_decoder_queue_accounting_publication);
     RUN_CTX_DESTROY_TEST (test_monitor_owner_start_waits_for_idle_detach_linearization);
+    RUN_CTX_DESTROY_TEST (test_unowned_async_owner_drains_command_before_idle_detach);
     RUN_CTX_DESTROY_TEST (test_unowned_command_handoff_preserves_pending_mailbox);
     RUN_CTX_DESTROY_TEST (test_completion_poller_does_not_retain_command_lease);
     RUN_CTX_DESTROY_TEST (test_transport_owner_start_waits_for_explicit_async_quiesce);
