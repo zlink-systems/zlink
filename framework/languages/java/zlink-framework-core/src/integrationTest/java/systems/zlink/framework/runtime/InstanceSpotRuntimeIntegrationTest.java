@@ -733,14 +733,13 @@ final class InstanceSpotRuntimeIntegrationTest {
                 } else if (failureStage == CloseScenario.CAS_WINDOW) {
                     store.holdNextAuthorityPutAfterApply.set(true);
                 }
-                var spots = target.spotManager();
                 AtomicInteger completedBackendOperation =
                         failureStage == CloseScenario.RESOURCE
                                 ? backend.failOnce(spotId, "closeInstanceSpot")
                                 : null;
                 CompletionStage<Boolean> closing =
                         ZLinkSpotRuntimeTesting.closeInstanceSpot(
-                                spots, spotId, EchoInstanceSpot.generations.getFirst());
+                                target, spotId, EchoInstanceSpot.generations.getFirst());
                 if (failureStage == CloseScenario.DOUBLE_RELEASE) {
                     store.deleteFailed.get(5, TimeUnit.SECONDS);
                     assertThrows(
@@ -749,7 +748,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                     @SuppressWarnings("unchecked")
                     CompletionStage<Boolean> second =
                             ZLinkSpotRuntimeTesting.closeInstanceSpot(
-                                    spots, spotId, EchoInstanceSpot.generations.getFirst());
+                                    target, spotId, EchoInstanceSpot.generations.getFirst());
                     store.deleteFailedTwice.get(5, TimeUnit.SECONDS);
                     assertThrows(
                             java.util.concurrent.ExecutionException.class,
@@ -757,7 +756,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                     @SuppressWarnings("unchecked")
                     CompletionStage<Boolean> resumed =
                             ZLinkSpotRuntimeTesting.closeInstanceSpot(
-                                    spots, spotId, EchoInstanceSpot.generations.getFirst());
+                                    target, spotId, EchoInstanceSpot.generations.getFirst());
                     assertTrue(resumed.toCompletableFuture().get(5, TimeUnit.SECONDS));
                     store.deleteApplied.get(5, TimeUnit.SECONDS);
                     // The activation record holds the Spot lane until the release succeeds.
@@ -774,7 +773,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                     @SuppressWarnings("unchecked")
                     CompletionStage<Boolean> resumed =
                             ZLinkSpotRuntimeTesting.closeInstanceSpot(
-                                    spots, spotId, EchoInstanceSpot.generations.getFirst());
+                                    target, spotId, EchoInstanceSpot.generations.getFirst());
                     assertTrue(resumed.toCompletableFuture().get(5, TimeUnit.SECONDS));
                     store.deleteApplied.get(5, TimeUnit.SECONDS);
                     assertEquals(1, EchoInstanceSpot.closingCalls.get());
@@ -827,7 +826,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                         @SuppressWarnings("unchecked")
                         CompletionStage<Boolean> resumed =
                                 ZLinkSpotRuntimeTesting.closeInstanceSpot(
-                                        spots, spotId, EchoInstanceSpot.generations.getFirst());
+                                        target, spotId, EchoInstanceSpot.generations.getFirst());
                         assertTrue(resumed.toCompletableFuture().get(5, TimeUnit.SECONDS));
                     }
                 }
@@ -1140,10 +1139,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                             var completion =
                                     systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTesting
                                             .admitInstanceSpotRoute(
-                                                    runtime.spotManager(),
-                                                    spotId,
-                                                    received,
-                                                    admitted);
+                                                    runtime, spotId, received, admitted);
                             completion.whenComplete(
                                     (value, failure) -> {
                                         if (failure != null) reply.completeExceptionally(failure);
@@ -1468,7 +1464,8 @@ final class InstanceSpotRuntimeIntegrationTest {
                 SourceEntrySpot.closeStart.complete(null);
                 EchoInstanceSpot.closingEntered.get(5, TimeUnit.SECONDS);
                 if (drain) {
-                    ((systems.zlink.framework.runtime.spots.ZLinkSpotRuntime) target.spotManager())
+                    (systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                                    target))
                             .beginDrain()
                             .toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);

@@ -85,14 +85,12 @@ final class ZLinkLocalRequestAdmissionDeadlineTest {
                     .submit()
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
-            var host = runtime.spotManager();
+            var host =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            runtime);
             var queue = options.registration().applicationJobQueue();
-            var node = ((ZLinkSpotRuntime) host).primaryNode();
-            var target =
-                    ((ZLinkSpotRuntime) host)
-                            .spotLifecycle()
-                            .spotActivationFor("room-a")
-                            .backendSpot;
+            var node = host.primaryNode();
+            var target = host.spotLifecycle().spotActivationFor("room-a").backendSpot;
             var executor = Executors.newSingleThreadExecutor();
             try (var held =
                     queue.acquire(

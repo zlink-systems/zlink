@@ -24,7 +24,6 @@ import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
 import systems.zlink.framework.handlers.ZLinkSpotActorSend;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntimeTestAccess;
-import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinEntrySpotResult;
@@ -172,7 +171,9 @@ final class EntrySpotActorDispatchTests {
                     .submit()
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
-            var actors = (ZLinkActorRuntime) runtime.actorManager();
+            var actors =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.actors(
+                            runtime);
             var actor = (ProbeActor) actors.localActor("actor-a").orElseThrow();
             if (!scenario.equals("unbound")) {
                 backend.node.canonicalBoundSessionRoute =
@@ -288,8 +289,9 @@ final class EntrySpotActorDispatchTests {
                                                         .currentSerialExecutionTurn()
                                                 != null);
                                 closing.set(
-                                        ((systems.zlink.framework.runtime.spots.ZLinkSpotRuntime)
-                                                        runtime.spotManager())
+                                        (systems.zlink.framework.runtime.host
+                                                        .ZLinkFrameworkRuntimeTestAccess.spots(
+                                                        runtime))
                                                 .closeAsync());
                                 return CompletableFuture.completedFuture(null);
                             },
@@ -397,7 +399,9 @@ final class EntrySpotActorDispatchTests {
         TestBackend backend = startBackend();
         ZLinkActorRuntime sourceRuntime = messageFollowSourceRuntime();
         try (ZLinkFrameworkRuntime targetRuntime = startRuntime(backend)) {
-            ZLinkActorRuntime targetActors = (ZLinkActorRuntime) targetRuntime.actorManager();
+            ZLinkActorRuntime targetActors =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.actors(
+                            targetRuntime);
             targetRuntime
                     .actorManager()
                     .create("follow-send-actor", "probe")
@@ -429,7 +433,8 @@ final class EntrySpotActorDispatchTests {
                             .orElseThrow();
 
             sourceRuntime.setRoutedTransport(
-                    (ZLinkChannelRuntime) targetRuntime.route(),
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.channels(
+                            targetRuntime),
                     () -> "message-follow-source-spot");
             retainMessageFollow(
                     sourceRuntime,
@@ -601,7 +606,9 @@ final class EntrySpotActorDispatchTests {
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
 
-            var actors = (ZLinkActorRuntime) runtime.actorManager();
+            var actors =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.actors(
+                            runtime);
             backend.node.announceSessionBinding(
                     actors.currentRef(actors.localActor("actor-a").orElseThrow()));
 
@@ -641,7 +648,9 @@ final class EntrySpotActorDispatchTests {
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
 
-            var actors = (ZLinkActorRuntime) runtime.actorManager();
+            var actors =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.actors(
+                            runtime);
             backend.node.announceSessionBinding(
                     actors.currentRef(actors.localActor("actor-a").orElseThrow()));
 
@@ -932,7 +941,9 @@ final class EntrySpotActorDispatchTests {
                     .submit()
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
-            ZLinkActorRuntime actors = (ZLinkActorRuntime) runtime.actorManager();
+            ZLinkActorRuntime actors =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.actors(
+                            runtime);
             ProbeActor actor = (ProbeActor) actors.localActor("actor-a").orElseThrow();
             awaitActorCreationTurn(actors);
 
@@ -990,7 +1001,9 @@ final class EntrySpotActorDispatchTests {
                     .submit()
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
-            ZLinkActorRuntime actors = (ZLinkActorRuntime) runtime.actorManager();
+            ZLinkActorRuntime actors =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.actors(
+                            runtime);
             ProbeActor actor = (ProbeActor) actors.localActor("actor-a").orElseThrow();
             awaitActorCreationTurn(actors);
 
@@ -1040,7 +1053,9 @@ final class EntrySpotActorDispatchTests {
                     .submit()
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
-            ZLinkActorRuntime actors = (ZLinkActorRuntime) runtime.actorManager();
+            ZLinkActorRuntime actors =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.actors(
+                            runtime);
             ProbeActor actor = (ProbeActor) actors.localActor("actor-a").orElseThrow();
             awaitActorCreationTurn(actors);
 

@@ -42,7 +42,9 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
         options.addLocationStore(new ZLinkInMemoryLocationStore());
         options.addRouteMesh(MESH).listen("inproc://drain-" + UUID.randomUUID()).objects().server();
         try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(options)) {
-            var host = (ZLinkSpotRuntime) runtime.spotManager();
+            var host =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            runtime);
             host.beginDrain().toCompletableFuture().get(WAIT.toMillis(), TimeUnit.MILLISECONDS);
             var send =
                     runtime.route()
@@ -224,7 +226,10 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
                 assertEquals(
                         TYPE,
                         ZLinkSpotRuntimeTestAccess.resolveInstanceType(
-                                        (ZLinkSpotRuntime) runtime.spotManager(), MESH, null)
+                                        systems.zlink.framework.runtime.host
+                                                .ZLinkFrameworkRuntimeTestAccess.spots(runtime),
+                                        MESH,
+                                        null)
                                 .toCompletableFuture()
                                 .join());
             } else {
@@ -246,7 +251,10 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
                 assertEquals(0, sends.get());
                 var inferred =
                         ZLinkSpotRuntimeTestAccess.resolveInstanceType(
-                                        (ZLinkSpotRuntime) runtime.spotManager(), MESH, null)
+                                        systems.zlink.framework.runtime.host
+                                                .ZLinkFrameworkRuntimeTestAccess.spots(runtime),
+                                        MESH,
+                                        null)
                                 .toCompletableFuture();
                 if (zeroWeightProvider) assertEquals(TYPE, inferred.join());
                 else {
@@ -309,7 +317,9 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
                         ZLinkHandlerActivator.reflection(),
                         null,
                         construction)) {
-            var host = (ZLinkSpotRuntime) runtime.spotManager();
+            var host =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            runtime);
             var result =
                     requestedType == null
                             ? ZLinkSpotRuntimeTestAccess.resolveInstanceType(host, MESH, null)

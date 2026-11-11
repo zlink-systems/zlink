@@ -241,8 +241,12 @@ final class ZLinkActorJoinPrewarmIngressTest {
                 throws Exception {
             var options = hostOptions();
             targetHost = ZLinkFrameworkRuntimeTestAccess.start(options);
-            ZLinkSpotRuntime targetSpots = (ZLinkSpotRuntime) targetHost.spotManager();
-            ZLinkActorRuntime targetActors = (ZLinkActorRuntime) targetHost.actorManager();
+            ZLinkSpotRuntime targetSpots =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            targetHost);
+            ZLinkActorRuntime targetActors =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.actors(
+                            targetHost);
             targetHost
                     .spotManager()
                     .getOrCreate(TARGET_SPOT_ID, SPOT_TYPE)

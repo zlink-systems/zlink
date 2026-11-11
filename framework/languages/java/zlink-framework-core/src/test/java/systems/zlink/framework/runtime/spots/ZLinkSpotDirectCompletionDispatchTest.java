@@ -255,15 +255,19 @@ final class ZLinkSpotDirectCompletionDispatchTest {
                                     if (method.getName().equals("requestToSpot")) return backend;
                                     throw new UnsupportedOperationException(method.getName());
                                 });
-        return outbound.request(
+        return systems.zlink.framework.execution.ZLinkSerialExecutionQueue.manageCurrent(
+                outbound.submitRequest(
                         spot,
                         RoutingId.from("target"),
                         "spot",
                         1L,
                         payload,
                         Optional.empty(),
-                        Duration.ZERO)
-                .submit(String.class);
+                        null,
+                        systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata.empty(),
+                        Duration.ZERO,
+                        String.class,
+                        new CompletableFuture<>()));
     }
 
     private static ZLinkSpotDirectOutbound outbound() {

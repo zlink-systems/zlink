@@ -72,7 +72,9 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                     .submit()
                     .toCompletableFuture()
                     .get(3, TimeUnit.SECONDS);
-            ZLinkSpotRuntime runtime = (ZLinkSpotRuntime) host.spotManager();
+            ZLinkSpotRuntime runtime =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            host);
             DefaultSpotContext context = (DefaultSpotContext) LiveSpot.last.get().context();
             ZLinkUserSpotRelocationBarrier barrier =
                     context.relocationBarrier(runtime.actorSessions());
@@ -239,7 +241,9 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                         .submit()
                         .toCompletableFuture()
                         .get();
-                var runtime = (ZLinkSpotRuntime) host.spotManager();
+                var runtime =
+                        systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                                host);
                 var context = (DefaultSpotContext) LiveSpot.last.get().context();
                 var barrier = context.relocationBarrier(runtime.actorSessions());
                 var sealing =
@@ -282,7 +286,9 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                     .submit()
                     .toCompletableFuture()
                     .get();
-            var runtime = (ZLinkSpotRuntime) host.spotManager();
+            var runtime =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            host);
             var context = (DefaultSpotContext) LiveSpot.last.get().context();
             var barrier = context.relocationBarrier(runtime.actorSessions());
             var completed = new CompletableFuture<Void>();
@@ -311,7 +317,9 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                     .submit()
                     .toCompletableFuture()
                     .get();
-            ZLinkSpotRuntime runtime = (ZLinkSpotRuntime) host.spotManager();
+            ZLinkSpotRuntime runtime =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            host);
             DefaultSpotContext context = (DefaultSpotContext) LiveSpot.last.get().context();
             ZLinkUserSpotRelocationBarrier barrier =
                     context.relocationBarrier(runtime.actorSessions());
@@ -394,7 +402,9 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
         var registration = options.registration();
         var nodeRegistration = registration.meshNodes().getFirst();
         try (ZLinkFrameworkRuntime host = ZLinkFrameworkRuntimeTestAccess.start(options)) {
-            ZLinkSpotRuntime runtime = (ZLinkSpotRuntime) host.spotManager();
+            ZLinkSpotRuntime runtime =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            host);
             ZLinkMeshNodeDescriptor source =
                     repository
                             .listMeshNodes(MESH, ZLinkPageRequest.firstPage())
@@ -615,7 +625,9 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
         var registration = options.registration();
         var nodeRegistration = registration.meshNodes().getFirst();
         try (ZLinkFrameworkRuntime host = ZLinkFrameworkRuntimeTestAccess.start(options)) {
-            ZLinkSpotRuntime runtime = (ZLinkSpotRuntime) host.spotManager();
+            ZLinkSpotRuntime runtime =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            host);
             ZLinkMeshNodeDescriptor source =
                     repository
                             .listMeshNodes(MESH, ZLinkPageRequest.firstPage())
@@ -733,7 +745,9 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
         var registration = options.registration();
         var nodeRegistration = registration.meshNodes().getFirst();
         try (ZLinkFrameworkRuntime host = ZLinkFrameworkRuntimeTestAccess.start(options)) {
-            ZLinkSpotRuntime runtime = (ZLinkSpotRuntime) host.spotManager();
+            ZLinkSpotRuntime runtime =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            host);
             ZLinkMeshNodeDescriptor source =
                     repository
                             .listMeshNodes(MESH, ZLinkPageRequest.firstPage())

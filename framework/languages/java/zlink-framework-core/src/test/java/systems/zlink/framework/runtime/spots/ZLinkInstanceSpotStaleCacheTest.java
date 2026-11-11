@@ -214,7 +214,9 @@ final class ZLinkInstanceSpotStaleCacheTest {
                                 null,
                                 construction);
                 var payload = Message.from(new byte[] {1})) {
-            var host = (ZLinkSpotRuntime) runtime.spotManager();
+            var host =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            runtime);
             var ready = resolver.resolve(SPOT).toCompletableFuture().join().orElseThrow();
             assertEquals("old", ready.ownerId());
             var call =

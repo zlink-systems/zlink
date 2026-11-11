@@ -37,6 +37,24 @@ public final class ZLinkOneWayCalls {
         if (submitted.compareAndSet(false, true)) {
             return null;
         }
+        return duplicateSubmission();
+    }
+
+    public static <T> CompletionStage<T> beginOneWay(AtomicBoolean submitted, Runnable admission) {
+        if (submitted.get()) {
+            return duplicateSubmission();
+        }
+        try {
+            admission.run();
+        } catch (systems.zlink.framework.errors.ZLinkConfigurationException failure) {
+            throw failure;
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+        return beginOneWay(submitted);
+    }
+
+    private static <T> CompletionStage<T> duplicateSubmission() {
         return CompletableFuture.failedFuture(
                 new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.INVALID_OPERATION,
