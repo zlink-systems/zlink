@@ -329,7 +329,9 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
                     .submit()
                     .toCompletableFuture()
                     .get(COMPLETION_SECONDS, TimeUnit.SECONDS);
-            host = (ZLinkSpotRuntime) framework.spotManager();
+            host =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            framework);
             activation = host.spotLifecycle().spotActivationFor("room-a");
             room = roomType.cast(activation.spot());
             jobs = options.registration().applicationJobQueue();

@@ -421,7 +421,8 @@ final class InstanceSpotColdActivationTest {
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
             var sourceHost =
-                    (systems.zlink.framework.runtime.spots.ZLinkSpotRuntime) source.spotManager();
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            source);
             var nodes = ZLinkSpotRuntimeTestAccess.routeMeshNodesByName(sourceHost);
             var node = nodes.get("cold-test");
             long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
@@ -650,7 +651,8 @@ final class InstanceSpotColdActivationTest {
                             .toCompletableFuture();
             echoHandled.get(5, TimeUnit.SECONDS);
             var host =
-                    (systems.zlink.framework.runtime.spots.ZLinkSpotRuntime) runtime.spotManager();
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            runtime);
             var snapshot =
                     assertInstanceOf(
                             ZLinkAuthoritySnapshot.class,

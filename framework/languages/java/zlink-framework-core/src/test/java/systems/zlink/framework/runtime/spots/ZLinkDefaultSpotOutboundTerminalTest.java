@@ -40,7 +40,18 @@ final class ZLinkDefaultSpotOutboundTerminalTest {
         verifyTerminal(request, true, true, true);
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void routedLocalSubmissionUsesOneCallGate(boolean request) {
+        verifyTerminal(request, false, false, false, true);
+    }
+
     private void verifyTerminal(boolean request, boolean instance, boolean stale, boolean missing) {
+        verifyTerminal(request, instance, stale, missing, false);
+    }
+
+    private void verifyTerminal(
+            boolean request, boolean instance, boolean stale, boolean missing, boolean routedPath) {
         var terminal =
                 stale
                         ? ZLinkFrameworkErrorOrigin.framework(
@@ -91,6 +102,34 @@ final class ZLinkDefaultSpotOutboundTerminalTest {
                                     systems.zlink.framework.runtime.internal.handlers
                                             .ZLinkHandlerActivator.reflection(),
                                     Runnable::run));
+            var admissions = new java.util.concurrent.atomic.AtomicInteger();
+            direct.setCallAdmission(admissions::incrementAndGet);
+            var routerNode =
+                    (systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode)
+                            Proxy.newProxyInstance(
+                                    systems.zlink.framework.runtime.internal.backend
+                                            .ZLinkInternalSpotNode.class
+                                            .getClassLoader(),
+                                    new Class<?>[] {
+                                        systems.zlink.framework.runtime.internal.backend
+                                                .ZLinkInternalSpotNode.class
+                                    },
+                                    (proxy, method, arguments) -> {
+                                        if (method.getName().equals("entrySpot")) return backend;
+                                        throw new AssertionError(
+                                                "unexpected node call: " + method.getName());
+                                    });
+            var routed =
+                    new ZLinkSpotRoutedOutbound(
+                            null,
+                            new ZLinkSpotRouteMessages(serializer),
+                            direct,
+                            new ZLinkMessageFlowTracer(
+                                    new ZLinkDispatchOptionsRegistration(),
+                                    systems.zlink.framework.runtime.internal.handlers
+                                            .ZLinkHandlerActivator.reflection(),
+                                    Runnable::run),
+                            ignored -> routerNode);
             var outbound =
                     new DefaultSpotOutbound(
                             backend,
@@ -98,11 +137,11 @@ final class ZLinkDefaultSpotOutboundTerminalTest {
                             null,
                             serializer,
                             ignored -> ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
-                            null,
+                            routed,
                             direct,
                             null,
                             null,
-                            false,
+                            routedPath,
                             Duration.ofSeconds(1),
                             () -> probe,
                             probe);
@@ -129,17 +168,33 @@ final class ZLinkDefaultSpotOutboundTerminalTest {
                                     .thenApply(received -> received.parts())
                                     .whenComplete((ignored, failure) -> payload.close());
             java.util.concurrent.CompletionStage<?> result;
+            java.util.function.Supplier<java.util.concurrent.CompletionStage<?>> repeat;
             if (request) {
                 var call = outbound.requestToSpot("spot", new Packet("request"));
-                result = (instance ? call.instanceSpot() : call).submit(String.class);
+                var selected = instance ? call.instanceSpot() : call;
+                repeat = () -> selected.submit(String.class);
+                result = repeat.get();
             } else {
                 var call = outbound.sendToSpot("spot", new Packet("send"));
-                result = (instance ? call.instanceSpot() : call).submit();
+                var selected = instance ? call.instanceSpot() : call;
+                repeat = selected::submit;
+                result = repeat.get();
             }
             var failure =
                     assertThrows(
                             CompletionException.class, () -> result.toCompletableFuture().join());
             assertSame(terminal, failure.getCause());
+            var duplicate =
+                    assertThrows(
+                            CompletionException.class,
+                            () -> repeat.get().toCompletableFuture().join());
+            assertEquals(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    assertInstanceOf(
+                                    systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                                    duplicate.getCause())
+                            .kind());
+            assertEquals(1, admissions.get());
             assertEquals(missing ? 0 : 1, probe.submissions);
             assertEquals(1, probe.resolves);
             if (instance && !missing) {

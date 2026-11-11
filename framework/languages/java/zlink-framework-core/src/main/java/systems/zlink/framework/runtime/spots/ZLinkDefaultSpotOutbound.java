@@ -38,6 +38,7 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 
 final class DefaultSpotOutbound implements ZLinkSpotOutbound {
+    private final Runnable callAdmission;
     private final ZLinkBackendSpot backendSpot;
     private final String meshName;
     private final String publisherChannelName;
@@ -67,6 +68,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
             Duration defaultRequestTimeout,
             Supplier<SpotTransportAddressResolver> spotAddressResolver,
             ZLinkInstanceSpotCallRuntime instanceSpots) {
+        this.callAdmission = direct == null ? () -> {} : direct::admitCall;
         this.backendSpot = backendSpot;
         this.meshName = meshName;
         this.publisherChannelName = publisherChannelName;
@@ -171,7 +173,13 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
         return spotAddressResolver == null ? null : spotAddressResolver.get();
     }
 
-    private final class DeferredSpotSendCall implements ZLinkSpotSendCall {
+    private final class DeferredSpotSendCall implements ZLinkSpotSendCall, Runnable {
+        @Override
+        public void run() {
+            callAdmission.run();
+            rejectAfterRelocationReady("Spot send submit");
+        }
+
         private final AtomicBoolean submitGate;
         private final String target;
         private final ZLinkFrameworkMultipartView payload;
@@ -326,8 +334,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
 
         @Override
         public CompletionStage<Void> submit() {
-            rejectAfterRelocationReady("Spot send submit");
-            CompletionStage<Void> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
+            CompletionStage<Void> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate, this);
             if (duplicate != null) {
                 return duplicate;
             }
@@ -377,27 +384,26 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                     address.spotGeneration(),
                     address.authorityOwnerGeneration(),
                     address.ownerLeaseGeneration());
-            ZLinkSendCall call =
-                    routeMeshEnabled
-                            ? routed.send(
-                                    address.routerChannelId(),
-                                    address.targetNodeRid(),
-                                    address.spotId(),
-                                    address.spotGeneration(),
-                                    payload,
-                                    packetName,
-                                    contentType)
-                            : direct.send(
-                                    backendSpot,
-                                    address.targetNodeRid(),
-                                    address.spotId(),
-                                    address.spotGeneration(),
-                                    payload,
-                                    packetName,
-                                    contentType);
-            call = call.metadata(metadata.values());
             try {
-                return call.submit();
+                return routeMeshEnabled
+                        ? routed.submitSend(
+                                address.routerChannelId(),
+                                address.targetNodeRid(),
+                                address.spotId(),
+                                address.spotGeneration(),
+                                payload,
+                                packetName,
+                                contentType,
+                                metadata)
+                        : direct.submitSend(
+                                backendSpot,
+                                address.targetNodeRid(),
+                                address.spotId(),
+                                address.spotGeneration(),
+                                payload,
+                                packetName,
+                                contentType,
+                                metadata);
             } catch (RuntimeException failure) {
                 payload.close();
                 throw failure;
@@ -405,7 +411,13 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
         }
     }
 
-    private final class DeferredSpotRequestCall implements ZLinkSpotRequestCall {
+    private final class DeferredSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
+        @Override
+        public void run() {
+            callAdmission.run();
+            rejectAfterRelocationReady("Spot request submit");
+        }
+
         private CompletableFuture<Void> requestAdmission;
 
         private final AtomicBoolean submitGate;
@@ -592,8 +604,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
 
         @Override
         public <TReply> ZLinkRequestStage<TReply> submit(Class<TReply> replyType) {
-            rejectAfterRelocationReady("Spot request submit");
-            CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
+            CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate, this);
             if (duplicate != null)
                 return ZLinkRequestStages.observe(duplicate, new CompletableFuture<>());
             requestAdmission = new CompletableFuture<>();
@@ -705,31 +716,32 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                     address.authorityOwnerGeneration(),
                     address.ownerLeaseGeneration());
             Message transportPayload = copyPayload();
-            ZLinkRequestCall call =
-                    routeMeshEnabled
-                            ? routed.request(
-                                    address.routerChannelId(),
-                                    address.targetNodeRid(),
-                                    address.spotId(),
-                                    address.spotGeneration(),
-                                    transportPayload,
-                                    packetName,
-                                    contentType,
-                                    timeout)
-                            : direct.request(
-                                    backendSpot,
-                                    address.targetNodeRid(),
-                                    address.spotId(),
-                                    address.spotGeneration(),
-                                    transportPayload,
-                                    packetName,
-                                    contentType,
-                                    timeout);
             try {
-                var submitted = call.metadata(metadata.values()).submit(replyType);
-                ZLinkRequestStages.forwardAdmission(
-                        requestAdmission, ZLinkRequestStages.ownerAdmission(submitted));
-                return submitted;
+                return routeMeshEnabled
+                        ? routed.submitRequest(
+                                address.routerChannelId(),
+                                address.targetNodeRid(),
+                                address.spotId(),
+                                address.spotGeneration(),
+                                transportPayload,
+                                packetName,
+                                contentType,
+                                metadata,
+                                timeout,
+                                replyType,
+                                requestAdmission)
+                        : direct.submitRequest(
+                                backendSpot,
+                                address.targetNodeRid(),
+                                address.spotId(),
+                                address.spotGeneration(),
+                                transportPayload,
+                                packetName,
+                                contentType,
+                                metadata,
+                                timeout,
+                                replyType,
+                                requestAdmission);
             } catch (RuntimeException failure) {
                 transportPayload.close();
                 throw failure;

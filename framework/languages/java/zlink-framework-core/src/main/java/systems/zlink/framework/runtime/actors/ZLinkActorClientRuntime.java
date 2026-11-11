@@ -8,10 +8,8 @@ import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActorClient;
 import systems.zlink.framework.actors.ZLinkActorRequestCall;
 import systems.zlink.framework.actors.ZLinkActorSendCall;
-import systems.zlink.framework.channels.ZLinkRequestStage;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
@@ -20,14 +18,12 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
-import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers.ActorRoute;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
-import systems.zlink.framework.runtime.messaging.ZLinkPacketNames;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
@@ -37,7 +33,6 @@ import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
 import java.time.Duration;
 import java.util.EnumSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -54,7 +49,8 @@ import java.util.function.Supplier;
 
 public final class ZLinkActorClientRuntime implements ZLinkActorClient {
 
-    private final Supplier<ZLinkInternalSpotNode> spotNode;
+    private final ZLinkActorClientCalls callFactories = new ZLinkActorClientCalls(() -> this);
+    final Supplier<ZLinkInternalSpotNode> spotNode;
     private final ZLinkStoreLocationResolvers locations;
     private final ZLinkMessageSerializer serializer;
     private final Duration defaultTimeout;
@@ -137,22 +133,22 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         this.flowCaptureEnabled = Objects.requireNonNull(flowCaptureEnabled, "flowCaptureEnabled");
     }
 
-    private ZLinkFlowContext.Scope enterApplicationFlow() {
+    ZLinkFlowContext.Scope enterApplicationFlow() {
         return ZLinkFlowContext.enterCurrentOrCreate(
                 ZLinkFlowOrigin.APPLICATION, flowCaptureEnabled.getAsBoolean());
     }
 
     @Override
     public ZLinkActorSendCall sendToActor(String actorId, Object message) {
-        return new SendCall(actorId, message);
+        return callFactories.sendToActor(actorId, message);
     }
 
     @Override
     public ZLinkActorRequestCall requestToActor(String actorId, Object request) {
-        return new RequestCall(actorId, request);
+        return callFactories.requestToActor(actorId, request);
     }
 
-    private <TReply> CompletionStage<TReply> requestAsync(
+    <TReply> CompletionStage<TReply> requestAsync(
             String actorId,
             String packetName,
             Object request,
@@ -253,7 +249,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                 row.ownerLeaseGeneration());
     }
 
-    private CompletionStage<Void> submitSendResult(
+    CompletionStage<Void> submitSendResult(
             String actorId, String packetName, Object message, Map<String, String> metadata) {
         ZLinkFlowContext.State operationFlow = ZLinkFlowContext.current();
         return ZLinkOneWayCalls.adaptOneWay(
@@ -476,133 +472,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         Message.closeAll(parts);
     }
 
-    private final class SendCall implements ZLinkActorSendCall {
-        private final AtomicBoolean submitGate = new AtomicBoolean();
-        private final String actorId;
-        private final Object message;
-        private String packetName;
-        private final Map<String, String> metadata = new LinkedHashMap<>();
-
-        SendCall(String actorId, Object message) {
-            this.actorId = requireActorId(actorId);
-            this.message = message;
-            this.packetName = ZLinkPacketNames.resolve(message);
-        }
-
-        public ZLinkActorSendCall packetName(String packetName) {
-            this.packetName = packetName;
-            return this;
-        }
-
-        @Override
-        public ZLinkActorSendCall metadata(String key, String value) {
-            metadata.put(
-                    Objects.requireNonNull(key, "key"), Objects.requireNonNull(value, "value"));
-            return this;
-        }
-
-        @Override
-        public CompletionStage<Void> submit() {
-            CompletionStage<Void> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
-            if (duplicate != null) {
-                return duplicate;
-            }
-            try (var flowScope = enterApplicationFlow()) {
-                return submitSendResult(actorId, packetName, message, metadata);
-            }
-        }
-    }
-
-    private final class RequestCall implements ZLinkActorRequestCall {
-        private CompletableFuture<Void> requestAdmission;
-
-        private final String actorId;
-        private final Object request;
-        private final AtomicBoolean submitGate = new AtomicBoolean();
-        private String packetName;
-        private final Map<String, String> metadata = new LinkedHashMap<>();
-        private Duration timeout;
-
-        RequestCall(String actorId, Object request) {
-            this.actorId = requireActorId(actorId);
-            this.request = request;
-            this.packetName = ZLinkPacketNames.resolve(request);
-        }
-
-        public ZLinkActorRequestCall packetName(String packetName) {
-            this.packetName = packetName;
-            return this;
-        }
-
-        @Override
-        public ZLinkActorRequestCall metadata(String key, String value) {
-            metadata.put(
-                    Objects.requireNonNull(key, "key"), Objects.requireNonNull(value, "value"));
-            return this;
-        }
-
-        @Override
-        public ZLinkActorRequestCall timeout(Duration timeout) {
-            this.timeout = timeout;
-            return this;
-        }
-
-        @Override
-        public <TReply> ZLinkRequestStage<TReply> submit(Class<TReply> replyType) {
-            CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
-            if (duplicate != null)
-                return ZLinkRequestStages.observe(duplicate, new CompletableFuture<>());
-            requestAdmission = new CompletableFuture<>();
-            return ZLinkRequestStages.observe(submitReply(replyType), requestAdmission);
-        }
-
-        private <TReply> CompletionStage<TReply> submitReply(Class<TReply> replyType) {
-
-            try (var flowScope = enterApplicationFlow()) {
-                systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
-                        .rejectSameActorWait(actorId);
-                ZLinkInternalSpotNode node = spotNode.get();
-                ZLinkRequestMetrics.Series metric = ZLinkRequestMetrics.actor(node.name());
-                long started =
-                        ZLinkRequestMetrics.durationEnabled()
-                                ? System.nanoTime()
-                                : ZLinkRequestMetrics.NO_START;
-                ZLinkRequestMetrics.start(metric);
-                CompletionStage<TReply> stage;
-                try {
-                    stage =
-                            requestAsync(
-                                    actorId,
-                                    packetName,
-                                    request,
-                                    metadata,
-                                    timeout,
-                                    replyType,
-                                    metric,
-                                    started,
-                                    requestAdmission);
-                } catch (RuntimeException | Error failure) {
-                    ZLinkRequestMetrics.complete(
-                            metric,
-                            started == ZLinkRequestMetrics.NO_START
-                                    ? -1L
-                                    : ZLinkRequestMetrics.elapsed(started, System.nanoTime()),
-                            failure);
-                    throw failure;
-                }
-                return ZLinkSerialExecutionQueue.manageCurrent(stage);
-            }
-        }
-
-        @Override
-        public <TReply> CompletionStage<TReply> yield(Class<TReply> replyType) {
-            systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
-                    .requireYieldAllowed("Actor request");
-            return ZLinkSerialExecutionQueue.yieldCurrent(submit(replyType));
-        }
-    }
-
-    private static String requireActorId(String actorId) {
+    static String requireActorId(String actorId) {
         Objects.requireNonNull(actorId, "actorId");
         if (actorId.isBlank() || actorId.indexOf('\0') >= 0) {
             throw new IllegalArgumentException("actorId is required");

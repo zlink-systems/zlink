@@ -57,7 +57,9 @@ final class ZLinkDeferredJoinActorIngressTest {
                     .submit()
                     .toCompletableFuture()
                     .get(COMPLETION_SECONDS, TimeUnit.SECONDS);
-            var spots = (ZLinkSpotRuntime) runtime.spotManager();
+            var spots =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            runtime);
             var actor = (Player) spots.actorSessions().localActor(ACTOR_ID).orElseThrow();
             var entry = (Entry) spots.localActorSpotSurface(actor);
             var joinReply =
