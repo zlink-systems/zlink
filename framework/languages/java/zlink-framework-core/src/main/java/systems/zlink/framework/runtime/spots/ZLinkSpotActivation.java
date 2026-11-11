@@ -194,11 +194,20 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                                 replyRoute.completeLocal();
                                 throw failure;
                             }
+                            // Release the local reply route before callers observe the failure;
+                            // cancellation still reaches the held dispatch directly.
+                            CompletableFuture<Void> settled =
+                                    systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
+                                            .newCancellationFuture();
+                            systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
+                                    .forwardCancellation(settled, admitted);
                             admitted.whenComplete(
                                     (done, failure) -> {
                                         if (failure != null) replyRoute.completeLocal();
+                                        if (failure == null) settled.complete(done);
+                                        else settled.completeExceptionally(failure);
                                     });
-                            return admitted;
+                            return settled;
                         });
         dispatched.whenComplete(
                 (done, failure) -> {

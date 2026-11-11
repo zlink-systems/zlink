@@ -97,7 +97,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     private StartupLifecycle startupLifecycle;
     private RoutingId nodeRid;
     private volatile boolean started;
-    private volatile long ownerAdmissionDeadlineNanos;
+    volatile long ownerAdmissionDeadlineNanos;
     // Revocation used to erase the deadline with a zero sentinel. Keep the time for outage capture.
     private volatile boolean ownerAdmissionRevoked = true;
     private String lastError;
@@ -639,7 +639,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                         TimeUnit.NANOSECONDS);
     }
 
-    private void ownerDeadlineCore() {
+    void ownerDeadlineCore() {
         StoreOutage episode = outage;
         if (episode != null) latchOutageCore(episode);
         // The deadline only closes admission; reopening belongs to a successful lease.

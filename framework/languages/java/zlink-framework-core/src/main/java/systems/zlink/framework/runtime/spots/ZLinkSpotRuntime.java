@@ -5921,8 +5921,20 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ownership.close();
             return CompletableFuture.failedFuture(failure);
         }
-        result.whenComplete((ignored, failure) -> ownership.close());
-        return result;
+        // Close the ownership before callers observe completion; cancellation still reaches the
+        // held operation directly.
+        CompletableFuture<T> closed =
+                systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
+                        .newCancellationFuture();
+        systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
+                closed, result);
+        result.whenComplete(
+                (value, failure) -> {
+                    ownership.close();
+                    if (failure == null) closed.complete(value);
+                    else closed.completeExceptionally(failure);
+                });
+        return closed;
     }
 
     private void attachRouteMeshSpotBridges(

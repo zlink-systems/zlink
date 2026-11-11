@@ -9,42 +9,25 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class ZLinkTimerAdmissionTestRuntime {
     private ZLinkTimerAdmissionTestRuntime() {}
 
+    /**
+     * Moves the recorded admission deadline to the current time and runs the owner-deadline task on
+     * the state lane, as the scheduler would when the deadline arrives.
+     */
     public static void advanceToDeadline(ZLinkLocationRuntime runtime) {
-        try {
-            var clock = ZLinkLocationRuntime.class.getDeclaredField("monotonicNow");
-            var deadline =
-                    ZLinkLocationRuntime.class.getDeclaredField("ownerAdmissionDeadlineNanos");
-            var lane = ZLinkLocationRuntime.class.getDeclaredField("stateLane");
-            clock.setAccessible(true);
-            deadline.setAccessible(true);
-            lane.setAccessible(true);
-            ((ZLinkStateLane) lane.get(runtime))
-                    .runAsync(
-                            () -> {
-                                try {
-                                    long now = deadline.getLong(runtime);
-                                    clock.set(runtime, (java.util.function.LongSupplier) () -> now);
-                                    latch(runtime);
-                                    return null;
-                                } catch (IllegalAccessException failure) {
-                                    throw new AssertionError(failure);
-                                }
-                            })
-                    .toCompletableFuture()
-                    .join();
-        } catch (ReflectiveOperationException failure) {
-            throw new AssertionError(failure);
-        }
+        runtime.stateLane
+                .runAsync(
+                        () -> {
+                            runtime.ownerAdmissionDeadlineNanos = runtime.monotonicNow.getAsLong();
+                            runtime.ownerDeadlineCore();
+                            return null;
+                        })
+                .toCompletableFuture()
+                .join();
     }
 
+    /** Runs the owner-deadline task now, as the scheduler would at the recorded deadline. */
     public static void latch(ZLinkLocationRuntime runtime) {
-        try {
-            var method = ZLinkLocationRuntime.class.getDeclaredMethod("ownerDeadlineCore");
-            method.setAccessible(true);
-            method.invoke(runtime);
-        } catch (ReflectiveOperationException failure) {
-            throw new AssertionError(failure);
-        }
+        runtime.ownerDeadlineCore();
     }
 
     public static ZLinkLocationRuntime create(AtomicLong now, ScheduledExecutorService executor) {
