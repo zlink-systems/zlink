@@ -90,10 +90,11 @@ internal sealed class TicTacToeMeshReadinessReporter(
             // Spec 10.1: confirm the peer named in the row, not merely that some peer is ready.
             // The spot mesh uses a fixed RID so the expected peer can be named at all.
             // User Spot placement requires this host's descriptor to be published before readiness.
-            TicTacToeReadyKind.PeerRoute => host.Status.IsReady && status.Peers.Any(peer =>
-                peer.NodeRid == SampleNodes.RouteMeshRoutingId(report.PeerNodeId!)
-                && peer.State == ZLinkPeerState.Ready
-            ),
+            TicTacToeReadyKind.PeerRoute => host.Status.IsReady
+                && status.Peers.Any(peer =>
+                    peer.NodeRid == SampleNodes.RouteMeshRoutingId(report.PeerNodeId!)
+                    && peer.State == ZLinkPeerState.Ready
+                ),
             // Spec 10.1: this row means the Api node can reach the Play spot mesh, not merely
             // that the mesh object exists. Mesh IsReady can be true before any object-capable Play
             // peer is admitted, which lets the client start too early and fail its first JoinSpot.
