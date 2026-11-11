@@ -9,7 +9,6 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.actors.*;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
-import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
@@ -63,7 +62,9 @@ final class ZLinkLocalActorCutoverAdmissionTest {
                     .submit()
                     .toCompletableFuture()
                     .get(WAIT_SECONDS, TimeUnit.SECONDS);
-            var actors = (ZLinkActorRuntime) host.actorManager();
+            var actors =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.actors(
+                            host);
             actors.awaitDrainBarrier().toCompletableFuture().get(WAIT_SECONDS, TimeUnit.SECONDS);
             var actor = actors.localActor(ACTOR).orElseThrow();
             long generation = actor.context().objectGeneration();
@@ -84,7 +85,10 @@ final class ZLinkLocalActorCutoverAdmissionTest {
             try {
                 assertEquals(List.of(), retained.records(), "the single cut must start quiescent");
 
-                var node = ((ZLinkSpotRuntime) host.spotManager()).primaryNode();
+                var node =
+                        (systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                                        host))
+                                .primaryNode();
                 var entry = node.entrySpot();
                 var original =
                         (ZLinkInternalAsyncSpotDispatchHandler)

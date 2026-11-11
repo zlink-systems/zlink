@@ -39,11 +39,13 @@ final class RouteSendCall
         implements ZLinkSendCall,
                 java.util.function.BiFunction<
                         ZLinkInternalSpotNode, Duration, CompletionStage<Void>>,
-                java.util.function.Consumer<Throwable> {
+                java.util.function.Consumer<Throwable>,
+                Runnable {
     private final AtomicBoolean submitGate;
-    private final ZLinkChannelCallRuntime runtime;
+    private final java.util.function.Supplier<ZLinkChannelRuntime> host;
+    private ZLinkChannelCallRuntime runtime;
     private final String channelName;
-    private final ZLinkChannelSocketRegistry sockets;
+    private ZLinkChannelSocketRegistry sockets;
     private final RoutingId target;
     final ZLinkFrameworkMultipartView payload;
     private final String packetName;
@@ -68,7 +70,8 @@ final class RouteSendCall
                 packetName,
                 contentType,
                 metadata,
-                new AtomicBoolean());
+                new AtomicBoolean(),
+                null);
     }
 
     private RouteSendCall(
@@ -80,8 +83,10 @@ final class RouteSendCall
             String packetName,
             String contentType,
             ZLinkApplicationMetadata metadata,
-            AtomicBoolean submitGate) {
+            AtomicBoolean submitGate,
+            java.util.function.Supplier<ZLinkChannelRuntime> host) {
         this.submitGate = submitGate;
+        this.host = host;
         this.runtime = runtime;
         this.channelName = channelName;
         this.sockets = sockets;
@@ -90,6 +95,36 @@ final class RouteSendCall
         this.packetName = packetName;
         this.contentType = contentType;
         this.metadata = metadata;
+    }
+
+    RouteSendCall(
+            java.util.function.Supplier<ZLinkChannelRuntime> host,
+            String channelName,
+            ZLinkChannelSocketRegistry sockets,
+            RoutingId target,
+            ZLinkFrameworkMultipartView payload,
+            String packetName,
+            String contentType,
+            ZLinkApplicationMetadata metadata) {
+        this(
+                null,
+                channelName,
+                sockets,
+                target,
+                payload,
+                packetName,
+                contentType,
+                metadata,
+                new AtomicBoolean(),
+                host);
+    }
+
+    @Override
+    public void run() {
+        if (host == null) return;
+        ZLinkChannelRuntime live = host.get();
+        runtime = live.callRuntimeForCalls();
+        sockets = live.sockets;
     }
 
     @Override
@@ -103,7 +138,8 @@ final class RouteSendCall
                 packetName,
                 contentType,
                 (metadata == null ? ZLinkApplicationMetadata.empty() : metadata).with(key, value),
-                submitGate);
+                submitGate,
+                host);
     }
 
     @Override
@@ -117,12 +153,13 @@ final class RouteSendCall
                 packetName,
                 contentType,
                 (metadata == null ? ZLinkApplicationMetadata.empty() : metadata).withAll(values),
-                submitGate);
+                submitGate,
+                host);
     }
 
     @Override
     public CompletionStage<Void> submit() {
-        CompletionStage<Void> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
+        CompletionStage<Void> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate, this);
         if (duplicate != null) {
             return duplicate;
         }
@@ -222,13 +259,14 @@ final class RouteSendCall
     }
 }
 
-final class RouteRequestCall implements ZLinkRequestCall {
+final class RouteRequestCall implements ZLinkRequestCall, Runnable {
     private CompletableFuture<Void> requestAdmission;
 
     private final AtomicBoolean submitGate;
-    private final ZLinkChannelCallRuntime runtime;
+    private final java.util.function.Supplier<ZLinkChannelRuntime> host;
+    private ZLinkChannelCallRuntime runtime;
     private final String channelName;
-    private final ZLinkChannelSocketRegistry sockets;
+    private ZLinkChannelSocketRegistry sockets;
     private final Duration defaultTimeout;
     private final RoutingId target;
     final ZLinkFrameworkMultipartView payload;
@@ -265,7 +303,8 @@ final class RouteRequestCall implements ZLinkRequestCall {
                 channelNames,
                 names,
                 metadata,
-                new AtomicBoolean());
+                new AtomicBoolean(),
+                null);
     }
 
     private RouteRequestCall(
@@ -281,8 +320,10 @@ final class RouteRequestCall implements ZLinkRequestCall {
             ZLinkChannelEnvelope.PreparedNames channelNames,
             ZLinkChannelEnvelope.PreparedNames names,
             ZLinkApplicationMetadata metadata,
-            AtomicBoolean submitGate) {
+            AtomicBoolean submitGate,
+            java.util.function.Supplier<ZLinkChannelRuntime> host) {
         this.submitGate = submitGate;
+        this.host = host;
         this.runtime = runtime;
         this.channelName = channelName;
         this.sockets = sockets;
@@ -311,7 +352,46 @@ final class RouteRequestCall implements ZLinkRequestCall {
                 channelNames,
                 names,
                 metadata,
-                submitGate);
+                submitGate,
+                host);
+    }
+
+    RouteRequestCall(
+            java.util.function.Supplier<ZLinkChannelRuntime> host,
+            String channelName,
+            ZLinkChannelSocketRegistry sockets,
+            Duration defaultTimeout,
+            RoutingId target,
+            ZLinkFrameworkMultipartView payload,
+            Optional<String> packetName,
+            Duration timeout,
+            String contentType,
+            ZLinkChannelEnvelope.PreparedNames channelNames,
+            ZLinkChannelEnvelope.PreparedNames names,
+            ZLinkApplicationMetadata metadata) {
+        this(
+                null,
+                channelName,
+                sockets,
+                defaultTimeout,
+                target,
+                payload,
+                packetName,
+                timeout,
+                contentType,
+                channelNames,
+                names,
+                metadata,
+                new AtomicBoolean(),
+                host);
+    }
+
+    @Override
+    public void run() {
+        if (host == null) return;
+        ZLinkChannelRuntime live = host.get();
+        runtime = live.callRuntimeForCalls();
+        sockets = live.sockets;
     }
 
     @Override
@@ -329,7 +409,8 @@ final class RouteRequestCall implements ZLinkRequestCall {
                 channelNames,
                 names,
                 (metadata == null ? ZLinkApplicationMetadata.empty() : metadata).with(key, value),
-                submitGate);
+                submitGate,
+                host);
     }
 
     @Override
@@ -347,7 +428,8 @@ final class RouteRequestCall implements ZLinkRequestCall {
                 channelNames,
                 names,
                 (metadata == null ? ZLinkApplicationMetadata.empty() : metadata).withAll(values),
-                submitGate);
+                submitGate,
+                host);
     }
 
     @Override
@@ -366,12 +448,13 @@ final class RouteRequestCall implements ZLinkRequestCall {
                 channelNames,
                 names,
                 metadata,
-                submitGate);
+                submitGate,
+                host);
     }
 
     @Override
     public <TReply> ZLinkRequestStage<TReply> submit(Class<TReply> replyType) {
-        CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
+        CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate, this);
         if (duplicate != null)
             return ZLinkRequestStages.observe(
                     duplicate, ZLinkCompletionBridge.newCancellationFuture());
@@ -569,11 +652,13 @@ final class ChannelSendCall
         implements ZLinkSendCall,
                 java.util.function.BiFunction<
                         ZLinkInternalSpotNode, Duration, CompletionStage<Void>>,
-                java.util.function.Consumer<Throwable> {
+                java.util.function.Consumer<Throwable>,
+                Runnable {
     private final AtomicBoolean submitGate;
-    private final ZLinkChannelCallRuntime runtime;
+    private final java.util.function.Supplier<ZLinkChannelRuntime> host;
+    private ZLinkChannelCallRuntime runtime;
     private final String channelName;
-    private final ZLinkChannelSocketRegistry sockets;
+    private ZLinkChannelSocketRegistry sockets;
     final ZLinkFrameworkMultipartView payload;
     private final String packetName;
     private final String contentType;
@@ -611,7 +696,8 @@ final class ChannelSendCall
                 packetName,
                 contentType,
                 metadata,
-                new AtomicBoolean());
+                new AtomicBoolean(),
+                null);
     }
 
     private ChannelSendCall(
@@ -622,8 +708,10 @@ final class ChannelSendCall
             String packetName,
             String contentType,
             ZLinkApplicationMetadata metadata,
-            AtomicBoolean submitGate) {
+            AtomicBoolean submitGate,
+            java.util.function.Supplier<ZLinkChannelRuntime> host) {
         this.submitGate = submitGate;
+        this.host = host;
         this.runtime = runtime;
         this.channelName = channelName;
         this.sockets = sockets;
@@ -631,6 +719,34 @@ final class ChannelSendCall
         this.packetName = packetName;
         this.contentType = contentType;
         this.metadata = metadata;
+    }
+
+    ChannelSendCall(
+            java.util.function.Supplier<ZLinkChannelRuntime> host,
+            String channelName,
+            ZLinkChannelSocketRegistry sockets,
+            ZLinkFrameworkMultipartView payload,
+            String packetName,
+            String contentType,
+            ZLinkApplicationMetadata metadata) {
+        this(
+                null,
+                channelName,
+                sockets,
+                payload,
+                packetName,
+                contentType,
+                metadata,
+                new AtomicBoolean(),
+                host);
+    }
+
+    @Override
+    public void run() {
+        if (host == null) return;
+        ZLinkChannelRuntime live = host.get();
+        runtime = live.callRuntimeForCalls();
+        sockets = live.sockets;
     }
 
     @Override
@@ -643,7 +759,8 @@ final class ChannelSendCall
                 packetName,
                 contentType,
                 (metadata == null ? ZLinkApplicationMetadata.empty() : metadata).with(key, value),
-                submitGate);
+                submitGate,
+                host);
     }
 
     @Override
@@ -656,12 +773,13 @@ final class ChannelSendCall
                 packetName,
                 contentType,
                 (metadata == null ? ZLinkApplicationMetadata.empty() : metadata).withAll(values),
-                submitGate);
+                submitGate,
+                host);
     }
 
     @Override
     public CompletionStage<Void> submit() {
-        CompletionStage<Void> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
+        CompletionStage<Void> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate, this);
         if (duplicate != null) {
             return duplicate;
         }
@@ -737,13 +855,14 @@ final class ChannelSendCall
     }
 }
 
-final class ChannelRequestCall implements ZLinkRequestCall {
+final class ChannelRequestCall implements ZLinkRequestCall, Runnable {
     private CompletableFuture<Void> requestAdmission;
 
     private final AtomicBoolean submitGate;
-    private final ZLinkChannelCallRuntime runtime;
+    private final java.util.function.Supplier<ZLinkChannelRuntime> host;
+    private ZLinkChannelCallRuntime runtime;
     private final String channelName;
-    private final ZLinkChannelSocketRegistry sockets;
+    private ZLinkChannelSocketRegistry sockets;
     private final Duration defaultTimeout;
     final ZLinkFrameworkMultipartView payload;
     private final Optional<String> packetName;
@@ -777,7 +896,8 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                 channelNames,
                 names,
                 metadata,
-                new AtomicBoolean());
+                new AtomicBoolean(),
+                null);
     }
 
     private ChannelRequestCall(
@@ -792,8 +912,10 @@ final class ChannelRequestCall implements ZLinkRequestCall {
             ZLinkChannelEnvelope.PreparedNames channelNames,
             ZLinkChannelEnvelope.PreparedNames names,
             ZLinkApplicationMetadata metadata,
-            AtomicBoolean submitGate) {
+            AtomicBoolean submitGate,
+            java.util.function.Supplier<ZLinkChannelRuntime> host) {
         this.submitGate = submitGate;
+        this.host = host;
         this.runtime = runtime;
         this.channelName = channelName;
         this.sockets = sockets;
@@ -820,7 +942,44 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                 channelNames,
                 names,
                 metadata,
-                submitGate);
+                submitGate,
+                host);
+    }
+
+    ChannelRequestCall(
+            java.util.function.Supplier<ZLinkChannelRuntime> host,
+            String channelName,
+            ZLinkChannelSocketRegistry sockets,
+            Duration defaultTimeout,
+            ZLinkFrameworkMultipartView payload,
+            Optional<String> packetName,
+            Duration timeout,
+            String contentType,
+            ZLinkChannelEnvelope.PreparedNames channelNames,
+            ZLinkChannelEnvelope.PreparedNames names,
+            ZLinkApplicationMetadata metadata) {
+        this(
+                null,
+                channelName,
+                sockets,
+                defaultTimeout,
+                payload,
+                packetName,
+                timeout,
+                contentType,
+                channelNames,
+                names,
+                metadata,
+                new AtomicBoolean(),
+                host);
+    }
+
+    @Override
+    public void run() {
+        if (host == null) return;
+        ZLinkChannelRuntime live = host.get();
+        runtime = live.callRuntimeForCalls();
+        sockets = live.sockets;
     }
 
     @Override
@@ -837,7 +996,8 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                 channelNames,
                 names,
                 (metadata == null ? ZLinkApplicationMetadata.empty() : metadata).with(key, value),
-                submitGate);
+                submitGate,
+                host);
     }
 
     @Override
@@ -854,7 +1014,8 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                 channelNames,
                 names,
                 (metadata == null ? ZLinkApplicationMetadata.empty() : metadata).withAll(values),
-                submitGate);
+                submitGate,
+                host);
     }
 
     @Override
@@ -872,12 +1033,13 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                 channelNames,
                 names,
                 metadata,
-                submitGate);
+                submitGate,
+                host);
     }
 
     @Override
     public <TReply> ZLinkRequestStage<TReply> submit(Class<TReply> replyType) {
-        CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
+        CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate, this);
         if (duplicate != null)
             return ZLinkRequestStages.observe(
                     duplicate, ZLinkCompletionBridge.newCancellationFuture());

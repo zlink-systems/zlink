@@ -77,6 +77,18 @@ public final class ZLinkCompletionBridge {
         return new CancellationFuture<>(null);
     }
 
+    /** Creates a terminal future whose observation runs before caller completion. */
+    public static <T> CompletableFuture<T> newCancellationFuture(
+            Consumer<Throwable> beforeCompletion) {
+        Objects.requireNonNull(beforeCompletion, "beforeCompletion");
+        return new CancellationFuture<>(null) {
+            @Override
+            protected void beforeCompletion(Throwable failure) {
+                beforeCompletion.accept(failure);
+            }
+        };
+    }
+
     /** Creates a terminal future with a side effect that does not need its own dependent stage. */
     public static <T> CompletableFuture<T> newCancellationFuture(
             BiConsumer<CompletableFuture<T>, Throwable> terminalObserver) {

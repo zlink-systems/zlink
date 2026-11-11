@@ -36,14 +36,24 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 final class ZLinkSpotPublisherRuntime implements AutoCloseable {
+    private Runnable callAdmission = () -> {};
+
+    void setCallAdmission(Runnable value) {
+        callAdmission = value;
+    }
+
+    void admitCall() {
+        callAdmission.run();
+    }
+
     private static final int MIN_MULTICAST_PARALLELISM = 2;
     private static final long WORKER_IDLE_SECONDS = 30;
     private static final Logger LOGGER =
             Logger.getLogger(ZLinkSpotPublisherRuntime.class.getName());
-    private final ZLinkMessageSerializer serializer;
+    final ZLinkMessageSerializer serializer;
     private final ZLinkSpotRouteMessages messages;
     final ThreadPoolExecutor multicastExecutor;
-    private final Function<Class<?>, String> contentTypeResolver;
+    final Function<Class<?>, String> contentTypeResolver;
     private final ZLinkMessageFlowTracer flow;
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private volatile Map<String, ZLinkInternalSpotNode> nodesByChannel = Map.of();
@@ -141,29 +151,11 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
     }
 
     ZLinkPublishCall publish(String channelName, String topic, Object message) {
-        return publish(channelName, channelName, topic, message);
+        return client().publish(channelName, topic, message);
     }
 
     ZLinkPublishCall publish(String meshName, String channelName, String topic, Object message) {
-        if (channelName == null || channelName.isBlank()) {
-            throw new ZLinkConfigurationException("SPOT publisher channel name is required");
-        }
-        if (topic == null || topic.isBlank()) {
-            throw new ZLinkConfigurationException("SPOT publish topic is required");
-        }
-        requireChannel(meshName);
-        ZLinkPayloadEncoding.EncodedPayload encoded =
-                ZLinkPayloadEncoding.encode(
-                        serializer,
-                        message,
-                        contentTypeResolver.apply(ZLinkPayloadEncoding.declaredType(message)));
-        return call(
-                meshName,
-                channelName,
-                topic,
-                encoded.payload().getFirst(),
-                Optional.of(encoded.packetName()),
-                encoded.contentType());
+        return client().publish(meshName, channelName, topic, message);
     }
 
     ZLinkPublishCall call(
@@ -412,7 +404,7 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
         }
     }
 
-    private ZLinkInternalSpotNode requireChannel(String channelName) {
+    ZLinkInternalSpotNode requireChannel(String channelName) {
         ZLinkInternalSpotNode node = nodesByChannel.get(channelName);
         if (node == null) {
             throw new ZLinkConfigurationException(
@@ -442,27 +434,55 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
 }
 
 final class ZLinkDefaultSpotPublisherClient implements ZLinkSpotPublisherClient {
-    private final ZLinkSpotPublisherRuntime publishers;
+    private final java.util.function.Supplier<ZLinkSpotPublisherRuntime> access;
+    private final ZLinkMessageSerializer serializer;
+    private final Function<Class<?>, String> contentTypeResolver;
 
     ZLinkDefaultSpotPublisherClient(ZLinkSpotPublisherRuntime publishers) {
-        this.publishers = publishers;
+        this(() -> publishers, publishers.serializer, publishers.contentTypeResolver);
     }
 
-    @Override
+    ZLinkDefaultSpotPublisherClient(
+            java.util.function.Supplier<ZLinkSpotPublisherRuntime> access,
+            ZLinkMessageSerializer serializer,
+            Function<Class<?>, String> contentTypeResolver) {
+        this.access = access;
+        this.serializer = serializer;
+        this.contentTypeResolver = contentTypeResolver;
+    }
+
+    public ZLinkPublishCall publish(String channelName, String topic, Object message) {
+        return publish(channelName, channelName, topic, message);
+    }
+
     public ZLinkPublishCall publish(
             String meshName, String channelName, String topic, Object message) {
-        return publishers.publish(meshName, channelName, topic, message);
-    }
-
-    @Override
-    public ZLinkPublishCall publish(String channelName, String topic, Object message) {
-        return publishers.publish(channelName, topic, message);
+        if (channelName == null || channelName.isBlank()) {
+            throw new ZLinkConfigurationException("SPOT publisher channel name is required");
+        }
+        if (topic == null || topic.isBlank()) {
+            throw new ZLinkConfigurationException("SPOT publish topic is required");
+        }
+        ZLinkPayloadEncoding.EncodedPayload encoded =
+                ZLinkPayloadEncoding.encode(
+                        serializer,
+                        message,
+                        contentTypeResolver.apply(ZLinkPayloadEncoding.declaredType(message)));
+        return new ZLinkExternalSpotPublishCall(
+                access,
+                meshName,
+                channelName,
+                topic,
+                encoded.payload().getFirst(),
+                Optional.of(encoded.packetName()),
+                encoded.contentType());
     }
 }
 
-final class ZLinkExternalSpotPublishCall implements ZLinkPublishCall {
+final class ZLinkExternalSpotPublishCall implements ZLinkPublishCall, Runnable {
     private final AtomicBoolean submitGate;
-    private final ZLinkSpotPublisherRuntime publishers;
+    private ZLinkSpotPublisherRuntime publishers;
+    private final java.util.function.Supplier<ZLinkSpotPublisherRuntime> access;
     private final String meshName;
     private final String channelName;
     private final String topic;
@@ -526,7 +546,8 @@ final class ZLinkExternalSpotPublishCall implements ZLinkPublishCall {
                 packetName,
                 contentType,
                 metadata,
-                new AtomicBoolean());
+                new AtomicBoolean(),
+                null);
     }
 
     private ZLinkExternalSpotPublishCall(
@@ -538,8 +559,10 @@ final class ZLinkExternalSpotPublishCall implements ZLinkPublishCall {
             Optional<String> packetName,
             String contentType,
             ZLinkApplicationMetadata metadata,
-            AtomicBoolean submitGate) {
+            AtomicBoolean submitGate,
+            java.util.function.Supplier<ZLinkSpotPublisherRuntime> access) {
         this.submitGate = submitGate;
+        this.access = access;
         this.publishers = publishers;
         this.meshName = meshName;
         this.channelName = channelName;
@@ -548,6 +571,34 @@ final class ZLinkExternalSpotPublishCall implements ZLinkPublishCall {
         this.packetName = packetName;
         this.contentType = contentType;
         this.metadata = metadata;
+    }
+
+    ZLinkExternalSpotPublishCall(
+            java.util.function.Supplier<ZLinkSpotPublisherRuntime> access,
+            String meshName,
+            String channelName,
+            String topic,
+            Message payload,
+            Optional<String> packetName,
+            String contentType) {
+        this(
+                null,
+                meshName,
+                channelName,
+                topic,
+                payload,
+                packetName,
+                contentType,
+                ZLinkApplicationMetadata.empty(),
+                new AtomicBoolean(),
+                access);
+    }
+
+    @Override
+    public void run() {
+        if (access != null) publishers = access.get();
+        else publishers.admitCall();
+        publishers.requireChannel(meshName);
     }
 
     public ZLinkPublishCall packetName(String packetName) {
@@ -560,7 +611,8 @@ final class ZLinkExternalSpotPublishCall implements ZLinkPublishCall {
                 Optional.of(packetName),
                 contentType,
                 metadata,
-                submitGate);
+                submitGate,
+                access);
     }
 
     @Override
@@ -574,7 +626,8 @@ final class ZLinkExternalSpotPublishCall implements ZLinkPublishCall {
                 packetName,
                 contentType,
                 metadata.with(key, value),
-                submitGate);
+                submitGate,
+                access);
     }
 
     @Override
@@ -588,12 +641,13 @@ final class ZLinkExternalSpotPublishCall implements ZLinkPublishCall {
                 packetName,
                 contentType,
                 metadata.withAll(values),
-                submitGate);
+                submitGate,
+                access);
     }
 
     @Override
     public CompletionStage<Void> submit() {
-        CompletionStage<Void> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
+        CompletionStage<Void> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate, this);
         if (duplicate != null) {
             return duplicate;
         }

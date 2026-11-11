@@ -43,7 +43,9 @@ final class ZLinkStandaloneActorRelocationLateIngressTest {
         objects.addActorFactory(
                 "player", Player.class, Factory.class, factory -> factory.disableRelocation());
         try (var host = ZLinkFrameworkRuntimeTestAccess.start(options)) {
-            var spots = (ZLinkSpotRuntime) host.spotManager();
+            var spots =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            host);
             var owner =
                     new ZLinkStandaloneActorRelocationStagingOwner(
                             spots.primaryNode(),

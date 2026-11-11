@@ -93,7 +93,8 @@ final class ZLinkRelocatedTimerOutcomeTest {
                             dispatched.get(),
                             "target local admission must open after its callback completes");
                     assertTrue(
-                            ((ZLinkSpotRuntime) target.spotManager())
+                            (systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess
+                                            .spots(target))
                                     .activeUserSpotIds()
                                     .contains("room"));
                     var restored = scenario.target.context.freezeTimerRelocationEnvelope();

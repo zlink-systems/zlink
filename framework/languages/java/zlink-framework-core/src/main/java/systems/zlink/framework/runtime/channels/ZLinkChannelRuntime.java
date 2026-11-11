@@ -47,14 +47,10 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
 import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.internal.service.ZLinkClassicFanoutLiveness;
-import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
-import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
-import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
-import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.spots.ZLinkSpotRequestCall;
 import systems.zlink.framework.spots.ZLinkSpotSendCall;
 
@@ -105,10 +101,10 @@ public final class ZLinkChannelRuntime
     private final boolean ownsContext;
     final ZLinkChannelSocketRegistry sockets;
     final ZLinkChannelDispatchRegistry dispatchRegistry;
+    private ZLinkChannelCalls callFactories;
     private final ZLinkMessageSerializer serializer;
     private final ZLinkChannelReplyDecoder replyDecoder;
     private final ZLinkCodecRegistration codecs;
-    private final Map<String, ZLinkChannelEnvelope.PreparedNames> channelEnvelopeNames;
     private final ZLinkHandlerActivator handlerFactory;
     private final Executor handlerExecutor;
     private final List<Class<? extends ZLinkHandlerFilter>> filterTypes;
@@ -646,20 +642,9 @@ public final class ZLinkChannelRuntime
                         () -> manualFanoutRuntime,
                         () -> hostState.get());
         this.serializer = Objects.requireNonNull(serializer, "serializer");
+        this.callFactories = new ZLinkChannelCalls(registration, serializer, () -> this);
         this.replyDecoder = new ZLinkChannelReplyDecoder(this.serializer);
         this.codecs = Objects.requireNonNull(registration.codecs(), "codecs");
-        Map<String, ZLinkChannelEnvelope.PreparedNames> preparedChannels =
-                new java.util.HashMap<>();
-        for (var mesh : registration.meshNodes()) {
-            preparedChannels.putIfAbsent(mesh.meshName(), mesh.envelopeNames());
-            for (String name : mesh.channelNames()) {
-                preparedChannels.putIfAbsent(name, mesh.channelEnvelopeNames(name));
-            }
-        }
-        for (ChannelRegistration channel : registration.channels()) {
-            preparedChannels.put(channel.name(), channel.envelopeNames());
-        }
-        this.channelEnvelopeNames = Map.copyOf(preparedChannels);
         this.handlerFactory = Objects.requireNonNull(handlerFactory, "handlerFactory");
         this.spotAddressResolver = resolveSpotAddressResolver(this.handlerFactory);
         this.handlerExecutor =
@@ -1225,171 +1210,49 @@ public final class ZLinkChannelRuntime
 
     @Override
     public ZLinkSendCall sendToChannel(String channelName, Object message) {
-        rejectAfterRelocationReady("Channel send");
-        String contentType = codecs.contentTypeFor(ZLinkPayloadEncoding.declaredType(message));
-        String packetName = ZLinkPayloadEncoding.resolvePacketName(message);
-        ZLinkFrameworkMultipartView payload =
-                ZLinkPayloadEncoding.encodeMessage(serializer, message, contentType);
-        return new ChannelSendCall(
-                callRuntime, channelName, sockets, payload, packetName, contentType, null);
-    }
-
-    private ZLinkPayloadEncoding.EncodedPayload encodePayload(Object message) {
-        Class<?> payloadType = ZLinkPayloadEncoding.declaredType(message);
-        var selected = codecs.sendSelectionFor(payloadType);
-        return ZLinkPayloadEncoding.encode(
-                serializer, message, selected.contentType(), selected.names());
+        return callFactories.sendToChannel(channelName, message);
     }
 
     @Override
     public ZLinkRequestCall requestToChannel(String channelName, Object message) {
-        rejectAfterRelocationReady("Channel request");
-        ZLinkPayloadEncoding.EncodedPayload encoded = encodePayload(message);
-        return new ChannelRequestCall(
-                callRuntime,
-                channelName,
-                sockets,
-                defaultRequestTimeout,
-                encoded.payload(),
-                Optional.of(encoded.packetName()),
-                null,
-                encoded.contentType(),
-                channelEnvelopeNames.get(channelName),
-                encoded.names(),
-                null);
+        return callFactories.requestToChannel(channelName, message);
     }
 
     @Override
     public ZLinkFanoutPublishCall publish(String channelName, Object message) {
-        rejectAfterRelocationReady("Channel publish");
-        ZLinkPayloadEncoding.EncodedPayload encoded = encodePayload(message);
-        requireApplicationFanoutTopic(encoded.packetName());
-        return new PublishCall(
-                callRuntime,
-                requirePublisher(channelName),
-                encoded.packetName(),
-                encoded.payload().getFirst(),
-                Optional.of(encoded.packetName()),
-                encoded.contentType());
+        return callFactories.publish(channelName, message);
     }
 
     @Override
     public ZLinkFanoutPublishCall publish(String channelName, String topic, Object message) {
-        rejectAfterRelocationReady("Channel publish");
-        requireApplicationFanoutTopic(topic);
-        ZLinkPayloadEncoding.EncodedPayload encoded = encodePayload(message);
-        return new PublishCall(
-                callRuntime,
-                requirePublisher(channelName),
-                topic,
-                encoded.payload().getFirst(),
-                Optional.of(encoded.packetName()),
-                encoded.contentType());
-    }
-
-    static void requireApplicationFanoutTopic(String topic) {
-        if (topic == null) {
-            throw new ZLinkConfigurationException("fanout topic is required");
-        }
-        requireWellFormedUnicodeTopic(topic);
-        if (ZLinkClassicFanoutLiveness.startsWithReservedTopic(
-                topic.getBytes(StandardCharsets.UTF_8))) {
-            throw new ZLinkConfigurationException(
-                    "fanout topic is reserved for transport liveness");
-        }
-    }
-
-    private static void requireWellFormedUnicodeTopic(String topic) {
-        for (int index = 0; index < topic.length(); index++) {
-            char value = topic.charAt(index);
-            if (Character.isHighSurrogate(value)) {
-                if (index + 1 >= topic.length()
-                        || !Character.isLowSurrogate(topic.charAt(index + 1))) {
-                    throw new ZLinkConfigurationException("fanout topic must be valid Unicode");
-                }
-                index++;
-            } else if (Character.isLowSurrogate(value)) {
-                throw new ZLinkConfigurationException("fanout topic must be valid Unicode");
-            }
-        }
-    }
-
-    private static void rejectAfterRelocationReady(String operation) {
-        systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
-                .rejectAfterRelocationReady(operation);
+        return callFactories.publish(channelName, topic, message);
     }
 
     @Override
     public ZLinkSendCall sendToNode(String meshName, RoutingId target, Object message) {
-        String contentType = codecs.contentTypeFor(ZLinkPayloadEncoding.declaredType(message));
-        String packetName = ZLinkPayloadEncoding.resolvePacketName(message);
-        ZLinkFrameworkMultipartView payload =
-                ZLinkPayloadEncoding.encodeMessage(serializer, message, contentType);
-        return new RouteSendCall(
-                callRuntime, meshName, sockets, target, payload, packetName, contentType, null);
+        return callFactories.sendToNode(meshName, target, message);
     }
 
     @Override
     public ZLinkSpotSendCall sendToSpot(String spotId, Object message) {
-        Objects.requireNonNull(spotId, "spotId");
-        ZLinkPayloadEncoding.EncodedPayload encoded = encodePayload(message);
-        return new RouteSpotSendCall(
-                callRuntime,
-                null,
-                spotAddressResolver,
-                () -> instanceSpotCallRuntime,
-                spotId,
-                encoded.payload(),
-                Optional.of(encoded.packetName()),
-                encoded.contentType(),
-                false,
-                null,
-                null,
-                ZLinkApplicationMetadata.empty());
+        return callFactories.sendToSpot(spotId, message);
     }
 
     @Override
     public ZLinkRequestCall requestToNode(String meshName, RoutingId target, Object message) {
-        ZLinkPayloadEncoding.EncodedPayload encoded = encodePayload(message);
-        return new RouteRequestCall(
-                callRuntime,
-                meshName,
-                sockets,
-                defaultRequestTimeout,
-                target,
-                encoded.payload(),
-                Optional.of(encoded.packetName()),
-                null,
-                encoded.contentType(),
-                channelEnvelopeNames.get(meshName),
-                encoded.names(),
-                null);
+        return callFactories.requestToNode(meshName, target, message);
     }
 
     @Override
     public ZLinkSpotRequestCall requestToSpot(String spotId, Object message) {
-        Objects.requireNonNull(spotId, "spotId");
-        ZLinkPayloadEncoding.EncodedPayload encoded = encodePayload(message);
-        return new RouteSpotRequestCall(
-                callRuntime,
-                null,
-                requestSourceMeshName(),
-                spotAddressResolver,
-                () -> instanceSpotCallRuntime,
-                spotId,
-                encoded.payload(),
-                Optional.of(encoded.packetName()),
-                defaultRequestTimeout,
-                encoded.contentType(),
-                null,
-                encoded.names(),
-                false,
-                null,
-                null,
-                ZLinkApplicationMetadata.empty());
+        return callFactories.requestToSpot(spotId, message);
     }
 
-    private String requestSourceMeshName() {
+    static void requireApplicationFanoutTopic(String topic) {
+        ZLinkChannelCalls.requireApplicationFanoutTopic(topic);
+    }
+
+    String requestSourceMeshName() {
         Supplier<ZLinkInternalSpotNode> source = requestSourceMeshOwner;
         ZLinkInternalSpotNode owner = source == null ? null : source.get();
         return owner == null ? null : owner.name();
@@ -1397,6 +1260,23 @@ public final class ZLinkChannelRuntime
 
     private volatile systems.zlink.framework.runtime.internal.spots.ZLinkInstanceSpotCallRuntime
             instanceSpotCallRuntime;
+
+    public void setCallFactories(ZLinkChannelCalls value) {
+        callFactories = Objects.requireNonNull(value, "value");
+    }
+
+    ZLinkChannelCallRuntime callRuntimeForCalls() {
+        return callRuntime;
+    }
+
+    SpotTransportAddressResolver spotAddressResolverForCalls() {
+        return spotAddressResolver;
+    }
+
+    systems.zlink.framework.runtime.internal.spots.ZLinkInstanceSpotCallRuntime
+            instanceSpotsForCalls() {
+        return instanceSpotCallRuntime;
+    }
 
     public void registerInstanceSpotCallRuntime(
             systems.zlink.framework.runtime.internal.spots.ZLinkInstanceSpotCallRuntime runtime) {
@@ -1832,7 +1712,7 @@ public final class ZLinkChannelRuntime
         return spotRouteBridgeOwner == null ? null : requireSpotRouteBridge(channelName);
     }
 
-    private ZLinkBackendPublisherSocket requirePublisher(String channelName) {
+    ZLinkBackendPublisherSocket requirePublisher(String channelName) {
         ZLinkBackendPublisherSocket publisher = sockets.publisher(channelName);
         if (publisher == null) {
             throw new ZLinkConfigurationException(

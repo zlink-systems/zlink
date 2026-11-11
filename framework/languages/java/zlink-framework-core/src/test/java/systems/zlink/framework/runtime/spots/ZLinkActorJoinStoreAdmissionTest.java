@@ -82,7 +82,9 @@ final class ZLinkActorJoinStoreAdmissionTest {
                     .submit()
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
-            ZLinkSpotRuntime host = (ZLinkSpotRuntime) framework.spotManager();
+            ZLinkSpotRuntime host =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            framework);
             SpotActivation activation = host.spotLifecycle().spotActivationFor("drain-room-a");
             var jobs = options.registration().applicationJobQueue();
             var permits =

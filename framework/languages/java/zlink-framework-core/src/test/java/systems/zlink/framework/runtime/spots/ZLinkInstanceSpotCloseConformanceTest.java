@@ -205,7 +205,9 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                     .toCompletableFuture()
                     .get(WAIT.toSeconds(), TimeUnit.SECONDS);
             ZLinkInstanceSpotActivation activation =
-                    ((ZLinkSpotRuntime) runtime.spotManager()).instanceSpotActivations.get(spotId);
+                    (systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                                    runtime))
+                            .instanceSpotActivations.get(spotId);
             CompletableFuture<Void> started = new CompletableFuture<>();
             CompletableFuture<Void> release = new CompletableFuture<>();
             CompletionStage<Void> accepted =
@@ -580,7 +582,8 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                                 before.ownerLeaseGeneration(),
                                 before.storeVersion());
                 ZLinkInstanceSpotActivation activation =
-                        ((ZLinkSpotRuntime) runtime.spotManager())
+                        (systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                                        runtime))
                                 .instanceSpotActivations.get(spotId);
                 store.deleteHold = new CompletableFuture<>();
                 runtime.route()

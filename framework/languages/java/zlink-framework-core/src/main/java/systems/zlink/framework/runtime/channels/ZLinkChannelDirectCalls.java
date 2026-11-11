@@ -13,11 +13,13 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-final class PublishCall implements ZLinkFanoutPublishCall {
+final class PublishCall implements ZLinkFanoutPublishCall, Runnable {
     private final AtomicBoolean submitGate;
-    private final ZLinkChannelCallRuntime runtime;
-    private final ZLinkBackendPublisherSocket publisher;
+    private final java.util.function.Supplier<ZLinkChannelRuntime> host;
+    private ZLinkChannelCallRuntime runtime;
+    private ZLinkBackendPublisherSocket publisher;
     private final String topic;
+    private String publisherChannel;
     private final Message payload;
     private final Optional<String> packetName;
     private final String contentType;
@@ -44,7 +46,15 @@ final class PublishCall implements ZLinkFanoutPublishCall {
             Message payload,
             Optional<String> packetName,
             String contentType) {
-        this(runtime, publisher, topic, payload, packetName, contentType, new AtomicBoolean());
+        this(
+                runtime,
+                publisher,
+                topic,
+                payload,
+                packetName,
+                contentType,
+                new AtomicBoolean(),
+                null);
     }
 
     private PublishCall(
@@ -54,8 +64,10 @@ final class PublishCall implements ZLinkFanoutPublishCall {
             Message payload,
             Optional<String> packetName,
             String contentType,
-            AtomicBoolean submitGate) {
+            AtomicBoolean submitGate,
+            java.util.function.Supplier<ZLinkChannelRuntime> host) {
         this.submitGate = submitGate;
+        this.host = host;
         this.runtime = runtime;
         this.publisher = publisher;
         this.topic = topic;
@@ -72,20 +84,44 @@ final class PublishCall implements ZLinkFanoutPublishCall {
         this(runtime, publisher, topic, payload, Optional.empty());
     }
 
+    PublishCall(
+            java.util.function.Supplier<ZLinkChannelRuntime> host,
+            ZLinkBackendPublisherSocket publisher,
+            String topic,
+            Message payload,
+            Optional<String> packetName,
+            String contentType,
+            String publisherChannel) {
+        this(null, publisher, topic, payload, packetName, contentType, new AtomicBoolean(), host);
+        this.publisherChannel = publisherChannel;
+    }
+
+    @Override
+    public void run() {
+        if (host == null) return;
+        var live = host.get();
+        runtime = live.callRuntimeForCalls();
+        publisher = live.requirePublisher(publisherChannel);
+    }
+
     public ZLinkFanoutPublishCall packetName(String packetName) {
-        return new PublishCall(
-                runtime,
-                publisher,
-                topic,
-                payload,
-                Optional.of(packetName),
-                contentType,
-                submitGate);
+        PublishCall copy =
+                new PublishCall(
+                        runtime,
+                        publisher,
+                        topic,
+                        payload,
+                        Optional.of(packetName),
+                        contentType,
+                        submitGate,
+                        host);
+        copy.publisherChannel = publisherChannel;
+        return copy;
     }
 
     @Override
     public CompletionStage<Void> submit() {
-        CompletionStage<Void> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
+        CompletionStage<Void> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate, this);
         if (duplicate != null) {
             return duplicate;
         }
