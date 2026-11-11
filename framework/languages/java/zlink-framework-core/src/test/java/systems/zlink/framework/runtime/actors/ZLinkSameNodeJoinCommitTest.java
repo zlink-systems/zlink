@@ -154,7 +154,8 @@ final class ZLinkSameNodeJoinCommitTest {
             assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, failed.kind());
             assertEquals(List.of("admission", "store-failed", "completion"), EVENTS);
             var spots =
-                    (systems.zlink.framework.runtime.spots.ZLinkSpotRuntime) runtime.spotManager();
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            runtime);
             var errors =
                     systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTestAccess.dispatchErrors(
                             spots);

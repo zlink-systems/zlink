@@ -8,7 +8,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.spots.ZLinkInstanceSpotContext;
 import systems.zlink.framework.spots.ZLinkSpotContext;
-import systems.zlink.framework.spots.ZLinkSpotManager;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -17,8 +16,11 @@ public final class ZLinkSpotRuntimeTesting {
     private ZLinkSpotRuntimeTesting() {}
 
     public static CompletionStage<Boolean> closeInstanceSpot(
-            ZLinkSpotManager manager, String spotId, long objectGeneration) {
-        return ((ZLinkSpotRuntime) manager).closeInstanceSpot(spotId, objectGeneration);
+            systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime runtime,
+            String spotId,
+            long objectGeneration) {
+        return systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(runtime)
+                .closeInstanceSpot(spotId, objectGeneration);
     }
 
     public static CompletionStage<Boolean> hasPendingMessages(ZLinkInstanceSpotContext context) {
@@ -29,22 +31,26 @@ public final class ZLinkSpotRuntimeTesting {
     }
 
     public static CompletionStage<Void> admitInstanceSpotRoute(
-            ZLinkSpotManager manager,
+            systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime runtime,
             String spotId,
             ZLinkBackendReceived received,
             CompletableFuture<Void> admission) {
-        return ((ZLinkSpotRuntime) manager)
+        return systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(runtime)
                 .instanceSpotActivations
                 .get(spotId)
                 .admitRoute(received, admission);
     }
 
-    public static ZLinkInternalMeshNode meshNode(ZLinkSpotManager manager, String meshName) {
-        return ((ZLinkSpotRuntime) manager).routeMeshNodesByName.get(meshName);
+    public static ZLinkInternalMeshNode meshNode(
+            systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime runtime, String meshName) {
+        return systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(runtime)
+                .routeMeshNodesByName
+                .get(meshName);
     }
 
-    public static CompletableFuture<Boolean> retainedCloseAttempt(ZLinkSpotManager manager) {
-        return ((ZLinkSpotRuntime) manager)
+    public static CompletableFuture<Boolean> retainedCloseAttempt(
+            systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime runtime) {
+        return systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(runtime)
                 .closingCoordinators
                 .values()
                 .iterator()
@@ -53,8 +59,10 @@ public final class ZLinkSpotRuntimeTesting {
                 .attempt;
     }
 
-    public static ZLinkInternalSpotNode primaryNode(ZLinkSpotManager manager) {
-        return ((ZLinkSpotRuntime) manager).primaryNode();
+    public static ZLinkInternalSpotNode primaryNode(
+            systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime runtime) {
+        return systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(runtime)
+                .primaryNode();
     }
 
     public static ZLinkSerialExecutionQueue spotQueue(ZLinkSpotContext context) {

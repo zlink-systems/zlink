@@ -926,21 +926,32 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         Long requestId = nextActorRequestSequence.getAndIncrement();
         CompletableFuture<List<Message>> completion = new CompletableFuture<>();
         actorRequests.put(requestId, completion);
+        CompletionStage<Void> dispatched;
+        try {
+            dispatched = dispatch.apply(requestId, requestAdmission);
+        } catch (RuntimeException | Error failure) {
+            actorRequests.remove(requestId, completion);
+            throw failure;
+        }
+        if (dispatched == null) {
+            actorRequests.remove(requestId);
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("actor Spot is not local"));
+        }
         if (timeout != null && !timeout.isNegative() && !timeout.isZero()) {
             CompletableFuture.delayedExecutor(timeout.toNanos(), TimeUnit.NANOSECONDS)
                     .execute(
                             () -> {
                                 if (actorRequests.remove(requestId, completion)) {
-                                    completion.completeExceptionally(
-                                            new ZlinkRequestException(RequestResult.TIMED_OUT));
+                                    var deadlineFailure =
+                                            new ZlinkRequestException(RequestResult.TIMED_OUT);
+                                    dispatched.whenComplete(
+                                            (ignored, failure) ->
+                                                    completion.completeExceptionally(
+                                                            deadlineFailure));
+                                    dispatched.toCompletableFuture().cancel(false);
                                 }
                             });
-        }
-        CompletionStage<Void> dispatched = dispatch.apply(requestId, requestAdmission);
-        if (dispatched == null) {
-            actorRequests.remove(requestId);
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("actor Spot is not local"));
         }
         dispatched.whenComplete(
                 (ignored, error) -> {

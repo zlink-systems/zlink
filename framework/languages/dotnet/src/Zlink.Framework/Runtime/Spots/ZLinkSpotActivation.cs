@@ -166,8 +166,9 @@ internal abstract partial class ZLinkSpotActivation
             var status = (ZLinkObjectExecutionStatus)Volatile.Read(ref _disposed);
             if (status == ZLinkObjectExecutionStatus.OwnershipLost)
                 return status;
-            if (!_runtime.IsLocationExecutionAllowed(this))
-                return ZLinkObjectExecutionStatus.OwnershipLost;
+            var locationStatus = _runtime.GetLocationExecutionStatus(this);
+            if (locationStatus != ZLinkObjectExecutionStatus.Allowed)
+                return locationStatus;
             return status;
         }
     }

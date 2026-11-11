@@ -292,7 +292,9 @@ final class ZLinkRelocationInitializationTest {
                 .addSpotFactory("diagnostic", ProbeSpot.class, f -> f.disableRelocation());
         try (var framework = ZLinkFrameworkRuntimeTestAccess.start(options);
                 var pool = Executors.newFixedThreadPool(Math.min(count, 8))) {
-            var host = (ZLinkSpotRuntime) framework.spotManager();
+            var host =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            framework);
             var lifecycle = host.spotLifecycle();
             var envelope =
                     ZLinkSpotTimerRelocationEnvelope.encode(

@@ -57,7 +57,7 @@ final class SpotManagerTest {
                         options, new ZLinkJavaBackendAdapterFactory())) {
             var node =
                     systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTesting.primaryNode(
-                            runtime.spotManager());
+                            runtime);
             ZLinkBackendSpot entry = node.entrySpot();
             entry.onDispatchEvent(
                     info -> {
@@ -273,7 +273,7 @@ final class SpotManagerTest {
             secondFailure.get(5, TimeUnit.SECONDS);
             CompletableFuture<Boolean> backgroundAttempt =
                     systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTesting
-                            .retainedCloseAttempt(runtime.spotManager());
+                            .retainedCloseAttempt(runtime);
             assertTrue(backgroundAttempt != null && !backgroundAttempt.isDone());
             heldSecondDelete.completeExceptionally(
                     new IllegalStateException("injected second User authority release failure"));
