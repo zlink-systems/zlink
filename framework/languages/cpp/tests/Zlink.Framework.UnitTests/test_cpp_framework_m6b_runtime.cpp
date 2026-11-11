@@ -1664,8 +1664,8 @@ void verify_remote_bound_session_bind_returns_terminal_fences ()
     assert (!preadmit_deadline);
     assert (preadmit_deadline.error_kind () == framework_error_kind_t::deadline_exceeded);
 
-    // The route snapshot has no known owner descriptor. Routing spec 08 §2
-    // ends this invalid target as Unavailable before readiness waiting.
+    // Submit/completion §5: an authority-selected owner without its lifecycle
+    // descriptor waits within the original request deadline.
     const runtime::spot_address_t disconnected_route{
       "m6b-mesh", zlink::routing_id_t::from ("unconnected-bound-session-target"),
       {},         0,
@@ -1679,7 +1679,7 @@ void verify_remote_bound_session_bind_returns_terminal_fences ()
                                          1, disconnected_route, 20ms)
         .result ();
     assert (!transport_failure);
-    assert (transport_failure.error_kind () == framework_error_kind_t::unavailable);
+    assert (transport_failure.error_kind () == framework_error_kind_t::deadline_exceeded);
     assert (invalidations == 1);
     assert (route_resolutions - initial_route_resolutions == 0);
 

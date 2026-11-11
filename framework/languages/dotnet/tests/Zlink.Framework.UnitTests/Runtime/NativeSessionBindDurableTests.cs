@@ -15,6 +15,174 @@ public sealed partial class StatefulServiceRuntimeTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task InfrastructureAdmission_WaitsForAuthorityLifecycleDescriptor(bool olderPeer)
+    {
+        var time = new ControllableTimeProvider();
+        await using var native = Systems.Zlink.Zlink.CreateContext();
+        var context = new MeshNodeShutdownSealTests.CanonicalRequestContext(native);
+        await using var source = new ZLinkManagedMeshNode(
+            context,
+            "mesh",
+            deadlineTimeProvider: time,
+            receivePollerFactory: () =>
+                new MeshNodeShutdownSealTests.CanonicalRequestPoller(
+                    Systems.Zlink.Zlink.CreatePoller()
+                )
+        );
+        source.SetRoutingId(RoutingId.From("descriptor-source"));
+        await using var target = NewNode(native, "descriptor-target", deadlineTimeProvider: time);
+        var suffix = Guid.NewGuid().ToString("N");
+        source.SetBind($"inproc://descriptor-source-{suffix}");
+        var endpoint = $"inproc://descriptor-target-{suffix}";
+        target.SetBind(endpoint);
+        var generation = target.Status().LifecycleGeneration;
+        var creates = new RecordingActorCreateOperationTarget("mesh");
+        target.SetActorCreateOperationTarget(creates);
+        var completed = new TaskCompletionSource<MeshReceiveRecord>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        source.SetCompletionHandlerCore(
+            (record, parts) =>
+            {
+                Assert.Empty(parts);
+                completed.TrySetResult(record);
+                return true;
+            }
+        );
+        source.Start();
+        target.Start();
+        if (olderPeer)
+            await source._lane.RunAsync(() =>
+                source._peersByRid.Add(
+                    target.RoutingId,
+                    new ZLinkMeshPeer(1)
+                    {
+                        RoutingId = target.RoutingId,
+                        LifecycleGeneration = generation == 1UL ? 2UL : 1UL,
+                        Admitted = true,
+                        State = MeshPeerState.Admitted,
+                    }
+                )
+            );
+        var timeout = TimeSpan.FromSeconds(2);
+        var reservation = new ObjectReservationFence(
+            "descriptor-reservation",
+            "descriptor-store",
+            11,
+            13,
+            target.RoutingId,
+            generation,
+            "descriptor-owner",
+            7,
+            1
+        );
+        Assert.Equal(
+            SubmitResult.Ok,
+            source.CreateActorRemote(
+                target.RoutingId,
+                "descriptor-actor",
+                "Sample.Actor",
+                reservation,
+                checked((ulong)time.GetUtcNow().Add(timeout).ToUnixTimeMilliseconds()),
+                out var operation,
+                timeout
+            )
+        );
+        Assert.False(completed.Task.IsCompleted);
+        Assert.Equal(0, creates.CreateCount);
+        Assert.Equal(0, context.NativeRequests);
+        Assert.Empty(context.Submissions);
+        Assert.Equal(1, source.PendingOperationCount);
+        // Discovery publishes the authority-selected lifecycle through its normal API.
+        source.SetPeerExpectation(
+            target.RoutingId,
+            endpoint,
+            ZLinkServiceSecurityIdentity.Plaintext,
+            generation
+        );
+        source.ConnectPeer(endpoint, target.RoutingId);
+        var completion = await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(operation, completion.OperationId);
+        Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);
+        Assert.Equal(1, creates.CreateCount);
+        Assert.Equal(1, context.NativeRequests);
+        Assert.Single(context.Submissions);
+        Assert.Equal(0, source.PendingOperationCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NativeSessionBind_AbsentDescriptorPreservesTerminalWithoutSubmission(
+        bool authorityChanged
+    )
+    {
+        var time = new ControllableTimeProvider();
+        await using var native = Systems.Zlink.Zlink.CreateContext();
+        var context = new MeshNodeShutdownSealTests.CanonicalRequestContext(native);
+        await using var source = new ZLinkManagedMeshNode(
+            context,
+            "mesh",
+            deadlineTimeProvider: time,
+            receivePollerFactory: () =>
+                new MeshNodeShutdownSealTests.CanonicalRequestPoller(
+                    Systems.Zlink.Zlink.CreatePoller()
+                )
+        );
+        source.SetRoutingId(RoutingId.From("absent-bind-source"));
+        await using var target = NewNode(native, "absent-bind-target", deadlineTimeProvider: time);
+        var attempts = 0;
+        target.SetBoundSessionBindHandler(
+            (_, _, _, reply, _) =>
+            {
+                Interlocked.Increment(ref attempts);
+                reply(RequestResult.Ok, 0, null);
+                return ValueTask.CompletedTask;
+            }
+        );
+        source.Start();
+        target.Start();
+        var endpoint = $"inproc://absent-bind-{Guid.NewGuid():N}";
+        if (authorityChanged)
+            source.SetPeerExpectation(
+                target.RoutingId,
+                endpoint,
+                ZLinkServiceSecurityIdentity.Plaintext,
+                target.Status().LifecycleGeneration
+            );
+        var timeout = TimeSpan.FromSeconds(2);
+        var request = source
+            .BindBoundSessionAsync(
+                CanonicalBindRequest(target.RoutingId, target.Status().LifecycleGeneration),
+                timeout,
+                CancellationToken.None
+            )
+            .AsTask();
+        Assert.False(request.IsCompleted);
+        Assert.Equal(0, attempts);
+        Assert.Equal(0, context.NativeRequests);
+        Assert.Empty(context.Submissions);
+        if (authorityChanged)
+            source.RemovePeerExpectation(target.RoutingId, endpoint);
+        else
+            time.AdvanceMonotonic(timeout);
+        var failure = await Record.ExceptionAsync(() => request.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0, context.NativeRequests);
+        Assert.Empty(context.Submissions);
+        var error = Assert.IsType<ZLinkFrameworkException>(failure);
+        Assert.Equal(
+            authorityChanged
+                ? ZLinkFrameworkErrorKind.Unavailable
+                : ZLinkFrameworkErrorKind.DeadlineExceeded,
+            error.Kind
+        );
+        Assert.Equal(0, attempts);
+        Assert.Equal(0, source.PendingOperationCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task NativeSessionBind_UsesIngressLifecycleWhenPeerChanges(bool retirePeer)
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();

@@ -61,7 +61,7 @@ struct raw_mesh_node_owner_test_access_t
         auto expected = owner._options.descriptor;
         expected.node_routing_id = {'n'};
         expected.advertised_endpoint = "tcp://127.0.0.1:1";
-        owner._expected_peers.emplace (expected.node_routing_id, std::move (expected));
+        owner.expect_peer (std::move (expected));
         const std::array<std::uint8_t, 1> target{'n'};
         return owner.request_with_header (
           target,

@@ -283,26 +283,50 @@ task_t<void> run_request_admission (
   task_t<TTerminal> terminal,
   std::shared_ptr<task_completion_source_t<void>> admitted,
   detail::backend::raw_request_callback_t observe = {},
-  raw_mesh_node_owner_t::physical_receiver_t receiver = {})
+  raw_mesh_node_owner_t::physical_receiver_t receiver = {},
+  std::uint64_t target_lifecycle_generation = 0)
 {
     struct wait_subscriptions_t
     {
         std::stop_source owner;
         ~wait_subscriptions_t () { owner.request_stop (); }
     };
-    std::optional<std::pair<std::uint64_t, std::uint64_t>> baseline;
+    struct admission_baseline_t
+    {
+        std::optional<std::pair<std::uint64_t, std::uint64_t>> attempt;
+        std::shared_ptr<const service_node_descriptor_t> expectation;
+    } baseline;
     bool waiting = false;
     while (operations->contains (operation)) {
         auto observation = observe_peer ();
+        const auto *peer = observation.peer
+                               && (target_lifecycle_generation == 0
+                                   || observation.peer->descriptor.lifecycle_generation
+                                        == target_lifecycle_generation)
+                             ? &*observation.peer
+                             : nullptr;
+        const auto expectation =
+          observation.expectation
+              && (target_lifecycle_generation == 0
+                  || observation.expectation->lifecycle_generation == 0
+                  || observation.expectation->lifecycle_generation == target_lifecycle_generation)
+            ? observation.expectation
+            : nullptr;
         // A waiting request checks failure history even if admission recovered.
-        const auto attempt = waiting || !observation.peer || !observation.peer->ready
-                               ? observation.connection_attempt ()
-                               : std::nullopt;
+        const auto attempt =
+          waiting || !peer || !peer->ready ? observation.connection_attempt () : std::nullopt;
         if (waiting
-            && ((baseline
-                 && (!attempt || baseline->first != attempt->intent_id
-                     || baseline->second != attempt->last_failure_id))
-                || (!baseline && attempt && attempt->last_failure_id != 0))) {
+            && ((baseline.expectation
+                 && (!expectation
+                     || baseline.expectation->lifecycle_generation
+                          != expectation->lifecycle_generation
+                     || baseline.expectation->advertised_endpoint
+                          != expectation->advertised_endpoint
+                     || baseline.expectation->security_identity != expectation->security_identity))
+                || (baseline.attempt
+                    && (!attempt || baseline.attempt->first != attempt->intent_id
+                        || baseline.attempt->second != attempt->last_failure_id))
+                || (!baseline.attempt && attempt && attempt->last_failure_id != 0))) {
             deliver_request_terminal (operations, operation,
                                       foundation::operation_terminal_t::route_unavailable,
                                       result_t<zlink::message_t>::success ({}), receiver);
@@ -315,9 +339,8 @@ task_t<void> run_request_admission (
                         observe_infrastructure_request (std::move (result), operations, operation,
                                                         correlation, decode_reply);
                     };
-        if (start_admitted_request (port, observation.peer ? &*observation.peer : nullptr,
-                                    target_routing_id, request_parts, deadline, admitted,
-                                    std::move (finish)))
+        if (start_admitted_request (port, peer, target_routing_id, request_parts, deadline,
+                                    admitted, std::move (finish)))
             co_return;
         if (foundation::operation_registry_t::clock_t::now () >= deadline) {
             deliver_request_terminal (operations, operation,
@@ -325,15 +348,17 @@ task_t<void> run_request_admission (
                                       result_t<zlink::message_t>::success ({}), receiver);
             co_return;
         }
-        if ((!observation.peer || observation.peer->connection_id.empty ()) && attempt
+        if ((!peer || peer->connection_id.empty ()) && attempt
             && attempt->state == zlink::connection_attempt_state_t::attempt_failed) {
             deliver_request_terminal (operations, operation,
                                       foundation::operation_terminal_t::route_unavailable,
                                       result_t<zlink::message_t>::success ({}), receiver);
             co_return;
         }
-        if (!baseline && attempt)
-            baseline = std::pair{attempt->intent_id, attempt->last_failure_id};
+        if (!baseline.attempt && attempt)
+            baseline.attempt = std::pair{attempt->intent_id, attempt->last_failure_id};
+        if (!baseline.expectation && expectation)
+            baseline.expectation = expectation;
         waiting = true;
         auto wake = std::make_shared<task_completion_source_t<void>> ();
         auto notified = wake->task ();
@@ -386,7 +411,8 @@ task_t<bool> submit_registered_request (
   task_t<TTerminal> terminal,
   std::shared_ptr<task_completion_source_t<void>> admitted = {},
   detail::backend::raw_request_callback_t observe = {},
-  raw_mesh_node_owner_t::physical_receiver_t receiver = {})
+  raw_mesh_node_owner_t::physical_receiver_t receiver = {},
+  std::uint64_t target_lifecycle_generation = 0)
 {
     if (!port) {
         deliver_request_terminal (operations, operation,
@@ -400,7 +426,8 @@ task_t<bool> submit_registered_request (
     auto running = std::make_shared<task_t<void>> (run_request_admission (
       std::move (port), std::move (observe_peer), operations, operation, correlation,
       std::move (target_routing_id), std::move (request_parts), std::move (decode_reply), deadline,
-      std::move (terminal), std::move (admitted), std::move (observe), receiver));
+      std::move (terminal), std::move (admitted), std::move (observe), receiver,
+      target_lifecycle_generation));
     detail::observe_task_terminal (
       *running, [operations, operation, receiver, running] (const result_t<void> &settled) {
           if (!settled)
@@ -729,14 +756,29 @@ service_mailbox_t &raw_mesh_node_owner_t::mailbox () noexcept
 bool raw_mesh_node_owner_t::connect_peer (
   const std::string &endpoint, std::optional<service_node_descriptor_t> expected_descriptor)
 {
-    return _lane
-      .run ([this, &endpoint, expected_descriptor = std::move (expected_descriptor)] () mutable {
-          return connect_peer_owned (endpoint, std::move (expected_descriptor));
-      })
-      .get ();
+    std::vector<std::function<void ()>> notifications;
+    try {
+        const auto connected =
+          _lane
+            .run ([this, &notifications, &endpoint,
+                   expected_descriptor = std::move (expected_descriptor)] () mutable {
+                return connect_peer_owned (endpoint, std::move (expected_descriptor),
+                                           notifications);
+            })
+            .get ();
+        if (auto failure = deliver_topology_notifications (notifications))
+            std::rethrow_exception (failure);
+        return connected;
+    }
+    catch (...) {
+        std::rethrow_exception (
+          deliver_topology_notifications (notifications, std::current_exception ()));
+    }
 }
 bool raw_mesh_node_owner_t::connect_peer_owned (
-  const std::string &endpoint, std::optional<service_node_descriptor_t> expected_descriptor)
+  const std::string &endpoint,
+  std::optional<service_node_descriptor_t> expected_descriptor,
+  std::vector<std::function<void ()>> &notifications)
 {
     std::lock_guard lifecycle_lock (_lifecycle_mutex);
     if (!_router || endpoint.empty ())
@@ -751,8 +793,7 @@ bool raw_mesh_node_owner_t::connect_peer_owned (
     if (existing != _outbound_endpoints.end ()) {
         if (existing->second == expectation) {
             if (expected_descriptor)
-                _expected_peers.insert_or_assign (expected_descriptor->node_routing_id,
-                                                  *expected_descriptor);
+                notifications.push_back (_topology.expect_peer_on_lane (*expected_descriptor));
             return true;
         }
     }
@@ -761,14 +802,12 @@ bool raw_mesh_node_owner_t::connect_peer_owned (
         if (existing != _outbound_endpoints.end ()) {
             _router->disconnect (endpoint);
             _outbound_endpoints.erase (existing);
-            for (auto peer = _expected_peers.begin (); peer != _expected_peers.end ();) {
-                if (peer->second.advertised_endpoint != endpoint) {
-                    ++peer;
+            const auto expected_peers = _topology.expected_peers ();
+            for (const auto &[rid, descriptor] : *expected_peers) {
+                if (descriptor.advertised_endpoint != endpoint)
                     continue;
-                }
-                const auto retired_rid = peer->first;
-                peer = _expected_peers.erase (peer);
-                end_peer_operations_if_disconnected_locked (retired_rid);
+                notifications.push_back (_topology.forget_peer_on_lane (rid, endpoint));
+                end_peer_operations_if_disconnected_locked (rid);
             }
         }
         if (expected_descriptor)
@@ -777,8 +816,7 @@ bool raw_mesh_node_owner_t::connect_peer_owned (
         _router->connect (endpoint);
         _outbound_endpoints.emplace (endpoint, expectation);
         if (expected_descriptor)
-            _expected_peers.insert_or_assign (expected_descriptor->node_routing_id,
-                                              *expected_descriptor);
+            notifications.push_back (_topology.expect_peer_on_lane (*expected_descriptor));
         return true;
     }
     catch (const zlink::binding_error_t &rejection) {
@@ -905,14 +943,26 @@ bool raw_mesh_node_owner_t::connect_peer_endpoint (const std::string &endpoint,
                                                    std::string security_identity,
                                                    bool automatic)
 {
-    return _lane
-      .run ([this, endpoint, expected = std::move (expected), expected_lifecycle_generation,
-             security_identity = std::move (security_identity), automatic] () mutable {
-          return connect_peer_endpoint_owned (endpoint, std::move (expected),
-                                              expected_lifecycle_generation,
-                                              std::move (security_identity), automatic);
-      })
-      .get ();
+    std::vector<std::function<void ()>> notifications;
+    try {
+        const auto connected =
+          _lane
+            .run ([this, &notifications, endpoint, expected = std::move (expected),
+                   expected_lifecycle_generation, security_identity = std::move (security_identity),
+                   automatic] () mutable {
+                return connect_peer_endpoint_owned (
+                  endpoint, std::move (expected), expected_lifecycle_generation,
+                  std::move (security_identity), automatic, notifications);
+            })
+            .get ();
+        if (auto failure = deliver_topology_notifications (notifications))
+            std::rethrow_exception (failure);
+        return connected;
+    }
+    catch (...) {
+        std::rethrow_exception (
+          deliver_topology_notifications (notifications, std::current_exception ()));
+    }
 }
 
 bool raw_mesh_node_owner_t::connect_peer_endpoint_owned (
@@ -920,7 +970,8 @@ bool raw_mesh_node_owner_t::connect_peer_endpoint_owned (
   std::optional<zlink::routing_id_t> expected,
   std::uint64_t expected_lifecycle_generation,
   std::string security_identity,
-  bool automatic)
+  bool automatic,
+  std::vector<std::function<void ()>> &notifications)
 {
     auto expected_key = expected ? expected->to_string () : std::string{};
     if (automatic && expected
@@ -937,9 +988,9 @@ bool raw_mesh_node_owner_t::connect_peer_endpoint_owned (
         descriptor.advertised_endpoint = endpoint;
         descriptor.lifecycle_generation = expected_lifecycle_generation;
         descriptor.security_identity = std::move (security_identity);
-        connected = connect_peer_owned (endpoint, std::move (descriptor));
+        connected = connect_peer_owned (endpoint, std::move (descriptor), notifications);
     } else {
-        connected = connect_peer_owned (endpoint, std::nullopt);
+        connected = connect_peer_owned (endpoint, std::nullopt, notifications);
     }
     if (connected)
         _peer_endpoints.insert_or_assign (endpoint, std::move (expected_key));
@@ -1011,13 +1062,24 @@ void raw_mesh_node_owner_t::connect_peer_intent (const std::string &endpoint,
                                                  std::string security_identity,
                                                  bool automatic)
 {
-    _lane
-      .run ([this, endpoint, expected = std::move (expected), expected_lifecycle_generation,
-             security_identity = std::move (security_identity), automatic] () mutable {
-          connect_peer_intent_owned (endpoint, std::move (expected), expected_lifecycle_generation,
-                                     std::move (security_identity), automatic);
-      })
-      .get ();
+    std::vector<std::function<void ()>> notifications;
+    try {
+        _lane
+          .run ([this, &notifications, endpoint, expected = std::move (expected),
+                 expected_lifecycle_generation, security_identity = std::move (security_identity),
+                 automatic] () mutable {
+              connect_peer_intent_owned (endpoint, std::move (expected),
+                                         expected_lifecycle_generation,
+                                         std::move (security_identity), automatic, notifications);
+          })
+          .get ();
+    }
+    catch (...) {
+        std::rethrow_exception (
+          deliver_topology_notifications (notifications, std::current_exception ()));
+    }
+    if (auto failure = deliver_topology_notifications (notifications))
+        std::rethrow_exception (failure);
 }
 
 task_t<void>
@@ -1027,22 +1089,35 @@ raw_mesh_node_owner_t::connect_peer_intent_async (std::string endpoint,
                                                   std::string security_identity,
                                                   bool automatic)
 {
-    return _lane.run_task (
-      [this, endpoint, expected = std::move (expected), expected_lifecycle_generation,
-       security_identity = std::move (security_identity), automatic] () mutable {
-          connect_peer_intent_owned (endpoint, std::move (expected), expected_lifecycle_generation,
-                                     std::move (security_identity), automatic);
-      });
+    std::vector<std::function<void ()>> notifications;
+    try {
+        co_await _lane.run_task ([this, &notifications, endpoint, expected = std::move (expected),
+                                  expected_lifecycle_generation,
+                                  security_identity = std::move (security_identity),
+                                  automatic] () mutable {
+            connect_peer_intent_owned (endpoint, std::move (expected),
+                                       expected_lifecycle_generation, std::move (security_identity),
+                                       automatic, notifications);
+        });
+    }
+    catch (...) {
+        std::rethrow_exception (
+          deliver_topology_notifications (notifications, std::current_exception ()));
+    }
+    if (auto failure = deliver_topology_notifications (notifications))
+        std::rethrow_exception (failure);
 }
 
-void raw_mesh_node_owner_t::connect_peer_intent_owned (const std::string &endpoint,
-                                                       std::optional<zlink::routing_id_t> expected,
-                                                       std::uint64_t expected_lifecycle_generation,
-                                                       std::string security_identity,
-                                                       bool automatic)
+void raw_mesh_node_owner_t::connect_peer_intent_owned (
+  const std::string &endpoint,
+  std::optional<zlink::routing_id_t> expected,
+  std::uint64_t expected_lifecycle_generation,
+  std::string security_identity,
+  bool automatic,
+  std::vector<std::function<void ()>> &notifications)
 {
     if (connect_peer_endpoint_owned (endpoint, std::move (expected), expected_lifecycle_generation,
-                                     std::move (security_identity), automatic)) {
+                                     std::move (security_identity), automatic, notifications)) {
         const auto [intent, inserted] = _peer_connection_intents.try_emplace (endpoint);
         if (inserted)
             intent->second = zlink::framework::detail::next_connection_intent_id ();
@@ -1051,14 +1126,23 @@ void raw_mesh_node_owner_t::connect_peer_intent_owned (const std::string &endpoi
 
 void raw_mesh_node_owner_t::connect_peer_intent (const mesh_peer_connection_t &configured)
 {
-    _lane
-      .run ([this, configured] {
-          if (connect_peer_endpoint_owned (configured.endpoint, configured.expected_routing_id, 0,
-                                           "default", false))
-              _peer_connection_intents.emplace (
-                configured.endpoint, zlink::framework::detail::next_connection_intent_id ());
-      })
-      .get ();
+    std::vector<std::function<void ()>> notifications;
+    try {
+        _lane
+          .run ([this, &notifications, configured] {
+              if (connect_peer_endpoint_owned (configured.endpoint, configured.expected_routing_id,
+                                               0, "default", false, notifications))
+                  _peer_connection_intents.emplace (
+                    configured.endpoint, zlink::framework::detail::next_connection_intent_id ());
+          })
+          .get ();
+    }
+    catch (...) {
+        std::rethrow_exception (
+          deliver_topology_notifications (notifications, std::current_exception ()));
+    }
+    if (auto failure = deliver_topology_notifications (notifications))
+        std::rethrow_exception (failure);
 }
 
 void raw_mesh_node_owner_t::disconnect_peer_intent (const std::string &endpoint)
@@ -1136,28 +1220,29 @@ void raw_mesh_node_owner_t::expect_peer (service_node_descriptor_t expected_desc
 {
     if (!valid_expected_peer (expected_descriptor))
         return;
-    _lane.run ([this, &expected_descriptor] { expect_peer_owned (expected_descriptor); }).get ();
+    auto changed = _lane
+                     .run ([this, &expected_descriptor] {
+                         return _topology.expect_peer_on_lane (expected_descriptor);
+                     })
+                     .get ();
+    changed ();
 }
 
 task_t<void>
 raw_mesh_node_owner_t::expect_peer_async (service_node_descriptor_t expected_descriptor)
 {
     if (!valid_expected_peer (expected_descriptor))
-        return task_t<void> (result_t<void>::success ());
-    return _lane.run_task ([this, expected_descriptor = std::move (expected_descriptor)] {
-        expect_peer_owned (expected_descriptor);
-    });
+        co_return;
+    auto changed =
+      co_await _lane.run_task ([this, expected_descriptor = std::move (expected_descriptor)] {
+          return _topology.expect_peer_on_lane (expected_descriptor);
+      });
+    changed ();
 }
 
 bool raw_mesh_node_owner_t::valid_expected_peer (const service_node_descriptor_t &descriptor)
 {
     return !descriptor.node_routing_id.empty () && !descriptor.advertised_endpoint.empty ();
-}
-
-void raw_mesh_node_owner_t::expect_peer_owned (const service_node_descriptor_t &expected_descriptor)
-{
-    std::lock_guard lifecycle_lock (_lifecycle_mutex);
-    _expected_peers.insert_or_assign (expected_descriptor.node_routing_id, expected_descriptor);
 }
 
 void raw_mesh_node_owner_t::configure_peer_reconcile (peer_reconcile_t request)
@@ -1200,28 +1285,31 @@ raw_mesh_node_owner_t::local_accepted_source (const std::vector<std::uint8_t> &r
 void raw_mesh_node_owner_t::forget_peer (const std::vector<std::uint8_t> &node_routing_id,
                                          const std::string &endpoint)
 {
-    _lane.run_sync (
-      [this, &node_routing_id, &endpoint] { forget_peer_owned (node_routing_id, endpoint); });
+    auto changed = _lane.run_sync ([this, &node_routing_id, &endpoint] {
+        return forget_peer_owned (node_routing_id, endpoint);
+    });
+    if (changed)
+        changed ();
 }
 
 task_t<void> raw_mesh_node_owner_t::forget_peer_async (std::vector<std::uint8_t> node_routing_id,
                                                        std::string endpoint)
 {
-    return _lane.run_task (
+    auto changed = co_await _lane.run_task (
       [this, node_routing_id = std::move (node_routing_id), endpoint = std::move (endpoint)] {
-          forget_peer_owned (node_routing_id, endpoint);
+          return forget_peer_owned (node_routing_id, endpoint);
       });
+    if (changed)
+        changed ();
 }
 
-void raw_mesh_node_owner_t::forget_peer_owned (const std::vector<std::uint8_t> &node_routing_id,
-                                               const std::string &endpoint)
+std::function<void ()>
+raw_mesh_node_owner_t::forget_peer_owned (const std::vector<std::uint8_t> &node_routing_id,
+                                          const std::string &endpoint)
 {
-    std::lock_guard lifecycle_lock (_lifecycle_mutex);
-    const auto found = _expected_peers.find (node_routing_id);
-    if (found != _expected_peers.end () && found->second.advertised_endpoint != endpoint)
-        return;
-    _expected_peers.erase (node_routing_id);
+    auto changed = _topology.forget_peer_on_lane (node_routing_id, endpoint);
     end_peer_operations_if_disconnected_locked (node_routing_id);
+    return changed;
 }
 
 void raw_mesh_node_owner_t::end_peer_operations_if_disconnected_locked (
@@ -1229,7 +1317,8 @@ void raw_mesh_node_owner_t::end_peer_operations_if_disconnected_locked (
 {
     // Re-evaluate after either input changes. Transport loss alone retains
     // the expectation and therefore does not end durable operations.
-    if (!_expected_peers.contains (node_routing_id) && !_topology.peer (node_routing_id))
+    if (!_topology.expected_peers ()->contains (node_routing_id)
+        && !_topology.peer (node_routing_id))
         (void) _operations->fail_target (node_routing_id,
                                          foundation::operation_terminal_t::route_unavailable);
 }
@@ -1522,10 +1611,7 @@ service_topology_registry_t::peer_observer_t raw_mesh_node_owner_t::observe_requ
 service_topology_registry_t::peer_observer_t raw_mesh_node_owner_t::observe_request_peer_on_lane (
   const std::vector<std::uint8_t> &target_routing_id) const
 {
-    const auto expected = _expected_peers.find (target_routing_id);
-    return _topology.observe_peer (target_routing_id, expected == _expected_peers.end ()
-                                                        ? std::string{}
-                                                        : expected->second.advertised_endpoint);
+    return _topology.observe_peer (target_routing_id);
 }
 
 std::shared_ptr<task_completion_source_t<void>> raw_mesh_node_owner_t::start_request_with_header (
@@ -1549,66 +1635,66 @@ std::shared_ptr<task_completion_source_t<void>> raw_mesh_node_owner_t::start_req
         std::shared_ptr<task_completion_source_t<void>> admitted;
         bool registered = false;
     };
-    auto start = _lane.run_sync (
-      [this, &header, &request_metric, &target_routing_id, &application_payload,
-       request = std::move (request), requested_correlation, target_claimed, deadline, wait_owner,
-       &callback, admitted = std::move (admitted), receiver = std::move (receiver)] () mutable {
-          const auto peer = _topology.peer (target_routing_id);
-          if (!target_claimed && !peer && !_expected_peers.contains (target_routing_id))
-              return std::optional<request_start_t>{};
-          auto encoded_payload = protocol::encode_application_payload_message (application_payload);
-          const auto &port = _port;
-          if (!port)
-              return std::optional<request_start_t>{};
-          request_start_t value;
-          value.admitted =
-            admitted ? std::move (admitted) : std::make_shared<task_completion_source_t<void>> ();
-          value.correlation = take_reply_route_id_locked (requested_correlation);
-          value.operation =
-            operation_id (_options.descriptor.lifecycle_generation, value.correlation);
-          std::vector<zlink::message_t> wire;
-          wire.reserve (2);
-          wire.push_back (header (value.correlation));
-          wire.push_back (std::move (encoded_payload));
-          if (request && request->operation == foundation::call_id_t{})
-              request->operation = value.operation;
-          try {
-              value.registered = _operations->register_operation (
-                value.operation, deadline, std::move (callback).with_admission (value.admitted),
-                peer && peer->ready ? std::vector<std::uint8_t>{}
-                                    : std::vector<std::uint8_t> (target_routing_id.begin (),
-                                                                 target_routing_id.end ()),
-                std::move (request_metric), std::move (request), wait_owner);
-              if (value.registered) {
-                  auto finish = [operations = _operations, operation = value.operation,
-                                 correlation = value.correlation, receiver] (auto result) {
-                      observe_request (operations, operation, correlation, std::move (result),
-                                       receiver);
-                  };
-                  if (!start_admitted_request (port, peer.get (), target_routing_id, wire, deadline,
-                                               value.admitted, finish)) {
-                      std::vector<std::uint8_t> target_owner (target_routing_id.begin (),
-                                                              target_routing_id.end ());
-                      auto peer_observer = observe_request_peer_on_lane (target_owner);
-                      (void) submit_registered_request (
-                        port, std::move (peer_observer), _operations, value.operation,
-                        value.correlation, std::move (target_owner), std::move (wire), {}, deadline,
-                        value.admitted->task (), value.admitted, std::move (finish), receiver);
-                  }
-              }
-          }
-          catch (...) {
-              // An empty callback was consumed at C1 publication, even if
-              // deadline reservation failed before registration returned.
-              if (!callback)
-                  deliver_request_terminal (_operations, value.operation,
-                                            foundation::operation_terminal_t::transport_failed,
-                                            detail::current_exception_result<zlink::message_t> (),
-                                            receiver);
-              throw;
-          }
-          return std::optional<request_start_t>{std::move (value)};
-      });
+    auto start = _lane.run_sync ([this, &header, &request_metric, &target_routing_id,
+                                  &application_payload, request = std::move (request),
+                                  requested_correlation, target_claimed, deadline, wait_owner,
+                                  &callback, admitted = std::move (admitted),
+                                  receiver = std::move (receiver)] () mutable {
+        const auto peer = _topology.peer (target_routing_id);
+        if (!target_claimed && !peer && !_topology.expected_peers ()->contains (target_routing_id))
+            return std::optional<request_start_t>{};
+        auto encoded_payload = protocol::encode_application_payload_message (application_payload);
+        const auto &port = _port;
+        if (!port)
+            return std::optional<request_start_t>{};
+        request_start_t value;
+        value.admitted =
+          admitted ? std::move (admitted) : std::make_shared<task_completion_source_t<void>> ();
+        value.correlation = take_reply_route_id_locked (requested_correlation);
+        value.operation =
+          operation_id (_options.descriptor.lifecycle_generation, value.correlation);
+        std::vector<zlink::message_t> wire;
+        wire.reserve (2);
+        wire.push_back (header (value.correlation));
+        wire.push_back (std::move (encoded_payload));
+        if (request && request->operation == foundation::call_id_t{})
+            request->operation = value.operation;
+        try {
+            value.registered = _operations->register_operation (
+              value.operation, deadline, std::move (callback).with_admission (value.admitted),
+              peer && peer->ready
+                ? std::vector<std::uint8_t>{}
+                : std::vector<std::uint8_t> (target_routing_id.begin (), target_routing_id.end ()),
+              std::move (request_metric), std::move (request), wait_owner);
+            if (value.registered) {
+                auto finish = [operations = _operations, operation = value.operation,
+                               correlation = value.correlation, receiver] (auto result) {
+                    observe_request (operations, operation, correlation, std::move (result),
+                                     receiver);
+                };
+                if (!start_admitted_request (port, peer.get (), target_routing_id, wire, deadline,
+                                             value.admitted, finish)) {
+                    std::vector<std::uint8_t> target_owner (target_routing_id.begin (),
+                                                            target_routing_id.end ());
+                    auto peer_observer = observe_request_peer_on_lane (target_owner);
+                    (void) submit_registered_request (
+                      port, std::move (peer_observer), _operations, value.operation,
+                      value.correlation, std::move (target_owner), std::move (wire), {}, deadline,
+                      value.admitted->task (), value.admitted, std::move (finish), receiver);
+                }
+            }
+        }
+        catch (...) {
+            // An empty callback was consumed at C1 publication, even if
+            // deadline reservation failed before registration returned.
+            if (!callback)
+                deliver_request_terminal (
+                  _operations, value.operation, foundation::operation_terminal_t::transport_failed,
+                  detail::current_exception_result<zlink::message_t> (), receiver);
+            throw;
+        }
+        return std::optional<request_start_t>{std::move (value)};
+    });
     if (!start)
         return {};
     if (!start->registered) {
@@ -2465,21 +2551,6 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
 
     const auto target_routing_id = actor_owner_routing_id;
     const auto target_generation = record.actor.target_node_generation;
-    const auto has_descriptor =
-      co_await _lane.run_task ([this, target_routing_id, target_generation] {
-          const auto expected = _expected_peers.find (target_routing_id);
-          if (expected != _expected_peers.end ()
-              && expected->second.lifecycle_generation == target_generation)
-              return true;
-          const auto peer = _topology.peer (target_routing_id);
-          return peer && peer->descriptor.lifecycle_generation == target_generation;
-      });
-    if (!has_descriptor) {
-        throw framework_exception_t (
-          framework_error_kind_t::unavailable,
-          "Remote Actor session binding owner descriptor is unavailable");
-    }
-
     const auto deadline = foundation::operation_registry_t::clock_t::now () + timeout;
     const auto local = _topology.local_descriptor ();
     const auto operations = _operations;
@@ -2510,13 +2581,15 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
           terminal_wake->complete (result_t<void>::success ());
           callback (terminal, std::move (payload));
       },
-      actor_owner_routing_id, {}, {}, detail::current_wait_owner ());
+      target_routing_id, {}, {}, detail::current_wait_owner ());
     if (!registered)
         co_return false;
 
+    auto peer_observer = co_await _lane.run_task (
+      [this, target_routing_id] { return observe_request_peer_on_lane (target_routing_id); });
     co_return co_await submit_registered_request (
-      std::move (port), observe_request_peer (actor_owner_routing_id), operations, id, correlation,
-      actor_owner_routing_id, std::move (request_parts),
+      std::move (port), std::move (peer_observer), operations, id, correlation, target_routing_id,
+      std::move (request_parts),
       [] (const detail::backend::raw_message_t &parts) {
           if (parts.size () != 1)
               throw protocol::service_wire_error_t (
@@ -2530,7 +2603,7 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
           }
           return parts.front ();
       },
-      deadline, terminal_wake->task (), std::move (admitted));
+      deadline, terminal_wake->task (), std::move (admitted), {}, {}, target_generation);
 }
 
 task_t<bool> raw_mesh_node_owner_t::send_bound_session_replaced (
@@ -3252,13 +3325,14 @@ void raw_mesh_node_owner_t::publish_peer_metrics (opentelemetry::metrics::Observ
                                return peer.ready
                                       && peer.descriptor.state == service_node_state_t::serving;
                            });
+            const auto expected_peers = owner._topology.expected_peers ();
             std::size_t configured =
-              owner._expected_peers.size ()
-              - owner._expected_peers.count (owner._options.descriptor.node_routing_id);
+              expected_peers->size ()
+              - expected_peers->count (owner._options.descriptor.node_routing_id);
             for (const auto &peer : peers)
-                configured += !owner._expected_peers.contains (peer.descriptor.node_routing_id);
+                configured += !expected_peers->contains (peer.descriptor.node_routing_id);
             for (const auto &peer : owner._topology.not_required_peers_on_lane ())
-                configured += !owner._expected_peers.contains (peer.node_routing_id);
+                configured += !expected_peers->contains (peer.node_routing_id);
             return configured;
         })
         .get ();
@@ -3413,9 +3487,9 @@ raw_mesh_pump_result_t raw_mesh_node_owner_t::admit_descriptor_record (
       _lane
         .run ([this, &source_routing_id, &descriptor] {
             admission_expectation_t value;
-            std::lock_guard lifecycle_lock (_lifecycle_mutex);
-            const auto expected = _expected_peers.find (source_routing_id);
-            if (expected == _expected_peers.end ())
+            const auto expected_peers = _topology.expected_peers ();
+            const auto expected = expected_peers->find (source_routing_id);
+            if (expected == expected_peers->end ())
                 return value;
             value.intent_endpoint = expected->second.advertised_endpoint;
             value.expected_descriptor_mismatch =

@@ -1062,7 +1062,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ),
                 _deadlineTimeProvider.GetTimestamp(),
                 timeout,
-                cancellationToken
+                cancellationToken,
+                static reply => reply,
+                static failure =>
+                    failure is null
+                        ? null
+                        : ZLinkRequestFailureMapper.CreateSubmitException(
+                            failure,
+                            "Bound-session bind"
+                        )
             )
             .ConfigureAwait(false);
         try
@@ -12201,17 +12209,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             )
         )
             throw new ArgumentOutOfRangeException(nameof(kind));
-
-        var peer = RunState(() =>
-        {
-            _peersByRid.TryGetValue(targetRid, out var current);
-            return current;
-        });
-        if ((peer is { Admitted: true } && peer.LifecycleGeneration != targetNodeGeneration))
-        {
-            operationId = default;
-            return SubmitResult.NotConnected;
-        }
 
         var effectiveTimeout = timeout <= TimeSpan.Zero ? DefaultServiceRequestTimeout : timeout;
         ulong correlation;

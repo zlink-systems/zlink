@@ -305,13 +305,18 @@ export class ZLinkManagedStream implements ZLinkStream {
       signal
     );
     try {
+      if (completion.terminalResult !== RequestResult.Ok || completion.failureErrno !== 0) {
+        throw wireReplyFailureException(
+          completion.terminalResult,
+          completion.failureErrno,
+          completion.failureMessage ?? `Actor '${actor.actorId}' native route lookup failed.`
+        );
+      }
       const resolved =
         completion.kindData?.kind === 'actorLookupCompletion'
           ? completion.kindData.location.actor
           : undefined;
       if (
-        completion.terminalResult !== 0 ||
-        completion.failureErrno !== 0 ||
         resolved === undefined ||
         resolved.actorId !== actor.actorId ||
         resolved.generation !== actor.objectGeneration ||
