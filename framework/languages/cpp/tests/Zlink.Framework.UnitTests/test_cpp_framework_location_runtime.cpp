@@ -4514,6 +4514,92 @@ TEST_P (StoreOutageRetention, NormalTurnsAndIneligibleObjectsDoNotReadExecutionC
         }
 }
 
+TEST_P (StoreOutageRetention, AdmissionDeadlineLatchesWithoutHeartbeatAndRenewalReopens)
+{
+    for (bool retained : {false, true})
+        for (bool shared : {false, true}) {
+            options.store_outage_retention = retained;
+            location_runtime_t runtime (store (), options,
+                                        "deadline-owner-" + std::to_string (retained)
+                                          + std::to_string (shared));
+            lease_access::clock (runtime, [&] { return clock_now.load (); });
+            claim (runtime);
+            auto scheduler = std::make_shared<test::manual_internal_scheduler_t> ();
+            auto spot = std::make_shared<serial_execution_queue_t> (
+              *scheduler, serial_execution_queue_options_t{},
+              serial_execution_queue_t::error_handler_t{},
+              shared ? serial_lane_policy_t::spot_wide ()
+                     : serial_lane_policy_t::per_actor_spot ());
+            auto actor = std::make_shared<serial_execution_queue_t> (*scheduler);
+            auto timer_queue = std::make_shared<serial_execution_queue_t> (*scheduler);
+            actor->attach_spot_gate (spot);
+            timer_queue->attach_spot_gate (spot);
+            for (auto queue : {spot, actor, timer_queue}) {
+                queue->set_execution_policy (runtime.execution_policy ());
+                queue->confirm_execution_ready (clock_now.load ());
+            }
+            auto context = std::make_shared<detail::spot_context_state_t> ();
+            context->serial_executor = scheduler;
+            context->channel_runtime = std::make_shared<detail::channel_runtime_state_t> ();
+            serializer_registry_t serializers;
+            context->channel_runtime->serializers = &serializers;
+            auto handler = std::make_shared<int> (0);
+            auto timer = std::make_shared<detail::timer_state_t> ();
+            timer->name = "deadline-timer";
+            timer->serial_queue = timer_queue;
+            timer->handler_instance = handler;
+            int timer_calls = 0, actor_calls = 0;
+            timer->handler_invoker = [&] (void *, void *, serializer_registry_t &,
+                                          const timer_tick_t &) {
+                ++timer_calls;
+                return task_t<zlink::message_t> (result_t<zlink::message_t>::success ({}));
+            };
+            scheduler->run_all ();
+            const auto first = lease_access::snapshot (runtime);
+            const auto deadline = *first->admission_deadline;
+            move_to (deadline - 1ms);
+            detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+            ASSERT_TRUE (actor->try_post ("before-deadline", [&] { ++actor_calls; }));
+            detail::timer_runtime_t::post_fire_count (context, timer, timer_queue, 1);
+            scheduler->run_all ();
+            EXPECT_EQ (1, actor_calls);
+            EXPECT_EQ (1, timer_calls);
+            // Callbacks queued before the deadline must not start once the deadline reservation runs.
+            ASSERT_TRUE (actor->try_post ("queued-before-deadline", [&] { ++actor_calls; }));
+            detail::timer_runtime_t::post_fire_count (context, timer, timer_queue, 1);
+            move_to (deadline + 1ms);
+            detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+            ASSERT_FALSE (lease_access::snapshot (runtime)->outage);
+            scheduler->run_all ();
+            EXPECT_EQ (1, actor_calls);
+            EXPECT_EQ (1, timer_calls);
+            EXPECT_NE (serial_execution_queue_t::execution_status_t::allowed,
+                       actor->execution_status ());
+            EXPECT_NE (serial_execution_queue_t::execution_status_t::allowed,
+                       timer_queue->execution_status ());
+            lease_access::accept (runtime, *first->token, *first->renewed_at + 30s,
+                                  *first->renewed_at, clock_now.load (), true);
+            ASSERT_FALSE (lease_access::snapshot (runtime)->outage);
+            scheduler->run_all ();
+            EXPECT_EQ (serial_execution_queue_t::execution_status_t::allowed,
+                       actor->execution_status ());
+            EXPECT_EQ (serial_execution_queue_t::execution_status_t::allowed,
+                       timer_queue->execution_status ());
+            ASSERT_TRUE (actor->try_post ("renewed", [&] { ++actor_calls; }));
+            ASSERT_TRUE (timer_queue->try_post ("renewed-timer-lane", [] {}));
+            scheduler->run_all ();
+            EXPECT_EQ (3, actor_calls);
+            EXPECT_EQ (2, timer_calls);
+            detail::timer_runtime_t::post_fire_count (context, timer, timer_queue, 1);
+            scheduler->run_all ();
+            EXPECT_EQ (3, timer_calls);
+            actor->cancel_pending ();
+            timer_queue->cancel_pending ();
+            spot->cancel_pending ();
+            scheduler->run_all ();
+        }
+}
+
 TEST_P (StoreOutageRetention, ExecutionGateConsumesOutageLatchInBothExecutionModes)
 {
     for (bool enabled : {false, true})
