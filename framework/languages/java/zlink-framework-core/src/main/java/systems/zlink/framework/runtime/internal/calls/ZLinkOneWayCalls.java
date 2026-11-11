@@ -41,11 +41,10 @@ public final class ZLinkOneWayCalls {
     }
 
     /**
-     * Spec 06-framework-api §7: a call is used only once host admission accepts it. Admission
-     * runs before the claim, so two concurrent submits of the same call can both run {@code
-     * admission}; it must be idempotent. Call builders use it to capture the host runtime into
-     * their own fields, and both runs write the same published services; only the claim winner
-     * then submits.
+     * Spec 06-framework-api §7: a call is used only once host admission accepts it. Admission runs
+     * before the claim, so two concurrent submits of the same call can both run {@code admission};
+     * it must be idempotent. Call builders use it to capture the host runtime into their own
+     * fields, and both runs write the same published services; only the claim winner then submits.
      */
     public static <T> CompletionStage<T> beginOneWay(AtomicBoolean submitted, Runnable admission) {
         if (submitted.get()) {
