@@ -155,6 +155,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         {
             _locationRuntime.CaptureExecutions = SnapshotLocationExecutions;
             _locationRuntime.ExecutionsDiscarded += DiscardLocationExecutions;
+            _locationRuntime.ExecutionResumed += ResumeLocationExecution;
         }
         _actors = components.Actors;
         _actorBoundSessionCoordinator = new ZLinkActorBoundSessionCoordinator(
@@ -753,8 +754,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     internal bool IsOwnerAdmissionOpen =>
         _locationRuntime is null || _locationRuntime.IsOwnerAdmissionOpen;
 
-    internal bool IsLocationExecutionAllowed(object execution) =>
-        _locationRuntime?.IsExecutionAllowed(execution) ?? true;
+    internal ZLinkObjectExecutionStatus GetLocationExecutionStatus(object execution) =>
+        _locationRuntime?.GetExecutionStatus(execution) ?? ZLinkObjectExecutionStatus.Allowed;
 
     private IReadOnlySet<object> SnapshotLocationExecutions()
     {
@@ -764,6 +765,21 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             foreach (var spot in node.Spots)
                 executions.Add(spot);
         return executions;
+    }
+
+    private void ResumeLocationExecution(object execution)
+    {
+        // Wake the queues that held work while the gate was paused. A member Actor's gate
+        // also depends on its parent Spot, so the Spot's members are woken with it.
+        if (execution is ZLinkActorRuntimeState actor)
+            actor._dispatchMailbox.NotifyReadiness();
+        else if (execution is ZLinkSpotActivation spot)
+        {
+            spot._serial.SchedulePendingApplications();
+            foreach (var member in _actorSessionManager.SnapshotStates())
+                if (ReferenceEquals(member.Activation, spot))
+                    member._dispatchMailbox.NotifyReadiness();
+        }
     }
 
     private void DiscardLocationExecutions(IReadOnlySet<object> executions)
