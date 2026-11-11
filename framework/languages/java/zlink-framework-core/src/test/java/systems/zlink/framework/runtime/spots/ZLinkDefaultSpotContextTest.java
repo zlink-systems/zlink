@@ -32,12 +32,10 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext;
-import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 
 import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -375,24 +373,26 @@ final class ZLinkDefaultSpotContextTest {
                 Message requestPayload = Message.from("request");
                 ZLinkWorkerPool workers = new ZLinkWorkerPool(1, 1, Duration.ofSeconds(5))) {
             ZLinkSendCall send =
-                    new ZLinkSpotDirectSendCall(
-                            null,
-                            host.backendSpot,
-                            RoutingId.from("target"),
-                            "target-spot",
-                            1,
-                            ZLinkFrameworkMultipartView.owned(sendPayload),
-                            Optional.of("packet"));
+                    () -> {
+                        sendPayload.close();
+                        throw new AssertionError("blocking call reached submission");
+                    };
             ZLinkRequestCall request =
-                    new ZLinkSpotDirectRequestCall(
-                            null,
-                            host.backendSpot,
-                            RoutingId.from("target"),
-                            "target-spot",
-                            1,
-                            requestPayload,
-                            Optional.of("packet"),
-                            Duration.ofSeconds(5));
+                    new ZLinkRequestCall() {
+                        public ZLinkRequestCall timeout(Duration timeout) {
+                            return this;
+                        }
+
+                        public <T> systems.zlink.framework.channels.ZLinkRequestStage<T> submit(
+                                Class<T> replyType) {
+                            requestPayload.close();
+                            throw new AssertionError("blocking call reached submission");
+                        }
+
+                        public <T> CompletionStage<T> yield(Class<T> replyType) {
+                            throw new AssertionError("blocking call reached yield");
+                        }
+                    };
             Supplier<CompletionStage<Void>> callback =
                     () -> {
                         assertEquals(

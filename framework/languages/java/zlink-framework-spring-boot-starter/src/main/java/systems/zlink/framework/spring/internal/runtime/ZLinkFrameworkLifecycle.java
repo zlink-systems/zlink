@@ -118,6 +118,7 @@ public final class ZLinkFrameworkLifecycle
                     return requireRuntime().fanoutRuntime().observe(channelName, capacity);
                 }
             };
+    private final ZLinkFrameworkRuntime preparedRuntime;
     private ZLinkFrameworkRuntime runtime;
     private boolean running;
     private Thread processShutdownHook;
@@ -132,6 +133,7 @@ public final class ZLinkFrameworkLifecycle
         this.handlerFactory = Objects.requireNonNull(handlerFactory, "handlerFactory");
         this.eventDispatcher = new ZLinkRuntimeEventDispatcher();
         this.runtime = ZLinkFrameworkRuntimeBootstrap.prepare(options, eventDispatcher);
+        this.preparedRuntime = this.runtime;
     }
 
     @Override
@@ -295,12 +297,12 @@ public final class ZLinkFrameworkLifecycle
 
     @Override
     public ZLinkSendCall sendToChannel(String channelName, Object message) {
-        return requireRuntime().client().sendToChannel(channelName, message);
+        return preparedRuntime.client().sendToChannel(channelName, message);
     }
 
     @Override
     public ZLinkRequestCall requestToChannel(String channelName, Object message) {
-        return requireRuntime().client().requestToChannel(channelName, message);
+        return preparedRuntime.client().requestToChannel(channelName, message);
     }
 
     public SpotHandleResolver spotHandleResolver() {
@@ -313,48 +315,48 @@ public final class ZLinkFrameworkLifecycle
 
     @Override
     public ZLinkFanoutPublishCall publish(String channelName, Object message) {
-        return requireRuntime().fanout().publish(channelName, message);
+        return preparedRuntime.fanout().publish(channelName, message);
     }
 
     @Override
     public ZLinkFanoutPublishCall publish(String channelName, String topic, Object message) {
-        return requireRuntime().fanout().publish(channelName, topic, message);
+        return preparedRuntime.fanout().publish(channelName, topic, message);
     }
 
     @Override
     public ZLinkSendCall sendToNode(String channelName, RoutingId target, Object message) {
-        return requireRuntime().route().sendToNode(channelName, target, message);
+        return preparedRuntime.route().sendToNode(channelName, target, message);
     }
 
     @Override
     public ZLinkSpotSendCall sendToSpot(String spotId, Object message) {
-        return requireRuntime().route().sendToSpot(spotId, message);
+        return preparedRuntime.route().sendToSpot(spotId, message);
     }
 
     @Override
     public ZLinkRequestCall requestToNode(String channelName, RoutingId target, Object message) {
-        return requireRuntime().route().requestToNode(channelName, target, message);
+        return preparedRuntime.route().requestToNode(channelName, target, message);
     }
 
     @Override
     public ZLinkSpotRequestCall requestToSpot(String spotId, Object message) {
-        return requireRuntime().route().requestToSpot(spotId, message);
+        return preparedRuntime.route().requestToSpot(spotId, message);
     }
 
     public ZLinkSpotManager spotManager() {
-        return requireRuntime().spotManager();
+        return preparedRuntime.spotManager();
     }
 
     public ZLinkSpotOutbound spotOutbound() {
-        return requireRuntime().spotOutbound();
+        return preparedRuntime.spotOutbound();
     }
 
     public ZLinkSpotPublisherClient spotPublisherClient() {
-        return requireRuntime().spotPublisherClient();
+        return preparedRuntime.spotPublisherClient();
     }
 
     public ZLinkActorManager actorManager() {
-        return requireRuntime().actorManager();
+        return preparedRuntime.actorManager();
     }
 
     public ZLinkActorDirectory actorDirectory() {
@@ -362,7 +364,7 @@ public final class ZLinkFrameworkLifecycle
     }
 
     public ZLinkActorClient actorClient() {
-        return requireRuntime().actorClient();
+        return preparedRuntime.actorClient();
     }
 
     public ZLinkRouteMeshRuntime routeMeshRuntime() {

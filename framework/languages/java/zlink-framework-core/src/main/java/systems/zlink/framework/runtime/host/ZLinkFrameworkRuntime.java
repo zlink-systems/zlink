@@ -95,13 +95,60 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     private static final long RELOCATION_TARGET_WAIT_POLL_MILLIS = 25;
     private static final long EXECUTOR_GRACEFUL_SHUTDOWN_SECONDS = 1;
     private static final long EXECUTOR_FORCED_SHUTDOWN_SECONDS = 4;
-    ZLinkChannelRuntime channels;
+    private volatile CallServices callServices;
+
+    private record CallServices(
+            ZLinkChannelRuntime channels,
+            ZLinkSpotRuntime spots,
+            ZLinkActorRuntime actors,
+            systems.zlink.framework.runtime.actors.ZLinkActorClientRuntime actorClient) {}
+
+    private final systems.zlink.framework.runtime.channels.ZLinkChannelCalls channelCalls;
+    private final ZLinkMessageSerializer callSerializer;
+    private final ZLinkActorClient actorCalls;
+    private final ZLinkActorManager actorManagerCalls;
+    private final ZLinkSpotManager spotManagerCalls;
+    private final ZLinkSpotPublisherClient publisherCalls;
+    private final ZLinkSpotOutbound outboundCalls = ZLinkSpotRuntime.ambientOutbound();
+
+    private ZLinkSpotRuntime callSpots() {
+        var value = admitCall().spots();
+        if (value == null) throw new ZLinkConfigurationException("Spot runtime is not configured");
+        return value;
+    }
+
+    private ZLinkActorRuntime callActors() {
+        var value = admitCall().actors();
+        if (value == null) throw new ZLinkConfigurationException("Actor runtime is not configured");
+        return value;
+    }
+
+    private systems.zlink.framework.runtime.actors.ZLinkActorClientRuntime callActorClient() {
+        var value = admitCall().actorClient();
+        if (value == null)
+            throw new ZLinkConfigurationException(
+                    "Actor client requires a SPOT node and location store");
+        return value;
+    }
+
+    private CallServices admitCall() {
+        if (closeGate.closing() || drainStarted.get()) {
+            throw new systems.zlink.framework.errors.ZLinkFrameworkException(
+                    systems.zlink.framework.errors.ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                    "framework runtime is shutting down");
+        }
+        CallServices services = callServices;
+        if (services == null) {
+            throw new systems.zlink.framework.errors.ZLinkFrameworkException(
+                    systems.zlink.framework.errors.ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "framework runtime has not started");
+        }
+        return services;
+    }
+
     final ZLinkMeshNodesRuntime meshNodes = new ZLinkMeshNodesRuntime();
-    private ZLinkSpotRuntime spots;
-    private ZLinkActorRuntime actors;
     systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireRuntime spotRetire;
     private ZLinkActorDirectory actorDirectory;
-    private ZLinkActorClient actorClient;
     private ZLinkStreamRuntime streams;
     private ZLinkBackendContext backendContext;
     private final systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue
@@ -203,6 +250,21 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 eventDispatcher == null ? new ZLinkRuntimeEventDispatcher() : eventDispatcher;
         this.eventDispatcher = eventDispatcher;
         this.registration = options.registration();
+        this.callSerializer = serializerFor(options);
+        this.actorCalls =
+                new systems.zlink.framework.runtime.actors.ZLinkActorClientCalls(
+                        this::callActorClient);
+        this.actorManagerCalls =
+                new systems.zlink.framework.runtime.actors.ZLinkActorManagerCalls(
+                        this::callActors, registration.defaultRequestTimeout());
+        this.spotManagerCalls =
+                new systems.zlink.framework.runtime.spots.ZLinkSpotManagerCalls(this::callSpots);
+        this.publisherCalls =
+                ZLinkSpotRuntime.publisherCalls(
+                        this::callSpots, callSerializer, registration.codecs()::contentTypeFor);
+        this.channelCalls =
+                new systems.zlink.framework.runtime.channels.ZLinkChannelCalls(
+                        registration, callSerializer, () -> admitCall().channels());
         this.telemetryHost =
                 systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner.openHost();
         this.applicationJobQueue = this.registration.applicationJobQueue();
@@ -219,6 +281,18 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         diagnostics.installLiveMode(this.messageFlowMode);
     }
 
+    ZLinkChannelRuntime channels() {
+        return callServices == null ? null : callServices.channels();
+    }
+
+    ZLinkSpotRuntime spots() {
+        return callServices == null ? null : callServices.spots();
+    }
+
+    ZLinkActorRuntime actors() {
+        return callServices == null ? null : callServices.actors();
+    }
+
     private void startComponents(
             DefaultZLinkFrameworkOptions options,
             ZLinkBackendAdapterProvider backendFactory,
@@ -226,7 +300,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             ZLinkFrameworkRuntimeConstruction construction) {
         options.validate();
         registration.codecs().freeze();
-        ZLinkMessageSerializer serializer = serializerFor(options);
+        ZLinkMessageSerializer serializer = callSerializer;
         ZLinkBackendAdapterOptions adapterOptions =
                 new ZLinkBackendAdapterOptions(options.defaultRequestTimeout());
         ZLinkStreamCodec defaultStreamCodec = defaultStreamCodec(options);
@@ -291,341 +365,399 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 backendFactory.createChannelAdapter(adapterOptions);
         this.backendContext = channelBackend.createContext();
         this.coreHwmContextActive.set(true);
-        this.channels =
-                ZLinkFrameworkChannelSubsystem.create(
-                                options,
-                                channelBackend,
-                                this.backendContext,
-                                backendFactory,
-                                adapterOptions,
-                                serializer,
-                                runtimeHandlers,
-                                eventDispatcher,
-                                construction)
-                        .channels();
-        this.channels.setHostStateSupplier(runtimeState::get);
-        if (!this.registration.meshNodes().isEmpty()) {
-            ZLinkMeshBackendAdapter meshAdapter = backendFactory.createMeshAdapter(adapterOptions);
-            this.meshNodes.start(
-                    this.registration.meshNodes(),
-                    meshAdapter,
-                    this.backendContext,
-                    mesh ->
-                            new ZLinkMeshApplicationDispatcher(
-                                    mesh,
+        var pendingCalls = new java.util.ArrayList<AutoCloseable>();
+        try {
+            ZLinkChannelRuntime channels =
+                    ZLinkFrameworkChannelSubsystem.create(
+                                    options,
+                                    channelBackend,
+                                    this.backendContext,
+                                    backendFactory,
+                                    adapterOptions,
                                     serializer,
-                                    this.registration,
                                     runtimeHandlers,
-                                    this.meshDrains),
-                    true,
-                    this.applicationJobQueue);
-        }
-        this.meshNodes
-                .nodesByName()
-                .forEach(
-                        (meshName, node) -> {
-                            node.setPeerAdmissionSealGate(() -> this.meshDrains.isSealed(meshName));
-                            this.channels.registerSpotRouterNode(meshName, node.spotNode());
-                            recordMeshListener(meshName, node);
-                        });
-        if (this.locationStores != null
-                && this.locationStores.unifiedStore() instanceof ZLinkLocationRepository store) {
-            var peerAuthorityResolver =
-                    new systems.zlink.framework.runtime.locations.ZLinkMeshPeerAuthorityResolver(
-                            store,
-                            this.registration.locations().options().pollingInterval(),
-                            this.locationRuntime);
-            this.meshNodes
-                    .nodesByName()
-                    .values()
-                    .forEach(node -> node.setPeerAuthorityResolver(peerAuthorityResolver));
-        }
-        this.objectDescriptors =
-                this.locationRuntime != null
-                                && this.locationStores.unifiedStore()
-                                        instanceof
-                                        systems.zlink.framework.runtime.internal.locations
-                                                        .ZLinkLocationRepository
-                                                store
-                        ? new systems.zlink.framework.runtime.internal.locations
-                                .ZLinkObjectServerDescriptorPublisher(
-                                store,
-                                this.locationRuntime,
-                                this.registration,
-                                this.meshNodes.nodesByName())
-                        : null;
-        this.routeMeshRuntimeOptions =
-                new systems.zlink.framework.runtime.channels.ZLinkRouteMeshRuntimeOptionsRuntime(
-                        this.meshNodes.nodesByName(),
-                        () -> {
-                            if (this.objectDescriptors != null) {
-                                try {
-                                    this.objectDescriptors
-                                            .publish(this.runtimeState.get())
-                                            .toCompletableFuture()
-                                            .join();
-                                } catch (CompletionException failure) {
-                                    Throwable cause = unwrapCompletionFailure(failure);
-                                    if (cause instanceof RuntimeException runtimeFailure) {
-                                        throw runtimeFailure;
-                                    }
-                                    throw failure;
-                                }
-                            }
-                        });
-        runtimeHandlers.add(ZLinkRouteMeshRuntimeOptions.class, this.routeMeshRuntimeOptions);
-
-        ZLinkFrameworkSpotSubsystem spotSubsystem =
-                ZLinkFrameworkSpotSubsystem.create(
-                        options,
-                        backendFactory,
-                        adapterOptions,
-                        serializer,
-                        runtimeHandlers,
-                        eventDispatcher,
-                        this.channels,
+                                    eventDispatcher,
+                                    construction)
+                            .channels();
+            pendingCalls.add(channels);
+            channels.setCallFactories(channelCalls);
+            channels.setHostStateSupplier(runtimeState::get);
+            if (!this.registration.meshNodes().isEmpty()) {
+                ZLinkMeshBackendAdapter meshAdapter =
+                        backendFactory.createMeshAdapter(adapterOptions);
+                this.meshNodes.start(
+                        this.registration.meshNodes(),
+                        meshAdapter,
                         this.backendContext,
-                        this.locationLifecycle,
-                        this.locationStores == null ? null : this.locationStores.authorityStore(),
-                        this.locationStores != null
-                                        && this.locationStores.unifiedStore()
-                                                instanceof ZLinkLocationRepository store
-                                ? store
-                                : null,
-                        this.locationRuntime,
-                        this.storeLocationResolvers,
-                        this.spotTransportAddressResolver,
-                        this.meshNodes.nodesByName(),
-                        construction);
-        this.spots = spotSubsystem.spots();
-        if (spots != null) spots.setCountChanged(routeMeshRuntime::signalAll);
-
-        this.instanceActivationStartupRecovery =
-                this.locationStores != null
-                                && this.locationStores.authorityStore() != null
-                                && !this.meshNodes.nodesByName().isEmpty()
-                        ? new ZLinkInstanceActivationStartupRecovery(
-                                this.locationStores.authorityStore(),
-                                this.registration.relocationStore(),
-                                this.meshNodes.nodesByName())
-                        : null;
-
-        ZLinkFrameworkActorSubsystem actorSubsystem =
-                ZLinkFrameworkActorSubsystem.create(
-                        backendFactory,
-                        this.registration,
-                        serializer,
-                        runtimeHandlers,
-                        runtimeHandlers,
-                        eventDispatcher,
-                        defaultStreamCodec,
-                        this.channels,
-                        this.spots,
-                        this.locationLifecycle,
-                        this.storeLocationResolvers,
-                        spotSubsystem.remoteAddressResolver(),
-                        this.locationStores != null
-                                        && this.locationStores.unifiedStore()
-                                                instanceof
-                                                systems.zlink.framework.runtime.internal.locations
-                                                                .ZLinkLocationRepository
-                                                        store
-                                ? store
-                                : null,
-                        this.meshNodes.nodesByName(),
-                        this.startupReady);
-        this.actors = actorSubsystem.actors();
-        if (actors != null) actors.setCountChanged(routeMeshRuntime::signalAll);
-        this.actorDirectory = actorSubsystem.actorDirectory();
-        this.actorClient = actorSubsystem.actorClient();
-
-        ZLinkFrameworkStreamSubsystem streamSubsystem =
-                ZLinkFrameworkStreamSubsystem.create(
-                        options,
-                        backendFactory,
-                        adapterOptions,
-                        serializer,
-                        runtimeHandlers,
-                        eventDispatcher,
-                        this.meshNodes,
-                        this.backendContext,
-                        this.spots,
-                        this.actors);
-        // Spot·Actor service 등록을 마친 catalog로 STREAM 시작 전에 생성 절차를 준비한다.
-        prepareConstruction(runtimeHandlers);
-        this.streams = streamSubsystem.streams();
-        if (this.streams != null) {
-            this.streams.start();
-            for (var streamNode : this.registration.streamNodes()) {
-                String endpoint = this.streams.boundListenerEndpoint(streamNode);
-                if (endpoint != null) {
-                    this.channels.recordListener(
-                            ZLinkListenerKind.STREAM, streamNode.name(), endpoint);
-                }
+                        mesh ->
+                                new ZLinkMeshApplicationDispatcher(
+                                        mesh,
+                                        serializer,
+                                        this.registration,
+                                        runtimeHandlers,
+                                        this.meshDrains),
+                        true,
+                        this.applicationJobQueue);
             }
             this.meshNodes
                     .nodesByName()
-                    .values()
                     .forEach(
-                            node ->
-                                    node.setSessionRelocationRouteHandler(
-                                            this.streams::handleSessionRelocationRoute));
-            this.meshNodes
-                    .nodesByName()
-                    .values()
-                    .forEach(
-                            node ->
-                                    node.setSessionActorFenceHandler(
-                                            this.streams::refreshSessionActorFence));
-            this.meshNodes
-                    .nodesByName()
-                    .values()
-                    .forEach(
-                            node ->
-                                    node.setSessionRelocationSealHandler(
-                                            this.streams::handleSessionRelocationSeal));
-            this.meshNodes
-                    .nodesByName()
-                    .values()
-                    .forEach(
-                            node ->
-                                    node.setBoundSessionSendHandler(
-                                            this.streams::handleBoundSessionSend));
-            this.meshNodes
-                    .nodesByName()
-                    .values()
-                    .forEach(
-                            node ->
-                                    node.setBoundSessionCloseHandler(
-                                            request ->
-                                                    this.streams.handleBoundSessionClose(
-                                                            node.routingId(), request)));
-            this.meshNodes
-                    .nodesByName()
-                    .values()
-                    .forEach(
-                            node ->
-                                    node.setBoundSessionReplacedHandler(
-                                            this.streams::handleBoundSessionReplaced));
-        }
-        this.spotRetire =
-                this.spots != null
-                                && this.actors != null
-                                && this.locationStores != null
-                                && this.locationStores.authorityStore() != null
-                                && this.locationStores.unifiedStore()
-                                        instanceof
-                                        systems.zlink.framework.runtime.internal.locations
-                                                        .ZLinkLocationRepository
-                                                locationStore
-                                && this.registration.relocationStore() != null
-                        ? construction
-                                .spotRetireRuntimeFactory()
-                                .create(
-                                        this.spots,
-                                        this.actors,
-                                        this.registration.meshNodes(),
-                                        this.meshNodes.nodesByName(),
-                                        locationStore,
-                                        this.storeLocationResolvers,
-                                        this.locationStores.authorityStore(),
-                                        this.registration.locations().options(),
-                                        relocationAdapters,
-                                        this.registration.applicationVersion(),
-                                        this.registration.maintenanceWave(),
-                                        this.registration
-                                                .locations()
-                                                .options()
-                                                .sessionRelocationSealTimeout(),
-                                        this.meshDrains::isSealed,
-                                        construction.relocationStateMachines(),
-                                        construction.aggregateRelocationAuthorityStoreDecorator(),
-                                        construction.targetNormalizerDecorator())
-                        : null;
+                            (meshName, node) -> {
+                                node.setPeerAdmissionSealGate(
+                                        () -> this.meshDrains.isSealed(meshName));
+                                channels.registerSpotRouterNode(meshName, node.spotNode());
+                                channels.recordListener(
+                                        ZLinkListenerKind.ROUTE_MESH,
+                                        meshName,
+                                        node.advertisedEndpoint());
+                            });
+            if (this.locationStores != null
+                    && this.locationStores.unifiedStore()
+                            instanceof ZLinkLocationRepository store) {
+                var peerAuthorityResolver =
+                        new systems.zlink.framework.runtime.locations
+                                .ZLinkMeshPeerAuthorityResolver(
+                                store,
+                                this.registration.locations().options().pollingInterval(),
+                                this.locationRuntime);
+                this.meshNodes
+                        .nodesByName()
+                        .values()
+                        .forEach(node -> node.setPeerAuthorityResolver(peerAuthorityResolver));
+            }
+            this.objectDescriptors =
+                    this.locationRuntime != null
+                                    && this.locationStores.unifiedStore()
+                                            instanceof
+                                            systems.zlink.framework.runtime.internal.locations
+                                                            .ZLinkLocationRepository
+                                                    store
+                            ? new systems.zlink.framework.runtime.internal.locations
+                                    .ZLinkObjectServerDescriptorPublisher(
+                                    store,
+                                    this.locationRuntime,
+                                    this.registration,
+                                    this.meshNodes.nodesByName())
+                            : null;
+            this.routeMeshRuntimeOptions =
+                    new systems.zlink.framework.runtime.channels
+                            .ZLinkRouteMeshRuntimeOptionsRuntime(
+                            this.meshNodes.nodesByName(),
+                            () -> {
+                                if (this.objectDescriptors != null) {
+                                    try {
+                                        this.objectDescriptors
+                                                .publish(this.runtimeState.get())
+                                                .toCompletableFuture()
+                                                .join();
+                                    } catch (CompletionException failure) {
+                                        Throwable cause = unwrapCompletionFailure(failure);
+                                        if (cause instanceof RuntimeException runtimeFailure) {
+                                            throw runtimeFailure;
+                                        }
+                                        throw failure;
+                                    }
+                                }
+                            });
+            runtimeHandlers.add(ZLinkRouteMeshRuntimeOptions.class, this.routeMeshRuntimeOptions);
 
-        if (this.spotRetire != null) {
-            this.spotRetire.onSourceQuiescenceChanged(
-                    () -> runtimeStatusSource.signal(RUNTIME_STATUS_SOURCE));
-        }
+            ZLinkFrameworkSpotSubsystem spotSubsystem =
+                    ZLinkFrameworkSpotSubsystem.create(
+                            options,
+                            backendFactory,
+                            adapterOptions,
+                            serializer,
+                            runtimeHandlers,
+                            eventDispatcher,
+                            channels,
+                            this.backendContext,
+                            this.locationLifecycle,
+                            this.locationStores == null
+                                    ? null
+                                    : this.locationStores.authorityStore(),
+                            this.locationStores != null
+                                            && this.locationStores.unifiedStore()
+                                                    instanceof ZLinkLocationRepository store
+                                    ? store
+                                    : null,
+                            this.locationRuntime,
+                            this.storeLocationResolvers,
+                            this.spotTransportAddressResolver,
+                            this.meshNodes.nodesByName(),
+                            construction);
+            ZLinkSpotRuntime spots = spotSubsystem.spots();
+            if (spots != null) spots.setCallAdmission(() -> admitCall());
+            if (spots != null) pendingCalls.add(spots);
+            if (spots != null) spots.setCountChanged(routeMeshRuntime::signalAll);
 
-        if (locationStores != null
-                && locationStores.unifiedStore()
-                        instanceof
-                        systems.zlink.framework.runtime.internal.locations
-                                        .ZLinkProviderLocationRepository
-                                repository) {
-            objectCapacityMetricRegistration = repository.registerCapacityObservation();
+            this.instanceActivationStartupRecovery =
+                    this.locationStores != null
+                                    && this.locationStores.authorityStore() != null
+                                    && !this.meshNodes.nodesByName().isEmpty()
+                            ? new ZLinkInstanceActivationStartupRecovery(
+                                    this.locationStores.authorityStore(),
+                                    this.registration.relocationStore(),
+                                    this.meshNodes.nodesByName())
+                            : null;
+
+            ZLinkFrameworkActorSubsystem actorSubsystem =
+                    ZLinkFrameworkActorSubsystem.create(
+                            backendFactory,
+                            this.registration,
+                            serializer,
+                            runtimeHandlers,
+                            runtimeHandlers,
+                            eventDispatcher,
+                            defaultStreamCodec,
+                            channels,
+                            spots,
+                            this.locationLifecycle,
+                            this.storeLocationResolvers,
+                            spotSubsystem.remoteAddressResolver(),
+                            this.locationStores != null
+                                            && this.locationStores.unifiedStore()
+                                                    instanceof
+                                                    systems.zlink.framework.runtime.internal
+                                                                    .locations
+                                                                    .ZLinkLocationRepository
+                                                            store
+                                    ? store
+                                    : null,
+                            this.meshNodes.nodesByName(),
+                            this.startupReady);
+            ZLinkActorRuntime actors = actorSubsystem.actors();
+            if (actors != null)
+                pendingCalls.add(() -> actors.closeAsync().toCompletableFuture().join());
+            if (actors != null) actors.setCountChanged(routeMeshRuntime::signalAll);
+            this.actorDirectory = actorSubsystem.actorDirectory();
+            var actorClient = actorSubsystem.actorClient();
+
+            ZLinkFrameworkStreamSubsystem streamSubsystem =
+                    ZLinkFrameworkStreamSubsystem.create(
+                            options,
+                            backendFactory,
+                            adapterOptions,
+                            serializer,
+                            runtimeHandlers,
+                            eventDispatcher,
+                            this.meshNodes,
+                            this.backendContext,
+                            spots,
+                            actors);
+            runtimeHandlers.add(ZLinkClient.class, channelCalls);
+            runtimeHandlers.add(ZLinkFanoutClient.class, channelCalls);
+            runtimeHandlers.add(ZLinkRouteClient.class, channelCalls);
+            runtimeHandlers.add(ZLinkSpotManager.class, spotManagerCalls);
+            runtimeHandlers.add(ZLinkSpotOutbound.class, outboundCalls);
+            runtimeHandlers.add(ZLinkSpotPublisherClient.class, publisherCalls);
+            runtimeHandlers.add(ZLinkActorManager.class, actorManagerCalls);
+            runtimeHandlers.add(ZLinkActorClient.class, actorCalls);
+            // Spot·Actor service 등록을 마친 catalog로 STREAM 시작 전에 생성 절차를 준비한다.
+            prepareConstruction(runtimeHandlers);
+            this.streams = streamSubsystem.streams();
+            if (this.streams != null) {
+
+                this.meshNodes
+                        .nodesByName()
+                        .values()
+                        .forEach(
+                                node ->
+                                        node.setSessionRelocationRouteHandler(
+                                                this.streams::handleSessionRelocationRoute));
+                this.meshNodes
+                        .nodesByName()
+                        .values()
+                        .forEach(
+                                node ->
+                                        node.setSessionActorFenceHandler(
+                                                this.streams::refreshSessionActorFence));
+                this.meshNodes
+                        .nodesByName()
+                        .values()
+                        .forEach(
+                                node ->
+                                        node.setSessionRelocationSealHandler(
+                                                this.streams::handleSessionRelocationSeal));
+                this.meshNodes
+                        .nodesByName()
+                        .values()
+                        .forEach(
+                                node ->
+                                        node.setBoundSessionSendHandler(
+                                                this.streams::handleBoundSessionSend));
+                this.meshNodes
+                        .nodesByName()
+                        .values()
+                        .forEach(
+                                node ->
+                                        node.setBoundSessionCloseHandler(
+                                                request ->
+                                                        this.streams.handleBoundSessionClose(
+                                                                node.routingId(), request)));
+                this.meshNodes
+                        .nodesByName()
+                        .values()
+                        .forEach(
+                                node ->
+                                        node.setBoundSessionReplacedHandler(
+                                                this.streams::handleBoundSessionReplaced));
+            }
+            this.spotRetire =
+                    spots != null
+                                    && actors != null
+                                    && this.locationStores != null
+                                    && this.locationStores.authorityStore() != null
+                                    && this.locationStores.unifiedStore()
+                                            instanceof
+                                            systems.zlink.framework.runtime.internal.locations
+                                                            .ZLinkLocationRepository
+                                                    locationStore
+                                    && this.registration.relocationStore() != null
+                            ? construction
+                                    .spotRetireRuntimeFactory()
+                                    .create(
+                                            spots,
+                                            actors,
+                                            this.registration.meshNodes(),
+                                            this.meshNodes.nodesByName(),
+                                            locationStore,
+                                            this.storeLocationResolvers,
+                                            this.locationStores.authorityStore(),
+                                            this.registration.locations().options(),
+                                            relocationAdapters,
+                                            this.registration.applicationVersion(),
+                                            this.registration.maintenanceWave(),
+                                            this.registration
+                                                    .locations()
+                                                    .options()
+                                                    .sessionRelocationSealTimeout(),
+                                            this.meshDrains::isSealed,
+                                            construction.relocationStateMachines(),
+                                            construction
+                                                    .aggregateRelocationAuthorityStoreDecorator(),
+                                            construction.targetNormalizerDecorator())
+                            : null;
+
+            if (this.spotRetire != null) {
+                this.spotRetire.onSourceQuiescenceChanged(
+                        () -> runtimeStatusSource.signal(RUNTIME_STATUS_SOURCE));
+            }
+
+            construction
+                    .callServicesPublication()
+                    .accept(
+                            () -> {
+                                if (!closeGate.publish(
+                                        () -> {
+                                            this.callServices =
+                                                    new CallServices(
+                                                            channels, spots, actors, actorClient);
+                                            pendingCalls.clear();
+                                        }))
+                                    throw new IllegalStateException(
+                                            "framework runtime closed during startup");
+                            });
+            if (closeGate.closing())
+                throw new IllegalStateException("framework runtime closed during startup");
+            if (this.streams != null) {
+                this.streams.start();
+                for (var streamNode : this.registration.streamNodes()) {
+                    String endpoint = this.streams.boundListenerEndpoint(streamNode);
+                    if (endpoint != null) {
+                        channels.recordListener(
+                                ZLinkListenerKind.STREAM, streamNode.name(), endpoint);
+                    }
+                }
+            }
+
+            if (locationStores != null
+                    && locationStores.unifiedStore()
+                            instanceof
+                            systems.zlink.framework.runtime.internal.locations
+                                            .ZLinkProviderLocationRepository
+                                    repository) {
+                objectCapacityMetricRegistration = repository.registerCapacityObservation();
+            }
+            if (locationRuntime != null) {
+                var scopes = new ArrayList<Map<String, String>>();
+                registration
+                        .meshNodes()
+                        .forEach(
+                                node ->
+                                        scopes.add(
+                                                Map.of(
+                                                        ZLinkRuntimeMetrics.Tag.SCOPE_KIND.wire(),
+                                                        "mesh",
+                                                        ZLinkRuntimeMetrics.Tag.SCOPE_NAME.wire(),
+                                                        node.meshName())));
+                registration
+                        .channels()
+                        .forEach(
+                                channel ->
+                                        scopes.add(
+                                                Map.of(
+                                                        ZLinkRuntimeMetrics.Tag.SCOPE_KIND.wire(),
+                                                        "channel",
+                                                        ZLinkRuntimeMetrics.Tag.SCOPE_NAME.wire(),
+                                                        channel.name())));
+                locationRuntime.metricScopes(scopes);
+            }
+            for (var configured : registration.meshNodes()) {
+                var tags = Map.of(ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(), configured.meshName());
+                activationMetricRegistrations.add(
+                        ZLinkRuntimeMetrics.registerObservable(
+                                ZLinkRuntimeMetrics.Metric.OBJECT_ACTIVATION_ACTIVE,
+                                tags,
+                                () -> activationConcurrency(configured).active()));
+                activationMetricRegistrations.add(
+                        ZLinkRuntimeMetrics.registerObservable(
+                                ZLinkRuntimeMetrics.Metric.OBJECT_ACTIVATION_LIMIT,
+                                tags,
+                                configured::activationConcurrency));
+            }
+            this.hostStateMetricRegistration =
+                    ZLinkRuntimeMetrics.registerHostState(
+                            () -> ZLinkRuntimeMetrics.wire(runtimeState.get()));
+            this.capacityMetricRegistration =
+                    ZLinkRuntimeMetrics.registerHostCapacity(this::capacityStatus);
+            this.applicationJobQueuePressureMetricRegistration =
+                    ZLinkRuntimeMetrics.registerApplicationJobQueuePressure(
+                            applicationJobQueue::pressureMetrics);
+            this.meshTopologyMetricRegistration =
+                    ZLinkRuntimeMetrics.registerMeshTopology(this::meshTopologyMetrics);
+            if (publishesDescriptors()) {
+                this.locationRuntime.setOwnerLeaseRecoveryListener(
+                        ownerLeaseWork(() -> startOwnerBoundRuntime(spotSubsystem)));
+            }
+            locationSubsystem
+                    .startup()
+                    .whenComplete(
+                            (ignored, failure) -> {
+                                if (failure != null) {
+                                    failStartup(failure);
+                                } else if (this.locationRuntime != null
+                                        && !this.locationRuntime.isOwnerAdmissionOpen()) {
+                                    startupReady.complete(null);
+                                } else if (publishesDescriptors()) {
+                                    this.locationRuntime
+                                            .publishWithStartupOwnerLease()
+                                            .whenComplete(
+                                                    (published, publicationFailure) ->
+                                                            startupReady.complete(null));
+                                } else {
+                                    startOwnerBoundRuntime(spotSubsystem);
+                                }
+                            });
+        } catch (RuntimeException | Error failure) {
+            for (int index = pendingCalls.size() - 1; index >= 0; index--) {
+                try {
+                    pendingCalls.get(index).close();
+                } catch (Exception closeFailure) {
+                    failure.addSuppressed(closeFailure);
+                }
+            }
+            throw failure;
         }
-        if (locationRuntime != null) {
-            var scopes = new ArrayList<Map<String, String>>();
-            registration
-                    .meshNodes()
-                    .forEach(
-                            node ->
-                                    scopes.add(
-                                            Map.of(
-                                                    ZLinkRuntimeMetrics.Tag.SCOPE_KIND.wire(),
-                                                    "mesh",
-                                                    ZLinkRuntimeMetrics.Tag.SCOPE_NAME.wire(),
-                                                    node.meshName())));
-            registration
-                    .channels()
-                    .forEach(
-                            channel ->
-                                    scopes.add(
-                                            Map.of(
-                                                    ZLinkRuntimeMetrics.Tag.SCOPE_KIND.wire(),
-                                                    "channel",
-                                                    ZLinkRuntimeMetrics.Tag.SCOPE_NAME.wire(),
-                                                    channel.name())));
-            locationRuntime.metricScopes(scopes);
-        }
-        for (var configured : registration.meshNodes()) {
-            var tags = Map.of(ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(), configured.meshName());
-            activationMetricRegistrations.add(
-                    ZLinkRuntimeMetrics.registerObservable(
-                            ZLinkRuntimeMetrics.Metric.OBJECT_ACTIVATION_ACTIVE,
-                            tags,
-                            () -> activationConcurrency(configured).active()));
-            activationMetricRegistrations.add(
-                    ZLinkRuntimeMetrics.registerObservable(
-                            ZLinkRuntimeMetrics.Metric.OBJECT_ACTIVATION_LIMIT,
-                            tags,
-                            configured::activationConcurrency));
-        }
-        this.hostStateMetricRegistration =
-                ZLinkRuntimeMetrics.registerHostState(
-                        () -> ZLinkRuntimeMetrics.wire(runtimeState.get()));
-        this.capacityMetricRegistration =
-                ZLinkRuntimeMetrics.registerHostCapacity(this::capacityStatus);
-        this.applicationJobQueuePressureMetricRegistration =
-                ZLinkRuntimeMetrics.registerApplicationJobQueuePressure(
-                        applicationJobQueue::pressureMetrics);
-        this.meshTopologyMetricRegistration =
-                ZLinkRuntimeMetrics.registerMeshTopology(this::meshTopologyMetrics);
-        if (publishesDescriptors()) {
-            this.locationRuntime.setOwnerLeaseRecoveryListener(
-                    ownerLeaseWork(() -> startOwnerBoundRuntime(spotSubsystem)));
-        }
-        locationSubsystem
-                .startup()
-                .whenComplete(
-                        (ignored, failure) -> {
-                            if (failure != null) {
-                                failStartup(failure);
-                            } else if (this.locationRuntime != null
-                                    && !this.locationRuntime.isOwnerAdmissionOpen()) {
-                                startupReady.complete(null);
-                            } else if (publishesDescriptors()) {
-                                this.locationRuntime
-                                        .publishWithStartupOwnerLease()
-                                        .whenComplete(
-                                                (published, publicationFailure) ->
-                                                        startupReady.complete(null));
-                            } else {
-                                startOwnerBoundRuntime(spotSubsystem);
-                            }
-                        });
     }
 
     /** Runs the shutdown routine over what a failed start opened; its failures stay attached. */
@@ -638,7 +770,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     private void recordMeshListener(String meshName, ZLinkInternalMeshNode node) {
-        channels.recordListener(ZLinkListenerKind.ROUTE_MESH, meshName, node.advertisedEndpoint());
+        channels()
+                .recordListener(ZLinkListenerKind.ROUTE_MESH, meshName, node.advertisedEndpoint());
     }
 
     private boolean publishesDescriptors() {
@@ -790,9 +923,9 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                 ZLinkFrameworkAutoConnectSubsystem.start(
                                         this.locationAutoConnectHost,
                                         this.registration,
-                                        this.channels,
+                                        channels(),
                                         this.meshNodes,
-                                        this.spots));
+                                        spots()));
     }
 
     static ZLinkFrameworkRuntime start(
@@ -841,7 +974,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         return new ZLinkFrameworkRuntime(options, eventDispatcher);
     }
 
-    private static ZLinkFrameworkRuntime prepareHost(
+    static ZLinkFrameworkRuntime prepareHost(
             DefaultZLinkFrameworkOptions options,
             ZLinkRuntimeEventDispatcher eventDispatcher,
             ZLinkFrameworkRuntimeConstruction construction) {
@@ -853,12 +986,22 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             DefaultZLinkFrameworkOptions options,
             ZLinkBackendAdapterProvider backendFactory,
             ZLinkHandlerActivator handlerFactory) {
+        startPreparedHost(
+                runtime,
+                options,
+                backendFactory,
+                handlerFactory,
+                ZLinkFrameworkRuntimeConstruction.defaults());
+    }
+
+    static void startPreparedHost(
+            ZLinkFrameworkRuntime runtime,
+            DefaultZLinkFrameworkOptions options,
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkFrameworkRuntimeConstruction construction) {
         try {
-            runtime.startComponents(
-                    options,
-                    backendFactory,
-                    handlerFactory,
-                    ZLinkFrameworkRuntimeConstruction.defaults());
+            runtime.startComponents(options, backendFactory, handlerFactory, construction);
             runtime.startupCompletion().toCompletableFuture().join();
         } catch (RuntimeException | Error failure) {
             runtime.rollBackStartup(failure);
@@ -899,11 +1042,11 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     public ZLinkClient client() {
-        return channels;
+        return channelCalls;
     }
 
     public ZLinkChannelRuntimeOptions channelRuntimeOptions() {
-        return channels;
+        return channels();
     }
 
     // Runtime toggle (ZLinkMessageFlowControl): flip the shared live-mode cell so every
@@ -923,11 +1066,11 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     public ZLinkFanoutClient fanout() {
-        return channels;
+        return channelCalls;
     }
 
     public ZLinkRouteClient route() {
-        return channels;
+        return channelCalls;
     }
 
     public ZLinkRouteMeshRuntime routeMeshRuntime() {
@@ -943,11 +1086,11 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     public ZLinkClientServerRuntime clientServerRuntime() {
-        return channels.clientServerRuntime();
+        return channels().clientServerRuntime();
     }
 
     public ZLinkFanoutRuntime fanoutRuntime() {
-        return channels.fanoutRuntime();
+        return channels().fanoutRuntime();
     }
 
     /**
@@ -956,28 +1099,19 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
      */
     public ZLinkListenerStatus listenerStatus(ZLinkListenerKind kind, String name) {
         return new ZLinkListenerStatus(
-                kind, name, channels.listenerEndpoint(kind, name), Instant.now());
+                kind, name, channels().listenerEndpoint(kind, name), Instant.now());
     }
 
     public ZLinkSpotManager spotManager() {
-        if (spots == null) {
-            throw new ZLinkConfigurationException("Spot runtime is not configured");
-        }
-        return spots;
+        return spotManagerCalls;
     }
 
     public ZLinkSpotOutbound spotOutbound() {
-        if (spots == null) {
-            throw new ZLinkConfigurationException("Spot runtime is not configured");
-        }
-        return spots.outbound();
+        return outboundCalls;
     }
 
     public ZLinkSpotPublisherClient spotPublisherClient() {
-        if (spots == null) {
-            throw new ZLinkConfigurationException("Spot runtime is not configured");
-        }
-        return spots.publisherClient();
+        return publisherCalls;
     }
 
     ZLinkInternalMeshNode monitoringMeshNode(String meshName) {
@@ -1030,10 +1164,10 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
      */
     private systems.zlink.framework.locations.ZLinkActivationConcurrency activationConcurrency(
             MeshNodeRegistration configured) {
-        return spots == null
+        return spots() == null
                 ? new systems.zlink.framework.locations.ZLinkActivationConcurrency(
                         0, configured.activationConcurrency())
-                : spots.activationAdmission(configured.meshName()).snapshot();
+                : spots().activationAdmission(configured.meshName()).snapshot();
     }
 
     systems.zlink.framework.locations.ZLinkActivationConcurrency activationConcurrency(
@@ -1050,12 +1184,12 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
 
     /** Actors activated on the named MeshNode in this process (runtime monitoring §5). */
     public int activeActorCount(String meshName) {
-        return actors == null ? 0 : actors.activeActorCount(meshName);
+        return actors() == null ? 0 : actors().activeActorCount(meshName);
     }
 
     /** Spots activated on the named MeshNode in this process (runtime monitoring §5). */
     public int activeSpotCount(String meshName) {
-        return spots == null ? 0 : spots.activeSpotCount(meshName);
+        return spots() == null ? 0 : spots().activeSpotCount(meshName);
     }
 
     public List<String> monitoringMeshNodeChannelNames(String meshName) {
@@ -1077,7 +1211,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 continue;
             }
             Set<RoutingId> configuredPeers = new HashSet<>(node.configuredPeerIds());
-            List<ZLinkRuntimeMetrics.MeshChannelTopologyMetrics> channels =
+            List<ZLinkRuntimeMetrics.MeshChannelTopologyMetrics> channelTopology =
                     monitoringMeshNodeChannelNames(configured.meshName()).stream()
                             .distinct()
                             .sorted()
@@ -1097,7 +1231,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                             configuredPeers.size(),
                             configuredPeers.stream().filter(node::isPeerTransportConnected).count(),
                             node.readyPeerCount(),
-                            channels));
+                            channelTopology));
         }
         return List.copyOf(result);
     }
@@ -1110,19 +1244,16 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     public boolean stopSpotRuntime() {
-        if (spots == null || !spotRuntimeStopped.compareAndSet(false, true)) {
+        if (spots() == null || !spotRuntimeStopped.compareAndSet(false, true)) {
             return false;
         }
-        spots.beginClose();
-        spots.closeAsync();
+        spots().beginClose();
+        spots().closeAsync();
         return true;
     }
 
     public ZLinkActorManager actorManager() {
-        if (actors == null) {
-            throw new ZLinkConfigurationException("Actor runtime is not configured");
-        }
-        return actors;
+        return actorManagerCalls;
     }
 
     public ZLinkActorDirectory actorDirectory() {
@@ -1134,11 +1265,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     public ZLinkActorClient actorClient() {
-        if (actorClient == null) {
-            throw new ZLinkConfigurationException(
-                    "Actor client requires a SPOT node and location store");
-        }
-        return actorClient;
+        return actorCalls;
     }
 
     public SpotHandleResolver spotHandleResolver() {
@@ -1494,11 +1621,11 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     private CompletionStage<Void> beginRelocationAdmission() {
-        if (spots != null) {
-            spots.beginRelocation();
+        if (spots() != null) {
+            spots().beginRelocation();
         }
-        if (actors != null) {
-            actors.beginRelocation();
+        if (actors() != null) {
+            actors().beginRelocation();
         }
         return publishRuntimeStateAwaited(ZLinkFrameworkRuntimeState.RELOCATING);
     }
@@ -1628,11 +1755,11 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         }
         lastRelocationResult.set(result);
         if (state == ZLinkFrameworkRuntimeState.SERVING) {
-            if (spots != null) {
-                spots.cancelRelocation();
+            if (spots() != null) {
+                spots().cancelRelocation();
             }
-            if (actors != null) {
-                actors.cancelRelocation();
+            if (actors() != null) {
+                actors().cancelRelocation();
             }
         }
         publishRuntimeState(
@@ -1834,7 +1961,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         //  Spec 30 §5.1: a host with no unit to move needs no target, so the
         //  target readiness checks below apply only to a host that owns a unit.
         if (!systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireRuntime.hasRelocationUnits(
-                spots, actors)) {
+                spots(), actors())) {
             return CompletableFuture.completedFuture(ZLinkTerminationReason.NONE);
         }
         return automaticRouteMeshRetirePreflight()
@@ -1847,8 +1974,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
 
     private CompletionStage<ZLinkTerminationReason> retireWorkloadPreflight() {
         boolean hasActiveRelocatableWork =
-                (actors != null && !actors.activeActorTypes().isEmpty())
-                        || (spots != null && spots.activeUserSpotCount() > 0);
+                (actors() != null && !actors().activeActorTypes().isEmpty())
+                        || (spots() != null && spots().activeUserSpotCount() > 0);
         if (hasActiveRelocatableWork) {
             boolean relocationPolicyConfigured =
                     registration.meshNodes().stream()
@@ -1863,17 +1990,17 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 return CompletableFuture.completedFuture(ZLinkTerminationReason.STATE_INCOMPATIBLE);
             }
         }
-        if (actors == null || actors.activeActorTypes().isEmpty()) {
+        if (actors() == null || actors().activeActorTypes().isEmpty()) {
             return CompletableFuture.completedFuture(ZLinkTerminationReason.NONE);
         }
-        if (storeLocationResolvers == null || spots == null) {
+        if (storeLocationResolvers == null || spots() == null) {
             return CompletableFuture.completedFuture(ZLinkTerminationReason.STORE_UNAVAILABLE);
         }
         Set<RoutingId> localNodes = new HashSet<>();
-        spots.nodesByName().values().forEach(node -> localNodes.add(node.routingId()));
+        spots().nodesByName().values().forEach(node -> localNodes.add(node.routingId()));
         CompletionStage<ZLinkTerminationReason> result =
                 CompletableFuture.completedFuture(ZLinkTerminationReason.NONE);
-        for (String actorType : actors.activeActorTypes().stream().sorted().toList()) {
+        for (String actorType : actors().activeActorTypes().stream().sorted().toList()) {
             result =
                     result.thenCompose(
                             current -> {
@@ -2223,8 +2350,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         }
         runtimeStatusSource.signal(RUNTIME_STATUS_SOURCE);
         routeMeshRuntime.signalAll();
-        if (channels != null) {
-            channels.signalTopologyStatus();
+        if (channels() != null) {
+            channels().signalTopologyStatus();
         }
     }
 
@@ -2303,11 +2430,11 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         }
         startupReady.completeExceptionally(
                 new IllegalStateException("Framework runtime is shutting down"));
-        if (spots != null && !spotRuntimeStopped.get()) {
-            spots.beginClose();
+        if (spots() != null && !spotRuntimeStopped.get()) {
+            spots().beginClose();
         }
-        if (channels != null) {
-            channels.beginClose();
+        if (channels() != null) {
+            channels().beginClose();
         }
         ZLinkFrameworkShutdown shutdown = new ZLinkFrameworkShutdown(terminationDeadline.get());
         // Close completion admission after accepted runtime components have
@@ -2317,9 +2444,9 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 "executor_close",
                 () -> {
                     CompletionStage<Void> applicationCleanup =
-                            spots == null
+                            spots() == null
                                     ? CompletableFuture.completedFuture(null)
-                                    : spots.applicationCleanup();
+                                    : spots().applicationCleanup();
                     CompletionStage<Void> executorClose =
                             applicationCleanup
                                     .handle((ignored, failure) -> null)
@@ -2372,25 +2499,25 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                 }));
             }
         }
-        if (spots != null) {
+        if (spots() != null) {
             shutdown.deferCloseStage(
                     "spot_close",
                     () -> {
                         if (spotRuntimeStopped.compareAndSet(false, true)) {
-                            return spots.closeAsync(forcedDrain);
+                            return spots().closeAsync(forcedDrain);
                         }
                         return CompletableFuture.completedFuture(null);
                     });
         }
-        if (channels != null) {
+        if (channels() != null) {
             shutdown.deferCloseStage(
-                    "channel_close", () -> channels.closeAsync(terminationDeadline.get()));
+                    "channel_close", () -> channels().closeAsync(terminationDeadline.get()));
         }
         if (locationAutoConnectHost != null) {
             shutdown.deferCloseStage("auto_connect_stop", locationAutoConnectHost::stop);
         }
-        if (actors != null) {
-            shutdown.deferCloseStage("instance_close", actors::closeAsync);
+        if (actors() != null) {
+            shutdown.deferCloseStage("instance_close", actors()::closeAsync);
         }
         if (streams != null) {
             shutdown.deferCloseStage("stream_close", streams::closeAsync);
@@ -2403,8 +2530,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         return shutdown.closeAsync()
                 .whenComplete(
                         (ignored, failure) -> {
-                            if (channels != null) {
-                                channels.clearListenerRecords();
+                            if (channels() != null) {
+                                channels().clearListenerRecords();
                             }
                             if (!drainStarted.get() && failure == null) {
                                 drained.complete(new InternalDrained());
@@ -2444,11 +2571,11 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 if (streams != null) {
                     streams.beginDrain();
                 }
-                if (spots != null) {
-                    spots.beginDrain().exceptionally(error -> null);
+                if (spots() != null) {
+                    spots().beginDrain().exceptionally(error -> null);
                 }
-                if (actors != null) {
-                    actors.beginDrain();
+                if (actors() != null) {
+                    actors().beginDrain();
                 }
                 publishRuntimeState(ZLinkFrameworkRuntimeState.DRAINING);
                 runDrain(acceptedTargetRelocations);
@@ -2514,18 +2641,18 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                             barrierStep ->
                                                     traceDrainStage(
                                                             "spot",
-                                                            spots == null
+                                                            spots() == null
                                                                     ? CompletableFuture
                                                                             .completedFuture(null)
-                                                                    : spots.awaitDrainBarrier()))
+                                                                    : spots().awaitDrainBarrier()))
                                     .thenCompose(
                                             barrierStep ->
                                                     traceDrainStage(
                                                             "actor",
-                                                            actors == null
+                                                            actors() == null
                                                                     ? CompletableFuture
                                                                             .completedFuture(null)
-                                                                    : actors.awaitDrainBarrier()))
+                                                                    : actors().awaitDrainBarrier()))
                                     .thenCompose(
                                             barrierStep ->
                                                     traceDrainStage(
@@ -2560,7 +2687,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                 streamIgnored ->
                                                         traceDrainStage(
                                                                 "spot_closing",
-                                                                spots == null
+                                                                spots() == null
                                                                         ? CompletableFuture
                                                                                 .completedFuture(
                                                                                         null)
@@ -2568,8 +2695,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                                                 .atStage(
                                                                                         "spot_closing",
                                                                                         () ->
-                                                                                                spots
-                                                                                                        .notifyClosing(
+                                                                                                spots().notifyClosing(
                                                                                                                 Optional
                                                                                                                         .ofNullable(
                                                                                                                                 terminationDeadline
@@ -2582,21 +2708,21 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                 closingIgnored ->
                                                         traceDrainStage(
                                                                 "actor_close",
-                                                                actors == null
+                                                                actors() == null
                                                                         ? CompletableFuture
                                                                                 .completedFuture(
                                                                                         null)
                                                                         : ZLinkFrameworkShutdown
                                                                                 .atStage(
                                                                                         "instance_close",
-                                                                                        actors
+                                                                                        actors()
                                                                                                 ::closeAsync)));
                                 CompletionStage<Void> spotDrain =
                                         actorShutdown.thenCompose(
                                                 streamIgnored ->
                                                         traceDrainStage(
                                                                 "spot_close",
-                                                                spots == null
+                                                                spots() == null
                                                                         ? CompletableFuture
                                                                                 .completedFuture(
                                                                                         null)
@@ -2604,8 +2730,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                                                 .atStage(
                                                                                         "spot_close",
                                                                                         () ->
-                                                                                                spots
-                                                                                                        .continueDrain(
+                                                                                                spots().continueDrain(
                                                                                                                 systems
                                                                                                                         .zlink
                                                                                                                         .framework
