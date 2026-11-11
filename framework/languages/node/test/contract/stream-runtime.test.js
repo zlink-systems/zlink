@@ -7675,11 +7675,12 @@ test('service-wire relocation replaces a learned source packet route before the 
     boundSession: targetBinding,
     remoteBoundSessionTarget: targetBinding
   };
-  const { host: targetHost, relay: targetHostRelay , meshRuntime: targetHostMesh } = createRelayMeshHost({
+  const { host: targetHost, relay: targetHostRelay , meshRuntime: targetHostMesh, admission: targetAdmission } = createRelayMeshHost({
     registration: framework.createFrameworkRegistration({
       routeChannels: [{ routerChannelId: 'play.route' }]
     })
   });
+  targetAdmission.register('play.route');
   Object.assign(targetHostMesh, {
     async dispatchEntryActorPacket(origin, actorId, parts, response, bound, ref) {
       const result = await targetHost.entryActorRuntime.routePacket(actorId, parts, response, bound, ref, origin);
