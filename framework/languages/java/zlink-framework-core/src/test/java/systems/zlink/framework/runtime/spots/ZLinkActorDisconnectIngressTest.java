@@ -58,7 +58,9 @@ final class ZLinkActorDisconnectIngressTest {
                     .submit()
                     .toCompletableFuture()
                     .get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            var spots = (ZLinkSpotRuntime) runtime.spotManager();
+            var spots =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            runtime);
             var actor = spots.actorSessions().localActor(ACTOR_ID).orElseThrow();
             var entry = (Entry) spots.localActorSpotSurface(actor);
             entry.release.complete(null);
@@ -186,7 +188,9 @@ final class ZLinkActorDisconnectIngressTest {
                     .submit()
                     .toCompletableFuture()
                     .get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            var spots = (ZLinkSpotRuntime) runtime.spotManager();
+            var spots =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            runtime);
             var actor = spots.actorSessions().localActor(ACTOR_ID).orElseThrow();
             var entry = (Entry) spots.localActorSpotSurface(actor);
             var activation = spots.entrySpotActivationFor(entry.context().spotId());
@@ -264,7 +268,9 @@ final class ZLinkActorDisconnectIngressTest {
                     .submit()
                     .toCompletableFuture()
                     .get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            var spots = (ZLinkSpotRuntime) runtime.spotManager();
+            var spots =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            runtime);
             var actor = spots.actorSessions().localActor(ACTOR_ID).orElseThrow();
             var entry = (Entry) spots.localActorSpotSurface(actor);
             entry.release.complete(null);
@@ -383,7 +389,9 @@ final class ZLinkActorDisconnectIngressTest {
                     .submit()
                     .toCompletableFuture()
                     .get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            var spots = (ZLinkSpotRuntime) runtime.spotManager();
+            var spots =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            runtime);
             var actors = spots.actorSessions().runtime();
             var actor = spots.actorSessions().localActor(ACTOR_ID).orElseThrow();
             var entry = (Entry) spots.localActorSpotSurface(actor);

@@ -58,7 +58,9 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
         var registration = options.registration();
         var nodeRegistration = registration.meshNodes().getFirst();
         try (ZLinkFrameworkRuntime host = ZLinkFrameworkRuntimeTestAccess.start(options)) {
-            ZLinkSpotRuntime runtime = (ZLinkSpotRuntime) host.spotManager();
+            ZLinkSpotRuntime runtime =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            host);
             var created =
                     host.actorManager()
                             .create("actor-a", ACTOR_TYPE)
@@ -230,7 +232,9 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
         var registration = options.registration();
         var nodeRegistration = registration.meshNodes().getFirst();
         try (ZLinkFrameworkRuntime host = ZLinkFrameworkRuntimeTestAccess.start(options)) {
-            ZLinkSpotRuntime runtime = (ZLinkSpotRuntime) host.spotManager();
+            ZLinkSpotRuntime runtime =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            host);
             assertInstanceOf(
                     ZLinkActorCreateResult.Created.class,
                     host.actorManager()
@@ -330,7 +334,9 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
         var registration = options.registration();
         var nodeRegistration = registration.meshNodes().getFirst();
         try (ZLinkFrameworkRuntime host = ZLinkFrameworkRuntimeTestAccess.start(options)) {
-            ZLinkSpotRuntime runtime = (ZLinkSpotRuntime) host.spotManager();
+            ZLinkSpotRuntime runtime =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            host);
             assertInstanceOf(
                     ZLinkActorCreateResult.Created.class,
                     host.actorManager()

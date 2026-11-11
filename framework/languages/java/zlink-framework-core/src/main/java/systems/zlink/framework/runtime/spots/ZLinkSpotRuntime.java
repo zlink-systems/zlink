@@ -133,13 +133,14 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         implements ZLinkSpotManager, AutoCloseable {
+    private final ZLinkSpotManagerCalls callFactories = new ZLinkSpotManagerCalls(() -> this);
+
     public static Set<Class<?>> prepareConstruction(
             ZLinkFrameworkRegistration registration, ZLinkHandlerActivator handlerFactory) {
         return ZLinkSpotActivationFactory.prepareConstruction(registration, handlerFactory);
@@ -1258,16 +1259,13 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     @Override
     public ZLinkSpotCreateCall create(String spotType) {
         rejectAfterRelocationReady("User Spot create");
-        return new CreateCall(requireStableType(spotType));
+        return callFactories.create(spotType);
     }
 
     @Override
     public ZLinkSpotGetOrCreateCall getOrCreate(String spotId, String spotType) {
         rejectAfterRelocationReady("User Spot getOrCreate");
-        return new GetOrCreateCall(
-                systems.zlink.framework.runtime.internal.spots.ZLinkSpotIdValidator
-                        .requireCallerAssignable(spotId),
-                requireStableType(spotType));
+        return callFactories.getOrCreate(spotId, spotType);
     }
 
     @Override
@@ -1414,12 +1412,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return startedAt.plus(defaultRequestTimeout);
     }
 
-    private static void rejectAfterRelocationReady(String operation) {
+    static void rejectAfterRelocationReady(String operation) {
         systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                 .rejectAfterRelocationReady(operation);
     }
 
-    private CompletionStage<ZLinkSpotCreateResult> submitUserSpot(
+    CompletionStage<ZLinkSpotCreateResult> submitUserSpot(
             String requestedId,
             String stableType,
             String meshName,
@@ -2214,7 +2212,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return userSpotLocationStore;
     }
 
-    private static String requireStableType(String value) {
+    static String requireStableType(String value) {
         if (value == null
                 || value.isBlank()
                 || value.getBytes(StandardCharsets.UTF_8).length > 255
@@ -2229,137 +2227,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             return MessageDigest.getInstance("SHA-256").digest(value);
         } catch (NoSuchAlgorithmException impossible) {
             throw new AssertionError(impossible);
-        }
-    }
-
-    private abstract class UserSpotCall {
-        final String stableType;
-        String meshName;
-        ZLinkMessage request = ZLinkMessage.empty();
-        boolean requestSet;
-        Duration timeout;
-        final AtomicBoolean submitted = new AtomicBoolean();
-
-        UserSpotCall(String stableType) {
-            this.stableType = stableType;
-        }
-
-        void setMesh(String value) {
-            if (meshName != null) {
-                throw new IllegalStateException("inMesh was already set");
-            }
-            meshName = requireStableType(value);
-        }
-
-        void setRequest(ZLinkMessage value) {
-            if (requestSet) {
-                throw new IllegalStateException("request was already set");
-            }
-            request = Objects.requireNonNull(value, "request");
-            requestSet = true;
-        }
-
-        void setTimeout(Duration value) {
-            if (timeout != null) {
-                throw new IllegalStateException("timeout was already set");
-            }
-            if (value == null || value.isZero() || value.isNegative()) {
-                throw new IllegalArgumentException("timeout must be positive");
-            }
-            timeout = value;
-        }
-
-        CompletionStage<ZLinkSpotCreateResult> submit(String spotId, boolean getOrCreate) {
-            if (!submitted.compareAndSet(false, true)) {
-                return CompletableFuture.failedFuture(
-                        new IllegalStateException("User Spot call was already submitted"));
-            }
-            return submitUserSpot(spotId, stableType, meshName, request, timeout, getOrCreate);
-        }
-    }
-
-    private final class CreateCall extends UserSpotCall implements ZLinkSpotCreateCall {
-        CreateCall(String stableType) {
-            super(stableType);
-        }
-
-        @Override
-        public CreateCall inMesh(String value) {
-            setMesh(value);
-            return this;
-        }
-
-        @Override
-        public CreateCall request(Object value) {
-            return request(ZLinkMessage.of(value));
-        }
-
-        @Override
-        public CreateCall request(ZLinkMessage value) {
-            setRequest(value);
-            return this;
-        }
-
-        @Override
-        public CreateCall timeout(Duration value) {
-            setTimeout(value);
-            return this;
-        }
-
-        @Override
-        public CompletionStage<ZLinkSpotCreateResult> submit() {
-            return submit(null, false);
-        }
-
-        @Override
-        public CompletionStage<ZLinkSpotCreateResult> yield() {
-            systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
-                    .requireYieldAllowed("Spot creation");
-            return ZLinkSerialExecutionQueue.yieldCurrent(submit());
-        }
-    }
-
-    private final class GetOrCreateCall extends UserSpotCall implements ZLinkSpotGetOrCreateCall {
-        private final String spotId;
-
-        GetOrCreateCall(String spotId, String stableType) {
-            super(stableType);
-            this.spotId = spotId;
-        }
-
-        @Override
-        public GetOrCreateCall inMesh(String value) {
-            setMesh(value);
-            return this;
-        }
-
-        @Override
-        public GetOrCreateCall request(Object value) {
-            return request(ZLinkMessage.of(value));
-        }
-
-        @Override
-        public GetOrCreateCall request(ZLinkMessage value) {
-            setRequest(value);
-            return this;
-        }
-
-        @Override
-        public GetOrCreateCall timeout(Duration value) {
-            setTimeout(value);
-            return this;
-        }
-
-        @Override
-        public CompletionStage<ZLinkSpotCreateResult> submit() {
-            return submit(spotId, true);
-        }
-
-        @Override
-        public CompletionStage<ZLinkSpotCreateResult> yield() {
-            systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
-                    .requireYieldAllowed("Spot creation");
-            return ZLinkSerialExecutionQueue.yieldCurrent(submit());
         }
     }
 
@@ -4449,6 +4316,23 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.InstanceRoute
                     route,
             String stableType) {}
+
+    public void setCallAdmission(Runnable admission) {
+        directOutbound.setCallAdmission(admission);
+        publishers.setCallAdmission(admission);
+    }
+
+    public static ZLinkSpotPublisherClient publisherCalls(
+            java.util.function.Supplier<ZLinkSpotRuntime> access,
+            systems.zlink.framework.ZLinkMessageSerializer serializer,
+            java.util.function.Function<Class<?>, String> contentTypeResolver) {
+        return new ZLinkDefaultSpotPublisherClient(
+                () -> access.get().publishers, serializer, contentTypeResolver);
+    }
+
+    public static ZLinkSpotOutbound ambientOutbound() {
+        return new ZLinkSpotOutboundScope().ambient();
+    }
 
     public ZLinkSpotPublisherClient publisherClient() {
         return publishers.client();
