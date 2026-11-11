@@ -1056,7 +1056,7 @@ internal sealed record BenchCell(
             result.CpuPercent(result.ServerCpuSeconds),
             result.ServerWorkingSetMb,
             result.ClientCores,
-            result.ClientParallelismCeiling,
+            streams.count,
             "client_cores",
             result.PeakInFlight,
             result.RequestWindow,
@@ -1224,8 +1224,6 @@ internal sealed record BenchResult(
     public double EffectiveP99Micros => ServerP99Micros ?? P99Micros;
     public double ClientCores => ClientCpuSeconds / Math.Max(0.001, DurationSeconds);
     public long WarmupAbandoned { get; init; }
-    public int ClientParallelismCeiling => Environment.ProcessorCount;
-
     public IEnumerable<string> PerfLines
     {
         get
