@@ -3125,6 +3125,7 @@ public sealed class SessionActorCoordinatorTests
     private static ValueTask<Zlink.Framework.Runtime.Streams.ZLinkSessionBindingIdentity> ConfirmWithDescriptorFixture(
         ZLinkSessionContext context,
         ActorRef actor,
+        long started,
         CancellationToken cancellationToken
     )
     {
