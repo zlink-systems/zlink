@@ -37,6 +37,7 @@ _CELL_FIELDS = (
     "server_memory_mb",
     "client_cores",
     "client_parallelism_ceiling",
+    "execution_model_ceiling",
     "client_saturation_metric",
     "event_loop_utilization",
     "jvm_thread_cores",
@@ -191,6 +192,13 @@ def cells_from_cell_json(payload: dict[str, Any], run: str, source: str = "") ->
                 setattr(cell, name, raw[name])
         if role == "source" or "streams" in raw:
             cell.streams = _streams(raw.get("streams"), origin)
+        if cell.execution_model_ceiling is None:
+            if cell.client_saturation_metric == "event_loop_utilization":
+                # Legacy Node cells recorded the instrument and its 1.0 ceiling,
+                # but not this normalized model field.
+                cell.execution_model_ceiling = 1.0
+            elif cell.streams.get("count") is not None:
+                cell.execution_model_ceiling = float(cell.streams["count"])
         if "target_stats" in raw:
             cell.target_stats = _target_stats(raw.get("target_stats"), origin, key.pattern)
             cell.target_errors = int(cell.target_stats["errors"])
