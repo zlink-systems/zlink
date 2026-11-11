@@ -133,9 +133,9 @@ class ServerDrivenCellTest(unittest.TestCase):
 
     def test_trigger_fields_are_required_not_invented(self):
         payload = self._source()
-        for name in ("endpoint",):
+        for name in ("warmup", "endpoint"):
             del payload["cells"][0]["trigger"][name]
-        with self.assertRaisesRegex(ReportError, "endpoint"):
+        with self.assertRaisesRegex(ReportError, "warmup, endpoint"):
             cells_from_cell_json(payload, "run1", "results.json")
 
     def test_warmup_is_normalized_from_trigger_units_or_results_seconds(self):
@@ -147,8 +147,7 @@ class ServerDrivenCellTest(unittest.TestCase):
         self.assertEqual(cells_from_cell_json(payload, "run1")[0].warmup_seconds, 30.0)
         payload["metadata"]["warmupSeconds"] = "30"
         self.assertEqual(cells_from_cell_json(payload, "run1")[0].warmup_seconds, 30.0)
-        del payload["metadata"]["warmupSeconds"]
-        del payload["cells"][0]["trigger"]["warmup"]
+        payload["metadata"] = {"warmupUnit": "fortnights"}
         self.assertIsNone(cells_from_cell_json(payload, "run1")[0].warmup_seconds)
 
     def test_a_separate_target_record_is_not_input(self):
