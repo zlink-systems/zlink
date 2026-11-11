@@ -13,7 +13,6 @@ import statistics
 from dataclasses import dataclass, field
 
 from .model import (
-    CLIENT_SATURATION_FRACTION,
     G5_SPREAD_LIMIT_PERCENT,
     BINDING_JUDGEMENT,
     FRAMEWORK_JUDGEMENT,
@@ -22,6 +21,8 @@ from .model import (
     Cell,
     CellKey,
     RunSet,
+    client_saturated,
+    saturation_evaluated,
 )
 
 _MEDIAN_FIELDS = (
@@ -63,6 +64,7 @@ class Row:
     #: spec 5.1: the ceiling the client harness declared. Constant within a run,
     #: so it is carried rather than averaged.
     client_parallelism_ceiling: float | None = None
+    execution_model_ceiling: float | None = None
     #: FB-023 / FB-032 / FB-037: the instrument the harness declared for this row.
     #: Rows that name none are read as ``client_cores``, which is what every
     #: result predating the declaration meant.
@@ -119,25 +121,52 @@ class Row:
 
     @property
     def saturation_evaluated(self) -> bool:
-        return self.saturation_value is not None and bool(self.client_parallelism_ceiling)
+        return saturation_evaluated(
+            self.saturation_value,
+            self.client_parallelism_ceiling,
+            self.execution_model_ceiling,
+        )
 
     @property
     def client_saturated(self) -> bool:
-        """spec 5.1 on the row medians, against the declared ceiling.
+        """spec 5.1 on the row medians, against the declared or model ceiling.
 
         FB-023: which number this compares is chosen by the harness, not assumed
         here. Comparing process cores against Node's ceiling would mark every
         Node cell, because the binding's I/O threads are counted but run no user
         code.
         """
-        if not self.saturation_evaluated:
-            return False
-        return self.saturation_value >= CLIENT_SATURATION_FRACTION * self.client_parallelism_ceiling
+        return client_saturated(
+            self.saturation_value,
+            self.client_parallelism_ceiling,
+            self.execution_model_ceiling,
+        )
+
+    @property
+    def g6_excluded(self) -> bool:
+        return self.client_saturated and (
+            self.client_parallelism_ceiling is None
+            or self.execution_model_ceiling is None
+            or self.client_parallelism_ceiling < self.execution_model_ceiling
+        )
+
+    @property
+    def execution_model_ceiling_reached(self) -> bool:
+        return (
+            self.client_saturated
+            and self.client_parallelism_ceiling is not None
+            and self.execution_model_ceiling is not None
+            and self.client_parallelism_ceiling == self.execution_model_ceiling
+        )
 
     def saturation_text(self) -> str:
         if not self.saturation_evaluated:
             return "not judged"
-        return "**yes**" if self.client_saturated else "no"
+        if self.execution_model_ceiling_reached:
+            return "실행 모델 상한 도달"
+        if self.g6_excluded:
+            return "G6 제외"
+        return "no" if not self.client_saturated else "포화; 판정 유지"
 
     def g5_text(self) -> str:
         if self.spread_percent is None:
@@ -204,6 +233,8 @@ def build_row(run_set: RunSet, key: CellKey, min_runs_for_g5: int = 3) -> Row | 
     row.abandoned = max(abandoned) if abandoned else None
     ceilings = [c.client_parallelism_ceiling for c in cells if c.client_parallelism_ceiling]
     row.client_parallelism_ceiling = max(ceilings) if ceilings else None
+    model_ceilings = [c.execution_model_ceiling for c in cells if c.execution_model_ceiling]
+    row.execution_model_ceiling = max(model_ceilings) if model_ceilings else None
     metrics = {c.client_saturation_metric for c in cells if c.client_saturation_metric}
     if len(metrics) > 1:
         # Runs of one cell that declare different instruments cannot be compared
@@ -302,11 +333,16 @@ def _block_reason(role: str, row: Row | None, key: CellKey) -> str | None:
         return f"{role} {key} has {row.abandoned} abandoned request(s) (spec 5.2)"
     if row.errors:
         return f"{role} {key} has {row.errors} error(s) (spec 5.2)"
-    if row.client_saturated:
+    if row.g6_excluded:
+        if row.client_parallelism_ceiling is None:
+            return (
+                f"{role} {key} is client-saturated at {row.saturation_value:.2f} with "
+                "no declared client parallelism ceiling (spec 5.1, G6)"
+            )
         return (
             f"{role} {key} is client-saturated at {row.saturation_value:.2f} of "
             f"{row.client_parallelism_ceiling:g} declared {row.saturation_metric} "
-            f"(spec 5.1, G6)"
+            "(spec 5.1, G6)"
         )
     if row.send_server_counted is False:
         return f"{role} {key} throughput is client-counted, not server-counted (G3, FB-014)"

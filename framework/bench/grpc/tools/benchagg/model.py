@@ -69,6 +69,28 @@ SUPPLEMENTARY_LANGUAGES = ("kotlin",)
 CLIENT_SATURATION_FRACTION = 0.95
 
 
+def saturation_evaluated(
+    reading: float | None,
+    declared_ceiling: float | None,
+    execution_model_ceiling: float | None,
+) -> bool:
+    return reading is not None and bool(declared_ceiling or execution_model_ceiling)
+
+
+def client_saturated(
+    reading: float | None,
+    declared_ceiling: float | None,
+    execution_model_ceiling: float | None,
+) -> bool:
+    ceiling = declared_ceiling or execution_model_ceiling
+    return (
+        reading is not None
+        and saturation_evaluated(reading, declared_ceiling, execution_model_ceiling)
+        and ceiling is not None
+        and reading >= CLIENT_SATURATION_FRACTION * ceiling
+    )
+
+
 
 @dataclass(frozen=True, order=True)
 class CellKey:
@@ -125,6 +147,7 @@ class Cell:
     #: other.
     client_cores: float | None = None
     client_parallelism_ceiling: float | None = None
+    execution_model_ceiling: float | None = None
 
     #: FB-023: the saturation instrument this harness DECLARES, and its reading.
     #: Process cores are the right instrument only where user code runs on the
@@ -214,21 +237,25 @@ class Cell:
     @property
     def saturation_evaluated(self) -> bool:
         """Whether spec 5.1 could be applied at all to this cell."""
-        return self.saturation_value is not None and bool(self.client_parallelism_ceiling)
+        return saturation_evaluated(
+            self.saturation_value,
+            self.client_parallelism_ceiling,
+            self.execution_model_ceiling,
+        )
 
     @property
     def client_saturated(self) -> bool:
         """spec 5.1: the client runtime, not the transport, set this ceiling.
 
-        A cell that declares no ceiling is not saturated here -- it is simply not
-        judged, and ``saturation_evaluated`` says so. Treating an undeclared
-        ceiling as saturation would exclude every legacy result; treating it as
-        proof of headroom would be the error spec 5.1 exists to prevent, which is
-        why the unevaluated state is carried rather than collapsed either way.
+        When the driver declares no ceiling, the execution-model ceiling is used
+        to identify saturation; G6 then excludes that cell because the driver
+        did not establish its capacity.
         """
-        if not self.saturation_evaluated:
-            return False
-        return self.saturation_value >= CLIENT_SATURATION_FRACTION * self.client_parallelism_ceiling
+        return client_saturated(
+            self.saturation_value,
+            self.client_parallelism_ceiling,
+            self.execution_model_ceiling,
+        )
 
     @property
     def send_throughput_server_counted(self) -> bool | None:
