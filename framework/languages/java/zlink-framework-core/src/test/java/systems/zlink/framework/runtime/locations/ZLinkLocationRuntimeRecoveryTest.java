@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.locations;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -8,6 +9,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.sockets.RequestResult;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimConflict;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimResult;
@@ -19,11 +24,13 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReadRes
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseReleaseResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewStale;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.testing.ZLinkLocationStoreTestAdapter;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ForkJoinPool;
@@ -527,7 +534,7 @@ final class ZLinkLocationRuntimeRecoveryTest {
             runtime.start(RoutingId.from("node-a")).toCompletableFuture().join();
 
             assertFalse(runtime.ownerLeaseHealthy());
-            assertThrows(IllegalStateException.class, runtime::currentOwnerToken);
+            assertOwnerAdmissionClosed(runtime);
             assertEquals(1L, republished.getCount());
 
             store.available.set(true);
@@ -770,7 +777,7 @@ final class ZLinkLocationRuntimeRecoveryTest {
             assertEquals(1, store.readCount.get());
             assertEquals(1, store.releaseCount.get());
             assertFalse(runtime.ownerLeaseHealthy());
-            assertThrows(IllegalStateException.class, runtime::currentOwnerToken);
+            assertOwnerAdmissionClosed(runtime);
             assertEquals(0, store.heartbeatRenewals.get());
         }
     }
@@ -1376,5 +1383,18 @@ final class ZLinkLocationRuntimeRecoveryTest {
             Instant now = Instant.now();
             claim.complete(new ZLinkOwnerLeaseClaimed(token, now.plusSeconds(1), now));
         }
+    }
+
+    /** Spec 01-submit-and-completion: a runtime that takes no new admission fails ShuttingDown. */
+    private static void assertOwnerAdmissionClosed(ZLinkLocationRuntime runtime) {
+        ZLinkFrameworkException closed =
+                assertThrows(ZLinkFrameworkException.class, runtime::currentOwnerToken);
+        assertEquals(ZLinkFrameworkErrorKind.SHUTTING_DOWN, closed.kind());
+        assertArrayEquals(
+                new int[] {
+                    RequestResult.TERMINATED.value(),
+                    (int) ServiceWireConstants.FRAMEWORK_ERROR_NONE
+                },
+                ZLinkRequestFailureMapping.outgoing(new CompletionException(closed)));
     }
 }
