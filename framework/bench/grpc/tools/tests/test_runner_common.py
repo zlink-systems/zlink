@@ -73,11 +73,11 @@ settle_and_capture source target /dev/null allPhaseMessages
                                 env=base | {"PATTERNS": "bogus-pattern"}, capture_output=True)
         self.assertNotEqual(0, result.returncode)
 
-    def test_common_warmup_is_two_seconds(self):
+    def test_common_warmup_is_thirty_seconds(self):
         result = subprocess.run(["bash", "-c", 'source "$1"; bench_init c grpc-c request-serial 1024; printf "%s" "$WARMUP_SECONDS"',
                                  "_", str(COMMON)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0)
-        self.assertEqual(result.stdout, "2")
+        self.assertEqual(result.stdout, "30")
 
     def check_port(self, port):
         return subprocess.run(["bash", "-c", 'source "$1"; check_ports_free "$2" "$2"',

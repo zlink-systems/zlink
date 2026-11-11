@@ -122,6 +122,8 @@ class Cell:
     run_id: str | None = None
     cell_id: str | None = None
     trigger: dict[str, Any] = field(default_factory=dict)
+    #: Warmup duration normalized to seconds; missing is never inferred.
+    warmup_seconds: float | None = None
     streams: dict[str, Any] = field(default_factory=dict)
     submit_concurrency: int | None = None
     target_stats: dict[str, Any] = field(default_factory=dict)
