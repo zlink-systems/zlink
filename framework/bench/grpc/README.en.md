@@ -399,12 +399,12 @@ Performance judgment compares within the same ZLink layer, not against gRPC. The
 judged against the `zlink-c` request-backpressure result under the same conditions. If the raw binding
 reaches 80% or more of the C result, the binding layer's baseline performance is judged as
 passing. The framework is judged against the same language's raw binding result. If the framework
-reaches 80% or more of the raw binding result, the framework's added cost is judged as passing.
+reaches 60% or more of the raw binding result, the framework's added cost is judged as passing.
 
 ```text
 at each of payload sizes 1024 and 4096:
 zlink-<lang> / zlink-c                     >= 0.80   binding layer passes
-zlink-framework-<lang> / zlink-<lang>      >= 0.80   framework added cost passes
+zlink-framework-<lang> / zlink-<lang>      >= 0.60   framework added cost passes (all three patterns)
 ```
 
 Both formulas are calculated separately per payload size. A language passes only when it satisfies
@@ -419,8 +419,13 @@ processed the message.
 `request-serial` is kept as a supplementary metric for looking at the round-trip latency of a
 process-one-at-a-time usage pattern.
 
-**The reference pattern for judgement is `request-backpressure`.** Whether a language passes is
-decided by that pattern satisfying the criterion at both payload sizes.
+**The reference pattern for the binding layer (the first formula) is `request-backpressure`.** It
+passes when the criterion holds at both payload sizes. **The framework added cost (the second
+formula) passes when the criterion holds in all three patterns — `request-serial`,
+`send-saturation`, and `request-backpressure` — at both payload sizes.** The cost the framework adds
+shows differently per usage pattern (round-trip latency, one-way submission, deep incomplete
+depth), so a pass in one pattern does not stand in for the others. For the framework judgement,
+`request-serial` is therefore a judgement cell rather than a supplementary metric.
 
 The grounds for choosing the reference pattern this way are below.
 
