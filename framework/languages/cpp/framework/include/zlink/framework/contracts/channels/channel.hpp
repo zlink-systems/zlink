@@ -456,7 +456,7 @@ class message_bus_t
                                                   : "channel request preflight failed"));
                   }
               }
-              auto bus = message_bus_t (state);
+              auto bus = message_bus_t (state, {});
               const auto effective_timeout = timeout > std::chrono::milliseconds::zero ()
                                                ? timeout
                                                : bus.default_request_timeout (channel_name);
@@ -475,17 +475,11 @@ class message_bus_t
         auto state = _state;
         auto preflight = _preflight;
         auto message_value = std::make_shared<TMessage> (std::move (message));
-        return send_call_t (
+        auto call = send_call_t (
           detail::message_name<TMessage> (),
-          [state, preflight = std::move (preflight), channel_name = std::move (channel_name),
-           message_value] (const std::string &packet_name,
-                           const send_call_t::metadata_map_t &metadata) {
-              if (preflight) {
-                  const auto admitted = preflight ();
-                  if (!admitted)
-                      return task_t<void> (admitted);
-              }
-              return message_bus_t (state).submit_send (
+          [state, channel_name = std::move (channel_name), message_value] (
+            const std::string &packet_name, const send_call_t::metadata_map_t &metadata) {
+              return message_bus_t (state, {}).submit_send (
                 channel_name, packet_name, std::type_index (typeid (TMessage)),
                 [message_value] (serializer_registry_t &serializers) {
                     return serializers.template get<TMessage> ().serialize_with_content_type (
@@ -493,6 +487,8 @@ class message_bus_t
                 },
                 metadata);
           });
+        call._preflight = std::move (preflight);
+        return call;
     }
 
     template <typename TEvent>
@@ -501,21 +497,12 @@ class message_bus_t
         detail::require_public_fanout_topic (topic);
         auto preflight = _preflight;
         auto event_value = std::make_shared<TEvent> (std::move (event));
-        return send_call_t (
+        auto call = send_call_t (
           detail::message_name<TEvent> (),
-          [state = _state, preflight = std::move (preflight),
-           channel_name = std::move (channel_name), topic = std::move (topic),
+          [state = _state, channel_name = std::move (channel_name), topic = std::move (topic),
            event_value] (const std::string &packet_name,
                          const send_call_t::metadata_map_t &metadata) -> task_t<void> {
-              if (preflight) {
-                  const auto admitted = preflight ();
-                  if (!admitted) {
-                      throw framework_exception_t (admitted.error_kind (),
-                                                   admitted.error () ? admitted.error ()->what ()
-                                                                     : "publish preflight failed");
-                  }
-              }
-              co_await message_bus_t (state).submit_publish (
+              co_await message_bus_t (state, {}).submit_publish (
                 channel_name, topic, packet_name, std::type_index (typeid (TEvent)),
                 [event_value] (serializer_registry_t &serializers) {
                     return serializers.template get<TEvent> ().serialize_with_content_type (
@@ -523,6 +510,8 @@ class message_bus_t
                 },
                 std::chrono::milliseconds::zero (), metadata);
           });
+        call._preflight = std::move (preflight);
+        return call;
     }
 
     std::chrono::milliseconds default_request_timeout (const std::string &channel_name) const;
@@ -695,12 +684,16 @@ class route_send_call_t
     };
 
     template <typename TSubmit>
-    route_send_call_t (std::string packet_name, TSubmit submit) :
+    route_send_call_t (std::shared_ptr<detail::route_client_state_t> state,
+                       std::string packet_name,
+                       TSubmit submit) :
+        _state (std::move (state)),
         _packet_name (std::move (packet_name)),
         _submit (std::make_shared<bound_submission_t<TSubmit>> (std::move (submit)))
     {
     }
 
+    std::shared_ptr<detail::route_client_state_t> _state;
     std::string _packet_name;
     metadata_map_t _metadata;
     std::shared_ptr<submission_t> _submit;
@@ -742,10 +735,11 @@ class spot_send_call_t : public route_send_call_t
   private:
     friend class route_client_t;
 
-    spot_send_call_t (std::string packet_name,
+    spot_send_call_t (std::shared_ptr<detail::route_client_state_t> state,
+                      std::string packet_name,
                       submit_fn_t submit,
                       std::shared_ptr<detail::spot_activation_intent_t> intent) :
-        route_send_call_t (std::move (packet_name), std::move (submit)),
+        route_send_call_t (std::move (state), std::move (packet_name), std::move (submit)),
         _intent (std::move (intent))
     {
     }
@@ -837,7 +831,7 @@ class route_client_t
     {
         auto state = _state;
         return route_send_call_t (
-          detail::message_name<TMessage> (),
+          state, detail::message_name<TMessage> (),
           [state, router_channel_id = std::move (router_channel_id),
            target_node_rid = std::move (target_node_rid), message_value = std::move (message)] (
             const std::string &packet_name,
@@ -859,7 +853,7 @@ class route_client_t
         auto state = _state;
         auto message_value = std::make_shared<TMessage> (std::move (message));
         return route_send_call_t (
-          detail::message_name<TMessage> (),
+          state, detail::message_name<TMessage> (),
           [state, channel_name = std::move (channel_name),
            message_value] (const std::string &packet_name,
                            const route_send_call_t::metadata_map_t &metadata) -> task_t<void> {
@@ -879,7 +873,7 @@ class route_client_t
         auto message_value = std::make_shared<TMessage> (std::move (message));
         auto intent = std::make_shared<detail::spot_activation_intent_t> ();
         return spot_send_call_t (
-          detail::message_name<TMessage> (),
+          state, detail::message_name<TMessage> (),
           [state, target = std::move (target), intent,
            message_value] (const std::string &packet_name,
                            const route_send_call_t::metadata_map_t &metadata) -> task_t<void> {

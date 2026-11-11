@@ -2316,6 +2316,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_di.cpp
     "framework-unit;framework-regression;DI;scope")
   add_zlink_framework_test(
+    test_cpp_framework_prestart_call
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_prestart_call.cpp
+    "framework-unit;framework-host;messaging"
+    unit)
+  target_use_zlink_gtest_main(test_cpp_framework_prestart_call)
+  add_zlink_framework_test(
     test_cpp_framework_startup_dependencies
     tests/Zlink.Framework.UnitTests/test_cpp_framework_startup_dependencies.cpp
     "framework-unit;DI;framework-host")

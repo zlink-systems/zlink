@@ -55,9 +55,7 @@ resolve_request_spot_address (const std::shared_ptr<channel_runtime_state_t> &st
       std::make_shared<task_t<std::optional<runtime::spot_address_t>>> (std::move (resolved));
     return state->lane.run_task ([state, pending_resolution, deadline, wait_owner] () mutable {
         using address_t = std::optional<runtime::spot_address_t>;
-        if (state->shutdown)
-            throw framework_exception_t (framework_error_kind_t::shutting_down,
-                                         "channel runtime is shutting down");
+        state->ensure_transport_open ();
         auto completion = std::make_shared<task_completion_source_t<address_t>> ();
         auto pending = completion->task ();
         const auto operations = state->resolver_operations;
@@ -292,11 +290,6 @@ class outbound_request_controller_t
 
     result_t<std::uint64_t> reserve_request (std::string channel_name)
     {
-        if (auto admission = ensure_admission (); !admission) {
-            return detail::propagate_failure<std::uint64_t> (admission,
-                                                             "channel request was rejected");
-        }
-
         const auto request_seq = _state.pending_requests.next_request_seq ();
         _state.pending_requests.register_request (request_seq, std::move (channel_name));
         ++_state.pending;
@@ -328,19 +321,6 @@ class outbound_request_controller_t
     }
 
   private:
-    result_t<void> ensure_admission () const
-    {
-        if (_state.shutdown) {
-            return detail::boundary_failure<void> (detail::boundary_error_t::shutdown,
-                                                   "channel runtime is shutting down");
-        }
-        if (_state.closed) {
-            return detail::boundary_failure<void> (detail::boundary_error_t::closed,
-                                                   "channel runtime is closed");
-        }
-        return result_t<void>::success ();
-    }
-
     void decrement_pending () noexcept
     {
         if (_state.pending > 0) {
@@ -350,6 +330,35 @@ class outbound_request_controller_t
 
     channel_runtime_state_t &_state;
 };
+
+void channel_runtime_state_t::ensure_transport_open () const
+{
+    if (shutdown)
+        throw detail::make_boundary_exception (detail::boundary_error_t::shutdown,
+                                               "channel runtime is shutting down");
+    if (closed)
+        throw detail::make_boundary_exception (detail::boundary_error_t::closed,
+                                               "channel runtime is closed");
+}
+
+void channel_runtime_state_t::admit_outbound () const
+{
+    if (!runtime_admission)
+        return;
+    const auto [draining, started] = runtime_admission ();
+    if (draining)
+        throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                     "Framework runtime is shutting down");
+    if (!started)
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                     "Framework runtime has not started");
+}
+
+void route_client_state_t::admit_outbound (const std::shared_ptr<route_client_state_t> &state)
+{
+    if (state && state->runtime)
+        channel_runtime_t (state->runtime).admit_outbound ();
+}
 
 channel_runtime_t::channel_runtime_t (std::shared_ptr<channel_runtime_state_t> state) :
     _state (std::move (state))
@@ -609,8 +618,20 @@ task_t<void> channel_runtime_t::dispatch_send_on_handler_executor (
 
 result_t<std::uint64_t> channel_runtime_t::reserve_outbound_request (std::string channel_name)
 {
+    try {
+        _state->admit_outbound ();
+    }
+    catch (...) {
+        return detail::current_exception_result<std::uint64_t> ();
+    }
     return _state->lane
       .run_checked ([&] {
+          try {
+              _state->ensure_transport_open ();
+          }
+          catch (...) {
+              return detail::current_exception_result<std::uint64_t> ();
+          }
           const auto *client = client_capability (*_state, channel_name);
           if (client == nullptr || !client->enabled) {
               return result_t<std::uint64_t>::failure (
@@ -1215,13 +1236,23 @@ route_channel_builder_t::add_handler (route_handler_registration_t registration)
     return *this;
 }
 
-message_bus_t::message_bus_t () : _state (std::make_shared<detail::channel_runtime_state_t> ())
+message_bus_t::message_bus_t () :
+    message_bus_t (std::make_shared<detail::channel_runtime_state_t> ())
 {
 }
 
 message_bus_t::message_bus_t (std::shared_ptr<detail::channel_runtime_state_t> state) :
     _state (std::move (state))
 {
+    _preflight = [state = _state] {
+        try {
+            state->admit_outbound ();
+            return result_t<void>::success ();
+        }
+        catch (...) {
+            return detail::current_exception_result<void> ();
+        }
+    };
 }
 
 message_bus_t::message_bus_t (std::shared_ptr<detail::channel_runtime_state_t> state,
@@ -1415,6 +1446,16 @@ task_t<void> route_send_call_t::async ()
                                    "route send call is not bound to a route client"));
     }
     const auto submission = _submit;
+    if (submission->once.claimed ()) {
+        return task_t<void> (result_t<void>::failure (
+          framework_error_kind_t::protocol_error, "route send call has already been submitted"));
+    }
+    try {
+        detail::route_client_state_t::admit_outbound (_state);
+    }
+    catch (...) {
+        return task_t<void> (detail::current_exception_result<void> ());
+    }
     if (!submission->once.try_claim ()) {
         return task_t<void> (result_t<void>::failure (
           framework_error_kind_t::protocol_error, "route send call has already been submitted"));
@@ -1447,6 +1488,7 @@ route_client_t::submit_send_erased (const std::shared_ptr<detail::route_client_s
                                     const route_send_call_t::metadata_map_t &metadata)
 {
     try {
+        detail::route_client_state_t::admit_outbound (state);
         auto submit_flow = runtime::flow_context_t::enter_current_or_create (
           flow_origin_t::application,
           state && state->runtime ? detail::message_flow_tracer_t (state->runtime->dispatch).mode ()
@@ -1509,6 +1551,8 @@ route_client_t::submit_channel_send_erased (std::shared_ptr<detail::route_client
                                             payload_encoder_t encode_payload,
                                             const route_send_call_t::metadata_map_t &metadata)
 {
+    detail::route_client_state_t::admit_outbound (state);
+
     // The call can be destroyed while the sender suspends. Own the values used
     // by the sent trace after completion; metadata and the encoder are consumed before it.
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
@@ -1736,6 +1780,8 @@ void route_client_t::submit_request_reply_message_erased (
   std::map<std::string, std::string> metadata,
   detail::request_receiver_t<encoded_payload_t> receiver)
 {
+    detail::route_client_state_t::admit_outbound (state_ref);
+
     const auto request_started = std::chrono::steady_clock::now ();
     // Retain the runtime through the physical reply conversion.
     const auto state = state_ref;
@@ -1928,6 +1974,8 @@ request_task_t<zlink::message_t> route_client_t::submit_channel_request_reply_me
   std::chrono::milliseconds timeout,
   std::map<std::string, std::string> metadata)
 try {
+    detail::route_client_state_t::admit_outbound (state_ref);
+
     // The reply owns this copy: the referenced state lives in the call closure.
     const auto state = state_ref;
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
@@ -2299,6 +2347,8 @@ task_t<void> route_client_t::submit_spot_id_send_erased (
   payload_encoder_t encode_payload,
   route_send_call_t::metadata_map_t metadata)
 {
+    detail::route_client_state_t::admit_outbound (state_ref);
+
     const auto started_at = std::chrono::system_clock::now ();
     /* The state reference belongs to the call object's closure, which can
      * unwind while this coroutine is suspended: keep a frame-owned copy
@@ -2368,6 +2418,7 @@ task_t<void> route_client_t::submit_spot_id_request_reply_message_erased (
 {
     const auto request_started = std::chrono::steady_clock::now ();
     try {
+        detail::route_client_state_t::admit_outbound (state_ref);
         // The call closure can end while suspended; this frame owns the state copy.
         const auto state = state_ref;
         // Frame-owned resolver, as in submit_spot_id_send_erased.

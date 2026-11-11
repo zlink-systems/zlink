@@ -38,6 +38,7 @@ void ensure_blocking_submit_allowed ();
 class submit_once_t
 {
   public:
+    bool claimed () const noexcept { return _claimed.load (std::memory_order_acquire); }
     bool try_claim () noexcept { return !_claimed.exchange (true, std::memory_order_acq_rel); }
 
   private:
@@ -337,6 +338,19 @@ class send_call_t
 
     task_t<void> async ()
     {
+        if (_submission->claimed ()) {
+            return task_t<void> (
+              result_t<void>::failure (framework_error_kind_t::invalid_operation,
+                                       "one-way call has already been submitted"));
+        }
+        if (_preflight) {
+            const auto admitted = _preflight ();
+            if (!admitted)
+                return task_t<void> (admitted);
+        }
+        if (!_immediate && !_submit && !_async_submit)
+            return task_t<void> (result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                                          "call is not bound"));
         if (!_submission->try_claim ()) {
             return task_t<void> (
               result_t<void>::failure (framework_error_kind_t::invalid_operation,
@@ -347,11 +361,6 @@ class send_call_t
         }
         if (_async_submit) {
             return _async_submit (_packet_name, _metadata);
-        }
-        if (!_submit) {
-            return task_t<void> (
-              result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                       "send call is not bound to a channel client"));
         }
         return detail::submit_one_way_task (
           [packet_name = _packet_name, metadata = _metadata, submit = _submit] () {
@@ -385,6 +394,7 @@ class send_call_t
     metadata_map_t _metadata;
     submit_fn_t _submit;
     async_submit_fn_t _async_submit;
+    std::function<result_t<void> ()> _preflight;
     std::shared_ptr<detail::submit_once_t> _submission = std::make_shared<detail::submit_once_t> ();
 
     friend class message_bus_t;
@@ -421,7 +431,7 @@ class publish_call_t
 
     task_t<void> async ()
     {
-        if (!_submission->try_claim ()) {
+        if (_submission->claimed ()) {
             return task_t<void> (
               result_t<void>::failure (framework_error_kind_t::invalid_operation,
                                        "logical multicast call has already been submitted"));
@@ -431,6 +441,14 @@ class publish_call_t
             if (!admitted) {
                 return task_t<void> (admitted);
             }
+        }
+        if (!_immediate && !_submit && !_async_submit)
+            return task_t<void> (result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                                          "call is not bound"));
+        if (!_submission->try_claim ()) {
+            return task_t<void> (
+              result_t<void>::failure (framework_error_kind_t::invalid_operation,
+                                       "logical multicast call has already been submitted"));
         }
         if (_immediate) {
             return task_t<void> (*_immediate);
@@ -465,6 +483,7 @@ class publish_call_t
 
   private:
     friend class spot_context_t;
+    friend class spot_publisher_client_t;
 
     std::optional<result_t<void>> _immediate;
     metadata_map_t _metadata;

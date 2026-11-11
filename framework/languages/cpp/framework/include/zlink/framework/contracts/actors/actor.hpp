@@ -382,6 +382,7 @@ class actor_client_t
     }
 
   protected:
+    virtual void admit_call () {}
     virtual task_t<void> send_erased (actor_id_t actor_id,
                                       std::string packet_name,
                                       message_t message,

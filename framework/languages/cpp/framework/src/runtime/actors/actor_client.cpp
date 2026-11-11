@@ -280,14 +280,25 @@ actor_send_call_t &actor_send_call_t::metadata (std::string key, std::string val
 
 task_t<void> actor_send_call_t::async ()
 {
-    if (!_submission->try_claim ()) {
+    if (_submission->claimed ()) {
         return task_t<void> (result_t<void>::failure (
           framework_error_kind_t::protocol_error, "actor send call has already been submitted"));
+    }
+    try {
+        if (_client)
+            _client->admit_call ();
+    }
+    catch (...) {
+        return task_t<void> (detail::current_exception_result<void> ());
     }
     if (_client == nullptr) {
         return task_t<void> (
           result_t<void>::failure (framework_error_kind_t::protocol_error,
                                    "actor send call is not bound to an actor client"));
+    }
+    if (!_submission->try_claim ()) {
+        return task_t<void> (result_t<void>::failure (
+          framework_error_kind_t::protocol_error, "actor send call has already been submitted"));
     }
     return _client->send_erased (std::move (_actor_id), std::move (_packet_name),
                                  std::move (_message), std::move (_metadata));
@@ -387,13 +398,15 @@ class actor_client_impl_t final : public actor_client_t,
                          std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> mesh_nodes,
                          std::shared_ptr<actor_location_observer_t> actor_locations,
                          location_options_t options,
-                         detail::delay_owner_t &delays) :
+                         detail::delay_owner_t &delays,
+                         std::function<void ()> admit_call) :
         _store (&store),
         _serializers (detail::serializer_registry_access_t::retain (serializers)),
         _mesh_nodes (std::move (mesh_nodes)),
         _actor_locations (std::move (actor_locations)),
         _location_options (std::move (options)),
-        _delays (delays)
+        _delays (delays),
+        _admit_call (std::move (admit_call))
     {
         _message_follow_subscriptions.reserve (_mesh_nodes.size ());
         try {
@@ -449,11 +462,19 @@ class actor_client_impl_t final : public actor_client_t,
     }
 
   protected:
+    void admit_call () override
+    {
+        if (_admit_call)
+            _admit_call ();
+    }
     task_t<void> send_erased (actor_id_t actor_id,
                               std::string packet_name,
                               message_t message,
                               const actor_send_call_t::metadata_map_t &metadata) override
     {
+        if (_admit_call)
+            _admit_call ();
+
         /* Frame-owned metadata copy before the first suspension: the reference
          * belongs to a caller-owned call object that can unwind while the
          * route lookup is suspended. */
@@ -488,6 +509,9 @@ class actor_client_impl_t final : public actor_client_t,
                     std::optional<std::chrono::milliseconds> timeout,
                     const actor_request_call_t::metadata_map_t &metadata) override
     {
+        if (_admit_call)
+            _admit_call ();
+
         /* The metadata reference belongs to a caller-owned call object that
          * can unwind while this coroutine is suspended: keep a frame-owned copy
          * before the first await so no resume reads through the dead reference
@@ -1054,6 +1078,7 @@ class actor_client_impl_t final : public actor_client_t,
     std::map<std::string, cached_actor_t> _route_cache;
     std::chrono::milliseconds _default_timeout{std::chrono::seconds (30)};
     detail::delay_owner_t &_delays;
+    std::function<void ()> _admit_call;
     const std::string _request_id_prefix =
       std::to_string (reinterpret_cast<std::uintptr_t> (this)) + "-";
     std::atomic<std::uint64_t> _request_id_seq{1};
@@ -1120,11 +1145,12 @@ make_actor_client (live_location_reader_t &store,
                    std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> mesh_nodes,
                    std::shared_ptr<actor_location_observer_t> actor_locations,
                    location_options_t options,
-                   detail::delay_owner_t &delays)
+                   detail::delay_owner_t &delays,
+                   std::function<void ()> admit_call)
 {
     return std::make_shared<actor_client_impl_t> (store, serializers, std::move (mesh_nodes),
                                                   std::move (actor_locations), std::move (options),
-                                                  delays);
+                                                  delays, std::move (admit_call));
 }
 
 task_t<void> send_to_actor_ref (actor_client_t &client,

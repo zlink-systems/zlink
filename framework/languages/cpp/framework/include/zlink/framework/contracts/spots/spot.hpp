@@ -1850,6 +1850,7 @@ class spot_publisher_client_t
                                 zlink::message_t payload) const;
 
     spot_manager_t _manager;
+    std::shared_ptr<detail::channel_runtime_state_t> _channel_runtime;
     serializer_registry_t *_serializers = nullptr;
 };
 

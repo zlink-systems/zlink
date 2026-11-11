@@ -5744,7 +5744,9 @@ task_t<std::optional<zlink::message_t>> spot_manager_t::relay_actor_packet (
 
 spot_publisher_client_t::spot_publisher_client_t (spot_manager_t manager,
                                                   serializer_registry_t &serializers) :
-    _manager (std::move (manager)), _serializers (&serializers)
+    _manager (std::move (manager)),
+    _channel_runtime (_manager._state->channel_runtime),
+    _serializers (&serializers)
 {
 }
 
@@ -5764,42 +5766,50 @@ publish_call_t spot_publisher_client_t::publish_raw (std::string channel_name,
           framework_error_kind_t::protocol_error, "logical multicast topic must not be empty"));
     }
 
-    auto native_node =
-      _manager._state->lane.run_sync ([&] { return _manager._state->native_node.lock (); });
-    if (!native_node) {
-        return publish_call_t (result_t<void>::failure (
-          framework_error_kind_t::unavailable, "logical multicast route mesh is not connected"));
-    }
-
     const auto diagnostics_mode = detail::message_flow_tracer_t (_manager._state->dispatch).mode ();
     auto frame = encode_spot_publish_frame (channel_name, packet_name, topic,
                                             std::move (content_type), payload);
-    return publish_call_t ([native_node = std::move (native_node), state = _manager._state,
-                            channel_name = std::move (channel_name), topic = std::move (topic),
-                            frame = std::move (frame), diagnostics_mode] (
-                             const publish_call_t::metadata_map_t &metadata) -> task_t<void> {
-        const auto capture = detail::dispatch_error_reporter_t (state->dispatch).enabled ();
-        auto flow_scope = runtime::flow_context_t::enter_current_or_create (
-          flow_origin_t::application, diagnostics_mode);
-        std::vector<zlink::message_t> parts{frame};
-        auto publisher = native_node->entry_spot ();
-        auto encoded_metadata = detail::mesh_metadata_codec_t::encode (metadata);
-        if (capture) {
-            const auto mesh_name = state->lane.run_sync ([&] { return state->snapshot.name; });
-            co_await publisher.publish (
-              channel_name, topic, std::move (parts), std::move (encoded_metadata),
-              [state, channel_name, mesh_name, topic] (const zlink::routing_id_t &target,
-                                                       zlink::submit_result_t submitted) {
-                  detail::report_logical_multicast_failure (
-                    state, channel_name, mesh_name, topic, target.to_string (),
-                    detail::dispatch_reason_from_submit_result (submitted));
-              });
-        } else {
-            co_await publisher.publish (channel_name, topic, std::move (parts),
-                                        std::move (encoded_metadata));
+    auto call =
+      publish_call_t ([state = _manager._state, channel_name = std::move (channel_name),
+                       topic = std::move (topic), frame = std::move (frame), diagnostics_mode] (
+                        const publish_call_t::metadata_map_t &metadata) -> task_t<void> {
+          auto native_node = state->lane.run_sync ([&] { return state->native_node.lock (); });
+          if (!native_node)
+              throw framework_exception_t (framework_error_kind_t::unavailable,
+                                           "logical multicast route mesh is not connected");
+          const auto capture = detail::dispatch_error_reporter_t (state->dispatch).enabled ();
+          auto flow_scope = runtime::flow_context_t::enter_current_or_create (
+            flow_origin_t::application, diagnostics_mode);
+          std::vector<zlink::message_t> parts{frame};
+          auto publisher = native_node->entry_spot ();
+          auto encoded_metadata = detail::mesh_metadata_codec_t::encode (metadata);
+          if (capture) {
+              const auto mesh_name = state->lane.run_sync ([&] { return state->snapshot.name; });
+              co_await publisher.publish (
+                channel_name, topic, std::move (parts), std::move (encoded_metadata),
+                [state, channel_name, mesh_name, topic] (const zlink::routing_id_t &target,
+                                                         zlink::submit_result_t submitted) {
+                    detail::report_logical_multicast_failure (
+                      state, channel_name, mesh_name, topic, target.to_string (),
+                      detail::dispatch_reason_from_submit_result (submitted));
+                });
+          } else {
+              co_await publisher.publish (channel_name, topic, std::move (parts),
+                                          std::move (encoded_metadata));
+          }
+          co_return;
+      });
+    call._preflight = [admission = _channel_runtime] {
+        try {
+            if (admission)
+                detail::channel_runtime_t (admission).admit_outbound ();
+            return result_t<void>::success ();
         }
-        co_return;
-    });
+        catch (...) {
+            return detail::current_exception_result<void> ();
+        }
+    };
+    return call;
 }
 
 } // namespace zlink::framework

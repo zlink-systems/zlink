@@ -145,23 +145,6 @@ fanout_publisher (const std::shared_ptr<channel_runtime_state_t> &state,
     });
 }
 
-bool channel_runtime_accepts_outbound_locked (const channel_runtime_state_t &state) noexcept
-{
-    return !state.shutdown && !state.closed;
-}
-
-detail::boundary_error_t
-channel_runtime_outbound_error_state_locked (const channel_runtime_state_t &state) noexcept
-{
-    return state.shutdown ? detail::boundary_error_t::shutdown : detail::boundary_error_t::closed;
-}
-
-const char *
-channel_runtime_outbound_error_message_locked (const channel_runtime_state_t &state) noexcept
-{
-    return state.shutdown ? "channel runtime is shutting down" : "channel runtime is closed";
-}
-
 runtime::messaging::message_parts_t
 encode_channel_payload_parts (runtime::messaging::envelope_header_t header,
                               std::type_index,
@@ -991,13 +974,7 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                   "channel message exceeds configured max message size");
             }
             auto native_selection = state->lane.run_sync ([&] {
-                if (!channel_runtime_accepts_outbound_locked (*state)) {
-                    const auto error = detail::make_boundary_exception (
-                      channel_runtime_outbound_error_state_locked (*state),
-                      channel_runtime_outbound_error_message_locked (*state));
-                    return result_t<std::shared_ptr<channel_native_client_t>>::failure (
-                      error.kind (), error.what ());
-                }
+                state->ensure_transport_open ();
                 auto &slot = state->native_clients[channel_name];
                 if (!slot) {
                     slot = std::make_shared<channel_native_client_t> (
@@ -1091,13 +1068,8 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application, detail::message_flow_tracer_t (state->dispatch).mode ());
     const auto call_packet_name = std::move (packet_name);
-    state->lane.run_sync ([&] {
-        if (!channel_runtime_accepts_outbound_locked (*state)) {
-            throw detail::make_boundary_exception (
-              channel_runtime_outbound_error_state_locked (*state),
-              channel_runtime_outbound_error_message_locked (*state));
-        }
-    });
+    state->admit_outbound ();
+    state->lane.run_sync ([&] { state->ensure_transport_open (); });
     const auto *client = client_capability (*state, channel_name);
     if (client == nullptr || !client->enabled) {
         throw framework_exception_t (framework_error_kind_t::not_configured,
@@ -1161,11 +1133,7 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
                                              "channel message exceeds configured max message size");
             }
             auto native_client = state->lane.run_sync ([&] {
-                if (!channel_runtime_accepts_outbound_locked (*state)) {
-                    throw detail::make_boundary_exception (
-                      channel_runtime_outbound_error_state_locked (*state),
-                      channel_runtime_outbound_error_message_locked (*state));
-                }
+                state->ensure_transport_open ();
                 auto &slot = state->native_clients[channel_name];
                 if (!slot) {
                     slot = std::make_shared<channel_native_client_t> (
@@ -1221,13 +1189,8 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application, detail::message_flow_tracer_t (state->dispatch).mode ());
     const auto call_packet_name = std::move (packet_name);
-    state->lane.run_sync ([&] {
-        if (!channel_runtime_accepts_outbound_locked (*state)) {
-            throw detail::make_boundary_exception (
-              channel_runtime_outbound_error_state_locked (*state),
-              channel_runtime_outbound_error_message_locked (*state));
-        }
-    });
+    state->admit_outbound ();
+    state->lane.run_sync ([&] { state->ensure_transport_open (); });
     const auto *publisher = publisher_capability (*state, channel_name);
     if (!has_connection (publisher)) {
         throw framework_exception_t (framework_error_kind_t::unavailable,
@@ -1270,11 +1233,7 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
                                              "channel message exceeds configured max message size");
             }
             auto native_publisher = state->lane.run_sync ([&] {
-                if (!channel_runtime_accepts_outbound_locked (*state)) {
-                    throw detail::make_boundary_exception (
-                      channel_runtime_outbound_error_state_locked (*state),
-                      channel_runtime_outbound_error_message_locked (*state));
-                }
+                state->ensure_transport_open ();
                 const auto found = state->native_publishers.find (channel_name);
                 if (found == state->native_publishers.end ()) {
                     throw framework_exception_t (framework_error_kind_t::unavailable,
