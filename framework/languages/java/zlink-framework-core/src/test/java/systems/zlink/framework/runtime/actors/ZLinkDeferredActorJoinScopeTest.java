@@ -97,7 +97,9 @@ final class ZLinkDeferredActorJoinScopeTest {
                             .toCompletableFuture()
                             .get(3, TimeUnit.SECONDS);
                 }
-                ZLinkActorRuntime actors = (ZLinkActorRuntime) runtime.actorManager();
+                ZLinkActorRuntime actors =
+                        systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.actors(
+                                runtime);
                 ZLinkDeferredActorJoinHandlerScope.run(
                                 actors.deferredJoinRuntimeScope(),
                                 id -> true,
@@ -308,7 +310,9 @@ final class ZLinkDeferredActorJoinScopeTest {
                         .get(3, TimeUnit.SECONDS);
             }
 
-            ZLinkActorRuntime actorRuntime = (ZLinkActorRuntime) runtime.actorManager();
+            ZLinkActorRuntime actorRuntime =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.actors(
+                            runtime);
             String request = "x".repeat(BULK_REQUEST_BYTES);
             ZLinkDeferredActorJoinHandlerScope.run(
                             actorRuntime.deferredJoinRuntimeScope(),

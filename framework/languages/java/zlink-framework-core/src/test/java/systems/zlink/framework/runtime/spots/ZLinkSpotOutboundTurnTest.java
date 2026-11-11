@@ -67,7 +67,9 @@ final class ZLinkSpotOutboundTurnTest {
                     .submit()
                     .toCompletableFuture()
                     .get(3, TimeUnit.SECONDS);
-            var spots = (ZLinkSpotRuntime) runtime.spotManager();
+            var spots =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            runtime);
             var actor = (Player) spots.actorSessions().localActor("player").orElseThrow();
             runtime.actorClient()
                     .requestToActor("player", new Join())

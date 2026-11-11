@@ -11,7 +11,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     private const int SharedGateIdle = 0;
     private const int SharedGateOwned = 1;
     private const int SharedGateNotified = 2;
-    private readonly object _admissionGate;
+    internal readonly object _admissionGate;
     private readonly object _disposeGate = new();
 
     private readonly TaskCompletionSource _drained = new(
@@ -1569,12 +1569,14 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                     item,
                     this
                 );
-                await item.InvokeAsync(
+                var result = await item.InvokeAsync(
                         mailbox._reportHandlerException,
                         mailbox._executionToken,
                         turn
                     )
                     .ConfigureAwait(false);
+                if (result == ZLinkSerialWorkItemResult.Paused)
+                    mailbox.RestorePausedApplication(item);
                 if (ReferenceEquals(mailbox._sharedOwner, this))
                 {
                     if (mailbox._readyItem is null)
@@ -1712,8 +1714,10 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                     _executionToken,
                     item
                 );
-                await item.InvokeAsync(_reportHandlerException, _executionToken, turn)
+                var result = await item.InvokeAsync(_reportHandlerException, _executionToken, turn)
                     .ConfigureAwait(false);
+                if (result == ZLinkSerialWorkItemResult.Paused)
+                    RestorePausedApplication(item);
                 lock (_admissionGate)
                 {
                     if (ReferenceEquals(_active, item) && _activeClaimGeneration == claimGeneration)
@@ -1754,27 +1758,48 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     private bool TryTakeNextCore(out ZLinkSerialWorkItem item, out ulong claimGeneration)
     {
         claimGeneration = 0;
+        if (_sealRequest is not null)
         {
-            if (_sealRequest is not null)
+            if (_acceptedOperations == 0)
+                CompleteSealRequestUnderLock();
+            else
             {
-                if (_acceptedOperations == 0)
-                {
-                    CompleteSealRequestUnderLock();
-                }
-                else
-                {
-                    if (!TryDequeueInfrastructureUnderLock(out item!))
-                        return false;
-                    claimGeneration = ClaimUnderLock(item);
-                    return true;
-                }
+                if (!TryDequeueInfrastructureUnderLock(out item!))
+                    return false;
+                claimGeneration = ClaimUnderLock(item);
+                return true;
             }
-            if (!TryDequeueNextUnderLock(out item!))
-                return false;
-            claimGeneration = ClaimUnderLock(item);
+        }
+        if (!TryDequeueNextUnderLock(out item!))
+            return false;
+        claimGeneration = ClaimUnderLock(item);
+        if (item.IsAccepted)
+            _acceptedOperations++;
+        return true;
+    }
+
+    private void RestorePausedApplication(ZLinkSerialWorkItem item)
+    {
+        lock (_admissionGate)
+        {
+            // Selection already placed this item ahead of the unready prefix.
+            // Preserve that decision when invocation pauses.
+            _applicationQueue.InsertAfter(item, null);
+            if (ReferenceEquals(_active, item))
+            {
+                _active = null;
+                _activeClaimGeneration = 0;
+            }
             if (item.IsAccepted)
-                _acceptedOperations++;
-            return true;
+                _acceptedOperations--;
+            if (item.TerminalExecutionOwner is { } owner)
+            {
+                item.TerminalExecutionOwner = null;
+                if (!ReferenceEquals(owner, this))
+                    lock (owner._admissionGate)
+                        owner._pendingCount--;
+            }
+            GateOperation?.Invoke(ZLinkSerialGateOperation.PausedRestored);
         }
     }
 
@@ -1805,7 +1830,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
     private bool TryDequeueInfrastructureUnderLock(out ZLinkSerialWorkItem item)
     {
-        if (_lifecycleYieldDebt && _applicationQueue.TryDequeueContinuation(out item!))
+        if (_lifecycleYieldDebt && TryDequeueContinuationUnderLock(out item!))
         {
             _consecutiveLifecycleTurns = 0;
             _lifecycleYieldDebt = false;
@@ -1838,10 +1863,27 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             RegisterSelectedLaneUnderLock(item);
             return true;
         }
-        if (!_applicationQueue.TryDequeueContinuation(out item!))
+        if (!TryDequeueContinuationUnderLock(out item!))
             return false;
         _consecutiveLifecycleTurns = 0;
         _lifecycleYieldDebt = false;
+        return true;
+    }
+
+    private bool TryDequeueContinuationUnderLock(out ZLinkSerialWorkItem item)
+    {
+        var continuation = SelectApplicationUnderLock(
+            out var previous,
+            out _,
+            continuationOnly: true
+        );
+        if (continuation is null)
+        {
+            item = null!;
+            return false;
+        }
+        item = continuation;
+        _applicationQueue.Remove(item, previous);
         return true;
     }
 
@@ -1852,7 +1894,10 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             && (_activeLifecycle?.ReadyContinuation is not null || HasRunnableLifecycle())
         )
             return TryDequeueInfrastructureUnderLock(out item);
-        var application = SelectApplicationUnderLock(out var previous, out var headRunnable);
+        var application = SelectApplicationUnderLock(
+            out var applicationPrevious,
+            out var headRunnable
+        );
         if (!headRunnable && _applicationQueue.Head is not null)
         {
             if (TryDequeueInfrastructureUnderLock(out item))
@@ -1860,7 +1905,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             if (application is null)
                 return false;
             item = application;
-            _applicationQueue.Remove(item, previous);
+            _applicationQueue.Remove(item, applicationPrevious);
             return true;
         }
         var lifecycleReady =
@@ -1886,7 +1931,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         }
 
         item = application!;
-        _applicationQueue.Remove(item, previous);
+        _applicationQueue.Remove(item, applicationPrevious);
         _consecutiveLifecycleTurns = 0;
         _lifecycleYieldDebt = false;
         return true;
@@ -1907,7 +1952,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
     private ZLinkSerialWorkItem? SelectApplicationUnderLock(
         out ZLinkSerialWorkItem? previous,
-        out bool headRunnable
+        out bool headRunnable,
+        bool continuationOnly = false
     )
     {
         previous = null;
@@ -1923,7 +1969,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         {
             var isHead = ReferenceEquals(candidate, head);
             if (
-                (applicationAvailable || !candidate.ReservationHeld)
+                (!continuationOnly || !candidate.ReservationHeld && candidate.Mailbox is null)
+                && (applicationAvailable || !candidate.ReservationHeld)
                 && (
                     (!candidate.ReservationHeld && candidate.Mailbox is null)
                     || (headReady ??= head.IsReady)
@@ -2198,14 +2245,12 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     )
     {
         var lifecycleOwner = turn.LifecycleOwner;
-        if (lifecycleOwner is null && !turn.Item.IsExecutionAllowed)
-            return ZLinkSerialPostAdmission.Closed;
         var item = new ZLinkSerialWorkItem(
             async _ =>
             {
                 turn.ResetSuspension();
                 resume(
-                    !turn.Item.IsExecutionAllowed
+                    lifecycleOwner is not null && !turn.Item.IsExecutionAllowed
                         ? ZLinkSerialPostAdmission.Closed
                         : ZLinkSerialPostAdmission.Accepted
                 );
@@ -2218,7 +2263,9 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             lane: lifecycleOwner is null
                 ? ZLinkSerialWorkLane.Application
                 : ZLinkSerialWorkLane.Lifecycle,
-            reservationHeld: false
+            reservationHeld: false,
+            relocationRelease: () => resume(ZLinkSerialPostAdmission.Closed),
+            executionAllowed: lifecycleOwner is null ? () => turn.Item.ExecutionStatus : null
         );
         Func<CancellationToken, ValueTask>? drain;
         lock (_admissionGate)
@@ -2299,6 +2346,7 @@ internal enum ZLinkSerialGateOperation
     Scan,
     ConsumerAdmissionLock,
     ConsumerTransfer,
+    PausedRestored,
 }
 
 internal sealed record ZLinkSerialRelocationSeal(

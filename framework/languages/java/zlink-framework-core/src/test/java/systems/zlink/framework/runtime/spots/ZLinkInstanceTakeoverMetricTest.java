@@ -59,7 +59,9 @@ final class ZLinkInstanceTakeoverMetricTest {
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
                     .toCompletableFuture()
                     .get(10, TimeUnit.SECONDS);
-            var spots = (ZLinkSpotRuntime) runtime.spotManager();
+            var spots =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            runtime);
             var original = spots.userSpotLocationStore;
             var node = spots.routeMeshNodesByName.get(mesh);
             var spi =
