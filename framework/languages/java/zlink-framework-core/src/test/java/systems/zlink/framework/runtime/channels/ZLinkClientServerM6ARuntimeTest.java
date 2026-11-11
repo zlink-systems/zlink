@@ -937,17 +937,7 @@ final class ZLinkClientServerM6ARuntimeTest {
             var connectionCount = runtime.connections.size();
             store.lease = Lease.EXPIRED;
             ticker.addAndGet(Duration.ofSeconds(31).toNanos());
-            try {
-                var tick =
-                        ZLinkClientServerLocationRuntime.class.getDeclaredMethod(
-                                "tick", List.class, long.class);
-                tick.setAccessible(true);
-                ((CompletionStage<?>) tick.invoke(runtime, List.of(client, server), 1L))
-                        .toCompletableFuture()
-                        .join();
-            } catch (ReflectiveOperationException failure) {
-                throw new AssertionError(failure);
-            }
+            runtime.tick(List.of(client, server), 1L).toCompletableFuture().join();
             assertEquals(
                     connectionCount,
                     runtime.connections.size(),

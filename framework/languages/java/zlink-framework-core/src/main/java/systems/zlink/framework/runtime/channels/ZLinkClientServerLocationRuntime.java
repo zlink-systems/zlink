@@ -290,8 +290,7 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
         }
     }
 
-    private CompletionStage<Void> tick(
-            List<ZLinkChannelRuntime.AutoConnectSurface> surfaces, long epoch) {
+    CompletionStage<Void> tick(List<ZLinkChannelRuntime.AutoConnectSurface> surfaces, long epoch) {
         List<CompletionStage<?>> work = new ArrayList<>();
         List<PublishedUpdate> publishes = new ArrayList<>();
         ZLinkLocationOwnerToken ownerToken = owner.get();
