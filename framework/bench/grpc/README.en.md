@@ -416,8 +416,8 @@ per-payload gate exposes that problem at no added cost.
 This criterion is applied to patterns where ZLink can send the next request without waiting for the
 reply. Such a pattern is the sound judgement cell because a ZLink request confirms that the server
 processed the message.
-`request-serial` is kept as a supplementary metric for looking at the round-trip latency of a
-process-one-at-a-time usage pattern.
+For the binding judgement, `request-serial` is kept as a supplementary metric for looking at the
+round-trip latency of a process-one-at-a-time usage pattern.
 
 **The reference pattern for the binding layer (the first formula) is `request-backpressure`.** It
 passes when the criterion holds at both payload sizes. **The framework added cost (the second

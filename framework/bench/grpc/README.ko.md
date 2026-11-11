@@ -386,7 +386,7 @@ zlink-framework-<lang> / zlink-<lang>      >= 0.60   framework 추가 비용 통
 어차피 두 크기를 모두 표시하므로 payload별 판정은 추가 비용 없이 그 문제를 드러낸다.
 
 이 기준은 ZLink가 reply를 기다리지 않고 다음 request를 보낼 수 있는 패턴에 적용한다. 그런
-패턴이 판정에 적합한 이유는 ZLink request가 서버가 처리했다는 확인을 주기 때문이다. `request-serial`은 한 번에 하나만 처리하는 사용 패턴의 왕복 지연을 보기
+패턴이 판정에 적합한 이유는 ZLink request가 서버가 처리했다는 확인을 주기 때문이다. binding 판정에서는 `request-serial`을 한 번에 하나만 처리하는 사용 패턴의 왕복 지연을 보기
 위한 보조 지표로 남긴다.
 
 **binding 계층(첫 번째 식)의 기준 패턴은 `request-backpressure`다.** 두 payload 크기 모두에서
