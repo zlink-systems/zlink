@@ -126,6 +126,31 @@ internal sealed class ZLinkSerialWorkQueue : IEnumerable<ZLinkSerialWorkItem>
         }
     }
 
+    internal void InsertAfter(ZLinkSerialWorkItem item, ZLinkSerialWorkItem? previous)
+    {
+        EnsureConsistentState();
+        if (item.Next is not null)
+            throw new InvalidOperationException(
+                "ZLink serial work is already attached to a queue."
+            );
+        var next =
+            previous is null ? _head
+            : ReferenceEquals(previous.Next, previous) ? null
+            : previous.Next;
+        item.Next = next ?? item;
+        if (previous is null)
+            _head = item;
+        else
+            previous.Next = item;
+        if (next is null)
+            _tail = item;
+        Count = checked(Count + 1);
+        unchecked
+        {
+            _version++;
+        }
+    }
+
     public bool TryDequeue(out ZLinkSerialWorkItem item)
     {
         EnsureConsistentState();
@@ -139,12 +164,6 @@ internal sealed class ZLinkSerialWorkQueue : IEnumerable<ZLinkSerialWorkItem>
         Remove(item, previous: null);
         return true;
     }
-
-    public bool TryDequeueContinuation(out ZLinkSerialWorkItem item) =>
-        TryDequeueMatching(
-            static candidate => !candidate.ReservationHeld && candidate.Mailbox is null,
-            out item
-        );
 
     internal bool TryDequeueMatching(
         Func<ZLinkSerialWorkItem, bool> predicate,
