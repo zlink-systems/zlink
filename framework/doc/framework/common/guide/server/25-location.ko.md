@@ -34,7 +34,12 @@ Store는 factory를 등록한 node에만 요구된다.
 
 ### 2.1 Store plugin 설정 {#store-setup}
 
-[두 plugin 비교](../../../common/guide/server/store-plugins.ko.md)에서 **Redis** 또는 **Redis with etcd**를 선택한다. 두 Store는 기존 API로 각각 한 번 등록한다.
+**Redis** 또는 **Redis with etcd** 중 하나를 고른다. 두 Store는 기존 API로 각각 한 번 등록한다.
+
+| Plugin | Location Store | Relocation Store | 사용 조건 |
+| --- | --- | --- | --- |
+| Redis | Redis | Redis (같은 server) | [Redis 내구성 조건](../../../common/spec/server/05-location-relocation/02-location-store-redis.ko.md#1-범위와-독자)을 충족하는 배포. |
+| Redis with etcd | etcd (3 voters) | Redis | 자동 장애 전환이 필요한 배포. |
 
 아래 코드는 server의 Framework 설정 callback 안에서 실행한다. `using`·`import`·`#include`는 파일 맨 위에 둔다. 각 process는 같은 Location prefix 또는 etcd namespace를 공유하고, Redis의 두 Store는 서로 다른 key prefix를 사용한다.
 

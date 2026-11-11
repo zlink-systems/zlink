@@ -34,7 +34,12 @@ The Relocation Store is required only on a node that registered a factory.
 
 ### 2.1 Store Plugin Setup {#store-setup}
 
-Choose **Redis** or **Redis with etcd** using the [plugin comparison](../../../common/guide/server/store-plugins.en.md). Register each Store once through its existing API.
+Choose **Redis** or **Redis with etcd**. Register each of the two Stores once with the existing APIs.
+
+| Plugin | Location Store | Relocation Store | Use when |
+| --- | --- | --- | --- |
+| Redis | Redis | Redis (same server) | Deployments meeting the [Redis durability condition](../../../common/spec/server/05-location-relocation/02-location-store-redis.en.md#1-scope-and-audience). |
+| Redis with etcd | etcd (3 voters) | Redis | Deployments needing automatic failover. |
 
 Run the registration code in the server's Framework configuration callback. Place `using`, `import` and `#include` declarations at file scope. Processes share the Location prefix or etcd namespace; the two Redis Stores use distinct key prefixes.
 
