@@ -465,13 +465,17 @@ export class DefaultZLinkSpotManager {
       registerActivation: async (activation) => {
         this.options.admission?.requireRequest('Spot Ready confirmation', activation.meshName);
         const lifecycle = this.options.locationLifecycle;
-        const executionAllowed = (owner: object | undefined) => {
-          const spotAllowed = this.options.admission?.executionAllowed(activation.spot);
-          return spotAllowed === undefined
-            ? undefined
-            : spotAllowed &&
-                (owner === activation.spot ||
-                  this.options.admission?.executionAllowed(owner) !== false);
+        const executionAllowed = {
+          executionFailure: () => this.options.admission!.executionFailure(),
+          executionDecision: (owner: object | undefined, wake?: () => void) => {
+            const spotAllowed = this.options.admission?.executionDecision(activation.spot, wake);
+            if (spotAllowed !== 'allowed') return spotAllowed;
+            return owner === activation.spot
+              ? ('allowed' as const)
+              : owner === undefined
+                ? ('lost' as const)
+                : this.options.admission?.executionDecision(owner, wake);
+          }
         };
         const actorOwner = (actorId: string) =>
           activation.resolveJoinedActor(actorId) ?? this.options.actorResolver?.(actorId);
@@ -1324,7 +1328,7 @@ export class DefaultZLinkSpotManager {
         operation.canExecuteApplication = (record) => {
           const context = record.context as
             import('./spot-serial-turn-executor').ZLinkSpotApplicationTurnContext | undefined;
-          return context === undefined;
+          return context === undefined || context.isSuspended === true;
         };
       }
       this.closeOperations.set(key, operation);

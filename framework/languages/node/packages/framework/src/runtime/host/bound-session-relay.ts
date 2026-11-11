@@ -1,3 +1,4 @@
+import type { ZLinkRuntimeAdmissionGate } from '../admission';
 import type { ActorRef } from '../../contracts';
 import type { ZLinkBackendActorSessionNode } from '../backend';
 import { type ZLinkActorRoutedJoinTransport } from '../actors';
@@ -18,6 +19,7 @@ import { ZLinkActorPacketRelay } from './actor-packet-relay';
 import { ZLinkRemoteActorJoinReceiver } from './remote-actor-join-receiver';
 
 export interface ZLinkBoundSessionRelayOptions {
+  readonly admission?: ZLinkRuntimeAdmissionGate;
   readonly requestTimeoutMs?: number;
   readonly sessionRelocationSealTimeoutMs: number;
   readonly routeTransport: ZLinkActorRoutedJoinTransport;
@@ -45,6 +47,7 @@ export class ZLinkBoundSessionRelay {
 
   constructor(options: ZLinkBoundSessionRelayOptions) {
     this.actorPackets = new ZLinkActorPacketRelay({
+      admission: options.admission,
       requestTimeoutMs: options.requestTimeoutMs,
       routeTransport: options.routeTransport,
       actorManager: options.actorManager,

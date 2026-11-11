@@ -327,10 +327,13 @@ export class ZLinkSpotSerialTurnExecutor {
     return await this.submitQueuedTurn(operation, workOptions);
   }
 
-  private async enqueueContinuationTurn<T>(operation: () => Promise<T> | T): Promise<T> {
+  private async enqueueContinuationTurn<T>(
+    operation: () => Promise<T> | T,
+    claim?: ZLinkExecutionBarrierClaim
+  ): Promise<T> {
     this.lastActivityAtMs = performance.now();
     await Promise.resolve();
-    return await this.scheduler.submitContinuation(operation);
+    return await this.scheduler.submitContinuation(operation, claim);
   }
 
   private submitQueuedTurn<T>(
@@ -339,22 +342,26 @@ export class ZLinkSpotSerialTurnExecutor {
     barrierClaim?: ZLinkExecutionBarrierClaim | Promise<ZLinkExecutionBarrierClaim>
   ): Promise<T> {
     const boundOperation = bindApplicationJobPermit(operation);
+    if (barrierClaim instanceof Promise) {
+      const context: Partial<ZLinkExecutionBarrierClaim> = {};
+      return this.scheduler.admitDurablePrefix(boundOperation, workOptions, context, {
+        prepare: async (signal) => {
+          const claim = await barrierClaim;
+          if (signal.aborted) {
+            claim.release();
+            throw signal.reason;
+          }
+          Object.defineProperties(context, Object.getOwnPropertyDescriptors(claim));
+        },
+        cancel: () => {}
+      });
+    }
     return hasApplicationJobPermit()
       ? this.scheduler.submitPreAdmitted(boundOperation, workOptions, barrierClaim)
       : this.scheduler.submit(boundOperation, workOptions, barrierClaim);
   }
 
   private runQueuedRecord(record: ZLinkSerialWorkRecord<unknown>): Promise<void> {
-    if (record.context instanceof Promise) {
-      // Branch-local captures keep the synchronous path free of a V8 function context.
-      const executor = this;
-      const work = record;
-      const pending = record.context;
-      return pending.then((claim: ZLinkExecutionBarrierClaim) => {
-        Object.assign(work, { context: claim });
-        return executor.runQueuedRecord(work);
-      });
-    }
     const context = record.context as ZLinkSpotApplicationTurnContext | undefined;
     if (context?.replay !== undefined && record.operation === context.replay) {
       context.release();
@@ -400,7 +407,6 @@ export class ZLinkSpotSerialTurnExecutor {
       const turnId = this.turnSequence;
       this.activeTurnId = turnId;
       try {
-        barrierClaim?.start?.();
         return await runZLinkSpotSerialTurn(this, turnId, turn, operation);
       } finally {
         this.depth -= 1;
@@ -442,7 +448,7 @@ export class ZLinkSpotSerialTurnExecutor {
       } finally {
         if (this.resumedOwnerTurn === turn) this.resumedOwnerTurn = undefined;
       }
-    }).catch((error) => {
+    }, turn.boundExecutionClaim).catch((error) => {
       try {
         turn.executionAllowed();
         reject(error);
