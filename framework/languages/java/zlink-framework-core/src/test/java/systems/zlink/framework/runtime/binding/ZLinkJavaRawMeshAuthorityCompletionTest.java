@@ -34,6 +34,21 @@ import java.util.function.Supplier;
 
 final class ZLinkJavaRawMeshAuthorityCompletionTest {
     @Test
+    void forgetSpotAuthorityRemovesOnlyTheExpectedOwnerFence() {
+        try (var context = Zlink.createContext();
+                var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            var spots = (ZLinkJavaRawSpotNode) node.spotNode();
+            var target = RoutingId.from("fence-owner");
+            spots.rememberSpotAuthority(target, "spot", 1, 2, 3);
+            spots.forgetSpotAuthority(target, "spot", 1, 1);
+            assertEquals(2, spots.spotAuthorityOwnerGeneration(target, "spot", 1));
+            spots.forgetSpotAuthority(target, "spot", 1, 2);
+            assertEquals(0, spots.spotAuthorityOwnerGeneration(target, "spot", 1));
+            assertEquals(0, spots.spotAuthorityOwnerLeaseGeneration(target, "spot", 1));
+        }
+    }
+
+    @Test
     void actorAuthorityCompletionEntersApplicationQueueOutsideProviderThread() throws Exception {
         assertApplicationHandoff(true);
     }

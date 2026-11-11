@@ -2,7 +2,6 @@ package systems.zlink.framework.runtime.locations;
 
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
-import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPage;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
@@ -19,8 +18,6 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.time.Duration;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
@@ -29,95 +26,32 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Consumer;
 
-/**
- * Reconciles durable Spot authority into fenced raw routes. A full scan is applied atomically; an
- * expired scan keeps the previous route set.
- */
-public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
+/** Restores durable Instance activation work once, before host admission begins. */
+public final class ZLinkInstanceActivationStartupRecovery {
     private static final ZLinkStoreCancellation OPEN = () -> false;
 
     private final ZLinkLocationRepository store;
     private final ZLinkRelocationStore relocationStore;
     private final Map<String, ZLinkInternalMeshNode> meshNodes;
-    private final Duration pollingInterval;
-    private final Consumer<Throwable> reportFailure;
     private final ZLinkServiceAuthorityPayloadCodec payloadCodec =
             new ZLinkServiceAuthorityPayloadCodec();
-    private final ScheduledExecutorService executor =
-            Executors.newSingleThreadScheduledExecutor(
-                    Thread.ofVirtual().name("zlink-jvm-authority-routes").factory());
-    private final AtomicBoolean inFlight = new AtomicBoolean();
-    // Applied routes are a C2 set: remove, add, and replacement must remain
-    // one ordered transition.
-    private final ZLinkStateLane stateLane = new ZLinkStateLane();
-    private final Map<String, Applied> applied = new HashMap<>();
-    private volatile boolean started;
-    private volatile boolean closed;
 
-    public ZLinkStatefulAuthorityRouteRuntime(
-            ZLinkLocationRepository store,
-            Map<String, ZLinkInternalMeshNode> meshNodes,
-            Duration pollingInterval,
-            Consumer<Throwable> reportFailure) {
-        this(store, null, meshNodes, pollingInterval, reportFailure);
-    }
-
-    public ZLinkStatefulAuthorityRouteRuntime(
+    public ZLinkInstanceActivationStartupRecovery(
             ZLinkLocationRepository store,
             ZLinkRelocationStore relocationStore,
-            Map<String, ZLinkInternalMeshNode> meshNodes,
-            Duration pollingInterval,
-            Consumer<Throwable> reportFailure) {
+            Map<String, ZLinkInternalMeshNode> meshNodes) {
         this.store = Objects.requireNonNull(store, "store");
         this.relocationStore = relocationStore;
         this.meshNodes = Map.copyOf(Objects.requireNonNull(meshNodes, "meshNodes"));
-        this.pollingInterval = Objects.requireNonNull(pollingInterval, "pollingInterval");
-        if (pollingInterval.isNegative() || pollingInterval.isZero()) {
-            throw new IllegalArgumentException("pollingInterval must be positive");
-        }
-        this.reportFailure = Objects.requireNonNull(reportFailure, "reportFailure");
     }
 
     public CompletionStage<Void> start() {
-        return scan(Optional.empty(), new HashMap<>())
-                .thenCompose(this::recoverActivations)
-                .thenCompose(
-                        next ->
-                                stateLane.runAsync(
-                                        () -> {
-                                            applyCore(next);
-                                            return null;
-                                        }))
-                .thenRun(
-                        () -> {
-                            started = true;
-                            executor.scheduleWithFixedDelay(
-                                    this::poll,
-                                    pollingInterval.toMillis(),
-                                    pollingInterval.toMillis(),
-                                    TimeUnit.MILLISECONDS);
-                        });
+        return scan(Optional.empty(), new HashMap<>()).thenCompose(this::recoverActivations);
     }
 
-    public CompletionStage<Void> reconcile() {
-        return scan(Optional.empty(), new HashMap<>())
-                .thenCompose(
-                        next ->
-                                stateLane.runAsync(
-                                        () -> {
-                                            applyCore(next);
-                                            return null;
-                                        }));
-    }
-
-    private CompletionStage<Map<String, Applied>> scan(
-            Optional<ZLinkAuthorityScanCursor> cursor, Map<String, Applied> routes) {
+    private CompletionStage<Map<String, InstanceRecovery>> scan(
+            Optional<ZLinkAuthorityScanCursor> cursor, Map<String, InstanceRecovery> routes) {
         return store.list(ZLinkAuthorityKeyCodec.spotPrefix(), cursor, 1000, OPEN)
                 .thenCompose(
                         result -> {
@@ -128,6 +62,7 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
                             ZLinkAuthorityPage page = (ZLinkAuthorityPage) result;
                             for (var entry : page.items()) {
                                 decode(entry.snapshot())
+                                        .filter(value -> value.activationRecovery().isPresent())
                                         .ifPresent(value -> routes.put(entry.key(), value));
                             }
                             return page.nextCursor().isEmpty()
@@ -136,9 +71,8 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
                         });
     }
 
-    private Optional<Applied> decode(ZLinkAuthoritySnapshot snapshot) {
-        if (snapshot.allocation().objectKind() != ZLinkPlacementObjectKind.USER_SPOT
-                && snapshot.allocation().objectKind() != ZLinkPlacementObjectKind.INSTANCE_SPOT) {
+    private Optional<InstanceRecovery> decode(ZLinkAuthoritySnapshot snapshot) {
+        if (snapshot.allocation().objectKind() != ZLinkPlacementObjectKind.INSTANCE_SPOT) {
             return Optional.empty();
         }
         return payloadCodec
@@ -158,7 +92,8 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
                                             && value.state()
                                                     == ZLinkServiceAuthorityPayloadCodec.State
                                                             .CREATING;
-                            return (ready || coldActivation)
+                            return value.instance().isPresent()
+                                    && (ready || coldActivation)
                                     && value.ownerId().equals(snapshot.ownerId())
                                     && value.ownerLeaseGeneration()
                                             == snapshot.ownerLeaseGeneration()
@@ -172,17 +107,6 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
                         })
                 .map(
                         value -> {
-                            var route =
-                                    new ZLinkInternalMeshNode.SpotAuthorityRoute(
-                                            value.spotId(),
-                                            snapshot.objectGeneration(),
-                                            value.nodeRid(),
-                                            value.nodeGeneration(),
-                                            snapshot.authorityOwnerGeneration(),
-                                            snapshot.ownerLeaseGeneration(),
-                                            snapshot.ownerId(),
-                                            value.meshName(),
-                                            snapshot.storeVersion());
                             var instance =
                                     new ZLinkServiceM6BWireCodec.InstanceRouteFence(
                                             value.nodeRid(),
@@ -196,48 +120,34 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
                             boolean ready =
                                     snapshot.allocation().state()
                                             == ZLinkPlacementAllocationState.ACTIVE;
-                            return value.instance()
-                                    .<Applied>map(
-                                            ignored ->
-                                                    new InstanceApplied(
-                                                            value.stableType(),
-                                                            value.meshName(),
-                                                            ready,
-                                                            route,
-                                                            instance,
-                                                            value.activationRecoveryState()
-                                                                    .or(
-                                                                            () ->
-                                                                                    snapshot.pendingCreation()
-                                                                                            .map(
-                                                                                                    pending ->
-                                                                                                            new ZLinkServiceAuthorityPayloadCodec
-                                                                                                                    .ActivationRecoveryState(
-                                                                                                                    pending
-                                                                                                                            .requestContentReference(),
-                                                                                                                    pending
-                                                                                                                            .requestSha256(),
-                                                                                                                    pending
-                                                                                                                            .requestEncodedSize(),
-                                                                                                                    1,
-                                                                                                                    0)))))
-                                    .orElseGet(
-                                            () ->
-                                                    new UserApplied(
-                                                            value.stableType(),
-                                                            value.meshName(),
-                                                            ready,
-                                                            route));
+                            return new InstanceRecovery(
+                                    value.stableType(),
+                                    value.meshName(),
+                                    ready,
+                                    instance,
+                                    value.activationRecoveryState()
+                                            .or(
+                                                    () ->
+                                                            snapshot.pendingCreation()
+                                                                    .map(
+                                                                            pending ->
+                                                                                    new ZLinkServiceAuthorityPayloadCodec
+                                                                                            .ActivationRecoveryState(
+                                                                                            pending
+                                                                                                    .requestContentReference(),
+                                                                                            pending
+                                                                                                    .requestSha256(),
+                                                                                            pending
+                                                                                                    .requestEncodedSize(),
+                                                                                            1,
+                                                                                            0))));
                         });
     }
 
-    private CompletionStage<Map<String, Applied>> recoverActivations(Map<String, Applied> routes) {
+    private CompletionStage<Void> recoverActivations(Map<String, InstanceRecovery> routes) {
         CompletionStage<Void> tail = CompletableFuture.completedFuture(null);
-        for (Map.Entry<String, Applied> entry : new ArrayList<>(routes.entrySet())) {
-            if (!(entry.getValue() instanceof InstanceApplied instance)
-                    || instance.activationRecovery().isEmpty()) {
-                continue;
-            }
+        for (Map.Entry<String, InstanceRecovery> entry : routes.entrySet()) {
+            InstanceRecovery instance = entry.getValue();
             ZLinkInternalMeshNode node = meshNodes.get(instance.meshName());
             if (node == null) continue;
             if (!instance.instance().targetNodeRid().equals(node.routingId())
@@ -260,32 +170,21 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
                                                                                                     .reference(),
                                                                                             OPEN)
                                                                                     .thenApply(
-                                                                                            deleted -> {
-                                                                                                routes
-                                                                                                        .remove(
-                                                                                                                entry
-                                                                                                                        .getKey());
-                                                                                                return null;
-                                                                                            })
+                                                                                            deleted ->
+                                                                                                    null)
                                                                             : CompletableFuture
                                                                                     .completedFuture(
                                                                                             null)));
                 }
                 continue;
             }
-            tail =
-                    tail.thenCompose(
-                            ignored ->
-                                    recoverActivation(entry.getKey(), node, instance)
-                                            .thenAccept(
-                                                    recovered ->
-                                                            routes.put(entry.getKey(), recovered)));
+            tail = tail.thenCompose(ignored -> recoverActivation(entry.getKey(), node, instance));
         }
-        return tail.thenApply(ignored -> routes);
+        return tail;
     }
 
-    private CompletionStage<InstanceApplied> recoverActivation(
-            String key, ZLinkInternalMeshNode node, InstanceApplied applied) {
+    private CompletionStage<Void> recoverActivation(
+            String key, ZLinkInternalMeshNode node, InstanceRecovery applied) {
         ZLinkServiceAuthorityPayloadCodec.ActivationRecoveryState recovery =
                 applied.activationRecovery().orElseThrow();
         if (relocationStore == null) {
@@ -350,22 +249,22 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
                                 return CompletableFuture.failedFuture(
                                         new IllegalStateException(
                                                 "Recovered Instance authority is missing"));
-                            Applied decoded = decode(current).orElse(null);
-                            if (!(decoded instanceof InstanceApplied observed)
+                            InstanceRecovery observed = decode(current).orElse(null);
+                            if (observed == null
                                     || !observed.ready()
                                     || !observed.stableType().equals(applied.stableType())
                                     || !observed.meshName().equals(applied.meshName())
                                     || !observed.instance()
                                             .equals(
-                                                    withoutRecovery(applied, current.storeVersion())
-                                                            .instance())) {
+                                                    withStoreVersion(
+                                                            applied.instance(),
+                                                            current.storeVersion()))) {
                                 return CompletableFuture.failedFuture(
                                         new IllegalStateException(
                                                 "Instance activation recovery owner changed"));
                             }
                             if (observed.activationRecovery().isEmpty()) {
-                                return CompletableFuture.completedFuture(
-                                        withoutRecovery(applied, current.storeVersion()));
+                                return CompletableFuture.completedFuture(null);
                             }
                             return completeActivationRecovery(store, relocationStore, key, current)
                                     .handle(
@@ -393,10 +292,7 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
                                                                                 .concurrent
                                                                                 .CompletionException(
                                                                                 notificationFailure);
-                                                                    return withoutRecovery(
-                                                                            applied,
-                                                                            released
-                                                                                    .storeVersion());
+                                                                    return (Void) null;
                                                                 });
                                             })
                                     .thenCompose(java.util.function.Function.identity());
@@ -477,29 +373,13 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
                 operation + " failed: " + result.getClass().getSimpleName());
     }
 
-    private static InstanceApplied withoutRecovery(InstanceApplied applied, String storeVersion) {
-        var route = applied.route();
-        var instance = applied.instance();
-        return new InstanceApplied(
-                applied.stableType(),
-                applied.meshName(),
-                true,
-                new ZLinkInternalMeshNode.SpotAuthorityRoute(
-                        route.spotId(),
-                        route.objectGeneration(),
-                        route.targetNodeRid(),
-                        route.targetNodeGeneration(),
-                        route.authorityOwnerGeneration(),
-                        route.ownerLeaseGeneration(),
-                        route.ownerId(),
-                        route.meshName(),
-                        storeVersion),
-                new ZLinkServiceM6BWireCodec.InstanceRouteFence(
-                        instance.targetNodeRid(), instance.targetNodeGeneration(),
-                        instance.targetSpotId(), instance.objectGeneration(),
-                        instance.ownerId(), instance.authorityOwnerGeneration(),
-                        instance.leaseGeneration(), storeVersion),
-                Optional.empty());
+    private static ZLinkServiceM6BWireCodec.InstanceRouteFence withStoreVersion(
+            ZLinkServiceM6BWireCodec.InstanceRouteFence instance, String storeVersion) {
+        return new ZLinkServiceM6BWireCodec.InstanceRouteFence(
+                instance.targetNodeRid(), instance.targetNodeGeneration(),
+                instance.targetSpotId(), instance.objectGeneration(),
+                instance.ownerId(), instance.authorityOwnerGeneration(),
+                instance.leaseGeneration(), storeVersion);
     }
 
     private static byte[] sha256(byte[] payload) {
@@ -510,118 +390,17 @@ public final class ZLinkStatefulAuthorityRouteRuntime implements AutoCloseable {
         }
     }
 
-    private void applyCore(Map<String, Applied> next) {
-        for (Map.Entry<String, Applied> old : applied.entrySet()) {
-            Applied current = next.get(old.getKey());
-            if (!old.getValue().equals(current)) {
-                forget(old.getValue());
-            }
-        }
-        for (Map.Entry<String, Applied> entry : next.entrySet()) {
-            if (!entry.getValue().equals(applied.get(entry.getKey()))) {
-                remember(entry.getValue());
-            }
-        }
-        applied.clear();
-        applied.putAll(next);
-    }
-
-    private void remember(Applied value) {
-        ZLinkInternalMeshNode node = meshNodes.get(value.meshName());
-        if (node == null) {
-            return;
-        }
-        if (value.ready()) {
-            node.rememberSpotAuthority(value.route());
-        }
-        if (value instanceof InstanceApplied instance) {
-            node.registerInstanceIntent(value.stableType(), instance.instance());
-        }
-    }
-
-    private void forget(Applied value) {
-        ZLinkInternalMeshNode node = meshNodes.get(value.meshName());
-        if (node == null) {
-            return;
-        }
-        if (value.ready()) {
-            node.forgetSpotAuthority(value.route());
-        }
-        if (value instanceof InstanceApplied instance) {
-            node.forgetInstanceIntent(instance.instance());
-        }
-    }
-
-    private void poll() {
-        if (closed || !started || !inFlight.compareAndSet(false, true)) {
-            return;
-        }
-        reconcile()
-                .whenComplete(
-                        (ignored, failure) -> {
-                            inFlight.set(false);
-                            if (failure != null && !closed) {
-                                reportFailure.accept(unwrap(failure));
-                            }
-                        });
-    }
-
-    @Override
-    public void close() {
-        inStateLane(
-                () -> {
-                    closed = true;
-                    executor.shutdownNow();
-                    applied.values().forEach(this::forget);
-                    applied.clear();
-                    return null;
-                });
-    }
-
-    private <T> T inStateLane(java.util.function.Supplier<T> work) {
-        try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
-    }
-
     private static Throwable unwrap(Throwable failure) {
         return failure instanceof CompletionException && failure.getCause() != null
                 ? failure.getCause()
                 : failure;
     }
 
-    private sealed interface Applied permits UserApplied, InstanceApplied {
-        String stableType();
-
-        String meshName();
-
-        boolean ready();
-
-        ZLinkInternalMeshNode.SpotAuthorityRoute route();
-    }
-
-    private record UserApplied(
+    private record InstanceRecovery(
             String stableType,
             String meshName,
             boolean ready,
-            ZLinkInternalMeshNode.SpotAuthorityRoute route)
-            implements Applied {}
-
-    private record InstanceApplied(
-            String stableType,
-            String meshName,
-            boolean ready,
-            ZLinkInternalMeshNode.SpotAuthorityRoute route,
             ZLinkServiceM6BWireCodec.InstanceRouteFence instance,
-            Optional<ZLinkServiceAuthorityPayloadCodec.ActivationRecoveryState> activationRecovery)
-            implements Applied {}
+            Optional<ZLinkServiceAuthorityPayloadCodec.ActivationRecoveryState>
+                    activationRecovery) {}
 }
