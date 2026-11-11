@@ -394,6 +394,10 @@ Operation별 call object는 해당 기능에 유효한 설정만 제공한다.
 - Create·lookup이 반환한 ref는 그 incarnation을 변경하거나 session에 bind할 때 사용하며 일반 message의
   target으로 사용하지 않는다.
 - STREAM 호출은 session identity와 packet correlation을 보존한다.
+- 구성으로 얻은 공개 client·manager를 Framework runtime이 시작되기 전에 호출하면 그 call은
+  terminal에서 `InvalidOperation`으로 끝난다. Framework는 runtime 시작을 기다리거나 시작을 유발하지 않는다.
+  Runtime 시작 뒤 hosted service 시작 중의 호출은 이 규칙의 대상이 아니다. Call은 admission이 받아들일 때
+  사용되므로, 이 거절과 shutdown 거절은 call을 사용하지 않으며 같은 call을 다시 submit할 수 있다.
 
 Server package의 one-way send·publish·명시적 STREAM reply는
 [비동기 실행 정책](../01-execution/01-submit-and-completion.ko.md)의 async-only admission 계약을 따른다. Public call은

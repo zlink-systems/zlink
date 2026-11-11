@@ -155,6 +155,8 @@ inline bool pattern_enabled (const std::string &enabled, const char *pattern)
     return false;
 }
 
+inline constexpr int k_submit_concurrency = 8;
+
 class latency_sampler_t
 {
   public:
@@ -166,6 +168,14 @@ class latency_sampler_t
         ++_count;
         if (_samples.size () < _cap)
             _samples.push_back (value);
+    }
+
+    void merge (const latency_sampler_t &other)
+    {
+        _sum += other._sum;
+        _count += other._count;
+        const auto count = std::min (_cap - _samples.size (), other._samples.size ());
+        _samples.insert (_samples.end (), other._samples.begin (), other._samples.begin () + count);
     }
 
     double mean_us () const { return _count == 0 ? 0.0 : _sum / static_cast<double> (_count); }
@@ -320,6 +330,8 @@ struct result_t
     std::string pattern;
     size_t size = 0;
     uint64_t completed = 0;
+    std::optional<uint64_t> terminal_completed;
+    int stream_count = 0;
     uint64_t errors = 0;
     uint64_t warmup_abandoned = 0;
     std::optional<uint64_t> server_received;
@@ -419,6 +431,8 @@ inline bool write_cell_json (const result_t &r, const std::string &grpc_version)
         << "    \"compiler\": \"" << json_escape (__VERSION__) << "\",\n"
         << "    \"durationSeconds\": " << duration_seconds () << ",\n"
         << "    \"warmupSeconds\": " << warmup_config ().seconds;
+    if (r.stream_count)
+        out << ",\n    \"submitConcurrency\": " << k_submit_concurrency;
     if (!grpc_version.empty ())
         out << ",\n    \"grpcVersion\": \"" << json_escape (grpc_version) << "\"";
     out << "\n  },\n  \"cells\": [\n    {\n"
@@ -445,6 +459,9 @@ inline bool write_cell_json (const result_t &r, const std::string &grpc_version)
         << "      \"server_cpu_percent\": " << json_number (r.server_cpu_percent) << ",\n"
         << "      \"server_memory_mb\": " << json_number (r.server_mem_mb) << ",\n"
         << "      \"peak_in_flight\": " << r.peak_in_flight << ",\n";
+    if (r.stream_count)
+        out << "      \"streams\": {\"count\": " << r.stream_count
+            << ", \"inFlightPerStream\": " << (r.pattern == "request-backpressure" ? "null" : "1") << "},\n";
     if (r.has_drain)
         out << "      \"abandoned\": " << r.abandoned << ",\n"
             << "      \"drain_ms\": " << json_number (r.drain_ms) << ",\n"
@@ -458,7 +475,7 @@ inline bool write_cell_json (const result_t &r, const std::string &grpc_version)
         << "      \"warmup_abandoned\": " << r.warmup_abandoned << ",\n"
         << "      \"errors\": " << r.errors << ",\n"
         << "      \"contaminated\": " << (r.warmup_abandoned != 0 ? "true" : "false") << ",\n"
-        << "      \"extra\": {\"submitted\": " << r.submitted << ", \"completed\": " << r.completed
+        << "      \"extra\": {\"submitted\": " << r.submitted << ", \"completed\": " << r.terminal_completed.value_or (r.completed)
         << ", \"blocked\": " << r.blocked
         << ", \"submit_wait_ms\": " << json_number (r.submit_wait_ms) << "}\n    }\n  ]\n}\n";
     const std::string path = cell_dir + "/results.json";
@@ -484,6 +501,7 @@ template <typename Driver> bool run_cell (Driver driver, const std::string &grpc
     result.pattern = warmup.pattern;
     result.size = warmup.size;
     result.warmup_abandoned = warmup.abandoned;
+    result.stream_count = warmup.stream_count;
     return write_cell_json (result, grpc_version);
 }
 

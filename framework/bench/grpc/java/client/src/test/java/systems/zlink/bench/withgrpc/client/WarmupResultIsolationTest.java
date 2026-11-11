@@ -66,7 +66,7 @@ public final class WarmupResultIsolationTest {
         String body = "{\"runId\":\"warmup-result-isolation\","
             + "\"cellId\":\"warmup-result-isolation\",\"pattern\":\"request-serial\","
             + "\"payloadBytes\":1024,\"phase\":\"" + phase + "\",\"durationMs\":1,"
-            + "\"requestWindow\":100,\"sendConcurrency\":8}";
+            + "\"requestWindow\":100,\"submitConcurrency\":8}";
         return client.send(HttpRequest.newBuilder(URI.create(endpoint + "/bench/start"))
                 .header("content-type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body)).build(),

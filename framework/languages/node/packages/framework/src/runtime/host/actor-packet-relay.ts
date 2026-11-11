@@ -1,3 +1,4 @@
+import type { ZLinkRuntimeAdmissionGate } from '../admission';
 import type { ZLinkActorSessionAuthorityFence } from '../streams/actor-session-binding-registry';
 import { mapZLinkRequestReply } from '../messaging/request-result';
 import {
@@ -51,6 +52,7 @@ import type {
   ZLinkSessionBindingConfirmationOptions,
   ZLinkStreamActorLookupPort
 } from '../streams/stream-binding-runtime-ports';
+import { ReceiveKind } from '../foundation/service-runtime-contracts';
 import type { ServiceStreamSessionBinding } from '../foundation/service-runtime-contracts';
 import { actorSessionBindingRuntimeOwnerIfRegistered } from '../streams/actor-session-binding-runtime-owner';
 import {
@@ -67,6 +69,7 @@ import { ZLinkRemoteActorPacketTargetStore } from './remote-actor-packet-target-
 import type { ZLinkStoreLocationResolvers } from '../locations';
 
 export interface ZLinkActorPacketRelayOptions {
+  readonly admission?: ZLinkRuntimeAdmissionGate;
   readonly requestTimeoutMs?: number;
   readonly routeTransport: ZLinkActorRoutedJoinTransport;
   readonly streamBindingRuntime: () => ZLinkBoundSessionResponsePort & ZLinkStreamActorLookupPort;
@@ -282,6 +285,17 @@ export class ZLinkActorPacketRelay {
         frameHeader.name !== ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET
       ) {
         this.requireCurrentRemoteBinding(relay, _routeContext);
+      }
+      if (frameHeader.name !== ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET) {
+        this.options.admission
+          ?.claim(
+            _routeContext.meshName,
+            'Relayed Actor packet',
+            frameHeader.kind === ZLinkStreamMessageKind.Send
+              ? ReceiveKind.ActorSend
+              : ReceiveKind.ActorRequest
+          )
+          .close();
       }
       if (
         frameHeader.kind === ZLinkStreamMessageKind.Send ||

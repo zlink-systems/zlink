@@ -205,11 +205,25 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                 inStateLane(
                         () -> {
                             if (phase == Phase.RUNNING) {
-                                return List.of();
+                                return timers.values().stream()
+                                        .filter(timer -> timer.pendingTick != null)
+                                        .toList();
                             }
                             phase = Phase.RUNNING;
                             return List.copyOf(timers.values());
                         });
+        current.forEach(ManagedTimer::resume);
+    }
+
+    void resumePending() {
+        List<ManagedTimer> current =
+                inStateLane(
+                        () ->
+                                phase == Phase.RUNNING
+                                        ? timers.values().stream()
+                                                .filter(timer -> timer.pendingTick != null)
+                                                .toList()
+                                        : List.of());
         current.forEach(ManagedTimer::resume);
     }
 
@@ -468,7 +482,6 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                                 if (disposed || phase != Phase.RUNNING || scheduled != attempt) {
                                     return null;
                                 }
-                                scheduled = null;
                                 future = null;
                                 ZLinkSpotTimerSchedule.PendingTick next =
                                         schedule.nextTick(
@@ -483,6 +496,12 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         }
 
         private void dispatchPending(ZLinkSpotTimerSchedule.PendingTick selected) {
+            if (inStateLane(
+                    () -> {
+                        if (!dispatch.paused()) return false;
+                        scheduled = null;
+                        return true;
+                    })) return;
             ZLinkTimerTick tick = selected.tick();
             dispatch.enqueue(name, () -> dispatchClaimed(selected, tick))
                     .whenComplete(
@@ -512,8 +531,12 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
             CompletionStage<HandlerInvocation> claim =
                     stateLane.tryRunNow(
                             () -> {
-                                if (disposed || phase != Phase.RUNNING || pendingTick != selected)
-                                    return null;
+                                if (disposed
+                                        || phase != Phase.RUNNING
+                                        || pendingTick != selected
+                                        || (activeDispatch != null
+                                                && activeDispatch.tick() == selected)) return null;
+                                scheduled = null;
                                 activeDispatch =
                                         new ActiveDispatch(selected, new CompletableFuture<>());
                                 schedule.markDelivered(selected);
@@ -565,6 +588,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                                         return new DispatchResult(
                                                 false, null, null, dispatchCompletion);
                                     }
+                                    scheduled = null;
                                     boolean stopped =
                                             error != null && options.stopOnUnhandledException();
                                     SchedulePlan next = null;
@@ -649,8 +673,14 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                                     return null;
                                 }
                                 if (pendingTick != null) {
+                                    if (scheduled != null
+                                            || (activeDispatch != null
+                                                    && activeDispatch.tick() == pendingTick))
+                                        return null;
+                                    scheduled = new ScheduleAttempt();
                                     return new ResumePlan(pendingTick, 0L);
                                 }
+                                if (scheduled != null) return null;
                                 Instant scheduledAt = nextScheduledAt;
                                 long delay =
                                         scheduledAt == null
@@ -856,6 +886,10 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
 
     @FunctionalInterface
     interface Dispatch {
+        default boolean paused() {
+            return false;
+        }
+
         CompletionStage<Void> enqueue(String timerName, Supplier<CompletionStage<Void>> operation);
     }
 }

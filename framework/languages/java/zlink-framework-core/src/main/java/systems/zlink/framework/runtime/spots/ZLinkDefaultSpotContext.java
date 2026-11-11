@@ -573,13 +573,20 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 host.createTimerRegistry(
                         backendSpot.spotId(),
                         handlerInstances,
-                        (timerName, operation) ->
-                                enqueueTimerDispatch(
-                                        timerName,
-                                        () -> host.runWithOutbound(outbound, operation)));
+                        timerDispatch(
+                                (timerName, operation) ->
+                                        enqueueTimerDispatch(
+                                                timerName,
+                                                () -> host.runWithOutbound(outbound, operation))));
         execution = instanceSpot ? null : host.execution(this);
         serials.spotQueue.executionPolicy(execution);
-        if (execution != null) execution.onResume(serials::resumeExecution);
+        if (execution != null)
+            execution.onResume(
+                    () -> {
+                        serials.resumeExecution();
+                        timers.resumePending();
+                        actorTimers.values().forEach(ZLinkSpotTimerRegistry::resumePending);
+                    });
     }
 
     ZLinkSpot<?> spot() {
@@ -1174,6 +1181,22 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 });
     }
 
+    private ZLinkSpotTimerRegistry.Dispatch timerDispatch(
+            ZLinkSpotTimerRegistry.Dispatch dispatch) {
+        return new ZLinkSpotTimerRegistry.Dispatch() {
+            @Override
+            public boolean paused() {
+                return execution != null && execution.paused();
+            }
+
+            @Override
+            public CompletionStage<Void> enqueue(
+                    String timerName, Supplier<CompletionStage<Void>> operation) {
+                return dispatch.enqueue(timerName, operation);
+            }
+        };
+    }
+
     private CompletionStage<Void> enqueueTimerDispatch(
             String timerName, Supplier<CompletionStage<Void>> operation) {
         return serials.executeTimer(
@@ -1188,19 +1211,21 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                             host.createTimerRegistry(
                                     spotId(),
                                     handlerInstances,
-                                    (timerName, operation) ->
-                                            host.runActorTimerDispatch(
-                                                    serials,
-                                                    key,
-                                                    () ->
-                                                            runApplicationExecution(
-                                                                    key,
-                                                                    serials
-                                                                            .usesSharedExecutionGate(),
-                                                                    () ->
-                                                                            host.runWithOutbound(
-                                                                                    outbound,
-                                                                                    operation))));
+                                    timerDispatch(
+                                            (timerName, operation) ->
+                                                    host.runActorTimerDispatch(
+                                                            serials,
+                                                            key,
+                                                            () ->
+                                                                    runApplicationExecution(
+                                                                            key,
+                                                                            serials
+                                                                                    .usesSharedExecutionGate(),
+                                                                            () ->
+                                                                                    host
+                                                                                            .runWithOutbound(
+                                                                                                    outbound,
+                                                                                                    operation)))));
                     if (spot != null) {
                         timer.setSpot(spot);
                     }

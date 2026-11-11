@@ -385,21 +385,22 @@ test('ZLinkModule.forRoot public DI clients expose callable framework contracts'
   class Ping { constructor(ok) { this.ok = ok; } }
   class Event { constructor(ok) { this.ok = ok; } }
 
+  // Framework API §7 rejects configured public calls at admission before target validation.
   await assert.rejects(
     () => routeClient.sendToNode('missing', 'node-a', new Ping(true)).submit(),
-    framework.ZLinkConfigurationException
+    { kind: framework.ZLinkFrameworkErrorKind.InvalidOperation }
   );
   await assert.rejects(
     () => routeClient.sendToNode('actors', 'node-a', new Ping(true)).submit(),
-    /runtime is not started/i
+    { kind: framework.ZLinkFrameworkErrorKind.InvalidOperation }
   );
   await assert.rejects(
     () => spotPublisher.publish('missing', 'events', 'topic', new Event(true)).submit(),
-    framework.ZLinkConfigurationException
+    { kind: framework.ZLinkFrameworkErrorKind.InvalidOperation }
   );
   await assert.rejects(
     () => spotPublisher.publish('actors', 'actors', 'topic', new Event(true)).submit(),
-    /runtime is not started/i
+    { kind: framework.ZLinkFrameworkErrorKind.InvalidOperation }
   );
   await assert.rejects(
     () => boundSessionFactory.create('actor-1').send({ ok: true }).packetName('Push').submit()

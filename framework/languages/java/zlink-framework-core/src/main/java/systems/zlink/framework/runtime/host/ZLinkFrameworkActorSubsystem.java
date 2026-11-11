@@ -157,6 +157,7 @@ final class ZLinkFrameworkActorSubsystem {
                                     meshActorNode.meshName(),
                                     meshNode,
                                     locationStore,
+                                    storeLocationResolvers,
                                     actors,
                                     serializer,
                                     spots.activationAdmission(meshActorNode.meshName()),

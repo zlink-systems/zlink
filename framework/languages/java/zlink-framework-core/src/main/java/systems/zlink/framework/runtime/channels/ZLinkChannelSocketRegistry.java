@@ -969,6 +969,14 @@ final class ZLinkChannelSocketRegistry {
                 });
     }
 
+    boolean isClientServerConnectionReady(String connectionId, ZLinkBackendDealerSocket dealer) {
+        return inStateLane(
+                () -> {
+                    ClientServerConnection current = clientServerConnections.get(connectionId);
+                    return current != null && current.dealer == dealer && current.ready();
+                });
+    }
+
     void removeClientServerConnection(String connectionId) {
         removeClientServerConnection(connectionId, null);
     }
