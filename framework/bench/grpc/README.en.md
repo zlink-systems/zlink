@@ -303,7 +303,7 @@ this limit", so the instrument has to measure **the execution resource on which 
 | `dotnet` | process cores used | the parallelism the harness declares |
 | `node` | `performance.eventLoopUtilization()` from `perf_hooks` | `1.0` |
 | `java`, `kotlin` | CPU of the submit threads (`ThreadMXBean`, `jvm_thread_cores`) | the submit parallelism the harness declares |
-| `cpp` | CPU of the application thread that runs submit and the completion drain (`CLOCK_THREAD_CPUTIME_ID`, `submit_thread_cores`) | `1` |
+| `cpp` | Summed CPU of the stream threads that run submit and the completion drain (`CLOCK_THREAD_CPUTIME_ID`, `submit_thread_cores`) | the stream count (§10.3) |
 
 `dotnet` is the only language that declares process cores used.
 
@@ -620,7 +620,7 @@ response are JSON and the five languages use the same fields.
 POST http://127.0.0.1:<A trigger>/bench/start
 { "runId": "...", "cellId": "...", "pattern": "request-backpressure",
   "payloadBytes": 1024, "phase": "warmup" | "active",
-  "durationMs": 5000, "requestWindow": 100, "sendConcurrency": 8 }
+  "durationMs": 5000, "requestWindow": 100, "submitConcurrency": 8 }
 → 200 { "accepted": true, "runId": "...", "cellId": "...", "phase": "active", "startedAt": <monotonic ns> }
 ```
 
@@ -650,12 +650,19 @@ count and a per-stream in-flight ceiling.
 | Pattern | Streams | In-flight per stream | Meaning |
 |---------|---------|----------------------|---------|
 | `request-serial` | 1 | 1 | Send one request, then the next after the reply |
-| `request-backpressure` | 1 | No ceiling | Submit until admission backpressure is met |
-| `send-saturation` | `send_concurrency` (default 8) | 1 (until send completion notification) | The command path with no reply |
+| `request-backpressure` | `submit_concurrency` (default 8) | No ceiling | Each stream submits until admission backpressure is met |
+| `send-saturation` | `submit_concurrency` (default 8) | 1 (until send completion notification) | The command path with no reply |
 
-The stream count and per-stream in-flight are recorded in the cell's raw file (§4). How a language
-harness implements a stream (thread, task, coroutine, event loop) differs per language and is left
-in the result as in §8.2.
+The stream count and per-stream in-flight are recorded in the cell's raw file (§4).
+
+**One stream is one submitting thread.** A production server submits sends and requests from many
+handlers at once, so the bench measures concurrent submission from several OS threads. Languages with
+threads (C++, .NET, Java, Kotlin) give each stream its own thread, and that thread owns the submits
+and the accounting (in-flight, counters, latency samples) of its stream. Completion callbacks run on
+the resource the language's completion model defines; the bench does not move them to the stream
+thread. Node runs every stream on one event loop,
+because that is its production execution model. The binding row and the framework row of a language
+use the same thread layout (§7.2).
 
 ### 10.4 Cell Order
 
