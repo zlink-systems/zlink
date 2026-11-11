@@ -3987,7 +3987,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                     return CompletableFuture.completedFuture(null);
                                                 ensureOwnerAdmissionOpen();
                                                 return systems.zlink.framework.runtime.locations
-                                                        .ZLinkStatefulAuthorityRouteRuntime
+                                                        .ZLinkInstanceActivationStartupRecovery
                                                         .completeActivationRecovery(
                                                                 store,
                                                                 frameworkRegistration

@@ -34,22 +34,18 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.LockSupport;
-import java.util.function.BooleanSupplier;
 import java.util.zip.CRC32C;
 
-final class ZLinkStatefulAuthorityRouteRuntimeTest {
+final class ZLinkInstanceActivationStartupRecoveryTest {
     private static final String MESH_NAME = "game";
     private static final String STABLE_TYPE = "game.room";
     private static final String OWNER_ID = "owner-a";
@@ -61,43 +57,35 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
     private static final RoutingId NODE_RID = RoutingId.from("node-a");
     private static final String AUTHORITY_KEY = ZLinkAuthorityKeyCodec.spot(SPOT_RID.toString());
 
-    @Test
-    void providerCompletionDoesNotWaitForAuthorityStateLane() throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(ZLinkPlacementAllocationState.class)
+    void startupDoesNotPublishSteadyAuthorities(ZLinkPlacementAllocationState state)
+            throws Exception {
         var page = new CompletableFuture<ZLinkAuthorityPage>();
-        var entered = new CountDownLatch(1);
-        var release = new CountDownLatch(1);
-        var recorded = new RecordedNode();
-        var delegate = recorded.proxy();
-        var node =
-                (ZLinkInternalMeshNode)
-                        Proxy.newProxyInstance(
-                                ZLinkInternalMeshNode.class.getClassLoader(),
-                                new Class<?>[] {ZLinkInternalMeshNode.class},
-                                (proxy, method, arguments) -> {
-                                    if (method.getName().equals("rememberSpotAuthority")) {
-                                        entered.countDown();
-                                        assertTrue(release.await(10, TimeUnit.SECONDS));
-                                    }
-                                    return method.invoke(delegate, arguments);
-                                });
         var store =
                 (ZLinkLocationRepository)
                         Proxy.newProxyInstance(
-                                ZLinkLocationRepository.class.getClassLoader(),
+                                getClass().getClassLoader(),
                                 new Class<?>[] {ZLinkLocationRepository.class},
                                 (proxy, method, arguments) -> {
-                                    if (method.getName().equals("list")) {
-                                        return page;
-                                    }
+                                    if (method.getName().equals("list")) return page;
                                     throw new UnsupportedOperationException(method.getName());
                                 });
+        var node = new RecordedNode();
+        var runtime =
+                new ZLinkInstanceActivationStartupRecovery(
+                        store, null, Map.of(MESH_NAME, node.proxy()));
+        var startup = runtime.start().toCompletableFuture();
+        assertFalse(startup.isDone());
         var codec = new ZLinkServiceAuthorityPayloadCodec();
-        var ready =
+        var entry =
                 entry(
-                        "ready",
-                        ZLinkPlacementAllocationState.ACTIVE,
+                        "steady",
+                        state,
                         codec.encodeInstance(
-                                ZLinkServiceAuthorityPayloadCodec.State.READY,
+                                state == ZLinkPlacementAllocationState.PENDING
+                                        ? ZLinkServiceAuthorityPayloadCodec.State.CREATING
+                                        : ZLinkServiceAuthorityPayloadCodec.State.READY,
                                 STABLE_TYPE,
                                 SPOT_RID.toString(),
                                 OWNER_ID,
@@ -105,98 +93,52 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
                                 MESH_NAME,
                                 NODE_RID,
                                 NODE_GENERATION));
-        try (var runtime =
-                new ZLinkStatefulAuthorityRouteRuntime(
-                        store,
-                        Map.of(MESH_NAME, node),
-                        Duration.ofHours(1),
-                        failure -> {
-                            throw new AssertionError(failure);
-                        })) {
-            var reconciliation = runtime.reconcile().toCompletableFuture();
-            var providerCompletion =
-                    CompletableFuture.runAsync(
-                            () ->
-                                    page.complete(
-                                            new ZLinkAuthorityPage(
-                                                    List.of(ready), Optional.empty())));
-            try {
-                assertTrue(entered.await(5, TimeUnit.SECONDS));
-                providerCompletion.get(5, TimeUnit.SECONDS);
-                assertFalse(reconciliation.isDone());
-            } finally {
-                release.countDown();
-            }
-            reconciliation.get(5, TimeUnit.SECONDS);
-            assertEquals(1, recorded.remembered.size());
-        }
+        CompletableFuture.runAsync(
+                        () ->
+                                page.complete(
+                                        new ZLinkAuthorityPage(List.of(entry), Optional.empty())))
+                .get(5, TimeUnit.SECONDS);
+        startup.get(5, TimeUnit.SECONDS);
+        assertTrue(node.remembered.isEmpty());
+        assertTrue(node.registered.isEmpty());
+        assertTrue(node.recovered.isEmpty());
     }
 
     @Test
-    void pendingInstanceAuthorityRegistersIntentBeforeReadyRoutePublication() {
-        var codec = new ZLinkServiceAuthorityPayloadCodec();
-        var entries =
-                new AtomicReference<>(
-                        List.of(
-                                entry(
-                                        "v1",
-                                        ZLinkPlacementAllocationState.PENDING,
-                                        codec.encodeInstance(
-                                                ZLinkServiceAuthorityPayloadCodec.State.CREATING,
-                                                STABLE_TYPE,
-                                                SPOT_RID.toString(),
-                                                OWNER_ID,
-                                                OWNER_LEASE_GENERATION,
-                                                MESH_NAME,
-                                                NODE_RID,
-                                                NODE_GENERATION))));
-        ZLinkLocationRepository store = authorityStore(entries);
-        var recorded = new RecordedNode();
-        var failures = new CopyOnWriteArrayList<Throwable>();
+    void startupScanExpiryFailsAdmission() {
+        var store =
+                (ZLinkLocationRepository)
+                        Proxy.newProxyInstance(
+                                getClass().getClassLoader(),
+                                new Class<?>[] {ZLinkLocationRepository.class},
+                                (proxy, method, arguments) ->
+                                        CompletableFuture.completedFuture(
+                                                new systems.zlink.framework.runtime.internal
+                                                        .locations.ZLinkAuthorityScanExpired()));
+        var runtime = new ZLinkInstanceActivationStartupRecovery(store, null, Map.of());
+        var failure =
+                org.junit.jupiter.api.Assertions.assertThrows(
+                        java.util.concurrent.CompletionException.class,
+                        () -> runtime.start().toCompletableFuture().join());
+        assertEquals("authority scan expired", failure.getCause().getMessage());
+    }
 
-        try (var runtime =
-                new ZLinkStatefulAuthorityRouteRuntime(
-                        store,
-                        Map.of(MESH_NAME, recorded.proxy()),
-                        Duration.ofHours(1),
-                        failures::add)) {
-            runtime.start().toCompletableFuture().join();
-
-            assertEquals(1, recorded.registered.size());
-            assertTrue(recorded.remembered.isEmpty());
-            assertFence(recorded.registered.getFirst());
-
-            entries.set(
-                    List.of(
-                            entry(
-                                    "v2",
-                                    ZLinkPlacementAllocationState.ACTIVE,
-                                    codec.encodeInstance(
-                                            ZLinkServiceAuthorityPayloadCodec.State.READY,
-                                            STABLE_TYPE,
-                                            SPOT_RID.toString(),
-                                            OWNER_ID,
-                                            OWNER_LEASE_GENERATION,
-                                            MESH_NAME,
-                                            NODE_RID,
-                                            NODE_GENERATION))));
-            runtime.reconcile().toCompletableFuture().join();
-
-            await(
-                    () ->
-                            recorded.remembered.size() == 1
-                                    && recorded.registered.size() == 2
-                                    && recorded.forgottenIntents.size() == 1);
-
-            entries.set(List.of());
-            runtime.reconcile().toCompletableFuture().join();
-
-            await(
-                    () ->
-                            recorded.forgottenRoutes.size() == 1
-                                    && recorded.forgottenIntents.size() == 2);
-            assertTrue(failures.isEmpty(), failures.toString());
-        }
+    @Test
+    void startupStoreFailureIsPreserved() {
+        var storeFailure = new IllegalStateException("startup store unavailable");
+        var store =
+                (ZLinkLocationRepository)
+                        Proxy.newProxyInstance(
+                                getClass().getClassLoader(),
+                                new Class<?>[] {ZLinkLocationRepository.class},
+                                (proxy, method, arguments) ->
+                                        CompletableFuture.failedFuture(storeFailure));
+        var recovery = new ZLinkInstanceActivationStartupRecovery(store, null, Map.of());
+        var failure =
+                org.junit.jupiter.api.Assertions.assertThrows(
+                        java.util.concurrent.CompletionException.class,
+                        () -> recovery.start().toCompletableFuture().join());
+        org.junit.jupiter.api.Assertions.assertSame(storeFailure, failure.getCause());
     }
 
     @org.junit.jupiter.params.ParameterizedTest
@@ -243,15 +185,10 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
         ZLinkRelocationStore relocation = relocationStore(envelope, events);
         var recorded = new RecordedNode(events);
 
-        try (var runtime =
-                new ZLinkStatefulAuthorityRouteRuntime(
-                        store,
-                        relocation,
-                        Map.of(MESH_NAME, recorded.proxy()),
-                        Duration.ofHours(1),
-                        failure -> {
-                            throw new AssertionError(failure);
-                        })) {
+        {
+            var runtime =
+                    new ZLinkInstanceActivationStartupRecovery(
+                            store, relocation, Map.of(MESH_NAME, recorded.proxy()));
             if (failedTransition.equals("none")) runtime.start().toCompletableFuture().join();
             else
                 org.junit.jupiter.api.Assertions.assertSame(
@@ -279,7 +216,12 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
         var recovered = codec.decode(entries.get().getFirst().snapshot().payload()).orElseThrow();
         assertEquals(
                 failedTransition.equals("none"), recovered.activationRecoveryState().isEmpty());
-        if (failedTransition.equals("none")) assertEquals(1, recorded.registered.size());
+        if (failedTransition.equals("none")) {
+            assertEquals(replayCursor == 0 ? 1 : 0, recorded.registered.size());
+            assertTrue(
+                    recorded.remembered.isEmpty(),
+                    "startup must not republish scanned route fences");
+        }
     }
 
     private static ZLinkAuthorityEntry entry(
@@ -490,14 +432,6 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
         assertEquals(OWNER_LEASE_GENERATION, fence.leaseGeneration());
     }
 
-    private static void await(BooleanSupplier condition) {
-        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-        while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
-            LockSupport.parkNanos(Duration.ofMillis(5).toNanos());
-        }
-        assertTrue(condition.getAsBoolean());
-    }
-
     private static final class RecordedNode {
         private final List<String> events;
         private final List<ZLinkInternalMeshNode.SpotAuthorityRoute> remembered =
@@ -546,6 +480,11 @@ final class ZLinkStatefulAuthorityRouteRuntimeTest {
                                                             arguments[0]);
                                     case "recoverInstanceActivation" -> {
                                         events.add("replay");
+                                        // The backend recovery owner installs its intent before
+                                        // replay.
+                                        registered.add(
+                                                (ZLinkServiceM6BWireCodec.InstanceRouteFence)
+                                                        arguments[1]);
                                         return CompletableFuture.completedFuture(null);
                                     }
                                     case "instanceActivationRecoveryCompleted" -> {
