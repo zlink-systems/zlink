@@ -53,6 +53,7 @@ for run in $(seq 1 "${RUNS}"); do
     esac
 
     for pattern in "${patterns[@]}"; do
+      bench_skip_cell "${impl}" "${pattern}" && continue
       for payload in "${payloads[@]}"; do
         cell_id="${impl}-${pattern}-${payload}"
         cell_dir="$(bench_cell_dir "${run}" "${impl}" "${pattern}" "${payload}")"

@@ -86,6 +86,7 @@ for run in $(seq 1 "${RUNS}"); do
     target_stats_url="http://127.0.0.1:${target_stats_port}"
 
     for pattern in "${patterns[@]}"; do
+      bench_skip_cell "${implementation}" "${pattern}" && continue
       for payload in "${payloads[@]}"; do
         cell_id="${implementation}-${pattern}-${payload}"
         cell_dir="$(bench_cell_dir "${run}" "${implementation}" "${pattern}" "${payload}")"

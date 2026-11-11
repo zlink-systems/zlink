@@ -51,7 +51,8 @@ class SourceMetrics {
     this.completed = 0;
     this.errors = 0;
     this.inFlight = 0;
-    this.peakInFlight = 0;
+    this.streamInFlight = new Map();
+    this.streamPeakInFlight = new Map();
     this.terminalSnapshot = null;
     this.sampleCount = 0;
     this.sampleSumMicros = 0;
@@ -60,19 +61,22 @@ class SourceMetrics {
     this.otherErrors = 0;
   }
 
-  begin() {
+  begin(stream = 0) {
     const now = header.nowNs();
     this.submitted += 1;
     this.inFlight += 1;
-    this.peakInFlight = Math.max(this.peakInFlight, this.inFlight);
+    const depth = (this.streamInFlight.get(stream) ?? 0) + 1;
+    this.streamInFlight.set(stream, depth);
+    this.streamPeakInFlight.set(stream, Math.max(this.streamPeakInFlight.get(stream) ?? 0, depth));
     return now;
   }
 
-  complete(started, success, error = null) {
+  complete(started, success, error = null, stream = 0) {
     if (this.terminalSnapshot !== null) return;
     const now = header.nowNs();
     const micros = Number(now - started) / 1000;
     this.inFlight -= 1;
+    this.streamInFlight.set(stream, this.streamInFlight.get(stream) - 1);
     if (success) this.completed += 1;
     else {
       this.errors += 1;
@@ -133,6 +137,10 @@ class SourceMetrics {
       p95Micros: percentile(sorted, 0.95),
       p99Micros: percentile(sorted, 0.99)
     };
+  }
+
+  get peakInFlight() {
+    return [...this.streamPeakInFlight.values()].reduce((total, peak) => total + peak, 0);
   }
 }
 
@@ -346,21 +354,21 @@ async function requestBackpressureStream(
           metrics.phase,
           sequence
         );
-        const started = metrics.begin();
+        const started = metrics.begin(stream);
         let submission;
         try {
           submission = transport.requestSubmission(stream, payload);
         } catch (error) {
-          metrics.complete(started, false, error);
+          metrics.complete(started, false, error, stream);
         }
         if (submission !== undefined) {
           const reply = (async () => {
             try {
               const value = await submission.reply;
               validateReply(value, runId, metrics.phase, trigger.payloadBytes, sequence);
-              metrics.complete(started, true);
+              metrics.complete(started, true, null, stream);
             } catch (error) {
-              metrics.complete(started, false, error);
+              metrics.complete(started, false, error, stream);
             }
           })();
           pending.add(reply);
@@ -418,7 +426,7 @@ async function sendWorkers(count, transport, metrics, trigger, runId, nextSequen
           metrics.phase,
           sequence
         );
-        const started = metrics.begin();
+        const started = metrics.begin(stream);
         try {
           if (typeof transport.sendSubmission === 'function') {
             const submission = transport.sendSubmission(stream, payload);
@@ -428,9 +436,9 @@ async function sendWorkers(count, transport, metrics, trigger, runId, nextSequen
           } else {
             await transport.send(stream, payload);
           }
-          metrics.complete(started, true);
+          metrics.complete(started, true, null, stream);
         } catch (error) {
-          metrics.complete(started, false, error);
+          metrics.complete(started, false, error, stream);
         }
         // Keep all logical send streams and completion callbacks runnable when
         // a normal submission does not otherwise await anything.
@@ -443,13 +451,13 @@ async function sendWorkers(count, transport, metrics, trigger, runId, nextSequen
 
 async function executeRequest(transport, metrics, trigger, runId, stream, sequence) {
   const payload = header.createPayloadBytes(trigger.payloadBytes, runId, metrics.phase, sequence);
-  const started = metrics.begin();
+  const started = metrics.begin(stream);
   try {
     const reply = await transport.request(stream, payload);
     validateReply(reply, runId, metrics.phase, trigger.payloadBytes, sequence);
-    metrics.complete(started, true);
+    metrics.complete(started, true, null, stream);
   } catch (error) {
-    metrics.complete(started, false, error);
+    metrics.complete(started, false, error, stream);
   }
 }
 

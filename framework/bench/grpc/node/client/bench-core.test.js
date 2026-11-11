@@ -42,6 +42,17 @@ const options = {
   drainBoundMs: 100
 };
 
+test('peak in-flight sums each logical stream maximum', () => {
+  const metrics = new core.SourceMetrics(10);
+  const first = metrics.begin(0);
+  const second = metrics.begin(0);
+  metrics.complete(first, true, null, 0);
+  metrics.complete(second, true, null, 0);
+  const third = metrics.begin(1);
+  metrics.complete(third, true, null, 1);
+  assert.equal(metrics.peakInFlight, 3);
+});
+
 test('a reply drained after active close is excluded from rate and latency', async (t) => {
   installTargetStats(t);
   const originalCpuUsage = process.cpuUsage;

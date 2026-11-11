@@ -663,7 +663,7 @@ public final class BenchDrivers {
         private final long activeDeadline;
         private final AtomicLong errors = new AtomicLong();
         private final AtomicInteger inFlight = new AtomicInteger();
-        private final AtomicInteger peakInFlight = new AtomicInteger();
+        private final AtomicLong peakInFlight = new AtomicLong();
         private final AtomicReferenceArray<ErrorKey> errorKeys =
                 new AtomicReferenceArray<>(ERROR_KIND_LIMIT);
         private final AtomicLongArray errorCounts = new AtomicLongArray(ERROR_KIND_LIMIT);
@@ -672,7 +672,6 @@ public final class BenchDrivers {
         private final Latencies latencies;
         private volatile List<SourceMetrics> streams = List.of();
         private volatile Latencies.Summary mergedLatency;
-        private SourceMetrics owner;
 
         SourceMetrics(int sampleLimit, long activeDeadline) {
             latencies = new Latencies(sampleLimit);
@@ -686,7 +685,6 @@ public final class BenchDrivers {
             List<SourceMetrics> created = new ArrayList<>(count);
             for (int i = 0; i < count; i++) {
                 SourceMetrics stream = new SourceMetrics(latencies.capacity(), activeDeadline);
-                stream.owner = this;
                 created.add(stream);
             }
             streams = List.copyOf(created);
@@ -697,10 +695,6 @@ public final class BenchDrivers {
             submitted.incrementAndGet();
             int depth = inFlight.incrementAndGet();
             peakInFlight.accumulateAndGet(depth, Math::max);
-            if (owner != null) {
-                int total = owner.inFlight.incrementAndGet();
-                owner.peakInFlight.accumulateAndGet(total, Math::max);
-            }
             return BenchMetricHeader.nowNs();
         }
 
@@ -722,7 +716,6 @@ public final class BenchDrivers {
                 latencies.add((now - started) / 1000.0);
             }
             inFlight.decrementAndGet();
-            if (owner != null) owner.inFlight.decrementAndGet();
         }
 
         private void recordError(Throwable original) {
@@ -822,6 +815,7 @@ public final class BenchDrivers {
                 long frozenOtherErrors = 0;
                 long frozenSubmitted = 0;
                 long frozenActiveCompleted = 0;
+                long frozenPeakInFlight = 0;
                 for (SourceMetrics stream : streams) {
                     stream.freezeTerminal();
                     TerminalSnapshot current = stream.terminal.get();
@@ -831,6 +825,7 @@ public final class BenchDrivers {
                     frozenOtherErrors += current.otherErrors();
                     frozenSubmitted += stream.submitted.get();
                     frozenActiveCompleted += stream.activeCompleted.get();
+                    frozenPeakInFlight += stream.peakInFlight.get();
                     for (ErrorCount count : current.summary()) merged.merge(
                             count.key(), count.count(), Long::sum);
                     latencies.merge(stream.latencies);
@@ -842,6 +837,7 @@ public final class BenchDrivers {
                 activeCompleted.set(frozenActiveCompleted);
                 submitted.set(frozenSubmitted);
                 otherErrors.set(frozenOtherErrors);
+                peakInFlight.set(frozenPeakInFlight);
                 terminal.set(new TerminalSnapshot(frozenCompleted, frozenErrors, summary,
                         frozenOtherErrors, frozenAbandoned));
                 mergedLatency = latencies.summary();
@@ -873,15 +869,15 @@ public final class BenchDrivers {
                     errors += stream.errors();
                 }
                 return new BenchHttpApplication.Counters(
-                        submitted, completed, errors, inFlight.get(), peakInFlight.get());
+                        submitted, completed, errors, aggregateInFlight(), peakInFlight());
             }
             TerminalSnapshot current = terminal.get();
             return new BenchHttpApplication.Counters(
                     submitted(),
                     current == null ? completed.get() : current.completed(),
                     current == null ? errors.get() : current.errors(),
-                    current == null ? inFlight.get() : current.abandoned(),
-                    peakInFlight.get());
+                    current == null ? aggregateInFlight() : current.abandoned(),
+                    peakInFlight());
         }
 
         private long submitted() {
@@ -915,8 +911,18 @@ public final class BenchDrivers {
             return current == null ? inFlight.get() : current.abandoned();
         }
 
-        private long peakInFlight() {
+        long peakInFlight() {
+            if (!streams.isEmpty() && terminal.get() == null) {
+                return streams.stream().mapToLong(stream -> stream.peakInFlight.get()).sum();
+            }
             return peakInFlight.get();
+        }
+
+        private int aggregateInFlight() {
+            if (!streams.isEmpty()) {
+                return streams.stream().mapToInt(stream -> stream.inFlight.get()).sum();
+            }
+            return inFlight.get();
         }
 
         long abandoned() {

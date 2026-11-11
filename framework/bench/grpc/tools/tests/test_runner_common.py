@@ -61,7 +61,7 @@ settle_and_capture source target /dev/null allPhaseMessages
         script = 'source "$1"; bench_init kotlin' + invocation + '\nIFS=,; printf "%s|%s" "${patterns[*]}" "${payloads[*]}"'
         base = {key: value for key, value in os.environ.items()
                 if key not in ("PATTERNS", "PAYLOAD_SIZES", "IMPLEMENTATIONS")}
-        for values, expected in [({}, "request-backpressure|1024"),
+        for values, expected in [({}, "request-serial|1024"),
                                  ({"PATTERNS": "request-serial"}, "request-serial|1024"),
                                  ({"PATTERNS": "send-saturation", "PAYLOAD_SIZES": "1024,4096"},
                                   "send-saturation|1024,4096")]:

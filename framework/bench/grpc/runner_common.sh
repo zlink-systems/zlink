@@ -75,6 +75,11 @@ bench_cell_dir() {
   printf '%s/run%s/%s-%s-%s\n' "${OUTPUT_DIR}" "$1" "$2" "$3" "$4"
 }
 
+# gRPC has no admission signal, so request-backpressure is not a runnable cell.
+bench_skip_cell() {
+  [[ "$1" == grpc-* && "$2" == request-backpressure ]]
+}
+
 # bench_require_low_load: refuses to build while the machine is busy.
 bench_require_low_load() {
   local load_average

@@ -5,7 +5,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../runner_common.sh
 source "${HERE}/../runner_common.sh"
 bench_init kotlin "grpc-kotlin,zlink-framework-kotlin" \
-  "request-serial,request-backpressure,send-saturation" "1024,4096" "request-backpressure" "1024"
+  "request-serial,request-backpressure,send-saturation" "1024,4096" "request-serial" "1024"
 cd "${HERE}"
 
 select_java_home
@@ -52,6 +52,7 @@ for run in $(seq 1 "${RUNS}"); do
     esac
 
     for pattern in "${patterns[@]}"; do
+      bench_skip_cell "${impl}" "${pattern}" && continue
       for payload in "${payloads[@]}"; do
         cell_id="${impl}-${pattern}-${payload}"
         cell_dir="$(bench_cell_dir "${run}" "${impl}" "${pattern}" "${payload}")"
