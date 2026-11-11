@@ -10,6 +10,7 @@ import {
   connectCall
 } from '../errors/native_errors';
 import { validateCString } from '../options/validation';
+import { CloseError, CloseResult } from '../../contracts/errors/errors';
 import { RoutingId } from '../../contracts';
 import {
   ConnectionAttemptState,
@@ -146,16 +147,23 @@ export class SocketBase extends NativeHandle {
     // operations intact, so the owner ends only after the close succeeded.
     const owner = completionOwnerOf(this);
     owner.stopReadableWatch();
+    let shutdown: CloseError | undefined;
     try {
       closeCall('socket close failed', () => {
         requireNative().socketClose(this._native);
       });
     } catch (error) {
-      owner.resumeReadableWatch();
-      throw error;
+      // SHUTDOWN means Core already accepted a close of this handle; any
+      // other failure leaves the socket open for a later close.
+      if (!(error instanceof CloseError && error.result === CloseResult.Shutdown)) {
+        owner.resumeReadableWatch();
+        throw error;
+      }
+      shutdown = error;
     }
     releaseCompletionOwner(this);
     this._native = null;
+    if (shutdown) throw shutdown;
   }
 }
 
