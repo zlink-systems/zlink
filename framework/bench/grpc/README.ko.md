@@ -94,16 +94,15 @@ gRPC HTTP/2 frame, protobuf field overhead, ZLink envelope, ZMP header는 이 �
 
 `request-backpressure`는 미완료 request 수에 application 상한을 두지 않는다. client는 reply를
 기다리지 않고 admission backpressure를 만날 때까지 request를 연속 제출하고, 재개 신호에서
-이어서 제출한다. gRPC 쪽도 같은 모양으로 자기 flow control이 제출을 막을 때까지 제출한다.
-어느 쪽에도 application 상한을 두지 않는다.
+이어서 제출한다. 이 패턴은 admission backpressure로 정의되므로, admission 신호가 없는 gRPC 행은
+이 패턴을 측정하지 않고 표에 해당 없음으로 적는다. ZLink 행에는 application 상한을 두지 않는다.
 
 **이 패턴에서 미완료 깊이는 설정값이 아니라 측정값이다.** 스택이 도달한 깊이는 그 스택의
 설계가 정하는 결과이므로 결과의 일부로 기록한다(§5.2).
 
 이 loop 모양은 새로 만든 것이 아니라 저장소에 이미 있는 구현을 옮긴 것이다. 기준 구현은
 `bindings/node/perf/multi/perf_multi_socket_reqrep.ts`이며, reply를 기다리지 않고 async request를
-연속 제출한 뒤 completion pump에 turn을 넘긴다. 여섯 행이 모두 같은 모양을 사용하고, gRPC 쪽도
-같게 unary 호출을 하나씩 기다리지 않고 연속 제출한다.
+연속 제출한 뒤 completion pump에 turn을 넘긴다. ZLink 행이 모두 같은 모양을 사용한다.
 
 이 저장소의 perf 규약은 이미 inflight 깊이를 인위적으로 고정하지 않고 admission backpressure를
 만날 때까지 연속 제출하도록 정하고 있다(`doc/perf/PERF_MULTI_TEST_POLICY.md`의 request/reply
@@ -211,7 +210,7 @@ RESULT,current,<scenario>,local,<payload_size>,<metric>,<value>
 예시는 아래와 같다.
 
 ```text
-RESULT,current,grpc-dotnet-request-backpressure,local,1024,throughput,10000.000
+RESULT,current,grpc-dotnet-request-serial,local,1024,throughput,10000.000
 RESULT,current,zlink-dotnet-request-backpressure,local,1024,latency,0.300
 RESULT,current,zlink-framework-dotnet-request-backpressure,local,1024,latency_p99,1.200
 ```

@@ -102,8 +102,9 @@ meant to show the cost of a "process one at a time" usage pattern.
 
 `request-backpressure` puts no application ceiling on the number of incomplete requests. Without
 waiting for replies, the client submits requests continuously until it meets admission
-backpressure, and resumes submitting when it is signalled to. The gRPC side has the same shape: it
-submits until its own flow control stops it. Neither side gets an application ceiling.
+backpressure, and resumes submitting when it is signalled to. The pattern is defined by admission
+backpressure, so the gRPC rows, which have no admission signal, do not measure it and the table
+shows them as not applicable. The ZLink rows get no application ceiling.
 
 **In this pattern the incomplete depth is a measurement, not a setting.** The depth a stack reaches
 is an outcome its design decides, so it is recorded as part of the result (§5.2).
@@ -111,8 +112,7 @@ is an outcome its design decides, so it is recorded as part of the result (§5.2
 This loop shape is not new; it is ported from an implementation already in the repository. The
 reference implementation is `bindings/node/perf/multi/perf_multi_socket_reqrep.ts`, which submits
 async requests continuously without waiting for a reply and then hands the turn to the completion
-pump. All six rows use the same shape, and the gRPC side is treated the same way: unary calls are
-submitted continuously rather than awaited one at a time.
+pump. All ZLink rows use the same shape.
 
 This repository's perf convention already requires that inflight depth not be fixed artificially
 and that requests be submitted continuously until admission backpressure (the request/reply client
@@ -226,7 +226,7 @@ RESULT,current,<scenario>,local,<payload_size>,<metric>,<value>
 An example follows.
 
 ```text
-RESULT,current,grpc-dotnet-request-backpressure,local,1024,throughput,10000.000
+RESULT,current,grpc-dotnet-request-serial,local,1024,throughput,10000.000
 RESULT,current,zlink-dotnet-request-backpressure,local,1024,latency,0.300
 RESULT,current,zlink-framework-dotnet-request-backpressure,local,1024,latency_p99,1.200
 ```
