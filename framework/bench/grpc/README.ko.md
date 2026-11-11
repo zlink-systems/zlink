@@ -312,7 +312,7 @@ request 계열 셀은 아래 세 값을 셀마다 함께 기록한다. 세 값�
 
 | 지표 | 의미 |
 |---|---|
-| `peak_in_flight` | active 구간에서 관측한 미완료 request 수의 최댓값 |
+| `peak_in_flight` | active 구간에서 stream마다 관측한 미완료 request 수 최댓값의 합. 전체 동시 최댓값의 상한이다 — stream 사이에 공유 계수를 두면 bench가 측정 경로에 경합을 더하므로 stream별로 잰다 |
 | 깊이 | 처리량 x 평균 latency로 계산한 평균 미완료 수(Little's law) |
 | `abandoned` | drain 상한에 이를 때까지 완료되지 않은 request 수 |
 

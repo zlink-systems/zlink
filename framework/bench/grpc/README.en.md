@@ -334,7 +334,7 @@ Request-family cells record the three values below for every cell. The three are
 
 | Metric | Meaning |
 |---|---|
-| `peak_in_flight` | The maximum number of incomplete requests observed during the active window |
+| `peak_in_flight` | The sum of each stream's maximum number of incomplete requests observed during the active window. It is an upper bound of the overall concurrent maximum; it is measured per stream because a counter shared between streams would make the bench add contention to the path it measures |
 | Depth | The mean incomplete count calculated as throughput x mean latency (Little's law) |
 | `abandoned` | The number of requests that did not complete by the drain bound |
 
