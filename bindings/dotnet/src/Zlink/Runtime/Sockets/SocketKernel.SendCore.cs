@@ -10,7 +10,8 @@ internal sealed partial class SocketKernel
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void SendSingleCore(Message message, int flags)
     {
-        var submitter = new SendSingleSubmitter(Handle, flags);
+        using var call = _handle.ReserveSubmit();
+        var submitter = new SendSingleSubmitter(call.Handle, flags);
         var rc = SinglePartSubmit.Submit(message, ref submitter);
         if (rc != 0)
             throw ZlinkException.CreateSubmitException((SubmitResult)rc);
@@ -19,14 +20,16 @@ internal sealed partial class SocketKernel
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private SendResult SendSingleResultCore(Message message, int flags)
     {
-        var submitter = new SendSingleSubmitter(Handle, flags);
+        using var call = _handle.ReserveSubmit();
+        var submitter = new SendSingleSubmitter(call.Handle, flags);
         return MapSendResult(SinglePartSubmit.Submit(message, ref submitter));
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private SendResult SendSingleNoWaitResultCore(Message message)
     {
-        var submitter = new SendSingleNoWaitSubmitter(Handle);
+        using var call = _handle.ReserveSubmit();
+        var submitter = new SendSingleNoWaitSubmitter(call.Handle);
         return MapSendResult(SinglePartSubmit.Submit(message, ref submitter));
     }
 
@@ -40,9 +43,10 @@ internal sealed partial class SocketKernel
     private unsafe void PublishSingleCore(byte[] topicUtf8, Message message,
         int flags)
     {
+        using var call = _handle.ReserveSubmit();
         fixed (byte* topicPtr = topicUtf8)
         {
-            var submitter = new PublishSingleSubmitter(Handle, topicPtr, flags);
+            var submitter = new PublishSingleSubmitter(call.Handle, topicPtr, flags);
             var rc = SinglePartSubmit.Submit(message, ref submitter);
             if (rc != 0)
                 throw ZlinkException.CreateSubmitException((SubmitResult)rc);
@@ -58,9 +62,10 @@ internal sealed partial class SocketKernel
     private unsafe SendResult PublishNoWaitSingleCore(byte[] topicUtf8,
         Message message)
     {
+        using var call = _handle.ReserveSubmit();
         fixed (byte* topicPtr = topicUtf8)
         {
-            var submitter = new PublishSingleSubmitter(Handle, topicPtr,
+            var submitter = new PublishSingleSubmitter(call.Handle, topicPtr,
                 DontWaitFlag);
             return MapSendResult(SinglePartSubmit.Submit(message, ref submitter));
         }
@@ -75,9 +80,10 @@ internal sealed partial class SocketKernel
     private unsafe void SendSingleCore(ref ZlinkRoutingId routingId,
         Message message, int flags)
     {
+        using var call = _handle.ReserveSubmit();
         fixed (ZlinkRoutingId* routingIdPtr = &routingId)
         {
-            var submitter = new TargetedSendSingleSubmitter(Handle, routingIdPtr,
+            var submitter = new TargetedSendSingleSubmitter(call.Handle, routingIdPtr,
                 flags);
             var rc = SinglePartSubmit.Submit(message, ref submitter);
             if (rc != 0)
@@ -89,9 +95,10 @@ internal sealed partial class SocketKernel
     private unsafe SendResult SendSingleResultCore(ref ZlinkRoutingId routingId,
         Message message, int flags)
     {
+        using var call = _handle.ReserveSubmit();
         fixed (ZlinkRoutingId* routingIdPtr = &routingId)
         {
-            var submitter = new TargetedSendSingleSubmitter(Handle, routingIdPtr,
+            var submitter = new TargetedSendSingleSubmitter(call.Handle, routingIdPtr,
                 flags);
             return MapSendResult(SinglePartSubmit.Submit(message, ref submitter));
         }
@@ -100,9 +107,10 @@ internal sealed partial class SocketKernel
     private unsafe SendResult SendSingleNoWaitResultCore(
         ref ZlinkRoutingId routingId, Message message)
     {
+        using var call = _handle.ReserveSubmit();
         fixed (ZlinkRoutingId* routingIdPtr = &routingId)
         {
-            var submitter = new TargetedSendSingleNoWaitSubmitter(Handle,
+            var submitter = new TargetedSendSingleNoWaitSubmitter(call.Handle,
                 routingIdPtr);
             return MapSendResult(SinglePartSubmit.Submit(message, ref submitter));
         }
