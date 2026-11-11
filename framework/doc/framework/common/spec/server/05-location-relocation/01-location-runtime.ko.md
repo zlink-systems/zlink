@@ -750,7 +750,8 @@ gate와 admission이 그 판정을 적용한다.
 - 닫혀 있는 동안 새로 들어온 operation은 queue에 받지 않고 `ShuttingDown`으로 끝낸다.
 - Timer의 아직 queue에 넣지 않은 tick은 넣지 않고 보존하며, 다시 열린 뒤
   [Spot timer](../03-spot-actor/10-spot-timer.ko.md) 규칙에 따라 전달한다.
-- 보류는 operation의 deadline과 취소를 연장하지 않는다.
+- 보류는 operation의 deadline과 취소를 연장하지 않는다. 보류 중 deadline이 지나거나 취소되면 그 결과로
+  한 번 끝나며, gate가 다시 열려도 실행하지 않는다.
 - `T` 폐기, 실행권 상실, 다른 owner·incarnation 확정은 영구 폐기다. 보류한 작업과 tick은 §5.1의
   정리 규칙으로 정리하고 gate를 다시 열지 않는다.
 

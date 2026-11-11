@@ -837,7 +837,9 @@ and admission apply that judgment.
 - An operation that arrives while closed is not accepted into the queue and ends with `ShuttingDown`.
 - A timer tick not yet queued is not queued; it is kept and delivered after reopening under the
   [Spot timer](../03-spot-actor/10-spot-timer.en.md) rules.
-- Holding does not extend an operation's deadline or cancellation.
+- Holding does not extend an operation's deadline or cancellation. If the deadline passes or the
+  operation is cancelled while held, it ends once with that result and does not run when the gate
+  reopens.
 - `T` discard, loss of execution rights, and a confirmed different owner or incarnation are permanent
   discard. Held work and ticks are cleaned up under the §5.1 cleanup rules and the gate does not reopen.
 
