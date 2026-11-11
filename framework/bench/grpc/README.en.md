@@ -90,7 +90,7 @@ ZMP header aren't included in this size.
 | Pattern Name | gRPC | ZLink raw binding | ZLink framework | Interpretation |
 |-----------|------|-------------------|-----------------|------|
 | `request-serial` | unary `Echo` RPC | raw request send and reply receive | node request call | Sends one request and sends the next only after the reply completes |
-| `request-backpressure` | unary `Echo` RPC | raw request send and reply receive | node request call | Puts no ceiling on incomplete requests. Submits continuously until admission backpressure |
+| `request-backpressure` | n/a (no admission signal) | raw request send and reply receive | node request call | Puts no ceiling on incomplete requests. Submits continuously until admission backpressure |
 | `send-saturation` | unary `Command` RPC, replying `Empty` | raw one-way send submission | node send submission | Compares the command path, which has no reply payload |
 
 The API names the three implementations use differ per language, but the contract is the same. In
@@ -102,8 +102,9 @@ meant to show the cost of a "process one at a time" usage pattern.
 
 `request-backpressure` puts no application ceiling on the number of incomplete requests. Without
 waiting for replies, the client submits requests continuously until it meets admission
-backpressure, and resumes submitting when it is signalled to. The gRPC side has the same shape: it
-submits until its own flow control stops it. Neither side gets an application ceiling.
+backpressure, and resumes submitting when it is signalled to. The pattern is defined by admission
+backpressure, so the gRPC rows, which have no admission signal, do not measure it and the table
+shows them as not applicable. The ZLink rows get no application ceiling.
 
 **In this pattern the incomplete depth is a measurement, not a setting.** The depth a stack reaches
 is an outcome its design decides, so it is recorded as part of the result (§5.2).
@@ -111,8 +112,7 @@ is an outcome its design decides, so it is recorded as part of the result (§5.2
 This loop shape is not new; it is ported from an implementation already in the repository. The
 reference implementation is `bindings/node/perf/multi/perf_multi_socket_reqrep.ts`, which submits
 async requests continuously without waiting for a reply and then hands the turn to the completion
-pump. All six rows use the same shape, and the gRPC side is treated the same way: unary calls are
-submitted continuously rather than awaited one at a time.
+pump. All ZLink rows use the same shape.
 
 This repository's perf convention already requires that inflight depth not be fixed artificially
 and that requests be submitted continuously until admission backpressure (the request/reply client
@@ -163,7 +163,7 @@ one-way send. Under this condition the difference was N times.
 - The `request-backpressure` pattern has no incomplete-request ceiling setting. In that
   pattern depth is not a condition that is set but a result that is measured and recorded
   (§5.2). This bench has no `request_window` setting.
-- The default send concurrency is `8`.
+- The default `submit_concurrency` is `8`.
 - gRPC and ZLink framework use the same protobuf DTO. The ZLink raw binding skips the framework but
   puts the same shape on the wire: two parts, an envelope header part and a protobuf-encoded
   `BenchPayload` part, with the 29-byte measurement header inside that protobuf `bytes body`. This
@@ -226,7 +226,7 @@ RESULT,current,<scenario>,local,<payload_size>,<metric>,<value>
 An example follows.
 
 ```text
-RESULT,current,grpc-dotnet-request-backpressure,local,1024,throughput,10000.000
+RESULT,current,grpc-dotnet-request-serial,local,1024,throughput,10000.000
 RESULT,current,zlink-dotnet-request-backpressure,local,1024,latency,0.300
 RESULT,current,zlink-framework-dotnet-request-backpressure,local,1024,latency_p99,1.200
 ```
@@ -389,7 +389,7 @@ information alongside it.
 - The depth reached (`request-backpressure` pattern, §5.2)
 - A's logical stream count, per-stream in-flight ceiling, and trigger endpoint (§10)
 - Per-cell `peak_in_flight`, depth, and `abandoned` (§5.2)
-- The send concurrency value
+- The `submit_concurrency` value
 - Source (A) CPU and whether the cell was saturated (§5.1), target (B) CPU
 - The original result JSON
 
@@ -414,8 +414,8 @@ but degrades at `4096` has a real problem, and since the report shows both sizes
 per-payload gate exposes that problem at no added cost.
 
 This criterion is applied to patterns where ZLink can send the next request without waiting for the
-reply. Such a pattern is the sound judgement cell because gRPC unary `Echo` and a ZLink request
-give the same guarantee, namely confirmation that the server processed the message.
+reply. Such a pattern is the sound judgement cell because a ZLink request confirms that the server
+processed the message.
 `request-serial` is kept as a supplementary metric for looking at the round-trip latency of a
 process-one-at-a-time usage pattern.
 
@@ -687,8 +687,9 @@ there are streams. The gRPC server configuration stays at the language default a
 
 Kotlin shares the binding, server, and codec with Java, so it's excluded from the full matrix.
 Instead, two supplementary cells that show the cost of the Kotlin call layer — `grpc-kotlin`
-(coroutine stub) and `zlink-framework-kotlin` (suspend calls) at `request-backpressure @1024` — are placed
-next to the Java rows. Only A is Kotlin; B is the Java binary on the Java band of §9, as is.
+(coroutine stub) and `zlink-framework-kotlin` (suspend calls) at `request-serial @1024` — are placed
+next to the Java rows. Both cells need the same pattern to compare the call layer, and gRPC does
+not measure `request-backpressure` (§2). Only A is Kotlin; B is the Java binary on the Java band of §9, as is.
 
 ## 11. Runner Inputs and Result Layout
 
@@ -720,7 +721,7 @@ difference doesn't show in the result table.
 - `TARGET_RATE`, `SOURCE_CPUS`, and `TARGET_CPUS` are optional C++ runner inputs. CPU lists use Linux `taskset -c` syntax.
   The C++ runner records them in the cell JSON `metadata` as `targetRate` (`0` is unpaced), `sourceCpus`, and `targetCpus` (`unpinned` when unset).
 
-Values outside the table aren't inputs. Send concurrency 8 and the 30-second drain
+Values outside the table aren't inputs. `submit_concurrency` 8 and the 30-second drain
 limit (§3), and ports (§9) are set by the runner and recorded in the `metadata` of the cell JSON.
 
 Results are written in this layout.
