@@ -905,8 +905,6 @@ export class ZLinkFrameworkRuntimeHost
       trackInstanceSpot: (input) => this.locationOwner.currentLifecycle?.trackInstanceSpot(input),
       observeActorAuthorityVersion: (actorId, storeVersion) =>
         this.actorClientLocationResolver?.observeActorAuthorityVersion(actorId, storeVersion),
-      reconcileStatefulAuthorityRoutes: (signal) =>
-        this.statefulAuthorityRoutes?.reconcile(signal) ?? Promise.resolve(),
       runtimeEventPublisher: this.runtimeEventPublisher,
       metrics: this.metrics,
       activationAdmission: this.activationAdmission
@@ -1665,7 +1663,6 @@ export class ZLinkFrameworkRuntimeHost
       this.lifecycleSink?.push('framework:started');
     } catch (error) {
       if (this.shutdownDeadline !== undefined && isAbortError(error)) throw error;
-      await this.statefulAuthorityRoutes?.stop();
       try {
         await this.runWithShutdownDeadline(DEFAULT_HOST_CONTROL_TIMEOUT_MS, async () =>
           rollbackRuntimeStart({
@@ -1780,12 +1777,10 @@ export class ZLinkFrameworkRuntimeHost
     const channelRuntime = this.channelRuntime;
     const spotNodeRuntime = this.spotNodeRuntime;
     const streamRuntime = this.streamRuntime;
-    const statefulAuthorityRoutes = this.statefulAuthorityRoutes;
     this.stopTopologyObservers();
     this.removeOwnerLeaseRecoveryPublication();
     const locationSnapshot = this.locationOwner.clearForStop();
     this.lifecycleSink?.push('framework:stop');
-    await statefulAuthorityRoutes?.stop();
     await stopRuntimeParts({
       state,
       locationSnapshot,
@@ -1938,16 +1933,12 @@ export class ZLinkFrameworkRuntimeHost
       creationStore: locationStore,
       relocationStore: this.relocationStore,
       meshNodes: spotNodeRuntime.meshNodesByName,
-      pollingIntervalMs:
-        this.options.registration.locations.options.pollingIntervalMs ??
-        zlinkDefaultLocationOptions.pollingIntervalMs,
       pageSize: ZLINK_PROVIDER_MAX_PAGE_SIZE,
       reportError: (error) =>
         this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
-          'stateful authority route reconciliation',
+          'stateful authority startup recovery',
           error
-        ),
-      onSpotRouteChanged: (spotId) => this.cachedLocationSpotRouteResolver?.invalidate?.(spotId)
+        )
     });
   }
 
@@ -2100,12 +2091,6 @@ export class ZLinkFrameworkRuntimeHost
       meshName,
       signal
     );
-    // A failed relocation rolls the local object barriers back before the
-    // descriptor is published as Serving. Reconcile the durable authority
-    // routes before returning so the next local request cannot observe the
-    // brief window where the Location row is ready but the route cache still
-    // reflects the failed capture.
-    await this.statefulAuthorityRoutes?.reconcile(signal);
   }
 
   private async publishMeshDraining(meshName: string, signal?: AbortSignal): Promise<void> {

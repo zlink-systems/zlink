@@ -278,7 +278,6 @@ interface ZLinkHostRelocationOptions {
   };
   readonly trackInstanceSpot?: (input: ZLinkTrackedInstanceAuthority) => void;
   readonly observeActorAuthorityVersion?: (actorId: string, storeVersion: string) => void;
-  readonly reconcileStatefulAuthorityRoutes?: (signal?: AbortSignal) => Promise<void>;
   readonly runtimeEventPublisher?: ZLinkRuntimeEventPublisher;
   readonly metrics?: ZLinkRuntimeMetrics;
   readonly activationAdmission?: ZLinkActivationAdmission;
@@ -2752,7 +2751,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       }
       for (const session of sessions) session.prepared.setReplayResults([]);
       await captured.commitSource(settlement.followAuthorities);
-      await this.options.reconcileStatefulAuthorityRoutes?.(signal);
       if (failure !== undefined) throw failure.error;
     } catch (error) {
       if (
@@ -3075,7 +3073,33 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
             if (!isIndeterminateLocationStoreFailure(error)) throw error;
             return undefined;
           });
-        if (preserved?.kind === 'stored') return 'source';
+        if (preserved?.kind === 'stored') {
+          const key = decodeAuthorityKey({ value: primaryKey(envelope) } as ZLinkAuthorityKey);
+          if (preserved.allocation.objectKind !== 'actor') {
+            const node = this.requireMeshNode(preserved.allocation.descriptor.meshName);
+            node.rememberSpotRoute?.({
+              spot: { spotId: key.globalId, generation: preserved.objectGeneration },
+              targetNodeRid: String(preserved.allocation.descriptor.rid),
+              targetNodeGeneration: preserved.allocation.descriptorLifecycleGeneration,
+              authorityOwnerGeneration: preserved.authorityOwnerGeneration,
+              ownerLeaseGeneration: preserved.ownerLeaseGeneration,
+              storeVersion: preserved.storeVersion.value
+            });
+            if (preserved.allocation.objectKind === 'instance_spot') {
+              node.registerInstanceIntent?.(preserved.allocation.stableType, {
+                targetSpotId: key.globalId,
+                objectGeneration: preserved.objectGeneration,
+                targetNodeRid: String(preserved.allocation.descriptor.rid),
+                targetNodeGeneration: preserved.allocation.descriptorLifecycleGeneration,
+                ownerId: preserved.ownerId,
+                authorityOwnerGeneration: preserved.authorityOwnerGeneration,
+                leaseGeneration: preserved.ownerLeaseGeneration,
+                storeVersion: preserved.storeVersion.value
+              });
+            }
+          }
+          return 'source';
+        }
       }
       // The caller awaits this settlement, so the retry timer keeps the loop alive.
       await new Promise<void>((resolve) =>
