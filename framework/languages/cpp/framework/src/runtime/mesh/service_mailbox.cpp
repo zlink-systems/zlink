@@ -255,6 +255,15 @@ service_mailbox_t::try_claim (service_mailbox_domain_t domain_value,
     auto &source = domain (domain_value);
     while (!source.ready.empty ()) {
         const auto owner = source.ready.front ();
+        // A ready callback that throws splices its owners back after the lock was released;
+        // such an entry can name an owner that has since left or can no longer be claimed.
+        const auto found = source.owners.find (owner);
+        if (found == source.owners.end () || !eligible (found->second)) {
+            source.ready.pop_front ();
+            if (found != source.owners.end ())
+                refresh_ready_locked (*_state, source, owner);
+            continue;
+        }
         return claim_owner_locked (source, domain_value, owner, message_budget, byte_budget,
                                    claimed, true, lock);
     }
