@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using Systems.Zlink.Stream.Connector.Runtime;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
-using Zlink.Framework.Runtime.Host;
 
 namespace Zlink.Framework.Runtime.Actors;
 
@@ -18,9 +17,6 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         return new ZLinkActorRequestCall<TRequest>(this, actorId, request);
     }
-
-    internal ValueTask<ZLinkFrameworkRuntime.ZLinkRuntimeOperationAdmission> AdmitSendOperationAsync() =>
-        runtime.AdmitOperationAsync(boundExecution: true);
 
     internal IZLinkActorRequestCall RequestToActorExact<TRequest>(
         string meshName,
@@ -48,12 +44,15 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         string packetName,
         TMessage message,
         ZLinkCallMetadata? metadata,
-        ResolvedActorRoute? fixedRoute = null
+        ResolvedActorRoute? fixedRoute = null,
+        IZLinkAdmittedCallClaim? call = null
     )
     {
         using var operation = (
             await runtime.AdmitOperationAsync(boundExecution: true).ConfigureAwait(false)
         ).Enter();
+        // Spec 06-framework-api §7: a call is used only once admission accepts it.
+        call?.ClaimAfterAdmission();
         using var flow = ZLinkFlowContext.EnterCurrentOrCreate(
             ZLinkFlowOrigin.Application,
             runtime.Flow.CaptureEnabled
@@ -523,11 +522,17 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         return MapRequestException(inner, operationName);
     }
 
+    // Lets a one-way call mark itself used inside the submission's own admission.
+    private interface IZLinkAdmittedCallClaim
+    {
+        void ClaimAfterAdmission();
+    }
+
     private sealed class ZLinkActorSendCall<TMessage>(
         ZLinkActorClient client,
         string actorId,
         TMessage message
-    ) : IZLinkActorSendCall
+    ) : IZLinkActorSendCall, IZLinkAdmittedCallClaim
     {
         private ZLinkCallMetadata? _metadata;
         private ZLinkOneWayCallGate _submission = new("Actor send");
@@ -544,22 +549,18 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
             return this;
         }
 
-        public async ValueTask Async()
-        {
-            using var operation = (
-                await client.AdmitSendOperationAsync().ConfigureAwait(false)
-            ).Enter();
-            _submission.Claim();
-            await client
+        public void ClaimAfterAdmission() => _submission.Claim();
+
+        public ValueTask Async() =>
+            client
                 .SubmitSendAsync(
                     actorId,
                     ZLinkMessageNameResolver.ResolveFromMessage(message),
                     message,
-                    _metadata
+                    _metadata,
+                    call: this
                 )
-                .EnsureAcceptedAsync("Actor send", ZLinkFrameworkErrorKind.NotFound)
-                .ConfigureAwait(false);
-        }
+                .EnsureAcceptedAsync("Actor send", ZLinkFrameworkErrorKind.NotFound);
     }
 
     private sealed class ZLinkActorRequestCall<TRequest>(
