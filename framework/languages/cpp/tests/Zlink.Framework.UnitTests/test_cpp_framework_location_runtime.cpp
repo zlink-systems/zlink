@@ -3889,8 +3889,14 @@ void StoreOutageRetention::discard_retained (bool shared, bool retained, bool re
     node->root_services = service_provider;
     auto &gateway = service_provider.get_required<detail::actor_gateway_runtime_t> ();
     std::vector<std::shared_ptr<detail::spot_context_state_t>> contexts;
+    // Close settles on the offload worker after its lane turn erases the context entry.
+    std::vector<std::shared_ptr<std::atomic<bool>>> close_settled;
     const auto add_context = [&] (std::string id) {
         auto context = std::make_shared<detail::spot_context_state_t> ();
+        auto settled = std::make_shared<std::atomic<bool>> (false);
+        context->merged_close_results.push_back (
+          [settled] (result_t<bool>) mutable { settled->store (true); });
+        close_settled.push_back (settled);
         context->node = node;
         context->lane_owner = node;
         context->serial_executor = scheduler;
@@ -4222,8 +4228,24 @@ void StoreOutageRetention::discard_retained (bool shared, bool retained, bool re
         context->ensure_spot_serial_executor ()->close ();
         context->node.reset ();
     }
-    scheduler->run_all ();
-    node->spot_contexts_by_id.clear ();
+    // Teardown waits for every started Close to settle, then clears the map on its lane.
+    const auto closes_settled = [&] {
+        return node->lane.run_sync ([&] {
+            for (std::size_t i = 0; i < contexts.size (); ++i)
+                if (contexts[i]->closed.has_value () && !close_settled[i]->load ())
+                    return false;
+            return true;
+        });
+    };
+    const auto close_deadline = std::chrono::steady_clock::now () + 10s;
+    for (;;) {
+        scheduler->run_all ();
+        if (closes_settled () || std::chrono::steady_clock::now () >= close_deadline)
+            break;
+        std::this_thread::yield ();
+    }
+    EXPECT_TRUE (closes_settled ());
+    node->lane.run_sync ([&] { node->spot_contexts_by_id.clear (); });
     mesh.stop ();
 }
 
