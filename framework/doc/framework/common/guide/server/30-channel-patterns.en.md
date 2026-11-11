@@ -119,7 +119,7 @@ ChannelName.
 - Only a node that registered `Server()` receives calls on that channel.
 - A node that registered only `Client()` can start a call but does not receive one.
 - **On a RouteMesh, the `Server()` role includes the ability to send.** Do not register `Client()`
-  again for the same ChannelName. ClientServer differs ([3.2](#32-clientserver-the-direction-is-fixed)).
+  again for the same ChannelName. ClientServer differs ([3.2](#32-clientserver--the-direction-is-fixed)).
 
 You can register several channels on one MeshNode, and each channel may carry a different role.
 

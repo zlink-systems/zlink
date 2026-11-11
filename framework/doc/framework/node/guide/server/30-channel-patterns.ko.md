@@ -106,7 +106,7 @@ RouteMesh 자체에는 방향이 없다. 방향은 node가 ChannelName마다 등
 - `Server()`를 등록한 node만 그 channel의 호출을 받는다.
 - `Client()`만 등록한 node는 호출을 시작할 수 있지만 받지는 않는다.
 - **RouteMesh에서는 `Server()` role이 송신 기능을 포함한다.** 같은 ChannelName에 `Client()`를 다시
-  등록하지 않는다. ClientServer는 다르다([3.2](#32-clientserver-방향이-고정된다)).
+  등록하지 않는다. ClientServer는 다르다([3.2](#32-clientserver--방향이-고정된다)).
 
 한 MeshNode 위에 channel을 여러 개 등록할 수 있고 channel마다 role이 다를 수 있다.
 
