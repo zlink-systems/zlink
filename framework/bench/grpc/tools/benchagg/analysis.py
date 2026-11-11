@@ -15,9 +15,10 @@ from dataclasses import dataclass, field
 from .model import (
     CLIENT_SATURATION_FRACTION,
     G5_SPREAD_LIMIT_PERCENT,
-    JUDGEMENT_PATTERN,
-    JUDGEMENT_THRESHOLD,
+    BINDING_JUDGEMENT,
+    FRAMEWORK_JUDGEMENT,
     PATTERNS,
+    SUPPLEMENTARY_LANGUAGES,
     Cell,
     CellKey,
     RunSet,
@@ -265,6 +266,7 @@ class Judgement:
     verdict: str | None = None
     value: float | None = None
     reason: str = ""
+    threshold: float = 0.0
 
     @property
     def published(self) -> bool:
@@ -317,7 +319,8 @@ def judge_pair(
     numerator_impl: str,
     denominator_impl: str,
     payload_size: int,
-    pattern: str = JUDGEMENT_PATTERN,
+    pattern: str,
+    threshold: float,
 ) -> Judgement:
     """Decide one ratio. FB-011: both rows must pass G5 or nothing is published."""
     numerator_key = CellKey(numerator_impl, pattern, payload_size)
@@ -351,9 +354,10 @@ def judge_pair(
             status="unsupported",
             value=value,
             reason="; ".join(blockers),
+            threshold=threshold,
         )
 
-    verdict = "pass" if value is not None and value >= JUDGEMENT_THRESHOLD else "fail"
+    verdict = "pass" if value is not None and value >= threshold else "fail"
     return Judgement(
         formula=formula,
         numerator=numerator_key,
@@ -363,6 +367,7 @@ def judge_pair(
         verdict=verdict,
         value=value,
         reason="both rows pass G5",
+        threshold=threshold,
     )
 
 
@@ -371,30 +376,33 @@ def judge_language(
     lang: str,
     baseline: str = "zlink-c",
     payload_sizes: tuple[int, ...] = (1024, 4096),
-    pattern: str = JUDGEMENT_PATTERN,
 ) -> list[Judgement]:
-    """The spec 7.2 pair of formulas, per payload size (FB-005)."""
+    """Apply both spec 7.2 gates independently at every payload size."""
+    if lang in SUPPLEMENTARY_LANGUAGES:
+        return []
     out = []
-    for size in payload_sizes:
-        out.append(
-            judge_pair(rows, f"zlink-{lang} / {baseline}", f"zlink-{lang}", baseline, size, pattern)
-        )
-    for size in payload_sizes:
-        out.append(
-            judge_pair(
-                rows,
-                f"zlink-framework-{lang} / zlink-{lang}",
-                f"zlink-framework-{lang}",
-                f"zlink-{lang}",
-                size,
-                pattern,
-            )
-        )
+    binding_threshold, binding_patterns = BINDING_JUDGEMENT
+    framework_threshold, framework_patterns = FRAMEWORK_JUDGEMENT
+    for cell_pattern in binding_patterns:
+        for size in payload_sizes:
+            out.append(judge_pair(
+                rows, f"zlink-{lang} / {baseline}", f"zlink-{lang}", baseline,
+                size, cell_pattern, binding_threshold,
+            ))
+    for cell_pattern in framework_patterns:
+        for size in payload_sizes:
+            out.append(judge_pair(
+                rows, f"zlink-framework-{lang} / zlink-{lang}",
+                f"zlink-framework-{lang}", f"zlink-{lang}", size,
+                cell_pattern, framework_threshold,
+            ))
     return out
 
 
 def language_verdict(judgements: list[Judgement]) -> tuple[str, str]:
     """FB-005: a language passes only when every size is published and passes."""
+    if not judgements:
+        return "n/a", "no spec 7.2 judgement cells (supplementary language cells only)"
     unsupported = [j for j in judgements if not j.published]
     if unsupported:
         return (
@@ -405,8 +413,9 @@ def language_verdict(judgements: list[Judgement]) -> tuple[str, str]:
     failed = [j for j in judgements if j.verdict == "fail"]
     if failed:
         names = ", ".join(f"{j.formula}@{j.payload_size}={j.value:.3f}" for j in failed)
-        return "fail", f"below {JUDGEMENT_THRESHOLD:.2f}: {names}"
-    return "pass", f"all judgements published and at or above {JUDGEMENT_THRESHOLD:.2f}"
+        thresholds = sorted({j.threshold for j in failed})
+        return "fail", f"below {', '.join(f'{t:.2f}' for t in thresholds)}: {names}"
+    return "pass", "all judgements published and at or above their layer thresholds"
 
 
 def ordered_keys(rows: dict[CellKey, Row], payload_sizes, implementations=None):
