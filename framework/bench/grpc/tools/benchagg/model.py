@@ -101,6 +101,7 @@ class Cell:
     cell_id: str | None = None
     trigger: dict[str, Any] = field(default_factory=dict)
     streams: dict[str, Any] = field(default_factory=dict)
+    submit_concurrency: int | None = None
     target_stats: dict[str, Any] = field(default_factory=dict)
 
     #: A server-driven source is complete only when the runner embedded its
@@ -149,10 +150,9 @@ class Cell:
     #: ceiling: both are "the threads this harness offers its own submit path".
     #: GC and JIT threads are not JVM threads and never appear in ThreadMXBean, so
     #: they cannot inflate it.
-    #: The cpp row declares ``submit_thread_cores``: CPU charged to the single
-    #: application thread its drivers run submit and completion drain on
-    #: (CLOCK_THREAD_CPUTIME_ID), against a declared ceiling of 1. It is the same
-    #: correction for the third time and for a third reason (FB-037). Measured,
+    #: The cpp row declares ``submit_thread_cores``: summed CPU charged to its
+    #: dedicated submit threads (CLOCK_THREAD_CPUTIME_ID), against their count.
+    #: Earlier single-submitter results declared a ceiling of 1 (FB-037). Measured,
     #: ``zlink-cpp`` request-window reads 0.955 submit cores against 1.92 process
     #: cores -- the difference is Core's native I/O threads -- while ``grpc-cpp``
     #: reads 0.695 against 0.698. Process cores would divide unlike quantities

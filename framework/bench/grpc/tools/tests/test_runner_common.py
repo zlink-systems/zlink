@@ -13,6 +13,25 @@ COMMON = Path(__file__).resolve().parents[2] / "runner_common.sh"
 
 
 class RunnerCommonTest(unittest.TestCase):
+    def test_trigger_uses_submit_concurrency_for_every_pattern(self):
+        script = '''
+source "$1"
+curl() {
+  while [[ $# -gt 0 ]]; do
+    if [[ "$1" == -d ]]; then printf '%s' "$2"; return; fi
+    shift
+  done
+}
+trigger_phase http://127.0.0.1:5285 run cell "$2" 1024 active 5000
+'''
+        for pattern in ("request-serial", "request-backpressure", "send-saturation"):
+            result = subprocess.run(["bash", "-c", script, "_", str(COMMON), pattern],
+                                    capture_output=True, text=True, check=True)
+            trigger = json.loads(result.stdout)
+            self.assertEqual(trigger["submitConcurrency"], 8)
+            self.assertEqual(trigger["requestWindow"], 100)
+            self.assertNotIn("sendConcurrency", trigger)
+
     def test_warmup_settle_observes_all_phase_receives(self):
         # Active-only received stays zero while the target drains warmup sends.
         script = '''
