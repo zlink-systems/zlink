@@ -445,7 +445,12 @@ final class ZLinkLocationRuntimeRecoveryTest {
                     new ZLinkOwnerLeaseClaimed(
                             new ZLinkLocationOwnerToken("owner-a", 1), now.plusSeconds(15), now));
             startup.get(1, TimeUnit.SECONDS);
-            var heartbeat = scheduler.tasks.getLast();
+            // The owner deadline task (admission lifetime) is scheduled with the heartbeat.
+            var heartbeat =
+                    scheduler.tasks.stream()
+                            .filter(task -> task.getDelay(TimeUnit.MILLISECONDS) < 1000)
+                            .reduce((first, second) -> second)
+                            .orElseThrow();
             // Location section 5: the initial claim already consumed the renewal interval.
             assertEquals(0, heartbeat.getDelay(TimeUnit.MILLISECONDS));
             heartbeat.run();
@@ -455,9 +460,13 @@ final class ZLinkLocationRuntimeRecoveryTest {
             assertFalse(releaseRenew.isDone());
             assertEquals(
                     0,
-                    scheduler.tasks.stream().filter(task -> !task.isDone()).count(),
+                    scheduler.tasks.stream()
+                            .filter(task -> !task.isDone())
+                            // The owner deadline task (admission lifetime) is not a renewal.
+                            .filter(task -> task.getDelay(TimeUnit.SECONDS) < 10)
+                            .count(),
                     "a pending renewal must not schedule an overlapping renewal");
-            var scheduled = scheduler.nextTask();
+            var scheduled = scheduler.nextTask(task -> task.getDelay(TimeUnit.MILLISECONDS) < 1000);
             releaseRenew.complete(
                     new systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewed(
                             now.plusSeconds(15), now));

@@ -603,6 +603,26 @@ public final class ZLinkLocationStoreOutageTest {
         queue.discardApplications().toCompletableFuture().join();
     }
 
+    /**
+     * Location runtime §5: after the admission deadline no new application turn starts, even when
+     * no Store failure has been observed yet (the renewal did not run, for example after a pause).
+     */
+    @Test
+    void admissionDeadlineWithoutObservedOutageClosesNewApplicationTurns() {
+        try (var f = new Fixture(false, true)) {
+            var execution = f.runtime.execution(() -> true, () -> {});
+            execution.ready().toCompletableFuture().join();
+            long admission = TTL.minus(MARGIN).toNanos();
+            f.now.set(100L + admission - 1L);
+            execution.check(true);
+            f.now.set(100L + admission);
+            f.fireCutoff();
+            assertNull(f.runtime.ownerLeaseSnapshot().outageCutoffNanos());
+            var closed = assertThrows(RuntimeException.class, () -> execution.check(true));
+            assertEquals("The owner lease admission deadline has expired.", closed.getMessage());
+        }
+    }
+
     public static final class Fixture implements AutoCloseable {
         public final AtomicLong now = new AtomicLong(100);
         final AtomicLong clockReads = new AtomicLong();
