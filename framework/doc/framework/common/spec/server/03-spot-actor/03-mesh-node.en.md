@@ -253,13 +253,12 @@ The framework selects the target using the following conditions.
 4. Confirms active/pending capacity remains.
 5. Applies node-wide placement weight across the remaining candidates.
 
-If some node with positive placement weight meets conditions 2-4 but none of them is `Serving`
-yet, the create operation waits within its remaining deadline. While it waits, it judges again
-only against descriptor lists that the existing discovery refresh has changed; it doesn't re-read
-the Store per request. Each new judgment applies all of conditions 1-5 (condition 2 is the owner
-lease validation of [Location runtime §4.1](../05-location-relocation/01-location-runtime.en.md#41-validating-a-target-descriptors-owner-lease)).
-When the deadline expires the result is `DeadlineExceeded`. If the first judgment finds no node to
-wait for either, the operation doesn't wait and ends with the `Unavailable` of §5.1.
+Each judgment selects among nodes that meet all of conditions 1-5 (condition 2 is the owner lease
+validation of [Location runtime §4.1](../05-location-relocation/01-location-runtime.en.md#41-validating-a-target-descriptors-owner-lease)).
+If there is none, but some node with positive placement weight meets conditions 2-4, the create
+operation waits for the existing discovery refresh within its remaining deadline and judges again.
+It doesn't re-read the Store per request. If there is neither, it ends with the `Unavailable` of
+§5.1. When the deadline expires the result is `DeadlineExceeded`.
 
 The framework reserves a slot to place the object on the selected node so it
 doesn't double-use capacity with another creation operation. It doesn't

@@ -236,12 +236,11 @@ Framework는 다음 조건을 사용해 target을 선택한다.
 4. Active·pending capacity가 남아 있는지 확인한다.
 5. 남은 후보의 node-wide placement weight를 적용한다.
 
-조건 2~4를 만족하고 placement weight가 양수인 node가 있으나 그중 `Serving`인 node가 아직 없으면
-create operation의 남은 deadline 안에서 기다린다. 기다리는 동안에는 기존 discovery 갱신으로 바뀐
-descriptor 목록에서만 다시 판정하며, 요청마다 Store를 다시 읽는 대기를 두지 않는다. 다시 판정할 때도
-조건 1~5를 모두 적용한다(조건 2는 [Location runtime §4.1](../05-location-relocation/01-location-runtime.ko.md#41-대상-descriptor의-owner-lease-검증)의
-owner lease 검증이다). Deadline이 끝나면 `DeadlineExceeded`다. 처음 판정할 때 기다릴 node도 없으면
-기다리지 않고 §5.1의 `Unavailable`로 끝낸다.
+판정할 때마다 조건 1~5를 모두 만족하는 node가 있으면 그중에서 선택한다(조건 2는
+[Location runtime §4.1](../05-location-relocation/01-location-runtime.ko.md#41-대상-descriptor의-owner-lease-검증)의
+owner lease 검증이다). 없지만 조건 2~4를 만족하고 placement weight가 양수인 node가 있으면 create operation의
+남은 deadline 안에서 기존 discovery 갱신을 기다려 다시 판정한다. 요청마다 Store를 다시 읽는 대기를 두지
+않는다. 둘 다 없으면 §5.1의 `Unavailable`로 끝낸다. Deadline이 끝나면 `DeadlineExceeded`다.
 
 Framework는 선택한 node에 object를 배치할 자리를 예약하여 다른 생성 작업과
 capacity를 중복 사용하지 않게 한다. Application에 target RID나 owner token을
