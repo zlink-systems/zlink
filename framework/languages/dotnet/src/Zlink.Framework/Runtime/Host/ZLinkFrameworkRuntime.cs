@@ -1029,15 +1029,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 //  shutdown) refuses it.
                 if (RefuseClosedApplicationAdmission() is not null)
                     return null;
-                if (
-                    !(
-                        boundExecution
-                            ? (_locationRuntime?.IsBoundExecutionOpen ?? true)
-                            : IsOwnerAdmissionOpen
-                    )
-                )
-                    throw NotAcceptingOperations("owner admission is closed");
-                return AdmitOperationOnLane(countAsRequest);
+                return AdmitOperationOnLane(countAsRequest, boundExecution);
             })
             .ConfigureAwait(false);
         return admitted is null
@@ -1101,21 +1093,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         }
 
         ZLinkFrameworkComponentState admitted;
-        admitted = AwaitStateLane(
-            _stateLane.RunAsync(() =>
-            {
-                if (
-                    Volatile.Read(ref _lifecyclePhase) != (int)ZLinkRuntimeLifecyclePhase.Running
-                    || _state is not { } state
-                )
-                    throw new InvalidOperationException(
-                        "ZLink framework runtime is not accepting operations."
-                    );
-                _activeOperations++;
-                _operationEpoch++;
-                return state;
-            })
-        );
+        admitted = AwaitStateLane(_stateLane.RunAsync(() => AdmitOperationOnLane(false)));
 
         return AttachOperation(admitted, countAsRequest: false);
     }
@@ -1357,7 +1335,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
 
     internal CancellationToken GetSendCancellationToken()
     {
-        var token = ShutdownToken;
+        var token = GetOrStartState().StopTokenSource.Token;
         if (token.IsCancellationRequested)
             ZLinkOneWaySubmitOutcome.EnsureAccepted(
                 new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Shutdown),
@@ -1741,13 +1719,10 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         {
             // Consult the admission owner before reporting a missing generation:
             // shutdown refuses new work even after its runtime state is disposed.
-            RefuseClosedApplicationAdmission()?.Enter();
-            throw new InvalidOperationException(
-                "ZLink framework runtime is not started. Call StartAsync before using synchronous runtime APIs."
-            );
+            using var operation = EnterOperation();
         }
 
-        return _state;
+        return _state!;
     }
 
     private async Task<Task> StopAcceptingOperationsAsync()
@@ -1770,19 +1745,30 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     /// Counts an operation whose drain-gate seal the caller already applied
     /// for its kind (new host work or existing-owner inbound).
     /// </summary>
-    private ZLinkFrameworkComponentState AdmitOperationOnLane(bool countAsRequest)
+    private ZLinkFrameworkComponentState AdmitOperationOnLane(
+        bool countAsRequest,
+        bool? boundExecution = null
+    )
     {
-        var refusal =
-            Volatile.Read(ref _lifecyclePhase) != (int)ZLinkRuntimeLifecyclePhase.Running
-                ? $"lifecycle phase is {(ZLinkRuntimeLifecyclePhase)Volatile.Read(ref _lifecyclePhase)}"
-            : _state is null ? "runtime state is not created"
-            : null;
-        if (refusal is not null)
-            throw NotAcceptingOperations(refusal);
-        if (_state is not { } state)
-            throw new InvalidOperationException(
-                "ZLink framework runtime is not accepting operations (runtime state is not created)."
-            );
+        var phase = (ZLinkRuntimeLifecyclePhase)Volatile.Read(ref _lifecyclePhase);
+        // Spec 06 §7 and §13: a runtime that never started rejects with InvalidOperation; a
+        // runtime whose shutdown sealed admission (kept until the next start) rejects with
+        // ShuttingDown.
+        if (phase != ZLinkRuntimeLifecyclePhase.Running || _state is not { } state)
+            throw new ZLinkFrameworkException(
+                _drainAdmission.IsSealed
+                    ? ZLinkFrameworkErrorKind.ShuttingDown
+                    : ZLinkFrameworkErrorKind.InvalidOperation,
+                $"ZLink framework runtime is not accepting operations (lifecycle phase is {phase})."
+            )
+            {
+                Origin = ZLinkErrorOrigin.Framework,
+            };
+        if (
+            boundExecution is { } bound
+            && !(bound ? (_locationRuntime?.IsBoundExecutionOpen ?? true) : IsOwnerAdmissionOpen)
+        )
+            throw NotAcceptingOperations("owner admission is closed");
         _activeOperations++;
         _operationEpoch++;
         if (countAsRequest)
