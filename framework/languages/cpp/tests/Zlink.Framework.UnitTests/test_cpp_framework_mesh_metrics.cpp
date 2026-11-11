@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "mailbox_claim_fixture.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "metric_test_reader.hpp"
@@ -398,12 +399,13 @@ void verify_not_required_peer_counts_as_configured ()
     require_metric (provider, "zlink.mesh_node.peers.ready", "gauge", "{peer}", peer_labels, 0);
 }
 
-std::shared_ptr<mesh::service_mailbox_claim_t> claim_request (mesh::raw_mesh_node_owner_t &target,
-                                                              mesh::service_mailbox_domain_t domain)
+zlink::framework::test::mailbox_claim_t claim_request (mesh::raw_mesh_node_owner_t &target,
+                                                       mesh::service_mailbox_domain_t domain)
 {
     const auto deadline = std::chrono::steady_clock::now () + 2s;
     while (std::chrono::steady_clock::now () < deadline) {
-        auto claim = target.mailbox ().try_claim (domain, 1, 64u * 1024u);
+        auto claim =
+          zlink::framework::test::claim_mailbox (target.mailbox (), domain, 1, 64u * 1024u);
         if (claim)
             return claim;
         const auto pumped =
@@ -412,7 +414,7 @@ std::shared_ptr<mesh::service_mailbox_claim_t> claim_request (mesh::raw_mesh_nod
                  "raw request pump reported a protocol error");
         std::this_thread::yield ();
     }
-    return nullptr;
+    return {};
 }
 
 using request_result_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;

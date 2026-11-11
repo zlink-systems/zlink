@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "mailbox_claim_fixture.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/stateful_ingress_fixture.hpp"
@@ -64,9 +65,9 @@ stateful::object_ref_t create_ready (stateful::stateful_object_runtime_t &object
     return *ready;
 }
 
-std::pair<bool, bool>
-submit_client_server_reply_and_release_claim (client_server::raw_client_server_server_t &server,
-                                              std::shared_ptr<mesh::service_mailbox_claim_t> claim)
+std::pair<bool, bool> submit_client_server_reply_and_release_claim (
+  client_server::raw_client_server_server_t &server,
+  std::shared_ptr<zlink::framework::test::mailbox_claim_t> claim)
 {
     const auto &request = *claim->records.front ();
     const auto delivered =
@@ -75,7 +76,7 @@ submit_client_server_reply_and_release_claim (client_server::raw_client_server_s
                                                          bytes ("reply")})
         .result ()
         .value ();
-    const auto released = server.mailbox ().release (*claim);
+    const auto released = server.mailbox ().release (**claim);
     return std::make_pair (delivered, released);
 }
 
@@ -224,8 +225,9 @@ void verify_client_server_claim_releases_after_one_shot_reply_terminal ()
     assert (server.mailbox ().try_enqueue (mesh::service_mailbox_record_t::from_parts (
       mailbox_owner, mesh::service_mailbox_domain_t::application,
       zlink::framework::detail::backend::materialize_binding_parts ({{0x02}}))));
-    auto claim = server.mailbox ().try_claim_owner (mesh::service_mailbox_domain_t::application,
-                                                    mailbox_owner, 1, 1024);
+    auto claim = std::make_shared<zlink::framework::test::mailbox_claim_t> (
+      zlink::framework::test::claim_mailbox_owner (
+        server.mailbox (), mesh::service_mailbox_domain_t::application, mailbox_owner, 1, 1024));
     assert (claim && claim->records.size () == 1);
     auto retained_claim = claim;
 
@@ -244,8 +246,8 @@ void verify_client_server_claim_releases_after_one_shot_reply_terminal ()
     assert (claim_released);
     assert (terminal_count.load (std::memory_order_relaxed) == 1);
 
-    auto released = server.mailbox ().try_claim_owner (mesh::service_mailbox_domain_t::application,
-                                                       mailbox_owner, 1, 1024);
+    auto released = zlink::framework::test::claim_mailbox_owner (
+      server.mailbox (), mesh::service_mailbox_domain_t::application, mailbox_owner, 1, 1024);
     assert (released && released->records.size () == 1);
     assert (server.mailbox ().release (*released));
 

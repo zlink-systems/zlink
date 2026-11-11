@@ -1,4 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "mailbox_claim_fixture.hpp"
+#include "same_owner_claim_controls.hpp"
 #include <zlink/json.hpp>
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/telemetry_observation.hpp"
@@ -37,6 +39,7 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <stop_token>
 #include <string>
 #include <thread>
 #include <utility>
@@ -229,6 +232,301 @@ struct other_owner_request_handler_t
     using reply_type = std::string;
     std::string handle (const other_owner_request_t &) { return "other"; }
 };
+
+struct same_owner_probe_request_t
+{
+    static constexpr const char *packet_name = "same-owner.probe";
+    int id = 0;
+};
+}
+
+template <> struct zlink::json::dto_traits<same_owner_probe_request_t>
+{
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("id", &same_owner_probe_request_t::id)};
+};
+
+namespace
+{
+
+struct same_owner_probe_state_t
+{
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool first_entered = false;
+    bool release_first = false;
+    bool second_entered = false;
+};
+
+struct same_owner_probe_handler_t
+{
+    using request_type = same_owner_probe_request_t;
+    using reply_type = int;
+
+    int handle (const same_owner_probe_request_t &request)
+    {
+        auto current = state;
+        if (request.id == 1) {
+            std::unique_lock lock (current->mutex);
+            current->first_entered = true;
+            current->changed.notify_all ();
+            current->changed.wait (lock, [&] { return current->release_first; });
+        } else {
+            std::lock_guard lock (current->mutex);
+            current->second_entered = true;
+            current->changed.notify_all ();
+        }
+        return request.id;
+    }
+
+    inline static std::shared_ptr<same_owner_probe_state_t> state;
+};
+
+class gated_probe_actor_t final : public zlink::framework::actor_t
+{
+  public:
+    explicit gated_probe_actor_t (zlink::framework::actor_context_t context) :
+        _context (std::move (context))
+    {
+    }
+
+    zlink::framework::actor_context_t &context () noexcept override { return _context; }
+    const zlink::framework::actor_context_t &context () const noexcept override { return _context; }
+
+  private:
+    zlink::framework::actor_context_t _context;
+};
+
+class gated_probe_actor_factory_t final
+    : public zlink::framework::actor_factory_t<gated_probe_actor_t>
+{
+  public:
+    zlink::framework::task_t<std::shared_ptr<gated_probe_actor_t>>
+    create (zlink::framework::actor_context_t context, std::stop_token) override
+    {
+        co_return std::make_shared<gated_probe_actor_t> (std::move (context));
+    }
+};
+
+class gated_probe_entry_spot_t final : public zlink::framework::entry_spot_t<gated_probe_actor_t>
+{
+  public:
+    explicit gated_probe_entry_spot_t (zlink::framework::entry_spot_context_t context) :
+        _context (std::move (context))
+    {
+    }
+
+    zlink::framework::entry_spot_context_t &context () noexcept override { return _context; }
+    const zlink::framework::entry_spot_context_t &context () const noexcept override
+    {
+        return _context;
+    }
+
+    void configure () override
+    {
+        _context.handlers ().add_actor_request<&gated_probe_entry_spot_t::on_request> ();
+    }
+
+    zlink::framework::task_t<zlink::framework::actor_create_response_t>
+    on_create_actor (gated_probe_actor_t &, const zlink::framework::message_t &) override
+    {
+        co_return zlink::framework::actor_create_response_t::accept ();
+    }
+
+    zlink::framework::task_t<void> on_actor_joined (gated_probe_actor_t &) override { co_return; }
+    zlink::framework::task_t<void> on_leave_actor (gated_probe_actor_t &) override { co_return; }
+    zlink::framework::task_t<void> on_disconnect_actor (gated_probe_actor_t &) override
+    {
+        co_return;
+    }
+
+    int on_request (gated_probe_actor_t &,
+                    zlink::framework::message_context_t &,
+                    const same_owner_probe_request_t &request)
+    {
+        return same_owner_probe_handler_t{}.handle (request);
+    }
+
+  private:
+    zlink::framework::entry_spot_context_t _context;
+};
+
+bool run_same_owner_probe_case (zlink::framework::channel_client_t &channels,
+                                std::string first_channel,
+                                std::string second_channel)
+{
+    auto state = std::make_shared<same_owner_probe_state_t> ();
+    same_owner_probe_handler_t::state = state;
+    auto first =
+      channels.request_to_channel (std::move (first_channel), same_owner_probe_request_t{1})
+        .async<int> ();
+    {
+        std::unique_lock lock (state->mutex);
+        assert (state->changed.wait_for (lock, 5s, [&] { return state->first_entered; }));
+    }
+    auto second =
+      channels.request_to_channel (std::move (second_channel), same_owner_probe_request_t{2})
+        .async<int> ();
+    bool started_before_release = false;
+    {
+        std::unique_lock lock (state->mutex);
+        started_before_release =
+          state->changed.wait_for (lock, 250ms, [&] { return state->second_entered; });
+        state->release_first = true;
+    }
+    state->changed.notify_all ();
+    const auto first_result = first.result_for (5s);
+    const auto second_result = second.result_for (5s);
+    assert (first_result && first_result->value () == 1);
+    assert (second_result && second_result->value () == 2);
+    return started_before_release;
+}
+
+bool verify_same_owner_blocking_public_api_repro ()
+{
+    auto app = zlink::framework::app_t::create ();
+    if (const auto *log = std::getenv ("ZLINK_CPP_SAME_OWNER_FLOW_LOG"))
+        app.logging ().use_file (std::string (log) + ".channel");
+    app.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
+        options.add_location_store (
+          std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ());
+        options.handlers ().group ("same-owner-probe").add<same_owner_probe_handler_t> ();
+        for (const auto &name : {"same-owner-probe-a", "actor:same-owner-probe-b"}) {
+            auto channel = options.add_client_server_channel (name);
+            channel.server ().listen ().add_handler_group ("same-owner-probe");
+            channel.client ();
+        }
+    });
+    auto provider = app.advanced ().services ().build_provider ();
+    auto &runtime = provider.get_required<zlink::framework::client_server_runtime_t> ();
+    auto &channels = provider.get_required<zlink::framework::channel_client_t> ();
+    app.set_message_flow_mode (zlink::framework::message_flow_log_mode_t::normal);
+    char program[] = "same-owner-blocking-repro";
+    char *arguments[] = {program, nullptr};
+    std::thread app_thread ([&] { (void) app.run (1, arguments); });
+    const auto deadline = std::chrono::steady_clock::now () + 10s;
+    while (
+      (!runtime.is_ready ("same-owner-probe-a") || !runtime.is_ready ("actor:same-owner-probe-b"))
+      && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::sleep_for (1ms);
+    assert (runtime.is_ready ("same-owner-probe-a")
+            && runtime.is_ready ("actor:same-owner-probe-b"));
+
+    int same_owner_started = 0;
+    int different_owner_started = 0;
+    int raw_channel_started = 0;
+    for (int i = 0; i < 20; ++i) {
+        same_owner_started +=
+          run_same_owner_probe_case (channels, "same-owner-probe-a", "same-owner-probe-a");
+        different_owner_started +=
+          run_same_owner_probe_case (channels, "same-owner-probe-a", "actor:same-owner-probe-b");
+        raw_channel_started += run_same_owner_probe_case (channels, "actor:same-owner-probe-b",
+                                                          "actor:same-owner-probe-b");
+    }
+    std::fprintf (stdout,
+                  "same-owner B before release: %d/20; different-owner B before release: %d/20\n",
+                  same_owner_started, different_owner_started);
+    std::fprintf (stdout, "raw Channel with Actor-looking name B before release: %d/20\n",
+                  raw_channel_started);
+    std::fflush (stdout);
+    app.stop ();
+    app_thread.join ();
+    assert (different_owner_started == 20);
+    return same_owner_started == 20 && raw_channel_started == 20;
+}
+
+void verify_gated_owner_control ()
+{
+    auto location_store =
+      std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ();
+    auto app = zlink::framework::app_t::create ();
+    if (const auto *log = std::getenv ("ZLINK_CPP_SAME_OWNER_FLOW_LOG"))
+        app.logging ().use_file (std::string (log) + ".actor");
+    app.add_zlink_framework (
+      [location_store] (zlink::framework::zlink_framework_options_t &options) {
+          options.configure_locations ().owner_lease_renew_interval = 10ms;
+          options.configure_locations ().owner_lease_fencing_margin = 1ms;
+          options.configure_locations ().polling_interval = 10ms;
+          options.add_location_store (location_store);
+          options.add_relocation_store (
+            std::make_shared<zlink::framework::runtime::in_memory_relocation_store_t> ());
+          auto mesh = options.add_route_mesh ("same-owner-gated-probe-mesh");
+          mesh.set_object_role (zlink::framework::object_role_t::server)
+            .set_routing_id (zlink::routing_id_t::from ("same-owner-gated-probe-node"))
+            .listen ("tcp://127.0.0.1:0");
+          mesh.add_entry_spot<gated_probe_entry_spot_t> ()
+            .add_actor_factory<gated_probe_actor_t, gated_probe_actor_factory_t> (
+              "same-owner-gated-probe-actor", std::make_shared<gated_probe_actor_factory_t> (),
+              [] (auto &factory) { factory.disable_relocation (); });
+      });
+    auto provider = app.advanced ().services ().build_provider ();
+    auto &actors = provider.get_required<zlink::framework::actor_manager_t> ();
+    auto &client = provider.get_required<zlink::framework::actor_client_t> ();
+    app.set_message_flow_mode (zlink::framework::message_flow_log_mode_t::normal);
+    char program[] = "same-owner-gated-probe";
+    char *arguments[] = {program, nullptr};
+    std::atomic_int app_exit_code{-1};
+    std::thread app_thread ([&] { app_exit_code.store (app.run (1, arguments)); });
+    const auto deadline = std::chrono::steady_clock::now () + 10s;
+    while (!app.is_ready () && app_exit_code.load () == -1
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::sleep_for (1ms);
+    if (!app.is_ready ()) {
+        const auto state = static_cast<int> (app.runtime_state ());
+        app.request_stop ();
+        app_thread.join ();
+        std::fprintf (stderr, "gated owner app readiness failed: state=%d exit=%d\n", state,
+                      app_exit_code.load ());
+    }
+    assert (app.is_ready ());
+
+    int second_started_while_first_blocked = 0;
+    for (int i = 0; i < 20; ++i) {
+        auto state = std::make_shared<same_owner_probe_state_t> ();
+        same_owner_probe_handler_t::state = state;
+        const auto actor_id_text = "same-owner-gated-" + std::to_string (i);
+        const auto created = actors
+                               .get_or_create (zlink::framework::actor_id_t (actor_id_text),
+                                               "same-owner-gated-probe-actor")
+                               .timeout (5s)
+                               .async ()
+                               .result ();
+        assert (
+          created
+          && std::holds_alternative<zlink::framework::actor_create_created_t> (created.value ()));
+        auto first =
+          client
+            .request (zlink::framework::actor_id_t (actor_id_text), same_owner_probe_request_t{1})
+            .timeout (5s)
+            .async<int> ();
+        {
+            std::unique_lock lock (state->mutex);
+            assert (state->changed.wait_for (lock, 5s, [&] { return state->first_entered; }));
+        }
+        auto second =
+          client
+            .request (zlink::framework::actor_id_t (actor_id_text), same_owner_probe_request_t{2})
+            .timeout (5s)
+            .async<int> ();
+        {
+            std::unique_lock lock (state->mutex);
+            second_started_while_first_blocked +=
+              state->changed.wait_for (lock, 250ms, [&] { return state->second_entered; });
+            state->release_first = true;
+        }
+        state->changed.notify_all ();
+        const auto first_result = first.result_for (5s);
+        const auto second_result = second.result_for (5s);
+        assert (first_result && first_result->value () == 1);
+        assert (second_result && second_result->value () == 2);
+    }
+    std::fprintf (stdout, "gated owner B before release: %d/20\n",
+                  second_started_while_first_blocked);
+    std::fflush (stdout);
+    app.stop ();
+    app_thread.join ();
+    assert (second_started_while_first_blocked == 0);
+}
 
 struct budget_owner_send_t
 {
@@ -1166,8 +1464,8 @@ void verify_invalid_metadata_is_a_protocol_error ()
       .async ();
     pump (client_server::client_server_pump_result_t::application);
     using zlink::framework::runtime::mesh::service_mailbox_domain_t;
-    const auto claim =
-      server.mailbox ().try_claim (service_mailbox_domain_t::application, 1, 1024 * 1024);
+    const auto claim = zlink::framework::test::claim_mailbox (
+      server.mailbox (), service_mailbox_domain_t::application, 1, 1024 * 1024);
     assert (claim && claim->records.size () == 1);
     assert (server.mailbox ().release (*claim));
     for (const auto &bad : invalid_metadata_headers ()) {
@@ -1332,11 +1630,11 @@ std::size_t server_receive_turn_records (std::uint32_t queue_capacity,
       server->mailbox ().pending_messages (service_mailbox_domain_t::application);
     assert (jobs->snapshot ().queued_application_jobs == records);
     assert (jobs->snapshot ().permits_in_use == records);
-    const auto claim =
-      server->mailbox ().try_claim (service_mailbox_domain_t::application, records, 1024 * 1024);
-    assert (claim && claim->records.size () == records);
     for (std::size_t index = 0; index < records; ++index) {
-        auto &record = *claim->records[index];
+        auto claim = zlink::framework::test::claim_mailbox (
+          server->mailbox (), service_mailbox_domain_t::application, 1, 1024 * 1024);
+        assert (claim && claim->records.size () == 1);
+        auto &record = *claim->records.front ();
         const auto &payload = record.parts ()[1];
         assert (payload.to_string () == std::to_string (index));
         auto application_permit =
@@ -1346,9 +1644,9 @@ std::size_t server_receive_turn_records (std::uint32_t queue_capacity,
         zlink::framework::runtime::handler_entry_t before_application_handler (
           record.before_application_handler, std::move (application_permit));
         before_application_handler ();
+        assert (server->mailbox ().release (*claim));
     }
     assert (jobs->snapshot ().permits_in_use == 0);
-    assert (server->mailbox ().release (*claim));
     server->close ();
     return records;
 }
@@ -1463,8 +1761,8 @@ void verify_client_server_closed_reply_finishes_without_server_lane ()
                      .async ();
     pump (client_server::client_server_pump_result_t::application);
     using zlink::framework::runtime::mesh::service_mailbox_domain_t;
-    const auto claim =
-      server.mailbox ().try_claim (service_mailbox_domain_t::application, 1, 1024 * 1024);
+    const auto claim = zlink::framework::test::claim_mailbox (
+      server.mailbox (), service_mailbox_domain_t::application, 1, 1024 * 1024);
     assert (claim && claim->records.size () == 1);
     const auto &request = (*claim->records.front ());
     server.close ();
@@ -2422,9 +2720,26 @@ int main (int argc, char **argv)
         verify_client_server_owner_gate_and_budget ();
         return 0;
     }
+    if (argc == 2 && std::string (argv[1]) == "--same-owner-gated-control") {
+        verify_gated_owner_control ();
+        assert (zlink::framework::test::same_owner_claim_controls ());
+        return 0;
+    }
+    if (argc == 2 && std::string (argv[1]) == "--same-owner-regression") {
+        const bool independent = verify_same_owner_blocking_public_api_repro ();
+        const bool controls = zlink::framework::test::same_owner_claim_controls ();
+        assert (independent && controls);
+        return 0;
+    }
     if (argc == 3 && std::string (argv[1]) == "--terminal-overlap") {
         verify_client_server_terminal_overlap_matrix (std::stoi (argv[2]));
         return 0;
+    }
+    {
+        const bool independent = verify_same_owner_blocking_public_api_repro ();
+        verify_gated_owner_control ();
+        const bool controls = zlink::framework::test::same_owner_claim_controls ();
+        assert (independent && controls);
     }
     verify_zero_weight_target_stays_ready ();
     verify_first_observation_contains_current_status ();

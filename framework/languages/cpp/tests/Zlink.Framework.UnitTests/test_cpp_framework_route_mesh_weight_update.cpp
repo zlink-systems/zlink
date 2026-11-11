@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "mailbox_claim_fixture.hpp"
 #include "../support/telemetry_observation.hpp"
 
 #include "../support/runtime_failure_fixture.hpp"
@@ -507,11 +508,11 @@ void expect_successful_channel_request (mesh::raw_mesh_node_owner_t &source,
           promise.set_value ({terminal, std::move (payload)});
       })));
 
-    std::shared_ptr<mesh::service_mailbox_claim_t> claim;
+    zlink::framework::test::mailbox_claim_t claim;
     const auto request_deadline = std::chrono::steady_clock::now () + 2s;
     while (!claim && std::chrono::steady_clock::now () < request_deadline) {
-        claim =
-          target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 64u * 1024u);
+        claim = zlink::framework::test::claim_mailbox (
+          target.mailbox (), mesh::service_mailbox_domain_t::application, 1, 64u * 1024u);
         if (!claim) {
             ASSERT_NE (
               mesh::raw_mesh_pump_result_t::protocol_error,
@@ -767,11 +768,11 @@ TEST_P (ChannelMessageFlow, RouteMeshRequestAndSendRecordAllReceiverStages)
           "X", payload, 2s, [replied] (auto, auto) { replied->set_value (); })));
     else
         ASSERT_TRUE (await_task (source.send_to_channel ("X", payload)));
-    std::shared_ptr<mesh::service_mailbox_claim_t> claim;
+    zlink::framework::test::mailbox_claim_t claim;
     ASSERT_TRUE (pump_until (source, target, [&] {
         if (!claim)
-            claim = target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1,
-                                                 64u * 1024u);
+            claim = zlink::framework::test::claim_mailbox (
+              target.mailbox (), mesh::service_mailbox_domain_t::application, 1, 64u * 1024u);
         return static_cast<bool> (claim);
     }));
     auto &received = *claim->records.front ();

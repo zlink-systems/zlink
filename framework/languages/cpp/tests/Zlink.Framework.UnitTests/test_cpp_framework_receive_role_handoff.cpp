@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include <gtest/gtest.h>
+#include "same_owner_claim_controls.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/mesh/service_mailbox.hpp"
 #include "runtime/mesh/application_dispatch_terminal_owner.hpp"
@@ -11,6 +12,9 @@
 #include <atomic>
 #include <future>
 #include <latch>
+#include <array>
+#include <algorithm>
+#include <iostream>
 
 #ifdef ZLINK_TEST_HANDOFF_ALLOC_FAIL
 #include <pthread.h>
@@ -372,19 +376,378 @@ mesh::service_mailbox_record_t record (std::string owner, unsigned sequence)
       {zlink::message_t::from (std::to_string (sequence))});
 }
 
+void same_owner_negative_controls (const std::string &owner = "node")
+{
+    EXPECT_TRUE (zlink::framework::test::same_owner_claim_controls (owner));
+}
+
+using original_t = std::optional<mesh::service_mailbox_record_t>;
+std::shared_ptr<mesh::service_mailbox_claim_t>
+take_independent (mesh::service_mailbox_t &mailbox, const std::string &owner, original_t &original)
+{
+    return mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, owner, 64, 65536,
+                                    [&] (const auto &claim) {
+                                        original.emplace (std::move (*claim->records.front ()));
+                                        claim->records.front ()->application.reset ();
+                                    });
+}
+
+TEST (SameOwner, NodePreexistingBacklog)
+{
+    same_owner_negative_controls ("node");
+}
+
+TEST (SameOwner, ChannelPreexistingBacklog)
+{
+    same_owner_negative_controls ("channel:actor:raw-looking-name");
+}
+
+TEST (SameOwner, FifoTakeWithReverseEntry)
+{
+    for (const auto &owner : {"node", "channel:fifo"}) {
+        mesh::service_mailbox_t mailbox;
+        ASSERT_TRUE (mailbox.try_enqueue (record (owner, 0)));
+        ASSERT_TRUE (mailbox.try_enqueue (record (owner, 1)));
+        std::promise<void> taken, enter;
+        auto did_take = taken.get_future ();
+        auto may_enter = enter.get_future ();
+        std::vector<unsigned> entries;
+        std::mutex mutex;
+        std::thread first ([&] {
+            original_t a;
+            auto claim = take_independent (mailbox, owner, a);
+            EXPECT_TRUE (claim && a);
+            if (a)
+                EXPECT_EQ ("0", a->parts ().front ().to_string ());
+            taken.set_value ();
+            may_enter.wait ();
+            std::lock_guard lock (mutex);
+            entries.push_back (0);
+            if (a)
+                EXPECT_TRUE (a->transferred ());
+        });
+        const auto took = did_take.wait_for (5s);
+        EXPECT_EQ (std::future_status::ready, took);
+        original_t b;
+        auto claim = take_independent (mailbox, owner, b);
+        EXPECT_TRUE (claim && b);
+        if (b) {
+            EXPECT_EQ ("1", b->parts ().front ().to_string ());
+            entries.push_back (1);
+            EXPECT_TRUE (b->transferred ());
+        }
+        enter.set_value ();
+        first.join ();
+        EXPECT_EQ ((std::vector<unsigned>{1, 0}), entries);
+    }
+    same_owner_negative_controls ();
+}
+
+TEST (SameOwner, ReverseAndDuplicateSettlement)
+{
+    mesh::service_mailbox_t mailbox;
+    auto a_record = record ("node", 0);
+    a_record.correlation = 123;
+    a_record.source_routing_id = {'a'};
+    ASSERT_TRUE (mailbox.try_enqueue (std::move (a_record)));
+    ASSERT_TRUE (mailbox.try_enqueue (record ("node", 1)));
+    original_t a, b, c;
+    auto a_claim = take_independent (mailbox, "node", a);
+    auto b_claim = take_independent (mailbox, "node", b);
+    ASSERT_TRUE (a_claim && b_claim && a && b);
+    auto reply = a->reply_source ();
+    EXPECT_TRUE (mailbox.release (*b_claim));
+    EXPECT_FALSE (b->transferred ());
+    EXPECT_FALSE (mailbox.release (*b_claim));
+    EXPECT_EQ (1u, a_claim->outstanding ());
+    EXPECT_EQ (123u, reply->correlation);
+    EXPECT_EQ ((std::vector<std::uint8_t>{'a'}), reply->source_routing_id);
+    ASSERT_TRUE (mailbox.try_enqueue (record ("node", 2)));
+    auto c_claim = take_independent (mailbox, "node", c);
+    ASSERT_TRUE (c_claim && c);
+    EXPECT_TRUE (c->transferred ());
+    EXPECT_TRUE (a->transferred ());
+    EXPECT_FALSE (a->transferred ());
+    EXPECT_FALSE (mailbox.release (*a_claim));
+    EXPECT_EQ (0u, mailbox.pending_messages (mesh::service_mailbox_domain_t::application));
+    same_owner_negative_controls ();
+}
+
+TEST (SameOwner, EnqueueAgainstLastSettlement)
+{
+    mesh::service_mailbox_t mailbox;
+    std::atomic_uint ready{0};
+    mailbox.bind_application_dispatch ({}, [&] (const auto &) { ++ready; });
+    ASSERT_TRUE (mailbox.try_enqueue (record ("channel:race", 0)));
+    ASSERT_TRUE (mailbox.begin_application_drain ("channel:race"));
+    original_t a, b;
+    auto claim = take_independent (mailbox, "channel:race", a);
+    ASSERT_TRUE (claim && a);
+    std::latch start (2);
+    std::thread settlement ([&] {
+        start.arrive_and_wait ();
+        EXPECT_TRUE (a->transferred ());
+        mailbox.end_application_drain ("channel:race");
+    });
+    start.arrive_and_wait ();
+    EXPECT_TRUE (mailbox.try_enqueue (record ("channel:race", 1)));
+    settlement.join ();
+    EXPECT_EQ (2u, ready.load ());
+    EXPECT_TRUE (mailbox.begin_application_drain ("channel:race"));
+    auto next = take_independent (mailbox, "channel:race", b);
+    ASSERT_TRUE (next && b);
+    EXPECT_EQ ("1", b->parts ().front ().to_string ());
+    EXPECT_TRUE (b->transferred ());
+    mailbox.end_application_drain ("channel:race");
+    same_owner_negative_controls ("channel:race");
+}
+
+TEST (SameOwner, CutAgainstEnqueueAndClaim)
+{
+    mesh::service_mailbox_t mailbox;
+    for (unsigned i = 0; i != 3; ++i)
+        ASSERT_TRUE (mailbox.try_enqueue (record ("node", i)));
+    original_t a, b;
+    auto first = take_independent (mailbox, "node", a);
+    ASSERT_TRUE (first && a);
+    std::latch start (3);
+    std::shared_ptr<mesh::service_mailbox_claim_t> second;
+    std::thread claimant ([&] {
+        start.arrive_and_wait ();
+        second = take_independent (mailbox, "node", b);
+    });
+    std::thread producer ([&] {
+        start.arrive_and_wait ();
+        EXPECT_TRUE (mailbox.try_enqueue (record ("node", 3)));
+    });
+    start.arrive_and_wait ();
+    bool cut = false;
+    auto originals = mailbox.cut_owners ({"node"}, {}, [&] { cut = true; });
+    claimant.join ();
+    producer.join ();
+    ASSERT_TRUE (originals && cut);
+    std::vector<unsigned> seen{0};
+    if (b) {
+        seen.push_back (std::stoul (b->parts ().front ().to_string ()));
+        EXPECT_TRUE (b->transferred ());
+    }
+    for (auto &original : originals->front ()) {
+        seen.push_back (std::stoul (original.parts ().front ().to_string ()));
+        if (original.transferred)
+            EXPECT_TRUE (original.transferred ());
+    }
+    for (;;) {
+        original_t rest;
+        auto next = take_independent (mailbox, "node", rest);
+        if (!next)
+            break;
+        ASSERT_TRUE (rest);
+        seen.push_back (std::stoul (rest->parts ().front ().to_string ()));
+        EXPECT_TRUE (rest->transferred ());
+    }
+    std::sort (seen.begin (), seen.end ());
+    EXPECT_EQ ((std::vector<unsigned>{0, 1, 2, 3}), seen);
+    EXPECT_TRUE (a->transferred ());
+    EXPECT_EQ (0u, mailbox.pending_messages (mesh::service_mailbox_domain_t::application));
+    same_owner_negative_controls ();
+}
+
+TEST (SameOwner, RollbackAgainstEnqueue)
+{
+    for (const bool transfer : {false, true}) {
+        SCOPED_TRACE (transfer);
+        mesh::service_mailbox_t mailbox;
+        ASSERT_TRUE (mailbox.try_enqueue (record ("node", 0)));
+        original_t failed;
+        std::latch locked (2);
+        std::thread producer ([&] {
+            locked.arrive_and_wait ();
+            EXPECT_TRUE (mailbox.try_enqueue (record ("node", 1)));
+        });
+        EXPECT_THROW (
+          mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "node", 1, 65536,
+                                   [&] (const auto &claim) {
+                                       if (transfer) {
+                                           failed.emplace (std::move (*claim->records.front ()));
+                                           claim->records.front ()->application.reset ();
+                                       }
+                                       locked.arrive_and_wait ();
+                                       throw std::bad_alloc ();
+                                   }),
+          std::bad_alloc);
+        producer.join ();
+        if (failed)
+            EXPECT_FALSE (failed->transferred ());
+        original_t b;
+        auto next = take_independent (mailbox, "node", b);
+        ASSERT_TRUE (next && b);
+        EXPECT_EQ ("1", b->parts ().front ().to_string ());
+        EXPECT_TRUE (b->transferred ());
+        EXPECT_FALSE (mailbox.try_claim (mesh::service_mailbox_domain_t::application, 1, 65536));
+    }
+    same_owner_negative_controls ();
+}
+
+TEST (SameOwner, ShutdownAgainstEnqueueAndSettlement)
+{
+    mesh::service_mailbox_t mailbox;
+    ASSERT_TRUE (mailbox.try_enqueue (record ("node", 0)));
+    original_t a;
+    auto claim = take_independent (mailbox, "node", a);
+    ASSERT_TRUE (claim && a);
+    std::latch start (3);
+    bool accepted = false;
+    std::thread producer ([&] {
+        start.arrive_and_wait ();
+        accepted = mailbox.try_enqueue (record ("node", 1));
+    });
+    std::thread settlement ([&] {
+        start.arrive_and_wait ();
+        EXPECT_TRUE (a->transferred ());
+    });
+    start.arrive_and_wait ();
+    mailbox.close ();
+    producer.join ();
+    settlement.join ();
+    EXPECT_FALSE (mailbox.try_enqueue (record ("node", 2)));
+    original_t b;
+    auto next = take_independent (mailbox, "node", b);
+    EXPECT_EQ (accepted, static_cast<bool> (next));
+    if (b)
+        EXPECT_TRUE (b->transferred ());
+    EXPECT_EQ (0u, mailbox.pending_messages (mesh::service_mailbox_domain_t::application));
+    same_owner_negative_controls ();
+}
+
+TEST (SameOwner, ClaimAllocationFailureRepublishesUntakenOriginal)
+{
+#ifdef ZLINK_TEST_HANDOFF_ALLOC_FAIL
+    for (int allocation = 0; allocation != 3; ++allocation) {
+        SCOPED_TRACE (allocation);
+        mesh::service_mailbox_t mailbox;
+        unsigned publications = 0;
+        mailbox.bind_application_dispatch ({}, [&] (const auto &) { ++publications; });
+        mailbox.begin_application_receive_turn ();
+        ASSERT_TRUE (mailbox.try_enqueue (record ("node", 0)));
+        ASSERT_TRUE (mailbox.try_enqueue (record ("node", 1)));
+        mailbox.end_application_receive_turn ();
+        ASSERT_TRUE (mailbox.begin_application_drain ("node"));
+        bool failed = false;
+        original_t original;
+        allocation_failure_after = allocation;
+        try {
+            (void) take_independent (mailbox, "node", original);
+        }
+        catch (const std::bad_alloc &) {
+            failed = true;
+        }
+        allocation_failure_after = -1;
+        EXPECT_TRUE (failed);
+        EXPECT_FALSE (original);
+        EXPECT_EQ (2u, mailbox.pending_messages (mesh::service_mailbox_domain_t::application));
+        EXPECT_EQ (2u, publications);
+        mailbox.end_application_drain ("node");
+        ASSERT_TRUE (mailbox.begin_application_drain ("node"));
+        for (unsigned sequence = 0; sequence != 2; ++sequence) {
+            original_t next;
+            auto claim = take_independent (mailbox, "node", next);
+            ASSERT_TRUE (claim && next);
+            EXPECT_EQ (std::to_string (sequence), next->parts ().front ().to_string ());
+            EXPECT_TRUE (next->transferred ());
+        }
+        mailbox.end_application_drain ("node");
+    }
+    same_owner_negative_controls ();
+#else
+    GTEST_SKIP () << "allocation injection requires Linux/GNU linker wrapping";
+#endif
+}
+
+TEST (SameOwner, RejectedReadyPublicationKeepsNextOriginal)
+{
+    mesh::service_mailbox_t mailbox;
+    unsigned publications = 0;
+    mailbox.bind_application_dispatch ({}, [&] (const auto &) {
+        if (++publications == 2)
+            throw std::bad_alloc ();
+    });
+    mailbox.begin_application_receive_turn ();
+    ASSERT_TRUE (mailbox.try_enqueue (record ("node", 0)));
+    ASSERT_TRUE (mailbox.try_enqueue (record ("node", 1)));
+    mailbox.end_application_receive_turn ();
+    ASSERT_TRUE (mailbox.begin_application_drain ("node"));
+    original_t a, b;
+    EXPECT_THROW (take_independent (mailbox, "node", a), std::bad_alloc);
+    ASSERT_TRUE (a);
+    EXPECT_FALSE (a->transferred ());
+    EXPECT_EQ (1u, mailbox.pending_messages (mesh::service_mailbox_domain_t::application));
+    mailbox.end_application_receive_turn ();
+    EXPECT_EQ (3u, publications);
+    ASSERT_TRUE (mailbox.begin_application_drain ("node"));
+    auto next = take_independent (mailbox, "node", b);
+    ASSERT_TRUE (next && b);
+    EXPECT_EQ ("1", b->parts ().front ().to_string ());
+    EXPECT_TRUE (b->transferred ());
+    mailbox.end_application_drain ("node");
+    same_owner_negative_controls ();
+}
+
+TEST (SameOwner, SerialOwnerBudgetsAndRetainedLifetime)
+{
+    for (const auto &owner : {"spot:serial", "actor:serial"}) {
+        mesh::service_mailbox_t mailbox;
+        for (unsigned i = 0; i != 4; ++i)
+            ASSERT_TRUE (mailbox.try_enqueue (record (owner, i)));
+        auto claim =
+          mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, owner, 3, 65536);
+        ASSERT_TRUE (claim);
+        EXPECT_EQ (3u, claim->claimed_messages);
+        EXPECT_FALSE (
+          mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, owner, 1, 65536));
+        std::array<original_t, 3> originals;
+        for (unsigned i = 0; i != 3; ++i) {
+            originals[i] = mailbox.take ({claim, i});
+            ASSERT_TRUE (originals[i]);
+            EXPECT_EQ (std::to_string (i), originals[i]->parts ().front ().to_string ());
+        }
+        EXPECT_TRUE (originals[2]->transferred ());
+        EXPECT_TRUE (originals[0]->transferred ());
+        EXPECT_FALSE (
+          mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, owner, 1, 65536));
+        EXPECT_TRUE (originals[1]->transferred ());
+        auto last =
+          mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, owner, 4, 1);
+        ASSERT_TRUE (last);
+        EXPECT_EQ (1u, last->claimed_messages); // First record may exceed the byte budget.
+        EXPECT_TRUE (mailbox.release (*last));
+    }
+    mesh::service_mailbox_t infrastructure;
+    for (unsigned i = 0; i != 2; ++i) {
+        auto original = record ("node", i);
+        original.domain = mesh::service_mailbox_domain_t::infrastructure;
+        ASSERT_TRUE (infrastructure.try_enqueue (std::move (original)));
+    }
+    auto claim =
+      infrastructure.try_claim (mesh::service_mailbox_domain_t::infrastructure, 2, 65536);
+    ASSERT_TRUE (claim);
+    EXPECT_EQ (2u, claim->claimed_messages);
+    EXPECT_TRUE (infrastructure.release (*claim));
+    same_owner_negative_controls ();
+}
+
 TEST (ReceiveRoleHandoff, T05OtherOwnerFifoAndExclusiveClaim)
 {
     mesh::service_mailbox_t mailbox;
     mailbox.bind_application_dispatch ({}, [] (const auto &) {});
     for (unsigned i = 0; i != 64; ++i)
-        ASSERT_TRUE (mailbox.try_enqueue (record ("node", i)));
+        ASSERT_TRUE (mailbox.try_enqueue (record ("spot:serial-control", i)));
     ASSERT_TRUE (mailbox.try_enqueue (record ("channel", 0)));
-    ASSERT_TRUE (mailbox.begin_application_drain ("node"));
+    ASSERT_TRUE (mailbox.begin_application_drain ("spot:serial-control"));
     const auto domain = mesh::service_mailbox_domain_t::application;
-    auto a = mailbox.try_claim_owner (domain, "node", 64, 65536);
+    auto a = mailbox.try_claim_owner (domain, "spot:serial-control", 64, 65536);
     ASSERT_TRUE (a);
-    EXPECT_FALSE (mailbox.try_claim_owner (domain, "node", 64, 65536));
-    EXPECT_FALSE (mailbox.begin_application_drain ("node"));
+    EXPECT_FALSE (mailbox.try_claim_owner (domain, "spot:serial-control", 64, 65536));
+    EXPECT_FALSE (mailbox.begin_application_drain ("spot:serial-control"));
     EXPECT_TRUE (mailbox.begin_application_drain ("channel"));
     auto b = mailbox.try_claim_owner (domain, "channel", 1, 65536);
     ASSERT_TRUE (b);
@@ -400,7 +763,7 @@ TEST (ReceiveRoleHandoff, T05OtherOwnerFifoAndExclusiveClaim)
     ASSERT_TRUE (independent);
     EXPECT_TRUE (independent->transferred ());
     mailbox.end_application_drain ("channel");
-    mailbox.end_application_drain ("node");
+    mailbox.end_application_drain ("spot:serial-control");
     EXPECT_EQ (0u, mailbox.pending_messages (domain));
 }
 
@@ -465,20 +828,22 @@ TEST (ReceiveRoleHandoff, T05IndependentGatesDuringSynchronousHandler)
         EXPECT_EQ (1u, same_gate.load ());
         EXPECT_EQ (1u, other_gate.load ());
     }
+    same_owner_negative_controls ();
 }
 
-// Excluded from the pass set: the independently tracked active-prefix defect
-// prevents same-owner B from claiming before synchronous A returns (#1639).
-TEST (ReceiveRoleHandoff, DISABLED_T05KnownFailureSameNodeOwnerProgress)
+TEST (ReceiveRoleHandoff, T05SameNodeOwnerProgress)
 {
     mesh::service_mailbox_t mailbox;
-    const auto domain = mesh::service_mailbox_domain_t::application;
     ASSERT_TRUE (mailbox.try_enqueue (record ("node", 0)));
-    auto a = mailbox.try_claim_owner (domain, "node", 1, 65536);
-    ASSERT_TRUE (a);
+    original_t a, b;
+    auto first = take_independent (mailbox, "node", a);
+    ASSERT_TRUE (first && a);
     ASSERT_TRUE (mailbox.try_enqueue (record ("node", 1)));
-    auto b = mailbox.try_claim_owner (domain, "node", 1, 65536);
-    EXPECT_TRUE (b) << "known failure: service_mailbox.cpp active_messages prefix checks";
+    auto second = take_independent (mailbox, "node", b);
+    ASSERT_TRUE (first && second && a && b);
+    EXPECT_TRUE (b->transferred ());
+    EXPECT_TRUE (a->transferred ());
+    same_owner_negative_controls ();
 }
 
 TEST (ReceiveRoleHandoff, T06ReceiveAndPublicationReturnBeforePermitEntry)
@@ -626,6 +991,7 @@ TEST (ReceiveRoleHandoff, T07AwaitKeepsGateAndYieldReacquiresIt)
         stop = true;
         executor.drain ();
     }
+    same_owner_negative_controls ();
 }
 
 TEST (ReceiveRoleHandoff, T08IndependentCompletionWhileLocalCallbackBlocks)

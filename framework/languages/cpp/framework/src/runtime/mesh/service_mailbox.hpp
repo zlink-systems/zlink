@@ -308,6 +308,7 @@ class service_mailbox_t
   public:
     using utc_clock_t = std::function<std::chrono::system_clock::time_point ()>;
     service_mailbox_t () = default;
+    explicit service_mailbox_t (std::string channel_owner);
     explicit service_mailbox_t (utc_clock_t utc_clock) :
         _utc_clock (utc_clock ? std::move (utc_clock)
                               : utc_clock_t{[] { return std::chrono::system_clock::now (); }})
@@ -318,6 +319,7 @@ class service_mailbox_t
 
     static std::string application_owner (host::owner_kind_t kind, std::string_view id = {});
     static std::string application_owner (const host::ready_record_t &owner);
+    static std::optional<host::owner_kind_t> application_owner_kind (std::string_view owner);
 
     using application_prepare_t = std::function<void (service_mailbox_record_t &)>;
     using application_ready_t = std::function<void (const std::string &)>;
@@ -434,16 +436,18 @@ class service_mailbox_t
         retained
     };
 
-    // A claim is the front prefix of records; it leaves the FIFO when its last
-    // credit settles.
+    using records_t = std::list<service_mailbox_record_t>;
     struct owner_queue_t
     {
-        std::list<service_mailbox_record_t> records;
-        std::size_t messages = 0;
-        std::size_t bytes = 0;
-        std::size_t active_messages = 0;
-        std::size_t active_bytes = 0;
+        explicit owner_queue_t (std::optional<host::owner_kind_t> kind) : kind (kind) {}
+        const std::optional<host::owner_kind_t> kind;
+        records_t records;
+        records_t::iterator unclaimed = records.end ();
         owner_phase_t phase = owner_phase_t::idle;
+        bool independent () const noexcept
+        {
+            return kind == host::owner_kind_t::node || kind == host::owner_kind_t::channel;
+        }
     };
 
     struct domain_t
@@ -452,10 +456,23 @@ class service_mailbox_t
         std::list<std::string> ready;
         std::size_t messages = 0;
         std::size_t bytes = 0;
-        std::size_t active_messages = 0;
-        std::size_t active_bytes = 0;
     };
 
+    static bool eligible (const owner_queue_t &queue);
+    // All reservation and drain state changes pass through this transition.
+    struct state_t;
+    enum class ready_step_t
+    {
+        changed,
+        begin,
+        queued_claim,
+        direct_claim,
+        end
+    };
+    static bool refresh_ready_locked (state_t &state,
+                                      domain_t &domain,
+                                      const std::string &owner,
+                                      ready_step_t step = ready_step_t::changed);
     domain_t &domain (service_mailbox_domain_t value);
     const domain_t &domain (service_mailbox_domain_t value) const;
     std::shared_ptr<service_mailbox_claim_t>
@@ -465,6 +482,7 @@ class service_mailbox_t
                         std::size_t message_budget,
                         std::size_t byte_budget,
                         const claimed_t &claimed,
+                        bool queued,
                         std::unique_lock<std::mutex> &lock);
     static std::size_t retained_bytes (const service_mailbox_record_t &record);
     static service_mailbox_record_t *slot_locked (const claim_handle_t &handle);
@@ -494,13 +512,13 @@ class service_mailbox_t
     utc_clock_t _utc_clock = [] { return std::chrono::system_clock::now (); };
 };
 
-// One claim of an owner's FIFO prefix. records views the claimed slots until the
+// One claim of an owner's FIFO records. records views the claimed slots until the
 // claim settles; read them only before their take. Each slot credit settles once.
 struct service_mailbox_claim_t
 {
     std::string owner;
     service_mailbox_domain_t domain = service_mailbox_domain_t::application;
-    std::vector<service_mailbox_record_t *> records;
+    std::vector<std::list<service_mailbox_record_t>::iterator> records;
     std::vector<std::size_t> record_bytes;
     std::size_t claimed_messages = 0;
     std::size_t claimed_bytes = 0;

@@ -194,7 +194,7 @@ raw_client_server_server_t::raw_client_server_server_t (
         return runtime::state_lane_t ();
     }()),
     _context (context ? std::move (context) : std::make_shared<zlink::context_t> ()),
-    _mailbox (),
+    _mailbox (_options.descriptor.channel_name),
     _liveness (_lane)
 {
     if (!_options.runtime_failures)

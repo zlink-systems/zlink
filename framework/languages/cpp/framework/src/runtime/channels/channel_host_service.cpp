@@ -147,16 +147,20 @@ class channel_host_service_t::server_loop_t
             if (!mailbox.begin_application_drain (owner))
                 return;
             try {
-                while (auto claim =
-                         mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application,
-                                                  owner, dispatch_limits::receive_batch_messages,
-                                                  dispatch_limits::receive_batch_bytes)) {
+                for (;;) {
+                    std::optional<mesh::service_mailbox_record_t> original;
+                    auto claim = mailbox.try_claim_owner (
+                      mesh::service_mailbox_domain_t::application, owner,
+                      dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes,
+                      [&] (const auto &claim) {
+                          original.emplace (std::move (*claim->records.front ()));
+                          claim->records.front ()->application.reset ();
+                      });
+                    if (!claim)
+                        break;
                     try {
-                        for (std::size_t index = 0; index != claim->claimed_messages; ++index) {
-                            if (auto record = mailbox.take ({claim, index}))
-                                report_dispatch_rejection (
-                                  messaging::message_parts_t (record->take_parts ()));
-                        }
+                        report_dispatch_rejection (
+                          messaging::message_parts_t (original->take_parts ()));
                     }
                     catch (...) {
                         mailbox.release (*claim);
@@ -295,8 +299,7 @@ class channel_host_service_t::server_loop_t
         auto application_job =
           std::make_shared<application_job_queue_t::permit_t> (std::move (permit));
         auto record = mesh::service_mailbox_record_t::from_received (
-          mesh::service_mailbox_t::application_owner (host::owner_kind_t::channel, _channel_name),
-          mesh::service_mailbox_domain_t::application, std::move (received));
+          _channel_name, mesh::service_mailbox_domain_t::application, std::move (received));
         record.before_application_handler = [application_job] {
             application_job->release_for_handler_entry ();
         };
@@ -386,18 +389,21 @@ class channel_host_service_t::server_loop_t
         std::shared_ptr<mesh::service_mailbox_claim_t> claim;
         try {
             do {
-                claim = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, owner,
-                                                 dispatch_limits::receive_batch_messages,
-                                                 dispatch_limits::receive_batch_bytes);
+                std::optional<mesh::service_mailbox_record_t> original;
+                claim = mailbox.try_claim_owner (
+                  mesh::service_mailbox_domain_t::application, owner,
+                  dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes,
+                  [&] (const auto &claim) {
+                      original.emplace (std::move (*claim->records.front ()));
+                      claim->records.front ()->application.reset ();
+                  });
                 if (!claim)
                     break;
-                for (std::size_t index = 0; index != claim->claimed_messages; ++index) {
-                    if (auto record = mailbox.take ({claim, index})) {
-                        // An ordinary Channel claim reserves FIFO entry, not terminal lifetime.
-                        // Preserve the drain ambient while a suspended pipeline keeps its own.
-                        flow_context_t::scope_t flow_scope (flow_context_t::current ());
-                        dispatch_application (std::move (*record));
-                    }
+                {
+                    // An ordinary Channel claim reserves FIFO entry, not terminal lifetime.
+                    // Preserve the drain ambient while a suspended pipeline keeps its own.
+                    flow_context_t::scope_t flow_scope (flow_context_t::current ());
+                    dispatch_application (std::move (*original));
                 }
                 mailbox.release (*claim);
                 claim.reset ();

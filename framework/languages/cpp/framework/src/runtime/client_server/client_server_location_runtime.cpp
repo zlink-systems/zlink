@@ -1630,6 +1630,7 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
               mesh::service_mailbox_domain_t::application, owner_name, 1,
               dispatch_limits::receive_batch_bytes, [&] (const auto &claim) noexcept {
                   original.emplace (std::move (*claim->records.front ()));
+                  claim->records.front ()->application.reset ();
               });
             if (!active_claim)
                 break;

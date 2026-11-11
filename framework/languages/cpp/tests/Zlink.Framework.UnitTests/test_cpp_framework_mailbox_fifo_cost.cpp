@@ -38,11 +38,15 @@ void rotate (mailbox_t &mailbox, std::size_t count)
     require (ready && ready->first.size () == 1, "owner ready count differs");
     mailbox_t::notify_application_ready (ready);
     require (mailbox.begin_application_drain ("node"), "owner drain did not begin");
-    auto claim = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "node",
-                                          count, 1024 * count);
-    require (claim && claim->claimed_messages == count, "owner claim count differs");
     for (std::size_t index = 0; index != count; ++index) {
-        auto original = mailbox.take ({claim, index});
+        std::optional<record_t> original;
+        auto claim =
+          mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "node", count,
+                                   1024 * count, [&] (const auto &claim) {
+                                       original.emplace (std::move (*claim->records.front ()));
+                                       claim->records.front ()->application.reset ();
+                                   });
+        require (claim && claim->claimed_messages == 1, "independent owner claim count differs");
         require (original && original->transferred (), "original did not settle");
     }
     mailbox.end_application_drain ("node");

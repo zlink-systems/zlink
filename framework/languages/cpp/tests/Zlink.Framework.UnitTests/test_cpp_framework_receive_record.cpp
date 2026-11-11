@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "mailbox_claim_fixture.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/mesh/receive_path_probe.hpp"
 #include "../support/native_call_counter.hpp"
@@ -264,8 +265,8 @@ class ReceiveRecord : public testing::Test
     }
     auto take ()
     {
-        auto claim =
-          target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 3, 65536);
+        auto claim = zlink::framework::test::claim_mailbox (
+          target.mailbox (), mesh::service_mailbox_domain_t::application, 1, 65536);
         if (!claim)
             throw std::runtime_error ("receive fixture has no queued record");
         return claim;
@@ -287,11 +288,11 @@ TEST_F (ReceiveRecord, CountsAndOriginalTokenAcrossOneRotation)
         EXPECT_EQ (target.receive_next (turn, now ()), mesh::raw_mesh_pump_result_t::no_data);
     }
     ASSERT_EQ (observation.records, 3u);
-    auto claim = take ();
-    ASSERT_EQ (claim->claimed_messages, 3u);
     std::array<std::optional<mesh::service_mailbox_record_t>, 3> owned_records;
     for (std::size_t index = 0; index != 3; ++index) {
-        owned_records[index] = target.mailbox ().take ({claim, index});
+        auto claim = take ();
+        ASSERT_EQ (claim->claimed_messages, 1u);
+        owned_records[index].emplace (std::move (claim.originals.front ()));
         auto &record = owned_records[index];
         ASSERT_TRUE (record);
         const auto &original = observation.originals[index];
@@ -308,9 +309,9 @@ TEST_F (ReceiveRecord, CountsAndOriginalTokenAcrossOneRotation)
                    zlink::framework::runtime::host::record_kind_t::node_request);
         EXPECT_EQ (record->owner, "node");
         EXPECT_TRUE (target.reply (*record, payload ()));
+        EXPECT_TRUE (target.mailbox ().release (*claim));
     }
     EXPECT_NE (observation.originals[0].token, observation.originals[1].token);
-    (void) target.mailbox ().release (*claim);
     EXPECT_EQ (observation.body_copies, 0u);
     EXPECT_EQ (native[6], 0u);
     EXPECT_EQ (probe.counts ().classifications, 3u);
@@ -349,11 +350,9 @@ TEST_F (ReceiveRecord, CallerWrapperDestructionKeepsQueuedNativeStorage)
     }
     auto claim = take ();
     if (fault () == "drop")
-        target.mailbox ().prepare ({claim, 0}, [] (auto &record) {
-            record.replace_parts ({});
-            return true;
-        });
-    auto record = target.mailbox ().take ({claim, 0});
+        claim.originals.front ().replace_parts ({});
+    auto record =
+      std::optional<mesh::service_mailbox_record_t> (std::move (claim.originals.front ()));
     ASSERT_TRUE (record);
     ASSERT_EQ (record->parts ().size (), 2u);
     EXPECT_EQ (record->parts ().back ().data (), original_body);
@@ -374,7 +373,8 @@ TEST_F (ReceiveRecord, ImmediateReplyBorrowsMetadataWithoutEntryAllocationsOrCop
     const auto turn = target.begin_receive_turn ();
     ASSERT_EQ (target.receive_next (turn, now ()), mesh::raw_mesh_pump_result_t::application);
     auto claim = take ();
-    auto record = target.mailbox ().take ({claim, 0});
+    auto record =
+      std::optional<mesh::service_mailbox_record_t> (std::move (claim.originals.front ()));
     ASSERT_TRUE (record);
     ASSERT_TRUE (record->routing_id ());
     ASSERT_TRUE (record->reply_token ());
@@ -417,7 +417,8 @@ TEST_F (ReceiveRecord, ReplySourceRetainsOnlyTargetWithoutPartCopies)
     const auto turn = target.begin_receive_turn ();
     ASSERT_EQ (target.receive_next (turn, now ()), mesh::raw_mesh_pump_result_t::application);
     auto claim = take ();
-    auto record = target.mailbox ().take ({claim, 0});
+    auto record =
+      std::optional<mesh::service_mailbox_record_t> (std::move (claim.originals.front ()));
     ASSERT_TRUE (record);
     ASSERT_EQ (record->parts ().size (), 2u);
     ASSERT_FALSE (record->source_routing_id.empty ());
@@ -466,7 +467,8 @@ TEST_F (ReceiveRecord, EmptyLogicalSourceKeepsNativeContextButRejectsReplies)
     const auto turn = target.begin_receive_turn ();
     ASSERT_EQ (target.receive_next (turn, now ()), mesh::raw_mesh_pump_result_t::application);
     auto claim = take ();
-    auto record = target.mailbox ().take ({claim, 0});
+    auto record =
+      std::optional<mesh::service_mailbox_record_t> (std::move (claim.originals.front ()));
     ASSERT_TRUE (record);
     ASSERT_TRUE (record->routing_id ());
     ASSERT_TRUE (record->reply_token ());
@@ -503,7 +505,8 @@ TEST_F (ReceiveRecord, LocalReplyDecisionsUseLogicalIdentityDespiteDifferentNati
     const auto turn = target.begin_receive_turn ();
     ASSERT_EQ (target.receive_next (turn, now ()), mesh::raw_mesh_pump_result_t::application);
     auto claim = take ();
-    auto record = target.mailbox ().take ({claim, 0});
+    auto record =
+      std::optional<mesh::service_mailbox_record_t> (std::move (claim.originals.front ()));
     ASSERT_TRUE (record);
     ASSERT_TRUE (record->routing_id ());
     const auto correlation = record->correlation;
@@ -627,7 +630,8 @@ TEST_F (ReceiveRecord, CloseDuringRotationKeepsLeaseAndRejectsLaterReply)
     const auto turn = target.begin_receive_turn ();
     ASSERT_EQ (target.receive_next (turn, now ()), mesh::raw_mesh_pump_result_t::application);
     auto claim = take ();
-    auto record = target.mailbox ().take ({claim, 0});
+    auto record =
+      std::optional<mesh::service_mailbox_record_t> (std::move (claim.originals.front ()));
     ASSERT_TRUE (record);
     const auto token = record->reply_token ();
     const auto generation = record->route_generation ();
