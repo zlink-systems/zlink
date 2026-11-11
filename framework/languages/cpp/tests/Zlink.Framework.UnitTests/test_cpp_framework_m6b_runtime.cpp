@@ -4413,8 +4413,8 @@ void verify_public_host_fifo_drains_before_liveness_probe ()
             wait_for_input (source->transport (), io_deadline);
     }
     assert (ack_barrier == mesh::raw_mesh_pump_result_t::application);
-    auto marker = source->transport ().mailbox ().try_claim (
-      mesh::service_mailbox_domain_t::application, 1, 1024);
+    auto marker = zlink::framework::test::claim_mailbox (
+      source->transport ().mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (marker && marker->records.size () == 1);
     const auto &record = (*marker->records.front ());
     assert (record.source_routing_id == target_status.routing_id ().to_bytes ());
@@ -4567,8 +4567,8 @@ void verify_logical_multicast_continues_after_one_target_failure ()
       target->transport ().mailbox ().pending_messages (mesh::service_mailbox_domain_t::application)
       == 1);
 
-    auto claim = target->transport ().mailbox ().try_claim (
-      mesh::service_mailbox_domain_t::application, 1, 4096);
+    auto claim = zlink::framework::test::claim_mailbox (
+      target->transport ().mailbox (), mesh::service_mailbox_domain_t::application, 1, 4096);
     assert (claim && claim->records.size () == 1);
     const auto &received = (*claim->records.front ());
     assert (received.parts ().size () == 3);
