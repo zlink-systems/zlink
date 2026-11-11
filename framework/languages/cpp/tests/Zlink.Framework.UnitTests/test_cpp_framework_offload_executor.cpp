@@ -35,7 +35,12 @@ struct offload_executor_test_access_t
     static std::size_t idle (offload_executor_t &executor)
     {
         std::lock_guard lock (executor._mutex);
-        return executor.idle_worker_count_locked ();
+        return [&] {
+            std::size_t n = 0;
+            for (auto *w = executor._idle_head; w; w = w->next_idle)
+                ++n;
+            return n;
+        }();
     }
     static bool stopping (offload_executor_t &executor)
     {

@@ -27,7 +27,13 @@ struct offload_executor_test_access_t
         while (true) {
             {
                 std::lock_guard lock (executor._mutex);
-                if (executor.idle_worker_count_locked () == executor._live_workers) {
+                if ([&] {
+                        std::size_t n = 0;
+                        for (auto *w = executor._idle_head; w; w = w->next_idle)
+                            ++n;
+                        return n;
+                    }()
+                    == executor._live_workers) {
                     std::vector<std::condition_variable *> result;
                     for (const auto &worker : executor._workers)
                         result.push_back (&worker->ready);
