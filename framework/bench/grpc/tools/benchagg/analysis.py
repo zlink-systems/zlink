@@ -92,6 +92,7 @@ class Row:
     excluded_runs: list[str] = field(default_factory=list)
     incomplete_runs: list[str] = field(default_factory=list)
     incomplete_reasons: list[str] = field(default_factory=list)
+    warmup_seconds: list[float | None] = field(default_factory=list)
 
     @property
     def g5_pass(self) -> bool:
@@ -211,6 +212,7 @@ def build_row(run_set: RunSet, key: CellKey, min_runs_for_g5: int = 3) -> Row | 
         incomplete_reasons=sorted(
             {c.incomplete_reason or "unstated" for c in incomplete}
         ),
+        warmup_seconds=[c.warmup_seconds for c in all_cells],
     )
     for name in _MEDIAN_FIELDS:
         row.values[name] = _median(cells, name)
@@ -364,6 +366,23 @@ def judge_pair(
     numerator = rows.get(numerator_key)
     denominator = rows.get(denominator_key)
 
+    warmup_blockers = []
+    for role, key, row in (("numerator", numerator_key, numerator),
+                           ("denominator", denominator_key, denominator)):
+        if row is None:
+            continue
+        recorded = row.warmup_seconds or [None]
+        invalid = [value for value in recorded
+                   if value is None or value != 30.0]
+        if invalid:
+            descriptions = sorted({
+                "missing" if value is None else f"{value:g}s"
+                for value in invalid
+            })
+            warmup_blockers.append(
+                f"{role} {key}: warmup {', '.join(descriptions)}, spec requires 30s"
+            )
+
     value = None
     if (
         numerator is not None
@@ -380,7 +399,7 @@ def judge_pair(
             _block_reason("denominator", denominator, denominator_key),
         )
         if reason
-    ]
+    ] + warmup_blockers
     if blockers:
         return Judgement(
             formula=formula,

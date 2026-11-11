@@ -1282,7 +1282,7 @@ internal sealed record BenchOptions(
             ParseInt(Value(args, "--request-window"), 100),
             ParseInt(Value(args, "--submit-concurrency"), 8),
             ParseInt(Value(args, "--latency-sample-limit"), 200_000),
-            ParseInt(Value(args, "--warmup-seconds"), 2),
+            ParseInt(Value(args, "--warmup-seconds"), 30),
             ParseInt(Value(args, "--drain-bound-ms"), 30_000),
             Value(args, "--trigger-url")
                 ?? throw new ArgumentException("--trigger-url is required."),

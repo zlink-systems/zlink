@@ -57,7 +57,7 @@ struct options_t
     int trigger_port = 5280;
     int stats_port = 5281;
     int target_stats_port = 5283;
-    double warmup_seconds = 5;
+    double warmup_seconds = 30;
     int warmup_segments = 10;
     int request_timeout_ms = 30000;
     int drain_bound_ms = 30000;
@@ -1066,7 +1066,7 @@ int main (int argc, char **argv)
         options.target_rate = std::stod (arg_value (argc, argv, "--target-rate", "0"));
         if (!std::isfinite (options.target_rate) || options.target_rate < 0)
             throw std::runtime_error ("target rate must be finite and non-negative");
-        options.warmup_seconds = std::stod (arg_value (argc, argv, "--warmup-seconds", "5"));
+        options.warmup_seconds = std::stod (arg_value (argc, argv, "--warmup-seconds", "30"));
         options.warmup_segments = std::stoi (arg_value (argc, argv, "--warmup-segments", "10"));
         options.request_timeout_ms =
           std::stoi (arg_value (argc, argv, "--request-timeout-ms", "30000"));
