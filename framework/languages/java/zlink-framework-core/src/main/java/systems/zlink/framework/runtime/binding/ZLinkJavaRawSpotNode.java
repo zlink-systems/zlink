@@ -1790,9 +1790,12 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             String spotId,
             long objectGeneration,
             long authorityOwnerGeneration) {
-        spotAuthorities.remove(
+        spotAuthorities.computeIfPresent(
                 new SpotAuthorityKey(targetNodeRid, spotId, objectGeneration),
-                authorityOwnerGeneration);
+                (key, fence) ->
+                        fence.authorityOwnerGeneration() == authorityOwnerGeneration
+                                ? null
+                                : fence);
     }
 
     @Override
