@@ -1022,13 +1022,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     public void installUserSpotOperationHandlers(
             ZLinkLocationRepository authorityStore,
             ZLinkLocationRepository locationStore,
-            ZLinkLocationRuntime locationRuntime) {
-        installUserSpotOperationHandlers(authorityStore, locationStore, locationRuntime, null);
-    }
-
-    public void installUserSpotOperationHandlers(
-            ZLinkLocationRepository authorityStore,
-            ZLinkLocationRepository locationStore,
             ZLinkLocationRuntime locationRuntime,
             systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers
                     locationResolvers) {
@@ -1037,7 +1030,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         userSpotAuthorityStore = authorityStore;
         userSpotLocationStore = locationStore;
         userSpotLocationRuntime = Objects.requireNonNull(locationRuntime, "locationRuntime");
-        userSpotLocationResolvers = locationResolvers;
+        userSpotLocationResolvers = Objects.requireNonNull(locationResolvers, "locationResolvers");
         for (var registration : frameworkRegistration.meshNodes()) {
             ZLinkInternalMeshNode meshNode = routeMeshNodesByName.get(registration.meshName());
             if (meshNode == null) {
@@ -1949,7 +1942,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             long deadlineUnixMs,
             Set<ZLinkMeshNodeDescriptorKey> excludedTargets,
             int refreshAttempt) {
-        return listUserSpotPlacementNodes(locations, userSpotLocationResolvers, meshName)
+        return userSpotLocationResolvers
+                .listLiveMeshNodes(meshName)
                 .toCompletableFuture()
                 .orTimeout(
                         Math.max(1L, deadlineUnixMs - System.currentTimeMillis()),
@@ -2006,18 +2000,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                         deadlineUnixMs,
                                                                         excludedTargets,
                                                                         refreshAttempt + 1)));
-    }
-
-    static CompletionStage<List<ZLinkMeshNodeDescriptor>> listUserSpotPlacementNodes(
-            ZLinkLocationRepository locations,
-            systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers locationResolvers,
-            String meshName) {
-        if (locationResolvers != null) {
-            return locationResolvers.listLiveMeshNodes(meshName);
-        }
-        return locations
-                .listMeshNodes(meshName, new ZLinkPageRequest(1000, null))
-                .thenApply(page -> page.items());
     }
 
     /**
@@ -3191,7 +3173,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                     route ->
                                                             route == null
                                                                     ? coldInstanceActivation(
-                                                                            store,
                                                                             authority.meshName(),
                                                                             authority.stableType(),
                                                                             spotId,
@@ -3204,7 +3185,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                             route));
                                 }
                                 return coldInstanceActivation(
-                                        store,
                                         authority.meshName(),
                                         authority.stableType(),
                                         spotId,
@@ -3212,11 +3192,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             }
                             requireAcceptingNewState();
                             String meshName = resolveObjectMesh(requestedMesh);
-                            return resolveInstanceType(store, meshName, requestedType)
+                            return resolveInstanceType(meshName, requestedType)
                                     .thenCompose(
                                             stableType ->
                                                     coldInstanceActivation(
-                                                            store,
                                                             meshName,
                                                             stableType,
                                                             spotId,
@@ -3233,13 +3212,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     private CompletionStage<InstanceActivation> coldInstanceActivation(
-            ZLinkLocationRepository store,
-            String meshName,
-            String stableType,
-            String spotId,
-            long deadline) {
+            String meshName, String stableType, String spotId, long deadline) {
         requireAcceptingNewState();
-        return selectInstanceSpotTarget(store, meshName, stableType)
+        return selectInstanceSpotTarget(meshName, stableType)
                 .thenApply(
                         target ->
                                 new InstanceActivation(
@@ -3281,15 +3256,15 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 .orElse(null);
     }
 
-    CompletionStage<String> resolveInstanceType(
-            ZLinkLocationRepository store, String meshName, String requestedType) {
+    CompletionStage<String> resolveInstanceType(String meshName, String requestedType) {
         if (requestedType != null) {
             return CompletableFuture.completedFuture(requireStableType(requestedType));
         }
-        return store.listMeshNodes(meshName, new ZLinkPageRequest(INSTANCE_TARGET_PAGE_SIZE, null))
+        return userSpotLocationResolvers
+                .listLiveMeshNodes(meshName)
                 .thenApply(
-                        page ->
-                                page.items().stream()
+                        nodes ->
+                                nodes.stream()
                                         .filter(
                                                 node ->
                                                         node.state()
@@ -3331,20 +3306,20 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         });
     }
 
-    CompletionStage<InstanceTarget> selectInstanceSpotTarget(
-            ZLinkLocationRepository store, String meshName, String stableType) {
+    CompletionStage<InstanceTarget> selectInstanceSpotTarget(String meshName, String stableType) {
         var admissionFailure = spotHostAdmissionFailure(stableType);
         if (admissionFailure != null) {
             return CompletableFuture.failedFuture(admissionFailure);
         }
-        return store.listMeshNodes(meshName, new ZLinkPageRequest(INSTANCE_TARGET_PAGE_SIZE, null))
+        return userSpotLocationResolvers
+                .listLiveMeshNodes(meshName)
                 .thenCompose(
-                        page -> {
+                        nodes -> {
                             List<
                                             systems.zlink.framework.runtime.internal.locations
                                                     .ZLinkMeshNodeDescriptor>
                                     typed =
-                                            page.items().stream()
+                                            nodes.stream()
                                                     .filter(
                                                             node ->
                                                                     node.state()

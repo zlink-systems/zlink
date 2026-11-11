@@ -232,6 +232,10 @@ final class ZLinkChannelShutdownInFlightTest {
         var location =
                 new ZLinkClientServerLocationRuntime(
                         repository,
+                        systems.zlink.framework.runtime.locations.ZLinkLiveLocationRows.create(
+                                systems.zlink.framework.runtime.locations
+                                        .ZLinkRegisteredLocationStores.fromUnified(repository),
+                                new systems.zlink.framework.locations.ZLinkLocationOptions()),
                         () -> null,
                         provider,
                         backend.context,
