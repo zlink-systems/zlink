@@ -243,6 +243,7 @@
         <Compile Include="Runtime/SerialExecutionQueueBenchmarkTests.cs"/>
         <Compile Include="Runtime/SerialExecutorLayerContractTests.cs"/>
         <Compile Include="Runtime/SerialExecutorTests.cs"/>
+        <Compile Include="Runtime/PausedSerialExecutionTests.cs"/>
         <Compile Include="Runtime/ServiceRuntimeFoundationTests.cs"/>
         <Compile Include="Runtime/ZLinkObservationQueueTests.cs"/>
         <Compile Include="Runtime/ZLinkMeshPeerAdmissionTests.cs"/>
