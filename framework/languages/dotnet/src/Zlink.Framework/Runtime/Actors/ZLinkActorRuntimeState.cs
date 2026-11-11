@@ -325,8 +325,10 @@ internal sealed class ZLinkActorRuntimeState(
             var status = (ZLinkObjectExecutionStatus)Volatile.Read(ref _contextInvalidated);
             if (status == ZLinkObjectExecutionStatus.OwnershipLost)
                 return status;
-            if (_locationRuntime?.IsExecutionAllowed(this) == false)
-                return ZLinkObjectExecutionStatus.OwnershipLost;
+            var locationStatus =
+                _locationRuntime?.GetExecutionStatus(this) ?? ZLinkObjectExecutionStatus.Allowed;
+            if (locationStatus != ZLinkObjectExecutionStatus.Allowed)
+                return locationStatus;
             if (Activation is { IsDisposed: true } activation)
                 return activation.ExecutionStatus;
             return status == ZLinkObjectExecutionStatus.Stopped || _dispatchMailbox.IsDisposed

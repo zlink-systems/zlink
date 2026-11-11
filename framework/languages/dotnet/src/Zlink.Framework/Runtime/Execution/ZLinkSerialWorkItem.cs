@@ -12,6 +12,7 @@ internal enum ZLinkObjectExecutionStatus
     Allowed,
     Stopped,
     OwnershipLost,
+    Paused,
 }
 
 internal interface IZLinkSerialTerminalRelease
