@@ -124,6 +124,28 @@ def _streams(raw: Any, source: str) -> dict[str, Any]:
     return {"count": count, "inFlightPerStream": in_flight}
 
 
+def _submit_concurrency(metadata: dict[str, Any], trigger: dict[str, Any], source: str) -> int | None:
+    """Normalize the renamed setting without changing historical stream declarations."""
+    values = [record[name] for record in (metadata, trigger)
+              for name in ("submitConcurrency", "sendConcurrency") if name in record]
+    if not values:
+        return None
+    normalized = []
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            raise ReportError(f"{source}: submitConcurrency must be a positive integer")
+        try:
+            count = int(value)
+        except ValueError as error:
+            raise ReportError(f"{source}: submitConcurrency must be a positive integer") from error
+        if count <= 0:
+            raise ReportError(f"{source}: submitConcurrency must be a positive integer")
+        normalized.append(count)
+    if len(set(normalized)) != 1:
+        raise ReportError(f"{source}: conflicting submitConcurrency/sendConcurrency values")
+    return normalized[0]
+
+
 def cells_from_cell_json(payload: dict[str, Any], run: str, source: str = "") -> list[Cell]:
     """Read the per-cell shape every runner writes.
 
@@ -159,6 +181,7 @@ def cells_from_cell_json(payload: dict[str, Any], run: str, source: str = "") ->
             run_id=None if role is None else str(trigger["runId"]),
             cell_id=None if role is None else str(trigger["cellId"]),
             trigger=trigger,
+            submit_concurrency=_submit_concurrency(payload.get("metadata", {}), trigger, origin),
         )
         for name in ("throughput_per_second", "bandwidth_mb_s"):
             if raw.get(name) is None:
@@ -166,7 +189,7 @@ def cells_from_cell_json(payload: dict[str, Any], run: str, source: str = "") ->
         for name in _CELL_FIELDS:
             if name in raw and raw[name] is not None:
                 setattr(cell, name, raw[name])
-        if role == "source":
+        if role == "source" or "streams" in raw:
             cell.streams = _streams(raw.get("streams"), origin)
         if "target_stats" in raw:
             cell.target_stats = _target_stats(raw.get("target_stats"), origin, key.pattern)

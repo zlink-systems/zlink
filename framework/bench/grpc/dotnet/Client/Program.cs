@@ -27,7 +27,7 @@ if (args.Length == 2 && args[0] == "--local-request-backpressure")
 
 var options = BenchOptions.Parse(args);
 options.Validate();
-BenchMeasurement.ConfigureThreadPool(options.SendConcurrency);
+BenchMeasurement.ConfigureThreadPool(options.SubmitConcurrency);
 Directory.CreateDirectory(options.Output);
 
 await using var transport = await BenchTransport.CreateAsync(options);
@@ -79,7 +79,7 @@ static async Task WriteResultAsync(
     var streams = StreamDescription.For(
         trigger.pattern,
         trigger.requestWindow,
-        trigger.sendConcurrency
+        trigger.submitConcurrency
     );
     var metadata = await BenchMetadata.CreateAsync(options, trigger);
     var cellTrigger = new BenchCellTrigger(
@@ -144,7 +144,7 @@ internal interface IBenchTransport : IAsyncDisposable
     /// <summary>
     /// Returns <paramref name="pending"/> once the transport has made it complete. A transport
     /// whose completions arrive on their own threads returns it as is; the raw transport drives
-    /// its socket's completion poller until it completes.
+    /// its socket completion poller before the phase starts and on its completion thread during it.
     /// </summary>
     Task DriveAsync(Task pending) => pending;
 }
@@ -157,7 +157,7 @@ internal static class BenchTransport
         {
             "grpc-dotnet" => new GrpcBenchTransport(
                 options.TargetEndpoint,
-                options.Scenario == "send-saturation" ? options.SendConcurrency : 1
+                options.Scenario == "send-saturation" ? options.SubmitConcurrency : 1
             ),
             "zlink-dotnet" => new RawBenchTransport(options),
             "zlink-framework-dotnet" => await FrameworkBenchTransport.CreateAsync(options),
@@ -368,13 +368,15 @@ internal sealed class RawBenchTransport : IBenchTransport
     private readonly IContext context;
     private readonly RawBenchSocket? request;
     private readonly RawBenchSocket[] commands;
+    private readonly CancellationTokenSource completionStopping = new();
+    private Thread? completionThread;
 
     public RawBenchTransport(BenchOptions options)
     {
         context = Systems.Zlink.Zlink.CreateContext();
         if (options.Scenario == "send-saturation")
         {
-            // 서버 간 연결은 하나다. `SendConcurrency`는 stream 수이지 연결 수가 아니다.
+            // 서버 간 연결은 하나다. `SubmitConcurrency`는 stream 수이지 연결 수가 아니다.
             // gRPC 행은 채널 하나를 stub 8개가 공유하고(`GrpcBenchTransport`), framework 행은
             // RouteMesh node의 socket 하나를 쓴다. raw만 stream마다 ROUTER를 만들면
             // `zlink-framework-<lang> / zlink-<lang>`이 계층 비용이 아니라 연결 수 차이를
@@ -406,6 +408,18 @@ internal sealed class RawBenchTransport : IBenchTransport
     public bool Ready { get; private set; }
 
     public void MarkReady() => Ready = true;
+
+    public void StartCompletionPump()
+    {
+        if (completionThread is not null)
+            return;
+        completionThread = new Thread(DriveCompletions)
+        {
+            IsBackground = true,
+            Name = "zlink-raw-completions",
+        };
+        completionThread.Start();
+    }
 
     public async ValueTask ProbeAsync(CancellationToken cancellationToken)
     {
@@ -464,9 +478,12 @@ internal sealed class RawBenchTransport : IBenchTransport
 
     public Task DriveAsync(Task pending)
     {
-        var socket = request ?? commands[0];
-        while (!pending.IsCompleted)
-            socket.WaitCompletion(BenchPolling.CompletionPollIntervalMs);
+        if (completionThread is null)
+        {
+            var socket = request ?? commands[0];
+            while (!pending.IsCompleted)
+                socket.WaitCompletion(BenchPolling.CompletionPollIntervalMs);
+        }
         return pending;
     }
 
@@ -494,11 +511,24 @@ internal sealed class RawBenchTransport : IBenchTransport
 
     public ValueTask DisposeAsync()
     {
+        completionStopping.Cancel();
+        completionThread?.Join(TimeSpan.FromSeconds(1));
         request?.Dispose();
         foreach (var command in commands)
             command.Dispose();
         context.Dispose();
+        completionStopping.Dispose();
         return ValueTask.CompletedTask;
+    }
+
+    private void DriveCompletions()
+    {
+        while (!completionStopping.IsCancellationRequested)
+        {
+            request?.WaitCompletion(1);
+            foreach (var command in commands)
+                command.WaitCompletion(1);
+        }
     }
 
     private static Message EncodeRawPayload(BenchPayload payload)
@@ -556,7 +586,6 @@ internal sealed class RawBenchSocket : IDisposable
     private readonly RoutingId peer;
     private readonly IPoller completionPoller;
     private readonly PollEvent[] completionEvents = new PollEvent[1];
-    private readonly SemaphoreSlim submissionGate = new(1, 1);
 
     private RawBenchSocket(IDealerSocket? dealer, IRouterSocket? router, RoutingId peer)
     {
@@ -632,26 +661,21 @@ internal sealed class RawBenchSocket : IDisposable
         return Request().Message(header).Message(body).Async(cancellationToken);
     }
 
-    public async ValueTask SubmitSendAsync(
+    public ValueTask SubmitSendAsync(
         Message header,
         Message body,
         CancellationToken cancellationToken
     )
     {
-        await submissionGate.WaitAsync(cancellationToken);
-        try
-        {
-            SendSubmission submission = Send()
-                .Message(header)
-                .Message(body)
-                .Async(cancellationToken);
-            if (submission.Result == SubmitResult.Backpressured)
-                await submission.Admitted;
-        }
-        finally
-        {
-            submissionGate.Release();
-        }
+        SendSubmission submission = Send()
+            .Message(header)
+            .Message(body)
+            .Async(cancellationToken);
+        if (submission.Result == SubmitResult.Backpressured)
+            return new ValueTask(submission.Admitted);
+        if (submission.Result != SubmitResult.Ok)
+            throw new InvalidOperationException($"Raw send submit returned {submission.Result}.");
+        return ValueTask.CompletedTask;
     }
 
     public void Dispose()
@@ -659,7 +683,6 @@ internal sealed class RawBenchSocket : IDisposable
         completionPoller.Dispose();
         dealer?.Dispose();
         router?.Dispose();
-        submissionGate.Dispose();
     }
 }
 
@@ -683,6 +706,7 @@ internal sealed class SourceMetrics(int sampleLimit)
     private long otherErrors;
 
     public BenchPhase Phase { get; private set; }
+    public int SampleLimit => sampleLimit;
 
     public void Reset(long deadline, BenchPhase phase = BenchPhase.Active)
     {
@@ -752,6 +776,35 @@ internal sealed class SourceMetrics(int sampleLimit)
         lock (gate)
         {
             inFlight--;
+        }
+    }
+
+    public void MergeFrom(SourceMetrics other)
+    {
+        var value = other.Result();
+        lock (gate)
+        {
+            submitted += value.Submitted;
+            completed += value.Completed;
+            completedAtClose += value.CompletedAtClose;
+            errors += value.Errors;
+            inFlight += value.CurrentInFlight;
+            peakInFlight += value.PeakInFlight;
+            sampleCount += other.sampleCount;
+            sampleSum += other.sampleSum;
+            if (samples.Count < sampleLimit)
+                samples.AddRange(other.samples.Take(sampleLimit - samples.Count));
+            foreach (var entry in value.ErrorSummary)
+            {
+                var key = (entry.Type, entry.Message);
+                if (errorSummary.TryGetValue(key, out var count))
+                    errorSummary[key] = count + entry.Count;
+                else if (errorSummary.Count < ErrorKindLimit)
+                    errorSummary.Add(key, entry.Count);
+                else
+                    otherErrors += entry.Count;
+            }
+            otherErrors += value.OtherErrors;
         }
     }
 
@@ -900,21 +953,21 @@ internal sealed record ActiveSnapshot(ResourceResult Source, BenchServerSnapshot
 
 internal sealed record StreamDescription(int count, int? inFlightPerStream, string implementation)
 {
-    public static StreamDescription For(string pattern, int requestWindow, int sendConcurrency) =>
+    public static StreamDescription For(string pattern, int requestWindow, int submitConcurrency) =>
         pattern switch
         {
-            "request-serial" => new(1, 1, ".NET Task; one sequential loop"),
+            "request-serial" => new(1, 1, ".NET dedicated thread; one sequential loop"),
             "request-window" => new(
                 1,
                 requestWindow,
                 ".NET Tasks sharing one logical-stream window"
             ),
             "request-backpressure" => new(
-                1,
+                submitConcurrency,
                 null,
-                ".NET submission/reply pump without an application in-flight cap"
+                ".NET dedicated thread per logical stream; no application in-flight cap"
             ),
-            "send-saturation" => new(sendConcurrency, 1, ".NET Task per logical stream"),
+            "send-saturation" => new(submitConcurrency, 1, ".NET dedicated thread per logical stream"),
             _ => throw new InvalidOperationException($"Unknown pattern {pattern}."),
         };
 }
@@ -1033,7 +1086,7 @@ internal sealed record BenchMetadata(
     string Implementation,
     int Warmup,
     int RequestWindow,
-    int SendConcurrency,
+    int SubmitConcurrency,
     int LatencySampleLimit,
     int DrainBoundMs,
     string TriggerUrl,
@@ -1067,7 +1120,7 @@ internal sealed record BenchMetadata(
             options.Implementation,
             options.Warmup,
             trigger.requestWindow,
-            trigger.sendConcurrency,
+            trigger.submitConcurrency,
             options.LatencySampleLimit,
             options.DrainBoundMs,
             options.TriggerUrl,
@@ -1201,7 +1254,7 @@ internal sealed record BenchOptions(
     string Scenario,
     int PayloadSize,
     int RequestWindow,
-    int SendConcurrency,
+    int SubmitConcurrency,
     int LatencySampleLimit,
     int Warmup,
     int DrainBoundMs,
@@ -1227,7 +1280,7 @@ internal sealed record BenchOptions(
             Value(args, "--scenario") ?? throw new ArgumentException("--scenario is required."),
             ParseInt(Value(args, "--payload-size"), 1024),
             ParseInt(Value(args, "--request-window"), 100),
-            ParseInt(Value(args, "--send-concurrency"), 8),
+            ParseInt(Value(args, "--submit-concurrency"), 8),
             ParseInt(Value(args, "--latency-sample-limit"), 200_000),
             ParseInt(Value(args, "--warmup-seconds"), 2),
             ParseInt(Value(args, "--drain-bound-ms"), 30_000),
@@ -1267,7 +1320,7 @@ internal sealed record BenchOptions(
         if (
             PayloadSize < BenchMetricHeaders.HeaderSize
             || RequestWindow <= 0
-            || SendConcurrency <= 0
+            || SubmitConcurrency <= 0
             || LatencySampleLimit <= 0
             || Warmup < 0
             || DrainBoundMs <= 0
@@ -1297,7 +1350,7 @@ internal sealed record BenchOptions(
             request.pattern != Scenario
             || request.payloadBytes != PayloadSize
             || request.requestWindow != RequestWindow
-            || request.sendConcurrency != SendConcurrency
+            || request.submitConcurrency != SubmitConcurrency
         )
             throw new InvalidOperationException(
                 "Trigger values do not match the runner-owned cell configuration."

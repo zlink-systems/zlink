@@ -51,7 +51,9 @@ class SourceMetrics {
     this.completed = 0;
     this.errors = 0;
     this.inFlight = 0;
-    this.peakInFlight = 0;
+    // Indexed by stream number; plain arrays keep the per-message cost a slot write.
+    this.streamInFlight = [];
+    this.streamPeakInFlight = [];
     this.terminalSnapshot = null;
     this.sampleCount = 0;
     this.sampleSumMicros = 0;
@@ -60,19 +62,22 @@ class SourceMetrics {
     this.otherErrors = 0;
   }
 
-  begin() {
+  begin(stream = 0) {
     const now = header.nowNs();
     this.submitted += 1;
     this.inFlight += 1;
-    this.peakInFlight = Math.max(this.peakInFlight, this.inFlight);
+    const depth = (this.streamInFlight[stream] ?? 0) + 1;
+    this.streamInFlight[stream] = depth;
+    if (depth > (this.streamPeakInFlight[stream] ?? 0)) this.streamPeakInFlight[stream] = depth;
     return now;
   }
 
-  complete(started, success, error = null) {
+  complete(started, success, error = null, stream = 0) {
     if (this.terminalSnapshot !== null) return;
     const now = header.nowNs();
     const micros = Number(now - started) / 1000;
     this.inFlight -= 1;
+    this.streamInFlight[stream] -= 1;
     if (success) this.completed += 1;
     else {
       this.errors += 1;
@@ -133,6 +138,12 @@ class SourceMetrics {
       p95Micros: percentile(sorted, 0.95),
       p99Micros: percentile(sorted, 0.99)
     };
+  }
+
+  get peakInFlight() {
+    let total = 0;
+    for (const peak of this.streamPeakInFlight) total += peak ?? 0;
+    return total;
   }
 }
 
@@ -222,6 +233,7 @@ async function runActive(transport, metrics, options, trigger) {
     );
   } else if (trigger.pattern === 'request-backpressure') {
     running = requestBackpressure(
+      trigger.submitConcurrency,
       transport,
       metrics,
       options,
@@ -232,7 +244,7 @@ async function runActive(transport, metrics, options, trigger) {
     );
   } else if (trigger.pattern === 'send-saturation') {
     running = sendWorkers(
-      trigger.sendConcurrency,
+      trigger.submitConcurrency,
       transport,
       metrics,
       trigger,
@@ -296,6 +308,31 @@ async function requestWorkers(count, transport, metrics, trigger, runId, nextSeq
 }
 
 async function requestBackpressure(
+  count,
+  transport,
+  metrics,
+  options,
+  trigger,
+  runId,
+  nextSequence,
+  deadline
+) {
+  await Promise.all(Array.from({ length: count }, (_, stream) =>
+    requestBackpressureStream(
+      stream,
+      transport,
+      metrics,
+      options,
+      trigger,
+      runId,
+      nextSequence,
+      deadline
+    )
+  ));
+}
+
+async function requestBackpressureStream(
+  stream,
   transport,
   metrics,
   options,
@@ -320,21 +357,21 @@ async function requestBackpressure(
           metrics.phase,
           sequence
         );
-        const started = metrics.begin();
+        const started = metrics.begin(stream);
         let submission;
         try {
-          submission = transport.requestSubmission(0, payload);
+          submission = transport.requestSubmission(stream, payload);
         } catch (error) {
-          metrics.complete(started, false, error);
+          metrics.complete(started, false, error, stream);
         }
         if (submission !== undefined) {
           const reply = (async () => {
             try {
               const value = await submission.reply;
               validateReply(value, runId, metrics.phase, trigger.payloadBytes, sequence);
-              metrics.complete(started, true);
+              metrics.complete(started, true, null, stream);
             } catch (error) {
-              metrics.complete(started, false, error);
+              metrics.complete(started, false, error, stream);
             }
           })();
           pending.add(reply);
@@ -362,14 +399,13 @@ async function requestBackpressure(
       completionPump?.poll(pollTimeoutUntil(drainDeadline, COMPLETION_POLL_INTERVAL_MS));
       await sleepImmediate();
     }
-    metrics.freezeTerminal();
     return;
   }
 
   const pending = new Set();
   let issuedSinceYield = 0;
   while (header.nowNs() < deadline) {
-    const operation = executeRequest(transport, metrics, trigger, runId, 0, nextSequence());
+    const operation = executeRequest(transport, metrics, trigger, runId, stream, nextSequence());
     pending.add(operation);
     operation.finally(() => pending.delete(operation));
     issuedSinceYield += 1;
@@ -380,7 +416,6 @@ async function requestBackpressure(
   }
   if (pending.size === 0) return;
   await Promise.race([Promise.all([...pending]), delay(options.drainBoundMs)]);
-  metrics.freezeTerminal();
 }
 
 async function sendWorkers(count, transport, metrics, trigger, runId, nextSequence, deadline) {
@@ -394,7 +429,7 @@ async function sendWorkers(count, transport, metrics, trigger, runId, nextSequen
           metrics.phase,
           sequence
         );
-        const started = metrics.begin();
+        const started = metrics.begin(stream);
         try {
           if (typeof transport.sendSubmission === 'function') {
             const submission = transport.sendSubmission(stream, payload);
@@ -404,9 +439,9 @@ async function sendWorkers(count, transport, metrics, trigger, runId, nextSequen
           } else {
             await transport.send(stream, payload);
           }
-          metrics.complete(started, true);
+          metrics.complete(started, true, null, stream);
         } catch (error) {
-          metrics.complete(started, false, error);
+          metrics.complete(started, false, error, stream);
         }
         // Keep all logical send streams and completion callbacks runnable when
         // a normal submission does not otherwise await anything.
@@ -419,13 +454,13 @@ async function sendWorkers(count, transport, metrics, trigger, runId, nextSequen
 
 async function executeRequest(transport, metrics, trigger, runId, stream, sequence) {
   const payload = header.createPayloadBytes(trigger.payloadBytes, runId, metrics.phase, sequence);
-  const started = metrics.begin();
+  const started = metrics.begin(stream);
   try {
     const reply = await transport.request(stream, payload);
     validateReply(reply, runId, metrics.phase, trigger.payloadBytes, sequence);
-    metrics.complete(started, true);
+    metrics.complete(started, true, null, stream);
   } catch (error) {
-    metrics.complete(started, false, error);
+    metrics.complete(started, false, error, stream);
   }
 }
 
@@ -436,7 +471,7 @@ function validateReply(reply, runId, phase, payloadBytes, sequence) {
   }
 }
 
-function streamDescription(pattern, requestWindow, sendConcurrency) {
+function streamDescription(pattern, requestWindow, submitConcurrency) {
   if (pattern === 'request-serial') {
     return { count: 1, inFlightPerStream: 1, implementation: 'Node Promise; one sequential loop' };
   }
@@ -449,15 +484,15 @@ function streamDescription(pattern, requestWindow, sendConcurrency) {
   }
   if (pattern === 'request-backpressure') {
     return {
-      count: 1,
+      count: submitConcurrency,
       inFlightPerStream: null,
       implementation:
-        'Node event loop; reply stages separate; pause only on BACKPRESSURED admission'
+        'Node event loop; one submit loop per logical stream; reply stages separate; pause each stream only on BACKPRESSURED admission'
     };
   }
   if (pattern === 'send-saturation') {
     return {
-      count: sendConcurrency,
+      count: submitConcurrency,
       inFlightPerStream: 1,
       implementation: 'Node loop per logical stream; pause only on BACKPRESSURED admission'
     };

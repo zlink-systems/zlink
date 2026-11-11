@@ -13,7 +13,7 @@ public final class BenchOptions {
     public final String implementation;
     public final List<Integer> payloadSizes;
     public final int requestWindow;
-    public final int sendConcurrency;
+    public final int submitConcurrency;
     public final int latencySampleLimit;
     public final double warmupSeconds;
     public final int drainBoundMs;
@@ -36,7 +36,7 @@ public final class BenchOptions {
         int payload = Args.integer(argv, "--payload-size", 1024);
         payloadSizes = List.of(payload);
         requestWindow = Args.integer(argv, "--request-window", 100);
-        sendConcurrency = Args.integer(argv, "--send-concurrency", 8);
+        submitConcurrency = Args.integer(argv, "--submit-concurrency", 8);
         latencySampleLimit = Args.integer(argv, "--latency-sample-limit", 200_000);
         warmupSeconds = Args.number(argv, "--warmup-seconds", 2.0);
         drainBoundMs = Args.integer(argv, "--drain-bound-ms", 30_000);
@@ -59,7 +59,7 @@ public final class BenchOptions {
         }
         if (payload < BenchMetricHeader.HEADER_SIZE
                 || requestWindow != 100
-                || sendConcurrency != 8
+                || submitConcurrency != 8
                 || latencySampleLimit <= 0
                 || drainBoundMs != 30_000
                 || requestTimeoutMs != 30_000

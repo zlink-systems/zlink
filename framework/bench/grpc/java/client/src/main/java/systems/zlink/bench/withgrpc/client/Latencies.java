@@ -26,6 +26,15 @@ public final class Latencies {
         }
     }
 
+    int capacity() {
+        return samples.length;
+    }
+
+    void merge(Latencies other) {
+        int count = Math.min(other.cursor.get(), other.samples.length);
+        for (int i = 0; i < count; i++) add(other.samples[i]);
+    }
+
     public Summary summary() {
         int count = Math.min(cursor.get(), samples.length);
         double[] sorted = Arrays.copyOf(samples, count);
