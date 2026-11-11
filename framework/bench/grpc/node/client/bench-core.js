@@ -222,6 +222,7 @@ async function runActive(transport, metrics, options, trigger) {
     );
   } else if (trigger.pattern === 'request-backpressure') {
     running = requestBackpressure(
+      trigger.submitConcurrency,
       transport,
       metrics,
       options,
@@ -232,7 +233,7 @@ async function runActive(transport, metrics, options, trigger) {
     );
   } else if (trigger.pattern === 'send-saturation') {
     running = sendWorkers(
-      trigger.sendConcurrency,
+      trigger.submitConcurrency,
       transport,
       metrics,
       trigger,
@@ -296,6 +297,31 @@ async function requestWorkers(count, transport, metrics, trigger, runId, nextSeq
 }
 
 async function requestBackpressure(
+  count,
+  transport,
+  metrics,
+  options,
+  trigger,
+  runId,
+  nextSequence,
+  deadline
+) {
+  await Promise.all(Array.from({ length: count }, (_, stream) =>
+    requestBackpressureStream(
+      stream,
+      transport,
+      metrics,
+      options,
+      trigger,
+      runId,
+      nextSequence,
+      deadline
+    )
+  ));
+}
+
+async function requestBackpressureStream(
+  stream,
   transport,
   metrics,
   options,
@@ -323,7 +349,7 @@ async function requestBackpressure(
         const started = metrics.begin();
         let submission;
         try {
-          submission = transport.requestSubmission(0, payload);
+          submission = transport.requestSubmission(stream, payload);
         } catch (error) {
           metrics.complete(started, false, error);
         }
@@ -362,14 +388,13 @@ async function requestBackpressure(
       completionPump?.poll(pollTimeoutUntil(drainDeadline, COMPLETION_POLL_INTERVAL_MS));
       await sleepImmediate();
     }
-    metrics.freezeTerminal();
     return;
   }
 
   const pending = new Set();
   let issuedSinceYield = 0;
   while (header.nowNs() < deadline) {
-    const operation = executeRequest(transport, metrics, trigger, runId, 0, nextSequence());
+    const operation = executeRequest(transport, metrics, trigger, runId, stream, nextSequence());
     pending.add(operation);
     operation.finally(() => pending.delete(operation));
     issuedSinceYield += 1;
@@ -380,7 +405,6 @@ async function requestBackpressure(
   }
   if (pending.size === 0) return;
   await Promise.race([Promise.all([...pending]), delay(options.drainBoundMs)]);
-  metrics.freezeTerminal();
 }
 
 async function sendWorkers(count, transport, metrics, trigger, runId, nextSequence, deadline) {
@@ -436,7 +460,7 @@ function validateReply(reply, runId, phase, payloadBytes, sequence) {
   }
 }
 
-function streamDescription(pattern, requestWindow, sendConcurrency) {
+function streamDescription(pattern, requestWindow, submitConcurrency) {
   if (pattern === 'request-serial') {
     return { count: 1, inFlightPerStream: 1, implementation: 'Node Promise; one sequential loop' };
   }
@@ -449,15 +473,15 @@ function streamDescription(pattern, requestWindow, sendConcurrency) {
   }
   if (pattern === 'request-backpressure') {
     return {
-      count: 1,
+      count: submitConcurrency,
       inFlightPerStream: null,
       implementation:
-        'Node event loop; reply stages separate; pause only on BACKPRESSURED admission'
+        'Node event loop; one submit loop per logical stream; reply stages separate; pause each stream only on BACKPRESSURED admission'
     };
   }
   if (pattern === 'send-saturation') {
     return {
-      count: sendConcurrency,
+      count: submitConcurrency,
       inFlightPerStream: 1,
       implementation: 'Node loop per logical stream; pause only on BACKPRESSURED admission'
     };
