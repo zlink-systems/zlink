@@ -88,6 +88,8 @@ Fixed RID를 쓰는 node가 재시작하면 이전 lifecycle의 lease가 Store e
 `3·margin`(기본값 예시 15초)을 따른다. Host 시작 호출은 Location runtime §5의 lease 없는 startup과
 같이 끝나며 host는 `Preparing`에 머문다. `t0 + 3·margin` 이후 첫 claim 시점(renew interval 주기)에
 같은 RID를 재claim하며 그 전에는 claim을 제출하지 않는다. 정상 종료 뒤 재시작도 같은 대기를 거친다.
+이전 lifecycle이 없는 최초 시작도 같다. Store는 최초 시작과 Store를 비운 뒤의 재시작을 구별하지 못하므로
+`Missing`을 처음 관찰한 시각을 `t0`로 삼아 같은 대기를 거친다.
 Lease가 아직 유효하면 기존 `Conflict` 규칙을 따른다. 재시작으로 관찰 시각을 잃으면 다시 관찰하고
 전체 대기를 처음부터 잰다. Mesh 질의나 기존 연결을 요구하지 않으며 새 RID를 발급하지 않는다.
 재claim 뒤의 descriptor 게시·bind·admission 순서는 §6을 따른다.
@@ -233,6 +235,13 @@ Framework는 다음 조건을 사용해 target을 선택한다.
 3. 요청한 object kind와 stable type을 등록했는지 확인한다.
 4. Active·pending capacity가 남아 있는지 확인한다.
 5. 남은 후보의 node-wide placement weight를 적용한다.
+
+조건 2~4를 만족하고 placement weight가 양수인 node가 있으나 그중 `Serving`인 node가 아직 없으면
+create operation의 남은 deadline 안에서 기다린다. 기다리는 동안에는 기존 discovery 갱신으로 바뀐
+descriptor 목록에서만 다시 판정하며, 요청마다 Store를 다시 읽는 대기를 두지 않는다. 다시 판정할 때도
+조건 1~5를 모두 적용한다(조건 2는 [Location runtime §4.1](../05-location-relocation/01-location-runtime.ko.md#41-대상-descriptor의-owner-lease-검증)의
+owner lease 검증이다). Deadline이 끝나면 `DeadlineExceeded`다. 처음 판정할 때 기다릴 node도 없으면
+기다리지 않고 §5.1의 `Unavailable`로 끝낸다.
 
 Framework는 선택한 node에 object를 배치할 자리를 예약하여 다른 생성 작업과
 capacity를 중복 사용하지 않게 한다. Application에 target RID나 owner token을
