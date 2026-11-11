@@ -19,7 +19,7 @@ sys.path.insert(0, _TOOLS)
 
 from benchagg.analysis import build_rows, judge_pair, spread_percent  # noqa: E402
 from benchagg.model import Cell, CellKey, RunSet  # noqa: E402
-from benchagg.readers import ReportError, read_run  # noqa: E402
+from benchagg.readers import ReportError, read_run, cells_from_cell_json  # noqa: E402
 
 
 def cell(impl, pattern, size, run, throughput, **kwargs):
@@ -37,6 +37,51 @@ def run_set_of(*cells):
     for item in cells:
         run_set.add(item)
     return run_set
+
+
+class SubmitConcurrencyTest(unittest.TestCase):
+    def payload(self, **metadata):
+        return {"schema": "with-grpc-cell-v1", "metadata": metadata, "cells": [{
+            "implementation": "zlink-c", "pattern": "request-backpressure", "payload_size": 1024,
+            "throughput_per_second": 1, "bandwidth_mb_s": .001024,
+            "streams": {"count": 8, "inFlightPerStream": None}}]}
+
+    def test_new_and_historical_metadata_normalize_to_the_same_setting(self):
+        for field in ("submitConcurrency", "sendConcurrency"):
+            for count in (8, "8"):
+                with self.subTest(field=field, count=count):
+                    result = cells_from_cell_json(self.payload(**{field: count}), "r1")[0]
+                    self.assertEqual(result.submit_concurrency, 8)
+                    self.assertEqual(result.stream_count, 8)
+                    self.assertIsNone(result.in_flight_per_stream)
+        self.assertIsNone(cells_from_cell_json(self.payload(), "old")[0].submit_concurrency)
+
+    def test_invalid_or_conflicting_settings_are_rejected(self):
+        for count in (0, -1, True, 1.5, None, "bad"):
+            with self.subTest(count=count), self.assertRaisesRegex(ReportError, "positive integer"):
+                cells_from_cell_json(self.payload(submitConcurrency=count), "bad")
+        with self.assertRaisesRegex(ReportError, "conflicting"):
+            cells_from_cell_json(self.payload(submitConcurrency=8, sendConcurrency=4), "bad")
+
+    def test_legacy_stream_count_is_not_reinterpreted(self):
+        payload = self.payload(sendConcurrency=8)
+        payload["cells"][0]["streams"]["count"] = 1
+        result = cells_from_cell_json(payload, "old")[0]
+        self.assertEqual(result.submit_concurrency, 8)
+        self.assertEqual(result.stream_count, 1)
+
+    def test_server_trigger_accepts_both_names_and_keeps_request_window(self):
+        for field in ("submitConcurrency", "sendConcurrency"):
+            payload = self.payload()
+            payload["cells"][0].update(role="source", trigger={
+                "runId": "r1", "cellId": "cell", "pattern": "request-backpressure",
+                "payloadBytes": 1024, "durationMs": 5000, "warmup": 5000,
+                "endpoint": "http://127.0.0.1:5285", "receivedAtUnixMs": 123,
+                "requestWindow": 100, field: 8})
+            result = cells_from_cell_json(payload, "r1")[0]
+            self.assertEqual(result.submit_concurrency, 8)
+            self.assertEqual(result.trigger["requestWindow"], 100)
+            self.assertEqual(result.stream_count, 8)
 
 
 class ExclusionTest(unittest.TestCase):
@@ -391,7 +436,7 @@ class JvmThreadCoresInstrumentTest(unittest.TestCase):
         self.assertFalse(cell.saturation_evaluated)
         self.assertFalse(cell.client_saturated)
 
-    def test_send_cell_is_judged_against_the_send_concurrency(self):
+    def test_send_cell_is_judged_against_the_submit_concurrency(self):
         cell = Cell(key=CellKey("zlink-java", "send-saturation", 4096), run="java-router-1")
         cell.throughput_per_second = 1000.0
         cell.client_saturation_metric = "jvm_thread_cores"

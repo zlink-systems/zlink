@@ -59,6 +59,7 @@ for run in $(seq 1 "${RUNS}"); do
                client="${BUILD_DIR}/bench_c_with_grpc_zlink_client"; port=6207 ;;
     esac
     for pattern in "${patterns[@]}"; do
+      bench_skip_cell "${impl}" "${pattern}" && continue
       for payload in "${payloads[@]}"; do
         cell_dir="$(bench_cell_dir "${run}" "${impl}" "${pattern}" "${payload}")"
         mkdir -p "${cell_dir}"
