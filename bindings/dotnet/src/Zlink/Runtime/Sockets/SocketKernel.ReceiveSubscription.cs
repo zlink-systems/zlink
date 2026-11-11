@@ -62,6 +62,7 @@ internal sealed partial class SocketKernel : IDisposable
     private bool ReceiveSubscriptionEventInto(SubscriptionEvent result,
         int flags)
     {
+        using var call = _handle.ReserveReceive();
         var topicBuffer = ArrayPool<byte>.Shared.Rent(InitialTopicBufferSize);
         try
         {
@@ -71,7 +72,7 @@ internal sealed partial class SocketKernel : IDisposable
             nuint topicLength;
             while (true)
             {
-                rc = NativeMethods.zlink_xpub_recv(Handle,
+                rc = NativeMethods.zlink_xpub_recv(call.Handle,
                     out sourceRoutingId, out subscribedInt, topicBuffer,
                     (nuint)topicBuffer.Length, out topicLength, flags);
                 if (rc == 0)

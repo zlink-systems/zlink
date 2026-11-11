@@ -2,6 +2,7 @@
 
 using System.Buffers;
 using Systems.Zlink.Runtime.Native;
+using Systems.Zlink.Runtime.Sockets.Internal;
 
 namespace Systems.Zlink;
 
@@ -71,39 +72,44 @@ internal static class RequestReplySupport
     }
 
     internal static void SubmitPreservingOnFailure<T>(
-        IReadOnlyList<Message> parts, ref T submitter)
+        SocketHandle socket, IReadOnlyList<Message> parts, ref T submitter)
         where T : struct, INativeMessageSubmitter<T>
     {
-        EnsureParts(parts, nameof(parts));
-        ZlinkMsg[]? rented = null;
-        var nativeParts = parts.Count <= NativeMessageParts.StackPartLimit
-            ? stackalloc ZlinkMsg[NativeMessageParts.StackPartLimit]
-            : rented = ArrayPool<ZlinkMsg>.Shared.Rent(parts.Count);
-        var built = 0;
-        try
+        using (var call = socket.ReserveSubmit())
         {
-            // Core consumes the whole native record on every returned result.
-            // Preserve the managed originals until admission succeeds.
-            for (; built < parts.Count; built++)
-                parts[built].CopyTo(ref nativeParts[built]);
-            var rc = T.Submit(ref submitter, nativeParts[..built]);
-            built = 0;
+            EnsureParts(parts, nameof(parts));
+            ZlinkMsg[]? rented = null;
+            var nativeParts = parts.Count <= NativeMessageParts.StackPartLimit
+                ? stackalloc ZlinkMsg[NativeMessageParts.StackPartLimit]
+                : rented = ArrayPool<ZlinkMsg>.Shared.Rent(parts.Count);
+            var built = 0;
+            int rc;
+            int errno;
+            try
+            {
+                // Core consumes the whole native record on every returned result.
+                // Preserve the managed originals until admission succeeds.
+                for (; built < parts.Count; built++)
+                    parts[built].CopyTo(ref nativeParts[built]);
+                rc = T.Submit(ref submitter, call.Handle, nativeParts[..built]);
+                errno = NativeMethods.GetLastPInvokeError();
+                built = 0;
+            }
+            finally
+            {
+                for (var i = 0; i < built; i++)
+                    NativeMethods.zlink_msg_close(ref nativeParts[i]);
+                if (rented != null)
+                    ArrayPool<ZlinkMsg>.Shared.Return(rented);
+            }
             if (rc != 0)
-                throw new ZlinkSubmitException((SubmitResult)rc,
-                    NativeMethods.GetLastPInvokeError());
-            ConsumeParts(parts);
+                throw new ZlinkSubmitException((SubmitResult)rc, errno);
         }
-        finally
-        {
-            for (var i = 0; i < built; i++)
-                NativeMethods.zlink_msg_close(ref nativeParts[i]);
-            if (rented != null)
-                ArrayPool<ZlinkMsg>.Shared.Return(rented);
-        }
+        ConsumeParts(parts);
     }
 }
 
 internal interface INativeMessageSubmitter<T> where T : struct, INativeMessageSubmitter<T>
 {
-    static abstract int Submit(ref T self, Span<ZlinkMsg> parts);
+    static abstract int Submit(ref T self, IntPtr handle, Span<ZlinkMsg> parts);
 }

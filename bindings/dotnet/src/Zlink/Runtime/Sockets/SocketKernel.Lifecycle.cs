@@ -35,14 +35,14 @@ internal sealed partial class SocketKernel : IDisposable
         {
             _handle.Dispose();
         }
-        catch
+        finally
         {
-            if (finalizing)
+            if (_handle.IsClosed)
+            {
                 _completion?.CompleteClose();
-            throw;
+                if (!finalizing)
+                    GC.SuppressFinalize(this);
+            }
         }
-        _completion?.CompleteClose();
-        if (!finalizing)
-            GC.SuppressFinalize(this);
     }
 }

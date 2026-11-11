@@ -44,7 +44,7 @@ internal sealed partial class SocketKernel : IDisposable
     {
         return type is SocketType.Pair or SocketType.Dealer
             or SocketType.Router or SocketType.Stream
-            ? new CompletionOwner(Handle, type)
+            ? new CompletionOwner(_handle, type)
             : null;
     }
 
