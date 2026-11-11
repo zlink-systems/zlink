@@ -8,7 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <queue>
+#include <deque>
 #include <stop_token>
 #include <string>
 #include <thread>
@@ -26,7 +26,10 @@ class offload_executor_t
       public:
         virtual ~role_t () = default;
         // Exceptions preserve the dedicated receive thread's terminate policy.
-        virtual void run () = 0;
+        // One complete receive rotation; false means the role has stopped.
+        virtual bool run () = 0;
+        // Publication returns before worker assignment or application entry.
+        virtual bool publish () { return false; }
     };
 
     template <typename Work> static void run_application_turn (Work &&work) noexcept
@@ -99,27 +102,46 @@ class offload_executor_t
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
     static thread_local const offload_executor_t *_current_worker_executor;
 #endif
-    using work_t = std::variant<std::function<void ()>, std::function<void (std::stop_token)>>;
+    using work_t = std::variant<std::function<void ()>,
+                                std::function<void (std::stop_token)>,
+                                std::shared_ptr<role_t>>;
     struct work_item_t
     {
         work_t work;
         std::optional<std::stop_source> cancellation;
     };
 
+    struct worker_t : std::enable_shared_from_this<worker_t>
+    {
+        std::thread thread;
+        std::condition_variable ready;
+        std::optional<work_item_t> assignment;
+        worker_t *previous_idle = nullptr;
+        worker_t *next_idle = nullptr;
+    };
+    static thread_local offload_executor_t *_publishing_executor;
     bool try_submit_application (work_t work);
-    void worker_loop ();
+    bool publishing_role () const noexcept;
+    std::size_t idle_worker_count_locked () const noexcept;
+    void add_idle_locked (worker_t &worker) noexcept;
+    void remove_idle_locked (worker_t &worker) noexcept;
+    std::shared_ptr<worker_t> assign_worker_locked (worker_t *current);
+    void dispatch_pending ();
+    void wake_workers ();
+    std::shared_ptr<worker_t> try_handoff (worker_t &worker);
+    void worker_loop (worker_t &worker);
+    bool application_queue_empty_locked () const noexcept;
     void complete_work_locked ();
     void start_worker_locked ();
     void retire_current_worker_locked ();
     void join_retired_workers_locked ();
 
     mutable std::mutex _mutex;
-    std::condition_variable _ready;
     std::condition_variable _empty;
-    std::queue<work_item_t> _queue;
-    std::queue<std::shared_ptr<role_t>> _roles;
+    std::deque<work_item_t> _queue;
     // [0, _live_workers) run worker_loop; the rest have returned.
-    std::vector<std::thread> _workers;
+    std::vector<std::shared_ptr<worker_t>> _workers;
+    worker_t *_idle_head = nullptr;
     std::vector<std::stop_source *> _active_cancellations;
     std::size_t _min_worker_count = 1;
     std::size_t _max_worker_count = 1;
@@ -129,7 +151,6 @@ class offload_executor_t
     std::size_t _active = 0;
     std::size_t _role_active = 0;
     std::size_t _live_workers = 0;
-    std::size_t _idle_workers = 0;
 };
 
 // Runtimes share one process pool and retain it until their lanes have drained.

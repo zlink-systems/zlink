@@ -2062,7 +2062,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       absl_DIR
       utf8_range_DIR
       ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX
-      ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX)
+      ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX
+      ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE)
     if(DEFINED ${tooling_dependency} AND NOT "${${tooling_dependency}}" STREQUAL "")
       list(APPEND ZLINK_FRAMEWORK_CPP_TOOLING_CONTRACT_ARGS
         -D ZLINK_FRAMEWORK_CPP_TOOLING_${tooling_dependency}=${${tooling_dependency}})
@@ -2357,6 +2358,20 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-unit;framework-regression;actor-join")
   target_include_directories(test_cpp_framework_actor_join_handoff_id PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_receive_role_handoff
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_role_handoff.cpp
+    "framework-unit;framework-contract;execution;resource" unit)
+  target_use_zlink_gtest_main(test_cpp_framework_receive_role_handoff)
+  target_include_directories(test_cpp_framework_receive_role_handoff PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_definitions(test_cpp_framework_receive_role_handoff PRIVATE
+      ZLINK_TEST_HANDOFF_ALLOC_FAIL)
+    target_link_options(test_cpp_framework_receive_role_handoff PRIVATE
+      "LINKER:--wrap=_Znwm" "LINKER:--wrap=pthread_mutex_trylock")
+  endif()
+
   add_zlink_framework_test(
     test_cpp_framework_receive_role_completion
     tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_role_completion.cpp

@@ -35,14 +35,14 @@ struct offload_executor_test_access_t
     static std::size_t idle (offload_executor_t &executor)
     {
         std::lock_guard lock (executor._mutex);
-        return executor._idle_workers;
+        return executor.idle_worker_count_locked ();
     }
     static bool stopping (offload_executor_t &executor)
     {
         std::lock_guard lock (executor._mutex);
         return executor._stopping;
     }
-    static void wake_workers (offload_executor_t &executor) { executor._ready.notify_all (); }
+    static void wake_workers (offload_executor_t &executor) { executor.wake_workers (); }
 };
 }
 
@@ -64,7 +64,11 @@ template <typename T> void await (std::future<T> &future)
 struct test_role_t final : rt::offload_executor_t::role_t
 {
     std::function<void ()> execute;
-    void run () override { execute (); }
+    bool run () override
+    {
+        execute ();
+        return false;
+    }
 };
 
 #ifdef ZLINK_TEST_WRAP_NOTIFY_ONE

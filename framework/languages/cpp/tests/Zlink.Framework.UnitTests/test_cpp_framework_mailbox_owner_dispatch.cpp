@@ -21,17 +21,70 @@ namespace zlink::framework::runtime
 {
 struct offload_executor_test_access_t
 {
-    static std::condition_variable *ready (offload_executor_t &executor)
+    static auto ready (offload_executor_t &executor)
     {
-        return &executor._ready;
+        const auto deadline = std::chrono::steady_clock::now () + 5s;
+        while (true) {
+            {
+                std::lock_guard lock (executor._mutex);
+                if (executor.idle_worker_count_locked () == executor._live_workers) {
+                    std::vector<std::condition_variable *> result;
+                    for (const auto &worker : executor._workers)
+                        result.push_back (&worker->ready);
+                    return result;
+                }
+            }
+            assert (std::chrono::steady_clock::now () < deadline);
+            std::this_thread::yield ();
+        }
+    }
+    static bool receiving (offload_executor_t &executor)
+    {
+        std::lock_guard lock (executor._mutex);
+        for (const auto &worker : executor._workers) {
+            if (worker->thread.get_id () == std::this_thread::get_id ())
+                return worker->assignment
+                       && std::holds_alternative<std::shared_ptr<offload_executor_t::role_t>> (
+                         worker->assignment->work);
+        }
+        return false;
     }
 };
 }
 namespace
 {
-std::atomic<std::condition_variable *> application_ready{nullptr};
+rt::offload_executor_t *application_executor = nullptr;
+std::vector<std::condition_variable *> application_ready;
 std::atomic_size_t worker_notifications{0};
 std::atomic_bool watch_notifications{false};
+std::atomic_uint receive_active{0}, receive_maximum{0}, receive_rotations{0}, publications{0};
+struct observed_role_t final : rt::offload_executor_t::role_t
+{
+    explicit observed_role_t (std::shared_ptr<rt::offload_executor_t::role_t> inner) :
+        inner (std::move (inner))
+    {
+    }
+    bool run () override
+    {
+        const auto concurrent = ++receive_active;
+        auto maximum = receive_maximum.load ();
+        while (concurrent > maximum
+               && !receive_maximum.compare_exchange_weak (maximum, concurrent)) {
+        }
+        const bool more = inner->run ();
+        --receive_active;
+        if (more)
+            ++receive_rotations;
+        return more;
+    }
+    bool publish () override
+    {
+        const bool published = inner->publish ();
+        ++publications;
+        return published;
+    }
+    std::shared_ptr<rt::offload_executor_t::role_t> inner;
+};
 std::mutex observation_mutex;
 std::thread::id received_on;
 std::promise<std::thread::id> handled;
@@ -61,6 +114,7 @@ struct handler_t
                 queue_drained.set_value ();
             return;
         }
+        assert (!rt::offload_executor_test_access_t::receiving (*application_executor));
         handler_blocked = true;
         handled.set_value (std::this_thread::get_id ());
         release_handler_turn.wait ();
@@ -114,8 +168,9 @@ extern "C" bool wrapped_start_role (
 extern "C" bool wrapped_start_role (rt::offload_executor_t *executor,
                                     std::shared_ptr<rt::offload_executor_t::role_t> role)
 {
+    application_executor = executor;
     application_ready = rt::offload_executor_test_access_t::ready (*executor);
-    return real_start_role (executor, std::move (role));
+    return real_start_role (executor, std::make_shared<observed_role_t> (std::move (role)));
 }
 
 extern "C" void
@@ -124,7 +179,9 @@ extern "C" void wrapped_notify (std::condition_variable *) __asm__ (
   "__wrap__ZNSt18condition_variable10notify_oneEv");
 extern "C" void wrapped_notify (std::condition_variable *ready)
 {
-    if (watch_notifications.load () && ready == application_ready.load ())
+    if (watch_notifications.load ()
+        && std::find (application_ready.begin (), application_ready.end (), ready)
+             != application_ready.end ())
         ++worker_notifications;
     real_notify (ready);
 }
@@ -161,7 +218,11 @@ int main ()
         fw::serializer_registry_t serializers;
         serializers.add<probe_t> (
           [] (const probe_t &value) { return fw::encoded_payload_t::from_string (value.value); },
-          [] (const fw::encoded_payload_t &value) { return probe_t{value.to_string ()}; });
+          [] (const fw::encoded_payload_t &value) {
+              assert (!rt::offload_executor_test_access_t::receiving (*application_executor));
+              assert (!fw::detail::current_infrastructure_wait ());
+              return probe_t{value.to_string ()};
+          });
         fw::service_collection_t services;
         auto owned = std::make_unique<rt::in_memory_location_repository_t> ();
         auto &store = *owned;
@@ -188,8 +249,17 @@ int main ()
           fw::service_lifetime_t::singleton);
         auto provider = services.build_provider ();
         provider.get_required<rt::location_runtime_t> ().start (*registration->routing_id);
+        fw::handler_registry_t filters;
+        filters.add_filter ([] (fw::service_provider_t &, fw::serializer_registry_t &,
+                                const fw::handler_filter_context_t &,
+                                fw::handler_next_t next) -> fw::task_t<void> {
+            assert (!rt::offload_executor_test_access_t::receiving (*application_executor));
+            assert (!fw::detail::current_infrastructure_wait ());
+            co_await next ();
+        });
         rt::mesh_node_host_service_t service (
-          std::make_shared<rt::runtime_failure_collector_t> (), {registration}, serializers, {}, {},
+          std::make_shared<rt::runtime_failure_collector_t> (), {registration}, serializers,
+          filters, {}, {},
           std::make_shared<rt::application_job_queue_t> (rt::application_job_queue_configuration_t{
             fw::application_job_queue_profile_t::balanced, std::uint32_t{512}, 1, 512}));
         service.start (provider).result ().value ();
@@ -251,6 +321,8 @@ int main ()
             const auto notifications_while_busy = worker_notifications.load ();
             std::cout << "worker_notifications_for_129_records=" << notifications_while_busy
                       << std::endl;
+            // The receive notification replaces the application wake on a
+            // successful handoff. This one-owner batch still needs one wake.
             correct = correct && notifications_while_busy == 1;
             auto completed = std::make_shared<std::promise<void>> ();
             auto terminal = completed->get_future ();
@@ -274,6 +346,59 @@ int main ()
                 .send_to_channel ("parallel", parallel_parts.items (), std::vector<std::uint8_t>{})
                 .result ();
             const bool other_owner = parallel.wait_for (5s) == std::future_status::ready;
+            // T04: a real outbound reply must reach C1 while the target's
+            // local synchronous handler is still blocked.
+            std::promise<void> replied;
+            auto reply = replied.get_future ();
+            assert (target->native_node ()
+                      .request_to_node (
+                        *source_state->routing_id, {zlink::message_t::from ("outbound-probe")}, 5s,
+                        [&] (auto result, fw::result_t<zlink::message_t>) {
+                            assert (result == rt::foundation::operation_terminal_t::completed);
+                            replied.set_value ();
+                        })
+                      .result ()
+                      .value ()
+                    == zlink::submit_result_t::ok);
+            const auto reply_deadline = std::chrono::steady_clock::now () + 5s;
+            while (reply.wait_for (0ms) != std::future_status::ready
+                   && std::chrono::steady_clock::now () < reply_deadline) {
+                source
+                  .dispatch_ready ([] (const auto &, const auto &record, auto, auto) {
+                      assert (rt::host::reply (record.reply_token,
+                                               {zlink::message_t::from ("outbound-reply")})
+                              == zlink::submit_result_t::ok);
+                  })
+                  .result ()
+                  .value ();
+                std::this_thread::yield ();
+            }
+            const bool outbound_reply = reply.wait_for (0ms) == std::future_status::ready;
+            // New peer admission requires a management turn, beyond a wake or
+            // a thread-name observation.
+            auto late_state =
+              fw::test::runtime_failure_fixture<fw::detail::mesh_node_builder_state_t> (
+                "mailbox-owner-dispatch");
+            late_state->core_context = std::make_shared<zlink::context_t> ();
+            late_state->listen_endpoint = "tcp://127.0.0.1:0";
+            late_state->listen_port.reset ();
+            late_state->routing_id = zlink::routing_id_t::from ("late-peer");
+            fw::detail::mesh_node_runtime_t late_peer (late_state);
+            late_peer.start ().result ().value ();
+            late_peer.connect_peer (*registration->routing_id, target->status ().local_endpoint ());
+            const auto admission_deadline = std::chrono::steady_clock::now () + 5s;
+            while (target->admitted_peer_count () < 2
+                   && std::chrono::steady_clock::now () < admission_deadline) {
+                late_peer.dispatch_ready ([] (const auto &, const auto &, auto, auto) {})
+                  .result ()
+                  .value ();
+                std::this_thread::yield ();
+            }
+            const bool management_progress = target->admitted_peer_count () == 2;
+            std::cout << "outbound_reply=" << outbound_reply
+                      << " late_peer_admitted=" << management_progress << '\n';
+            correct = correct && outbound_reply && management_progress;
+            late_peer.stop ();
             const bool completion_ready = terminal.wait_for (5s) == std::future_status::ready;
             release_handler.set_value ();
             assert (drained.wait_for (5s) == std::future_status::ready);
@@ -286,10 +411,17 @@ int main ()
         }
         std::cout << "queued_records=" << handled_queued.load ()
                   << " handler_on_receive_thread=" << same << '\n';
-        correct = correct && !same && handled_queued.load () == queued_records;
+        correct = correct && same && handled_queued.load () == queued_records;
         source.stop ();
         service.request_stop ();
         service.stop ();
+        // run() encloses the actual socket's wait, poll/drain, claim and
+        // management stacks, across every worker that receives this role.
+        std::cout << "max_socket_receivers=" << receive_maximum.load ()
+                  << " rotations=" << receive_rotations.load ()
+                  << " publications=" << publications.load () << '\n';
+        correct = correct && receive_maximum == 1 && receive_active == 0
+                  && receive_rotations == publications;
     }
     return correct ? 0 : 1;
 }

@@ -570,9 +570,8 @@ service_mailbox_t::take_application_ready_locked (state_t &state)
 void service_mailbox_t::notify_application_ready (application_ready_batch_t &ready)
 {
     while (ready && !ready->first.empty ()) {
-        auto owner = std::move (ready->first.front ());
+        ready->second (ready->first.front ());
         ready->first.pop_front ();
-        ready->second (owner);
     }
 }
 

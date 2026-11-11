@@ -215,6 +215,22 @@ int main ()
                 })
               .result ()
               .value ());
+    // T08: A remains blocked while an unrelated operation reaches C1 and its
+    // completion callback. A serial callback batch cannot satisfy this probe.
+    std::promise<void> independent;
+    auto independent_delivered = independent.get_future ();
+    assert (node->native_node ()
+              .transport ()
+              .register_local_operation_async (
+                runtime::foundation::operation_registry_t::clock_t::time_point::min (),
+                [&] (auto result, ::zlink::framework::result_t<zlink::message_t>) {
+                    assert (result == runtime::foundation::operation_terminal_t::timed_out);
+                    independent.set_value ();
+                })
+              .result ()
+              .value ());
+    const bool independent_progress =
+      independent_delivered.wait_for (1s) == std::future_status::ready;
     service.request_stop ();
     auto stopping = std::async (std::launch::async, [&] {
         stop_started.set_value ();
@@ -226,5 +242,6 @@ int main ()
     stopping.get ();
     assert (shutdown_delivered.wait_for (0s) == std::future_status::ready);
     assert (shutdown_delivered.get () == runtime::foundation::operation_terminal_t::shutdown);
+    assert (independent_progress);
     assert (callbacks == 2 && node->pending_transport_operations () == 0);
 }
