@@ -8,6 +8,7 @@ import org.springframework.boot.ApplicationRunner
 import systems.zlink.framework.errors.ZLinkConfigurationException
 import systems.zlink.framework.monitoring.ZLinkPeerState
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime
 
 class TicTacToeReadinessReporter private constructor(private val checks: List<ReadinessCheck>) :
     ApplicationRunner, AutoCloseable {
@@ -68,6 +69,7 @@ class TicTacToeReadinessReporter private constructor(private val checks: List<Re
             nodeId: String,
             peerNodeId: String,
             meshes: ZLinkRouteMeshRuntime,
+            host: ZLinkFrameworkRuntime,
         ): TicTacToeReadinessReporter {
             val peerRoutingId = "tictactoe-play-$peerNodeId"
             return TicTacToeReadinessReporter(
@@ -75,10 +77,12 @@ class TicTacToeReadinessReporter private constructor(private val checks: List<Re
                     ReadinessCheck(
                         "tictactoe-ready kind=peer-route node=$nodeId peer=$peerNodeId"
                     ) {
-                        meshes.snapshot(SampleNames.SpotMesh).peers().any { peer ->
-                            peer.nodeRid().toString() == peerRoutingId &&
-                                peer.state() == ZLinkPeerState.READY
-                        }
+                        // User Spot placement requires this host's published descriptor.
+                        host.status().isReady &&
+                            meshes.snapshot(SampleNames.SpotMesh).peers().any { peer ->
+                                peer.nodeRid().toString() == peerRoutingId &&
+                                    peer.state() == ZLinkPeerState.READY
+                            }
                     }
                 )
             )
