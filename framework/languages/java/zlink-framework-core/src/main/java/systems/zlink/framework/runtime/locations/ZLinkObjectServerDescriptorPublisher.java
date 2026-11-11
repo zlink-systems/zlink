@@ -47,7 +47,7 @@ public final class ZLinkObjectServerDescriptorPublisher {
         ZLinkLocationOwnerToken owner;
         try {
             owner = runtime.currentOwnerToken();
-        } catch (IllegalStateException ownerAdmissionClosed) {
+        } catch (ZLinkFrameworkException ownerAdmissionClosed) {
             // Location runtime §5: an expired owner does not publish a descriptor.
             return CompletableFuture.failedFuture(
                     new UnconfirmedPublicationException(ownerAdmissionClosed));

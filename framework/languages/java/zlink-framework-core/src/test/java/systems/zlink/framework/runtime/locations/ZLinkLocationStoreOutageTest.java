@@ -6,6 +6,7 @@ import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.*;
@@ -364,7 +365,7 @@ public final class ZLinkLocationStoreOutageTest {
                     .join();
             assertEquals(2, calls.get());
             if (retention)
-                assertThrows(IllegalStateException.class, f.runtime::ensureOwnerAdmissionOpen);
+                assertThrows(ZLinkFrameworkException.class, f.runtime::ensureOwnerAdmissionOpen);
             var hold = new CompletableFuture<Void>();
             var started = new CompletableFuture<Void>();
             var active =
