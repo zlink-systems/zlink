@@ -741,6 +741,19 @@ Store 값의 불일치는 정상 만료 뒤 새 claim과 구분하며, 그 자�
 이미 local queue가 받은 작업의 결과 처리와 정리는 별도 deadline 안에서 진행할 수 있다.
 하지만 만료된 owner 자격으로 새 Store 변경을 만들지 않는다.
 
+**잠시 닫힘과 영구 폐기.** 위 차단이나 §5.1의 Store 복구 확인으로 객체의 실행이 닫혀 있는 동안,
+Location runtime의 실행권 정책은 이를 영구 폐기와 구분되는 잠시 닫힘으로 판정하고 기존 execution
+gate와 admission이 그 판정을 적용한다.
+
+- 이미 local queue가 받은 미시작 작업과 이미 queue에 들어간 timer tick은 보류한다. 같은 incarnation의
+  gate가 다시 열리면 한 번 실행하며 재생성하거나 재전송하지 않는다.
+- 닫혀 있는 동안 새로 들어온 operation은 queue에 받지 않고 `ShuttingDown`으로 끝낸다.
+- Timer의 아직 queue에 넣지 않은 tick은 넣지 않고 보존하며, 다시 열린 뒤
+  [Spot timer](../03-spot-actor/10-spot-timer.ko.md) 규칙에 따라 전달한다.
+- 보류는 operation의 deadline과 취소를 연장하지 않는다.
+- `T` 폐기, 실행권 상실, 다른 owner·incarnation 확정은 영구 폐기다. 보류한 작업과 tick은 §5.1의
+  정리 규칙으로 정리하고 gate를 다시 열지 않는다.
+
 Startup의 최초 owner lease claim도 갱신과 같은 Store 요청이며 renew timeout 안에 끝낸다.
 요청을 시작한 뒤 timeout이나 provider error를 받으면 §10대로 같은 key를 다시 읽어 결과를
 확인하되, 이 확인도 같은 renew timeout 안에서 한다. Renew timeout까지 lease를 확인하지
