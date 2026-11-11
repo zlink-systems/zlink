@@ -100,7 +100,9 @@ final class ZLinkFrameworkLocationSubsystem {
                 new ZLinkStoreLocationResolvers(locationStores, liveLocationRows);
         ZLinkClientServerRuntimeConfiguration clientServerConfiguration =
                 new ZLinkClientServerRuntimeConfiguration(
-                        locationStores.clientServerStore(), registration.locations().options());
+                        locationStores.clientServerStore(),
+                        registration.locations().options(),
+                        liveLocationRows);
         runtimeHandlers.add(ZLinkClientServerRuntimeConfiguration.class, clientServerConfiguration);
         ZLinkFanoutRuntimeConfiguration fanoutConfiguration =
                 new ZLinkFanoutRuntimeConfiguration(
