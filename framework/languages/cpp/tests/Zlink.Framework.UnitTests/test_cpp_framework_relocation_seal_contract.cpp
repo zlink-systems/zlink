@@ -1729,14 +1729,19 @@ TEST (FrameworkRelocationSealContract, ordinary_dispatch_failure_settles_each_re
     for (int index = 0; index < 64; ++index)
         enqueue ();
     unsigned started = 0, rejected = 0, calls = 0;
-    auto failed = host->dispatch_application_owner (
-      "node",
-      [&] (const auto &, const auto &, auto, auto) {
-          ++calls;
-          std::rethrow_exception (injected);
-      },
-      [&] { ++started; }, [&] { ++rejected; });
-    EXPECT_TRUE (zlink::framework::test::application_owner_result (failed).value ());
+    for (unsigned index = 0; index != 64; ++index) {
+        auto failed = host->dispatch_application_owner (
+          "node",
+          [&] (const auto &, const auto &, auto, auto) {
+              ++calls;
+              std::rethrow_exception (injected);
+          },
+          [&] { ++started; }, [&] { ++rejected; });
+        EXPECT_TRUE (zlink::framework::test::application_owner_result (failed).value ());
+        EXPECT_EQ (calls, index + 1);
+        EXPECT_EQ (mailbox.pending_messages (mesh::service_mailbox_domain_t::application),
+                   63 - index);
+    }
     EXPECT_EQ (calls, 64u);
     EXPECT_EQ (reported, 64u);
     EXPECT_EQ (started, 64u);

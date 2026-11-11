@@ -1443,7 +1443,7 @@ void verify_local_node_submit_bridge ()
         assert (probe->changed.wait_for (lock, 1s, [&] { return probe->entered == 1; }));
         assert (probe->completed == 0);
     }
-    {
+    const auto verify_released_capacity = [&] {
         // The receive pump shares this queue and can reserve the released
         // permit. Acquire it through the same FIFO to prove that the running
         // handler returned capacity at entry, independent of pump scheduling.
@@ -1463,11 +1463,11 @@ void verify_local_node_submit_bridge ()
         assert (capacity_while_handlers_are_pending.reserved_supply_permits == 1);
         assert (capacity_while_handlers_are_pending.queued_application_jobs == 0);
         assert (capacity_while_handlers_are_pending.permits_in_use == 1);
-    }
+    };
+    verify_released_capacity ();
 
-    // A different node owns a different gate and must enter while the first
-    // handler is blocked. The same-node successor retains its permit until
-    // that node's first handler reaches terminal completion (02 §2).
+    // Node pipelines have no gate. Both another Node and this Node's successor
+    // enter before the first handler completes (02 §2).
     auto independent = encode ("independent-owner", "independent-mesh");
     assert (
       service.submit_local_node_send (independent_node, independent.items ()).result ().value ()
@@ -1482,16 +1482,13 @@ void verify_local_node_submit_bridge ()
             == zlink::submit_result_t::ok);
     {
         std::unique_lock lock (probe->mutex);
-        assert (!probe->changed.wait_for (lock, 1s, [&] { return probe->entered == 3; }));
+        assert (probe->changed.wait_for (lock, 1s, [&] { return probe->entered == 3; }));
         assert (probe->completed == 0);
-        assert (node->pending_application_callbacks () == 1);
-        assert (node->active_application_callbacks () == 1);
+        assert (node->pending_application_callbacks () == 0);
+        assert (node->active_application_callbacks () == 2);
         assert (independent_node->active_application_callbacks () == 1);
-        const auto queued = application_jobs->snapshot ();
-        assert (queued.effective_max_queued_application_jobs == 1);
-        assert (queued.queued_application_jobs == 1);
-        assert (queued.permits_in_use == 1);
     }
+    verify_released_capacity ();
 
     {
         std::lock_guard lock (probe->mutex);

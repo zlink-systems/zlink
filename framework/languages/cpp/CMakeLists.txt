@@ -2138,12 +2138,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_same_owner_channel
     COMMAND test_cpp_framework_client_server_runtime --same-owner-regression
-    LABELS "framework-unit;framework-contract;execution;unit;contract"
+    LABELS "framework-contract;execution"
     TIMEOUT 60)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_same_owner_actor_control
     COMMAND test_cpp_framework_client_server_runtime --same-owner-gated-control
-    LABELS "framework-unit;framework-contract;execution;unit;contract"
+    LABELS "framework-contract;execution"
     TIMEOUT 60)
   target_include_directories(test_cpp_framework_client_server_runtime PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
@@ -2404,7 +2404,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     zlink_framework_cpp_add_boost_headers(test_cpp_framework_mailbox_owner_dispatch)
     target_link_options(test_cpp_framework_mailbox_owner_dispatch PRIVATE
       "LINKER:--wrap=_ZN5zlink9framework7runtime18offload_executor_t10start_roleESt10shared_ptrINS2_6role_tEE"
-      "LINKER:--wrap=_ZNSt18condition_variable10notify_oneEv"
       "LINKER:--wrap=zlink_router_recv")
     set(ZLINK_TEST_RECEIVE_WAIT_SYMBOL
       "_ZN5zlink9framework7runtime4host21public_host_runtime_t33wait_for_hosted_dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE")

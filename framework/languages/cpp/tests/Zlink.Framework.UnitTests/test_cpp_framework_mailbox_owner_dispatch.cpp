@@ -8,7 +8,9 @@
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "../support/runtime_failure_fixture.hpp"
+#include "same_owner_claim_controls.hpp"
 #include <zlink.h>
+#include <array>
 #include <cassert>
 #include <future>
 #include <iostream>
@@ -21,23 +23,6 @@ namespace zlink::framework::runtime
 {
 struct offload_executor_test_access_t
 {
-    static auto ready (offload_executor_t &executor)
-    {
-        const auto deadline = std::chrono::steady_clock::now () + 5s;
-        while (true) {
-            {
-                std::lock_guard lock (executor._mutex);
-                if (executor.idle_worker_count_locked () == executor._live_workers) {
-                    std::vector<std::condition_variable *> result;
-                    for (const auto &worker : executor._workers)
-                        result.push_back (&worker->ready);
-                    return result;
-                }
-            }
-            assert (std::chrono::steady_clock::now () < deadline);
-            std::this_thread::yield ();
-        }
-    }
     static bool receiving (offload_executor_t &executor)
     {
         std::lock_guard lock (executor._mutex);
@@ -54,9 +39,6 @@ struct offload_executor_test_access_t
 namespace
 {
 rt::offload_executor_t *application_executor = nullptr;
-std::vector<std::condition_variable *> application_ready;
-std::atomic_size_t worker_notifications{0};
-std::atomic_bool watch_notifications{false};
 std::atomic_uint receive_active{0}, receive_maximum{0}, receive_rotations{0}, publications{0};
 struct observed_role_t final : rt::offload_executor_t::role_t
 {
@@ -92,6 +74,7 @@ std::atomic_bool handler_blocked{false};
 constexpr std::size_t queued_records = 128;
 std::atomic_size_t received_queued{0};
 std::atomic_size_t handled_queued{0};
+std::array<std::atomic_uint, queued_records> handled_indices{};
 std::promise<void> queue_drained;
 std::promise<void> parallel_started;
 std::shared_future<void> release_handler_turn;
@@ -109,8 +92,9 @@ struct handler_t
         }
         if (probe.value.starts_with ("queued-probe-")) {
             const auto index = std::stoul (probe.value.substr (13));
-            assert (handled_queued.fetch_add (1) == index);
-            if (index + 1 == queued_records)
+            assert (index < queued_records);
+            assert (handled_indices[index].fetch_add (1) == 0);
+            if (handled_queued.fetch_add (1) + 1 == queued_records)
                 queue_drained.set_value ();
             return;
         }
@@ -149,7 +133,6 @@ extern "C" zlink_recv_result_t __wrap_zlink_router_recv (void *socket,
                 && std::string_view (data, bytes).find (marker) != std::string_view::npos) {
                 std::lock_guard lock (observation_mutex);
                 received_on = std::this_thread::get_id ();
-                watch_notifications = true;
             }
         }
     }
@@ -169,31 +152,20 @@ extern "C" bool wrapped_start_role (rt::offload_executor_t *executor,
                                     std::shared_ptr<rt::offload_executor_t::role_t> role)
 {
     application_executor = executor;
-    application_ready = rt::offload_executor_test_access_t::ready (*executor);
     return real_start_role (executor, std::make_shared<observed_role_t> (std::move (role)));
-}
-
-extern "C" void
-real_notify (std::condition_variable *) __asm__ ("__real__ZNSt18condition_variable10notify_oneEv");
-extern "C" void wrapped_notify (std::condition_variable *) __asm__ (
-  "__wrap__ZNSt18condition_variable10notify_oneEv");
-extern "C" void wrapped_notify (std::condition_variable *ready)
-{
-    if (watch_notifications.load ()
-        && std::find (application_ready.begin (), application_ready.end (), ready)
-             != application_ready.end ())
-        ++worker_notifications;
-    real_notify (ready);
 }
 
 int main ()
 {
+    assert (fw::test::same_owner_claim_controls ());
     bool correct = true;
     {
         fw::completion_owner_t completion;
         handled = {};
         received_queued = 0;
         handled_queued = 0;
+        for (auto &seen : handled_indices)
+            seen = 0;
         queue_drained = {};
         auto drained = queue_drained.get_future ();
         handler_blocked = false;
@@ -317,13 +289,10 @@ int main ()
                 assert (std::chrono::steady_clock::now () < receive_deadline);
                 std::this_thread::yield ();
             }
-            assert (handled_queued.load () == 0);
-            const auto notifications_while_busy = worker_notifications.load ();
-            std::cout << "worker_notifications_for_129_records=" << notifications_while_busy
-                      << std::endl;
-            // The receive notification replaces the application wake on a
-            // successful handoff. This one-owner batch still needs one wake.
-            correct = correct && notifications_while_busy == 1;
+            assert (drained.wait_for (5s) == std::future_status::ready);
+            assert (handled_queued.load () == queued_records);
+            for (const auto &seen : handled_indices)
+                assert (seen == 1);
             auto completed = std::make_shared<std::promise<void>> ();
             auto terminal = completed->get_future ();
             const auto operation =
@@ -401,7 +370,6 @@ int main ()
             late_peer.stop ();
             const bool completion_ready = terminal.wait_for (5s) == std::future_status::ready;
             release_handler.set_value ();
-            assert (drained.wait_for (5s) == std::future_status::ready);
             correct = correct && operation && parallel_send
                       && parallel_send.value () == zlink::submit_result_t::ok && other_owner
                       && completion_ready && handler_blocked.load ();
