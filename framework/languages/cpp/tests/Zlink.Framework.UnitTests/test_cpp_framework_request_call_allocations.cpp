@@ -703,15 +703,21 @@ TEST (RequestCallAllocations, NodeRequestUsesOnlyItsPreparedReceiverAboveTheTran
         fw::detail::observe_task_terminal (reply, std::move (receiver.complete));
     });
     auto client = builder.route_client (serializers);
+    fw::channel_request_call_t::metadata_map_t metadata{{"allocation-probe", "node-request"}};
+    const auto prepared_channel = std::make_shared<const fw::detail::prepared_header_fragment_t> (
+      fw::detail::prepare_request_channel ("m"));
     const auto encode_node = [&] {
         return sample_allocations ([&] {
             fw::runtime::messaging::client_call_codec_t codec;
             auto header = codec.create_envelope (
               fw::runtime::messaging::message_kind_t::request, "m", payload_t::packet_name,
               fw::runtime::configuration::default_request_timeout, std::nullopt, std::nullopt, {});
+            header.metadata = metadata;
             const auto serializer = serializers.get<payload_t> ();
-            (void) codec.encode_payload_parts (
-              std::move (header), serializer.serialize (payload_t{}), serializer.content_type ());
+            (void) codec.encode_service_payload_parts (
+              std::move (header), serializer.serialize (payload_t{}),
+              fw::detail::serializer_registry_access_t::request_plan (serializer),
+              prepared_channel);
         });
     };
     const auto first_encode = encode_node ().total;
@@ -732,6 +738,7 @@ TEST (RequestCallAllocations, NodeRequestUsesOnlyItsPreparedReceiverAboveTheTran
     SCOPED_TRACE ("node receiver reference\n" + receiver.diagnostics);
 
     auto call = client.request_to_node ("m", zlink::routing_id_t::from ("n"), payload_t{});
+    call.metadata ("allocation-probe", "node-request");
     std::optional<fw::request_task_t<payload_t>> pending;
     const auto actual = sample_allocations ([&] { pending.emplace (call.async<payload_t> ()); });
     print_allocation_sizes ("node request above transport", actual);
