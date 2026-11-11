@@ -93,7 +93,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     // Lane-published fast path; deadlines remain owned by the lease/outage policy below.
     private volatile boolean executionOpen;
     private final Map<Object, Execution> executions = new HashMap<>();
-    private ScheduledFuture<?> outageDeadlineTask;
+    private ScheduledFuture<?> ownerDeadlineTask;
     private StartupLifecycle startupLifecycle;
     private RoutingId nodeRid;
     private volatile boolean started;
@@ -593,17 +593,44 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                 episode.records.put(execution, new Preservation(execution));
         }
         outage = episode;
-        if (latchOutageCore(episode)) return;
-        outageDeadlineTask =
+        latchOutageCore(episode);
+        scheduleOwnerDeadlinesCore();
+    }
+
+    /**
+     * Location runtime §5 and §5.1: the admission deadline and the retention cutoff T are recorded
+     * when they arrive, by one task at the earlier of the two. Execution checks read the recorded
+     * state and never read the clock on a turn.
+     */
+    private void scheduleOwnerDeadlinesCore() {
+        cancel(ownerDeadlineTask);
+        ownerDeadlineTask = null;
+        if (!started) return;
+        StoreOutage episode = outage;
+        boolean admission = executionOpen && ownerAdmissionDeadlineNanos != 0L;
+        boolean cutoff = episode != null && !episode.discarded;
+        if (!admission && !cutoff) return;
+        long now = monotonicNow.getAsLong();
+        long delay = admission ? ownerAdmissionDeadlineNanos - now : Long.MAX_VALUE;
+        if (cutoff) delay = Math.min(delay, episode.cutoffNanos - now);
+        ownerDeadlineTask =
                 heartbeatExecutor.schedule(
                         () ->
                                 stateLane.runAsync(
                                         () -> {
-                                            if (outage == episode) latchOutageCore(episode);
+                                            ownerDeadlineCore();
                                             return null;
                                         }),
-                        cutoff - monotonicNow.getAsLong(),
+                        Math.max(0L, delay),
                         TimeUnit.NANOSECONDS);
+    }
+
+    private void ownerDeadlineCore() {
+        StoreOutage episode = outage;
+        if (episode != null) latchOutageCore(episode);
+        // The deadline only closes admission; reopening belongs to a successful lease.
+        else if (!isOwnerAdmissionOpenCore()) executionOpen = false;
+        scheduleOwnerDeadlinesCore();
     }
 
     private boolean cutoffReached(StoreOutage episode) {
@@ -614,7 +641,10 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         if (!episode.discarded && cutoffReached(episode)) {
             discardOutageCore(episode);
         }
-        if (episode.discarded) executionOpen = isOwnerAdmissionOpenCore();
+        if (episode.discarded) {
+            executionOpen = isOwnerAdmissionOpenCore();
+            scheduleOwnerDeadlinesCore();
+        }
         return episode.discarded;
     }
 
@@ -626,8 +656,8 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
 
     private void cancelOutageCore() {
         StoreOutage episode = outage;
-        cancel(outageDeadlineTask);
-        outageDeadlineTask = null;
+        cancel(ownerDeadlineTask);
+        ownerDeadlineTask = null;
         if (episode == null) return;
         executionOpen = false;
         outage = null;
@@ -657,11 +687,10 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                     || !Objects.equals(outage.token, ownerToken)
                     || operationStartedNanos < outage.observedAtNanos) return;
             if (!outage.records.isEmpty()) return;
-            cancel(outageDeadlineTask);
-            outageDeadlineTask = null;
             outage = null;
         }
         executionOpen = isOwnerAdmissionOpenCore();
+        scheduleOwnerDeadlinesCore();
     }
 
     private <T> CompletionStage<T> observeLeaseOperation(Supplier<CompletionStage<T>> operation) {
@@ -1467,10 +1496,9 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                 || episode.discarded
                 || !episode.records.isEmpty()
                 || cutoffReached(episode)) return;
-        cancel(outageDeadlineTask);
-        outageDeadlineTask = null;
         outage = null;
         executionOpen = isOwnerAdmissionOpenCore();
+        scheduleOwnerDeadlinesCore();
     }
 
     private CompletionStage<ZLinkAuthoritySnapshot> recoverAuthority(
@@ -2012,10 +2040,12 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                                             executionOpen = false;
                                                                             ownerAdmissionRevoked =
                                                                                     true;
-                                                                        } else
+                                                                        } else {
                                                                             executionOpen =
                                                                                     outage == null
                                                                                             && isOwnerAdmissionOpenCore();
+                                                                            scheduleOwnerDeadlinesCore();
+                                                                        }
                                                                     }
                                                                     if (ownerLeaseRecoveryOperation
                                                                             == completion) {
