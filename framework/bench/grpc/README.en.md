@@ -157,8 +157,8 @@ one-way send. Under this condition the difference was N times.
   endpoint over HTTP. The runner itself generates no load.
 - Only a loopback address (`127.0.0.1`) is used. Ports use the per-language bands in §9.
 - Runs as a Release build.
-- Runs a fixed-duration measured active window after warmup. Warmup runs the same pattern
-  for 2 seconds in every language and is excluded from measured results (§8.2).
+- Runs a fixed-duration measured active window after a 30-second warmup. The same rule applies
+  to every language and pattern; a cell whose recorded warmup is not 30 seconds is not judged (§8.2).
 - The default payload size is `1024,4096` bytes.
 - The `request-backpressure` pattern has no incomplete-request ceiling setting. In that
   pattern depth is not a condition that is set but a result that is measured and recorded
@@ -534,10 +534,9 @@ Results including raw serialization cost form a new baseline. Do not compare per
 with `framework/raw` ratios from raw drivers that bypassed serialization. A lower raw throughput
 can raise this ratio; that reflects corrected measurement conditions, not improved framework performance.
 
-### 8.2 Values Set Per Language That Must Be Recorded
+### 8.2 The Same 30-Second Warmup for Every Language and Pattern
 
-Warmup runs the same pattern with a warmup phase header for the shared `WARMUP_SECONDS` (default 2 seconds). Unfinished operations are recorded as `warmup_abandoned` and excluded from active results. The two values below are set differently per language. The goal isn't to make them identical but
-to leave the values used in the result.
+Warmup runs the same pattern for 30 seconds in every language and pattern. A cell whose recorded warmup is not 30 seconds is not judged. Unfinished operations are recorded as `warmup_abandoned` and excluded from active results. The value used is recorded in the result.
 
 | Item | Reason |
 |------|------|
@@ -709,7 +708,7 @@ difference doesn't show in the result table.
 | `OUTPUT_DIR` | `framework/bench/grpc/log/<RUN_STAMP>/<lang>` | Result root. A relative path is resolved against the directory the runner was started from |
 | `RUN_STAMP` | Start time (`YYYYmmdd_HHMMSS`) | Name of the default `OUTPUT_DIR` |
 | `PAYLOAD_SIZES` | `1024,4096` | Payload sizes of §2 |
-| `WARMUP_SECONDS` | `2` | Same-pattern warmup duration for every language (positive integer seconds, §8.2) |
+| `WARMUP_SECONDS` | `30` | Same-pattern warmup duration for every language and pattern (positive integer seconds, §8.2). Cells with another recorded value are not judged |
 | `DURATION_SECONDS` | `5` | Active window of each cell (§3) |
 | `PATTERNS` | `request-serial,request-backpressure,send-saturation` | Patterns of §2 |
 | `IMPLEMENTATIONS` | Every implementation of the language (§1.1, §1.2) | Implementations to measure |

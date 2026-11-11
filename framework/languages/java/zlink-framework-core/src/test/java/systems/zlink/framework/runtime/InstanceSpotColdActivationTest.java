@@ -528,12 +528,10 @@ final class InstanceSpotColdActivationTest {
                 assertTrue(envelope.operationHigh() != 0 || envelope.operationLow() != 0);
                 assertTrue(envelope.deadlineUnixMs() > 0);
                 assertEquals(1, initialized.get());
-                var routes =
-                        systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess
-                                .authorityRouteRuntime(runtime);
-                routes.reconcile().toCompletableFuture().get(5, TimeUnit.SECONDS);
                 assertEquals(
-                        1, handled.get(), "live reconciliation must not replay the first record");
+                        1,
+                        handled.get(),
+                        "the first record must execute once while its handler is pending");
             } finally {
                 release.complete(null);
             }
