@@ -163,7 +163,7 @@ reservation after cleanup, and doesn't share an earlier application
 reply. Creation terminal replay and retention follow
 [Framework API §15](../../../00-foundation/06-framework-api.en.md#15-userinstance-spot-and-actor-factory-registration). A callback exception isn't `rejected` —
 it's a typed creation failure. If the whole deadline ends,
-`DeadlineExceeded`; if no node can host it, `Unavailable`. An
+`DeadlineExceeded`; when no node can host it or none is ready yet, [MeshNode §5.2](../../../03-spot-actor/03-mesh-node.en.md#52-conditions-for-selecting-a-target-node) applies. An
 lifecycle operation whose ActorRef's object generation differs from
 current is `InvalidOperation`, and `Unavailable` while moving.
 
