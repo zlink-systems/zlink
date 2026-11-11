@@ -69,10 +69,10 @@ ASSEMBLY_NAMES=(
   Zlink.HttpClient
   Systems.Zlink.Stream.Connector
 )
-OUT_OF_SCOPE_PACKABLE_PROJECTS=()
-
 packable_projects=()
-mapfile -t all_projects < <(rg --files "$DOTNET_ROOT" -g '*.csproj' | sort)
+# Templates are user projects, outside the Framework package manifest.
+mapfile -t all_projects < <(git -C "$DOTNET_ROOT" ls-files -- '*.csproj' ':(exclude,glob)**/templates/**' \
+  | sed "s|^|$DOTNET_ROOT/|" | sort)
 for project_path in "${all_projects[@]}"; do
   is_packable="$(dotnet msbuild "$project_path" \
     -nologo \
@@ -81,16 +81,7 @@ for project_path in "${all_projects[@]}"; do
   case "$is_packable" in
     true)
       relative_project="${project_path#"$DOTNET_ROOT/"}"
-      out_of_scope=0
-      for excluded_project in "${OUT_OF_SCOPE_PACKABLE_PROJECTS[@]}"; do
-        if [[ "$relative_project" == "$excluded_project" ]]; then
-          out_of_scope=1
-          break
-        fi
-      done
-      if [[ "$out_of_scope" == "0" ]]; then
-        packable_projects+=("$relative_project")
-      fi
+      packable_projects+=("$relative_project")
       ;;
     false)
       ;;
@@ -272,7 +263,7 @@ cat >"$CONSUMER_DIR/NuGet.Config" <<EOF
   <packageSources>
     <clear />
     <add key="contract" value="$PACKAGE_DIR" />
-    <add key="bindings" value="$REPO_ROOT/.artifacts/wsl/nuget" />
+    <add key="bindings" value="${ZLINK_LOCAL_PACKAGE_ROOT:-$REPO_ROOT/.artifacts/wsl}/nuget" />
     <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
   </packageSources>
   <packageSourceMapping>
