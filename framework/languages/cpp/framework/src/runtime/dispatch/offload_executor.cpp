@@ -13,6 +13,10 @@
 #include <utility>
 #include <mutex>
 
+#if defined(__linux__) || defined(__APPLE__)
+#include <pthread.h>
+#endif
+
 namespace zlink::framework::runtime
 {
 
@@ -422,6 +426,12 @@ std::shared_ptr<offload_executor_t::worker_t> offload_executor_t::try_handoff (w
 
 void offload_executor_t::worker_loop (worker_t &worker)
 {
+    // Diagnostics read the OS thread name; Linux keeps at most 15 characters.
+#if defined(__linux__)
+    (void) pthread_setname_np (pthread_self (), _thread_name.substr (0, 15).c_str ());
+#elif defined(__APPLE__)
+    (void) pthread_setname_np (_thread_name.substr (0, 15).c_str ());
+#endif
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
     const auto previous_executor = std::exchange (_current_worker_executor, this);
 #endif
