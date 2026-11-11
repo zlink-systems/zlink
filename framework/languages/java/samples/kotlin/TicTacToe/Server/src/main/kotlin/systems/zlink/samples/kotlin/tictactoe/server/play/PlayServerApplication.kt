@@ -15,6 +15,7 @@ import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
 import systems.zlink.samples.kotlin.tictactoe.server.configuration.SampleLocationStore
@@ -54,11 +55,13 @@ class PlayServerApplication {
     fun ticTacToeReadinessReporter(
         settings: SampleSettings,
         meshes: ZLinkRouteMeshRuntime,
+        host: ZLinkFrameworkRuntime,
     ): TicTacToeReadinessReporter =
         TicTacToeReadinessReporter.play(
             settings.nodeId,
             if (settings.nodeId == "play-a") "play-b" else "play-a",
             meshes,
+            host,
         )
 
     @Bean

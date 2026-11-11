@@ -613,15 +613,15 @@ final class NativeSocketRuntime implements AutoCloseable {
 
     void closeInternal() {
         if (handle != null && handle.address() != 0) {
-            if (own) {
-                int rc = socketCore.closeNativeHandle();
-                if (rc != CloseResult.OK.value()) {
-                    throw new ZlinkCloseException(CloseResult.fromValue(rc),
-                        Native.errno());
-                }
-            }
+            int rc = own ? socketCore.closeNativeHandle() : CloseResult.OK.value();
+            int errno = rc == CloseResult.OK.value() ? 0 : Native.errno();
+            // A handle that is still open keeps its owner and retries on the next close.
+            if (own && !socketCore.isClosed())
+                throw new ZlinkCloseException(CloseResult.fromValue(rc), errno);
             handle = MemorySegment.NULL;
             socketCore.closeCommonState();
+            if (rc != CloseResult.OK.value())
+                throw new ZlinkCloseException(CloseResult.fromValue(rc), errno);
             return;
         }
         socketCore.closeCommonState();

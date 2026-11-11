@@ -44,6 +44,12 @@ for (const emptyFirstPage of [true, false]) {
     const calls = [];
     const failure = new Error('descriptor continuation failed');
     const store = host.locationOwner.locationStore();
+    store.readOwnerLease = async ownerId => ({
+      kind: 'found',
+      token: { ownerId, leaseGeneration: 1n },
+      leaseExpiresAt: new Date(31_000),
+      storeNow: new Date(1000)
+    });
     store.listMeshNodes = async (meshName, page, signal) => {
       calls.push({ meshName, page, signal });
       if (page?.continuationToken === 'next') {

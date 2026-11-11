@@ -7,6 +7,7 @@ import org.junit.jupiter.api.RepeatedTest;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.*;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.*;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.locations.*;
@@ -196,13 +197,13 @@ final class ZLinkActorOutageExecutionTest {
                             .toCompletableFuture()
                             .join();
                     assertThrows(
-                            IllegalStateException.class,
+                            ZLinkFrameworkException.class,
                             () -> actors.create("new", "type").submit());
                     assertThrows(
-                            IllegalStateException.class,
+                            ZLinkFrameworkException.class,
                             () -> actors.locations.findStoredActorRefExact("second"));
                     assertThrows(
-                            IllegalStateException.class,
+                            ZLinkFrameworkException.class,
                             () -> actors.relocateActorJoin(null, Duration.ofSeconds(1)));
                     // Discarding the actual Spot object cascades through existing membership.
                     spotExecution.discard();
