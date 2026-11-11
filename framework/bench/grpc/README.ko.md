@@ -82,7 +82,7 @@ gRPC HTTP/2 frame, protobuf field overhead, ZLink envelope, ZMP header는 이 �
 | 패턴 이름 | gRPC | ZLink raw binding | ZLink framework | 해석 |
 |-----------|------|-------------------|-----------------|------|
 | `request-serial` | unary `Echo` RPC | raw request 전송과 reply 수신 | node request 호출 | 요청 하나를 보내고 reply 완료 뒤 다음 요청을 보낸다 |
-| `request-backpressure` | unary `Echo` RPC | raw request 전송과 reply 수신 | node request 호출 | 미완료 request 수에 상한을 두지 않는다. admission backpressure를 만날 때까지 연속 제출한다 |
+| `request-backpressure` | 해당 없음(admission 신호 없음) | raw request 전송과 reply 수신 | node request 호출 | 미완료 request 수에 상한을 두지 않는다. admission backpressure를 만날 때까지 연속 제출한다 |
 | `send-saturation` | unary `Command` RPC, 응답은 `Empty` | raw 단방향 send 제출 | node send 제출 | reply payload가 없는 command 경로를 비교한다 |
 
 세 구현이 사용하는 API 이름은 언어마다 다르지만 계약은 같다. Java에서 framework node request는
@@ -94,16 +94,15 @@ gRPC HTTP/2 frame, protobuf field overhead, ZLink envelope, ZMP header는 이 �
 
 `request-backpressure`는 미완료 request 수에 application 상한을 두지 않는다. client는 reply를
 기다리지 않고 admission backpressure를 만날 때까지 request를 연속 제출하고, 재개 신호에서
-이어서 제출한다. gRPC 쪽도 같은 모양으로 자기 flow control이 제출을 막을 때까지 제출한다.
-어느 쪽에도 application 상한을 두지 않는다.
+이어서 제출한다. 이 패턴은 admission backpressure로 정의되므로, admission 신호가 없는 gRPC 행은
+이 패턴을 측정하지 않고 표에 해당 없음으로 적는다. ZLink 행에는 application 상한을 두지 않는다.
 
 **이 패턴에서 미완료 깊이는 설정값이 아니라 측정값이다.** 스택이 도달한 깊이는 그 스택의
 설계가 정하는 결과이므로 결과의 일부로 기록한다(§5.2).
 
 이 loop 모양은 새로 만든 것이 아니라 저장소에 이미 있는 구현을 옮긴 것이다. 기준 구현은
 `bindings/node/perf/multi/perf_multi_socket_reqrep.ts`이며, reply를 기다리지 않고 async request를
-연속 제출한 뒤 completion pump에 turn을 넘긴다. 여섯 행이 모두 같은 모양을 사용하고, gRPC 쪽도
-같게 unary 호출을 하나씩 기다리지 않고 연속 제출한다.
+연속 제출한 뒤 completion pump에 turn을 넘긴다. ZLink 행이 모두 같은 모양을 사용한다.
 
 이 저장소의 perf 규약은 이미 inflight 깊이를 인위적으로 고정하지 않고 admission backpressure를
 만날 때까지 연속 제출하도록 정하고 있다(`doc/perf/PERF_MULTI_TEST_POLICY.md`의 request/reply
@@ -150,7 +149,7 @@ bench에서 옳은 비교인 이유는 아래와 같다.
 - 기본 payload 크기는 `1024,4096` bytes다.
 - `request-backpressure` 패턴에는 미완료 request 상한 설정이 없다. 이 패턴에서 깊이는
   설정하는 조건이 아니라 측정해 기록하는 결과다(§5.2). `request_window` 설정은 이 bench에 없다.
-- 기본 send concurrency는 `8`이다. **이것은 stream 수이지 연결 수가 아니다.**
+- 기본 `submit_concurrency`는 `8`이다. **이것은 stream 수이지 연결 수가 아니다.**
   세 행 모두 서버 간 연결은 **하나**를 쓴다 — gRPC는 채널 하나를 stub 8개가 공유하고,
   raw binding은 ROUTER 하나를 stream 8개가 공유하며, framework는 RouteMesh socket 하나다.
   연결 수가 행마다 다르면 §7.2의 비율이 계층 비용이 아니라 연결 수 차이를 잰다.
@@ -211,7 +210,7 @@ RESULT,current,<scenario>,local,<payload_size>,<metric>,<value>
 예시는 아래와 같다.
 
 ```text
-RESULT,current,grpc-dotnet-request-backpressure,local,1024,throughput,10000.000
+RESULT,current,grpc-dotnet-request-serial,local,1024,throughput,10000.000
 RESULT,current,zlink-dotnet-request-backpressure,local,1024,latency,0.300
 RESULT,current,zlink-framework-dotnet-request-backpressure,local,1024,latency_p99,1.200
 ```
@@ -364,7 +363,7 @@ client stopwatch만으로 단방향 처리량을 과장하지 않기 위한 기�
 - 도달 깊이(`request-backpressure` 패턴, §5.2)
 - A의 logical stream 수, stream당 in-flight 상한, trigger endpoint(§10)
 - 셀마다의 `peak_in_flight`, 깊이, `abandoned`(§5.2)
-- send concurrency 값
+- `submit_concurrency` 값
 - source(A) CPU와 포화 여부(§5.1), target(B) CPU
 - 결과 JSON 원본
 
@@ -387,8 +386,7 @@ zlink-framework-<lang> / zlink-<lang>      >= 0.80   framework 추가 비용 통
 어차피 두 크기를 모두 표시하므로 payload별 판정은 추가 비용 없이 그 문제를 드러낸다.
 
 이 기준은 ZLink가 reply를 기다리지 않고 다음 request를 보낼 수 있는 패턴에 적용한다. 그런
-패턴이 판정에 적합한 이유는 gRPC unary `Echo`와 ZLink request가 같은 보장, 곧 서버가 처리했다는
-확인을 주기 때문이다. `request-serial`은 한 번에 하나만 처리하는 사용 패턴의 왕복 지연을 보기
+패턴이 판정에 적합한 이유는 ZLink request가 서버가 처리했다는 확인을 주기 때문이다. `request-serial`은 한 번에 하나만 처리하는 사용 패턴의 왕복 지연을 보기
 위한 보조 지표로 남긴다.
 
 **판정의 기준 패턴은 `request-backpressure`다.** 언어 통과 여부는 이 패턴에서 두 payload 크기
@@ -636,7 +634,8 @@ gRPC server 구성은 언어 기본값을 두고 결과에 기록한다(§8.2).
 
 Kotlin은 Java와 같은 binding·server·codec을 쓰므로 전체 matrix에서 제외한다. 대신 Kotlin 호출
 층의 비용을 보여 주는 보조 셀 둘 — `grpc-kotlin`(coroutine stub)과 `zlink-framework-kotlin`
-(suspend 호출)의 `request-backpressure @1024` — 을 Java 행 옆에 싣는다. A만 Kotlin이고 B는 Java
+(suspend 호출)의 `request-serial @1024` — 을 Java 행 옆에 싣는다. 두 셀이 같은 패턴이어야 호출 층
+비용을 비교할 수 있고, gRPC는 `request-backpressure`를 재지 않는다(§2). A만 Kotlin이고 B는 Java
 바이너리를 §9의 Java 대역에서 그대로 쓴다.
 
 ## 11. runner 입력과 결과 배치
@@ -669,7 +668,7 @@ runner는 여섯 개다: `c/run_local.sh`, `cpp/run_local.sh`, `dotnet/run_local
 - `TARGET_RATE`, `SOURCE_CPUS`, `TARGET_CPUS`는 C++ runner 전용 선택 입력이다. CPU 목록은 Linux `taskset -c` 형식을 쓴다.
   C++ runner는 세 값을 셀 JSON `metadata`의 `targetRate`(`0`은 unpaced), `sourceCpus`, `targetCpus`(설정 안 하면 `unpinned`)에 기록한다.
 
-위 표 밖의 값은 입력이 아니다. send concurrency 8과 drain 상한 30초(§3), 포트(§9)는
+위 표 밖의 값은 입력이 아니다. `submit_concurrency` 8과 drain 상한 30초(§3), 포트(§9)는
 runner가 정하고 셀 JSON의 `metadata`에 기록한다.
 
 결과는 다음 배치로 쓴다.
