@@ -102,7 +102,7 @@ bool offload_executor_t::try_submit_internal (std::function<void ()> work)
         if (_stopping && _active == _role_active && application_queue_empty_locked ()) {
             return false;
         }
-        if (idle_worker_count_locked () <= _queue.size () && _live_workers < _max_worker_count) {
+        if (!idle_workers_exceed_locked (_queue.size ()) && _live_workers < _max_worker_count) {
             start_worker_locked ();
         }
         _queue.push_back (work_item_t{std::move (work), std::nullopt});
@@ -164,7 +164,7 @@ bool offload_executor_t::try_submit_application (work_t work)
         if (_stopping) {
             return false;
         }
-        if (idle_worker_count_locked () <= _queue.size () && _live_workers < _max_worker_count) {
+        if (!idle_workers_exceed_locked (_queue.size ()) && _live_workers < _max_worker_count) {
             start_worker_locked ();
         }
         _queue.push_back (work_item_t{std::move (work), std::stop_source{}});
@@ -329,12 +329,13 @@ bool offload_executor_t::publishing_role () const noexcept
     return _publishing_executor == this;
 }
 
-std::size_t offload_executor_t::idle_worker_count_locked () const noexcept
+bool offload_executor_t::idle_workers_exceed_locked (std::size_t count) const noexcept
 {
-    std::size_t count = 0;
+    // Stops at the (count + 1)th idle worker; an empty queue needs only the head.
     for (auto *worker = _idle_head; worker; worker = worker->next_idle)
-        ++count;
-    return count;
+        if (count-- == 0)
+            return true;
+    return false;
 }
 
 void offload_executor_t::add_idle_locked (worker_t &worker) noexcept

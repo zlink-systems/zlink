@@ -122,7 +122,7 @@ class offload_executor_t
     static thread_local offload_executor_t *_publishing_executor;
     bool try_submit_application (work_t work);
     bool publishing_role () const noexcept;
-    std::size_t idle_worker_count_locked () const noexcept;
+    bool idle_workers_exceed_locked (std::size_t count) const noexcept;
     void add_idle_locked (worker_t &worker) noexcept;
     void remove_idle_locked (worker_t &worker) noexcept;
     std::shared_ptr<worker_t> assign_worker_locked (worker_t *current);
