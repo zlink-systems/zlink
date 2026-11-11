@@ -138,6 +138,18 @@ class ServerDrivenCellTest(unittest.TestCase):
         with self.assertRaisesRegex(ReportError, "warmup, endpoint"):
             cells_from_cell_json(payload, "run1", "results.json")
 
+    def test_warmup_is_normalized_from_trigger_units_or_results_seconds(self):
+        payload = self._source()
+        cell = payload["cells"][0]
+        cell["implementation"] = "zlink-cpp"
+        cell["trigger"]["warmup"] = 30000
+        payload["metadata"] = {"warmupUnit": "milliseconds"}
+        self.assertEqual(cells_from_cell_json(payload, "run1")[0].warmup_seconds, 30.0)
+        payload["metadata"]["warmupSeconds"] = "30"
+        self.assertEqual(cells_from_cell_json(payload, "run1")[0].warmup_seconds, 30.0)
+        payload["metadata"] = {"warmupUnit": "fortnights"}
+        self.assertIsNone(cells_from_cell_json(payload, "run1")[0].warmup_seconds)
+
     def test_a_separate_target_record_is_not_input(self):
         payload = self._source()
         payload["cells"][0]["role"] = "target"

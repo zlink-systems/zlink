@@ -165,11 +165,11 @@ jobs:
           npm install -g node-gyp@11
           echo "npm_config_node_gyp=$(cygpath -w "$(npm root -g)/node-gyp/bin/node-gyp.js")" >> "${GITHUB_ENV}"
 
-      - name: Install Linux build dependencies
+      # The hosted Ubuntu images ship the native toolchain; installing the
+      # build-essential meta package only added a dependency on the apt mirrors.
+      - name: Check the Linux native toolchain
         if: startsWith(matrix.target.name, 'linux-')
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential
+        run: gcc --version && g++ --version && make --version
 
       - name: Prepare the Core release runtime for this platform
         id: core
@@ -327,10 +327,8 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
-      - name: Install native build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential
+      - name: Check the native toolchain
+        run: gcc --version && g++ --version && make --version
 
       - name: Prepare the Core release runtime
         id: core

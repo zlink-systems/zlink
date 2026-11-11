@@ -1,5 +1,4 @@
 using System.IO.Compression;
-using System.Security.Cryptography;
 using System.Xml.Linq;
 
 internal static class PackageContractSnapshot
@@ -25,13 +24,26 @@ internal static class PackageContractSnapshot
                      .Select(static entry => NormalizeEntry(entry.FullName))
                      .Order(StringComparer.Ordinal))
             lines.Add($"entry {entry}");
-        foreach (var entry in archive.Entries
+        // XML documentation is shipped with every assembly but its text is not the API contract
+        // (the signature snapshot is). Require a non-empty, parseable doc per assembly so a
+        // missing or broken file still fails, without pinning the comment text.
+        foreach (var assembly in archive.Entries
                      .Where(static entry => entry.FullName.StartsWith("lib/", StringComparison.Ordinal)
-                                            && entry.FullName.EndsWith(".xml", StringComparison.Ordinal))
+                                            && entry.FullName.EndsWith(".dll", StringComparison.Ordinal))
                      .OrderBy(static entry => entry.FullName, StringComparer.Ordinal))
         {
-            using var content = entry.Open();
-            lines.Add($"content-sha256 {entry.FullName}={Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant()}");
+            var docPath = assembly.FullName[..^".dll".Length] + ".xml";
+            var doc = archive.GetEntry(docPath)
+                ?? throw new InvalidOperationException($"{assembly.FullName} has no XML documentation entry {docPath}.");
+            if (doc.Length == 0)
+                throw new InvalidOperationException($"XML documentation {docPath} is empty.");
+            using (var content = doc.Open())
+            {
+                var root = XDocument.Load(content).Root;
+                if (root?.Name.LocalName != "doc")
+                    throw new InvalidOperationException($"XML documentation {docPath} has no doc root.");
+            }
+            lines.Add($"xml-doc {docPath}");
         }
 
         using (var stream = nuspecEntry.Open())

@@ -23,6 +23,7 @@ from benchagg.readers import ReportError, read_run, cells_from_cell_json  # noqa
 
 
 def cell(impl, pattern, size, run, throughput, **kwargs):
+    kwargs.setdefault("warmup_seconds", 30.0)
     return Cell(
         key=CellKey(impl, pattern, size),
         run=run,

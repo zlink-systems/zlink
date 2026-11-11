@@ -27,7 +27,7 @@ function parseOptions(argv) {
     requestWindow: argInt(argv, '--request-window', 100),
     submitConcurrency: argInt(argv, '--submit-concurrency', 8),
     latencySampleLimit: argInt(argv, '--latency-sample-limit', 200000),
-    warmup: argInt(argv, '--warmup-seconds', 2),
+    warmup: argInt(argv, '--warmup-seconds', 30),
     drainBoundMs: argInt(argv, '--drain-bound-ms', 30000),
     requestTimeoutMs: argInt(argv, '--request-timeout-ms', 30000),
     routeReadyMs: argInt(argv, '--route-ready-ms', 30000),

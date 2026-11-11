@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import sys
+import dataclasses
 import unittest
 
 _TOOLS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -169,6 +170,15 @@ class AcceptanceTest(unittest.TestCase):
             self.assertAlmostEqual(row.spread_percent, spread, delta=0.05, msg=f"{impl} {pattern}@{size}")
             self.assertEqual(row.g5_status, "fail", f"{impl} {pattern}@{size}")
 
+    def test_historical_fixture_without_warmup_is_not_judged(self):
+        """The Phase 0 fixture records no warmup, so spec 8.2 leaves it unjudged."""
+        judgement = judge_pair(
+            self.rows, "zlink-dotnet / zlink-c", "zlink-dotnet", "zlink-c", 1024,
+            "request-window", BINDING_JUDGEMENT[0]
+        )
+        self.assertEqual(judgement.status, "unsupported")
+        self.assertIn("warmup missing, spec requires 30s", judgement.reason)
+
     def test_summary_4_judgements(self):
         """One published value, three unsupported, each naming the row that failed.
 
@@ -188,9 +198,11 @@ class AcceptanceTest(unittest.TestCase):
              FRAMEWORK_JUDGEMENT[0], 4096, "unsupported", None, 0.071,
              ("numerator", "zlink-framework-dotnet", 11.5)),
         ]
+        rows = {key: dataclasses.replace(row, warmup_seconds=[30.0] * max(1, len(row.warmup_seconds)))
+                for key, row in self.rows.items()}
         for formula, numerator, denominator, threshold, size, status, verdict, value, blame in expected:
             judgement = judge_pair(
-                self.rows, formula, numerator, denominator, size, "request-window", threshold
+                rows, formula, numerator, denominator, size, "request-window", threshold
             )
             self.assertEqual(judgement.status, status, f"{formula}@{size}")
             self.assertEqual(judgement.verdict, verdict, f"{formula}@{size}")

@@ -317,7 +317,7 @@ struct phase_config_t
 
 inline phase_config_t warmup_config ()
 {
-    return {phase_warmup, env_int ("WARMUP_SECONDS", 2)};
+    return {phase_warmup, env_int ("WARMUP_SECONDS", 30)};
 }
 inline phase_config_t active_config ()
 {

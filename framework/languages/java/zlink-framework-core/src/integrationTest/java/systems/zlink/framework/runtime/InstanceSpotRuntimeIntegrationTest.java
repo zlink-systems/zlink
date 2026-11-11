@@ -733,14 +733,13 @@ final class InstanceSpotRuntimeIntegrationTest {
                 } else if (failureStage == CloseScenario.CAS_WINDOW) {
                     store.holdNextAuthorityPutAfterApply.set(true);
                 }
-                var spots = target.spotManager();
                 AtomicInteger completedBackendOperation =
                         failureStage == CloseScenario.RESOURCE
                                 ? backend.failOnce(spotId, "closeInstanceSpot")
                                 : null;
                 CompletionStage<Boolean> closing =
                         ZLinkSpotRuntimeTesting.closeInstanceSpot(
-                                spots, spotId, EchoInstanceSpot.generations.getFirst());
+                                target, spotId, EchoInstanceSpot.generations.getFirst());
                 if (failureStage == CloseScenario.DOUBLE_RELEASE) {
                     store.deleteFailed.get(5, TimeUnit.SECONDS);
                     assertThrows(
@@ -749,7 +748,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                     @SuppressWarnings("unchecked")
                     CompletionStage<Boolean> second =
                             ZLinkSpotRuntimeTesting.closeInstanceSpot(
-                                    spots, spotId, EchoInstanceSpot.generations.getFirst());
+                                    target, spotId, EchoInstanceSpot.generations.getFirst());
                     store.deleteFailedTwice.get(5, TimeUnit.SECONDS);
                     assertThrows(
                             java.util.concurrent.ExecutionException.class,
@@ -757,7 +756,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                     @SuppressWarnings("unchecked")
                     CompletionStage<Boolean> resumed =
                             ZLinkSpotRuntimeTesting.closeInstanceSpot(
-                                    spots, spotId, EchoInstanceSpot.generations.getFirst());
+                                    target, spotId, EchoInstanceSpot.generations.getFirst());
                     assertTrue(resumed.toCompletableFuture().get(5, TimeUnit.SECONDS));
                     store.deleteApplied.get(5, TimeUnit.SECONDS);
                     // The activation record holds the Spot lane until the release succeeds.
@@ -774,7 +773,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                     @SuppressWarnings("unchecked")
                     CompletionStage<Boolean> resumed =
                             ZLinkSpotRuntimeTesting.closeInstanceSpot(
-                                    spots, spotId, EchoInstanceSpot.generations.getFirst());
+                                    target, spotId, EchoInstanceSpot.generations.getFirst());
                     assertTrue(resumed.toCompletableFuture().get(5, TimeUnit.SECONDS));
                     store.deleteApplied.get(5, TimeUnit.SECONDS);
                     assertEquals(1, EchoInstanceSpot.closingCalls.get());
@@ -827,7 +826,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                         @SuppressWarnings("unchecked")
                         CompletionStage<Boolean> resumed =
                                 ZLinkSpotRuntimeTesting.closeInstanceSpot(
-                                        spots, spotId, EchoInstanceSpot.generations.getFirst());
+                                        target, spotId, EchoInstanceSpot.generations.getFirst());
                         assertTrue(resumed.toCompletableFuture().get(5, TimeUnit.SECONDS));
                     }
                 }
@@ -1140,10 +1139,7 @@ final class InstanceSpotRuntimeIntegrationTest {
                             var completion =
                                     systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTesting
                                             .admitInstanceSpotRoute(
-                                                    runtime.spotManager(),
-                                                    spotId,
-                                                    received,
-                                                    admitted);
+                                                    runtime, spotId, received, admitted);
                             completion.whenComplete(
                                     (value, failure) -> {
                                         if (failure != null) reply.completeExceptionally(failure);
@@ -1206,24 +1202,6 @@ final class InstanceSpotRuntimeIntegrationTest {
                                         && peer.state()
                                                 == systems.zlink.framework.monitoring.ZLinkPeerState
                                                         .READY);
-    }
-
-    /** Waits until the target's route scan has dropped the Closing Instance authority. */
-    private static void awaitClosingRouteDropped(
-            systems.zlink.framework.spots.ZLinkSpotManager spots, String spotId) throws Exception {
-        var mesh =
-                systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTesting.meshNode(
-                        spots, "game");
-        var spotNode = mesh.spotNode();
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (systems.zlink.framework.runtime.binding.ZLinkJavaReadyRouteTestAccess
-                .hasInstanceAuthority(spotNode, spotId)) {
-            if (System.nanoTime() > deadline) {
-                throw new java.util.concurrent.TimeoutException(
-                        "route scan kept the Closing Instance authority");
-            }
-            Thread.sleep(2);
-        }
     }
 
     /** Waits until the Instance Spot owner queue holds an accepted message behind Close. */
@@ -1483,24 +1461,14 @@ final class InstanceSpotRuntimeIntegrationTest {
                         "closing-verdict-target-" + suffix);
                 SourceEntrySpot.start.complete(null);
                 SourceEntrySpot.beforeClose.get(5, TimeUnit.SECONDS);
-                // Establish the scan-owned Ready projection before testing its Closing removal.
-                systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess
-                        .authorityRouteRuntime(target)
-                        .reconcile()
-                        .toCompletableFuture()
-                        .get(5, TimeUnit.SECONDS);
                 SourceEntrySpot.closeStart.complete(null);
                 EchoInstanceSpot.closingEntered.get(5, TimeUnit.SECONDS);
                 if (drain) {
-                    ((systems.zlink.framework.runtime.spots.ZLinkSpotRuntime) target.spotManager())
+                    (systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                                    target))
                             .beginDrain()
                             .toCompletableFuture()
                             .get(5, TimeUnit.SECONDS);
-                }
-                if (expectedKind == null) {
-                    // The target's background route scan drops the Closing authority before the
-                    // probe arrives, so the probe's admission cannot rely on that scan.
-                    awaitClosingRouteDropped(target.spotManager(), spotId);
                 }
                 SourceEntrySpot.probeStart.complete(null);
                 if (expectedKind == null) {

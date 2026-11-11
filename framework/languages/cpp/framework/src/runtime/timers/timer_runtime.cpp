@@ -274,7 +274,7 @@ void timer_runtime_t::post_fire_count (
     std::unique_ptr<void, decltype (rollback)> rollback_pending (state.get (), rollback);
     // Queued work owns the claim. The timer can cancel that claim without
     // running the application lane; active callbacks keep their claim.
-    const bool admitted = context->admit_timer_fire ();
+    const bool admitted = context->admit_timer_fire (queue);
     timer_callback_admission_t claimed (admitted ? context : nullptr);
     {
         std::lock_guard lock (state->mutex);

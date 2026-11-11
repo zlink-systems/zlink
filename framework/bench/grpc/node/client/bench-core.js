@@ -287,6 +287,7 @@ async function runActive(transport, metrics, options, trigger) {
     server_memory_mb: target.workingSetMb,
     client_cores: usage.cores,
     client_parallelism_ceiling: CLIENT_PARALLELISM_CEILING,
+    execution_model_ceiling: CLIENT_PARALLELISM_CEILING,
     client_saturation_metric: CLIENT_SATURATION_METRIC,
     event_loop_utilization: usage.eventLoopUtilization,
     peak_in_flight: source.peakInFlight,

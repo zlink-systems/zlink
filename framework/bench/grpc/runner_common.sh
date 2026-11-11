@@ -46,7 +46,7 @@ bench_init() {
 
   RUN_STAMP="${RUN_STAMP:-$(date +%Y%m%d_%H%M%S)}"
   DURATION_SECONDS="${DURATION_SECONDS-5}"
-  WARMUP_SECONDS="${WARMUP_SECONDS-2}"
+  WARMUP_SECONDS="${WARMUP_SECONDS-30}"
   RUNS="${RUNS-3}"
   SKIP_BUILD="${SKIP_BUILD-0}"
   local payload_sizes="${PAYLOAD_SIZES-${default_payloads}}"

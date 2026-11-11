@@ -38,7 +38,7 @@ public final class BenchOptions {
         requestWindow = Args.integer(argv, "--request-window", 100);
         submitConcurrency = Args.integer(argv, "--submit-concurrency", 8);
         latencySampleLimit = Args.integer(argv, "--latency-sample-limit", 200_000);
-        warmupSeconds = Args.number(argv, "--warmup-seconds", 2.0);
+        warmupSeconds = Args.number(argv, "--warmup-seconds", 30.0);
         drainBoundMs = Args.integer(argv, "--drain-bound-ms", 30_000);
         requestTimeoutMs = Args.integer(argv, "--request-timeout-ms", 30_000);
         routeReadyMs = Args.integer(argv, "--route-ready-ms", 30_000);

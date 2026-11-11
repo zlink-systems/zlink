@@ -14,9 +14,17 @@ final class ZLinkCloseGate {
         return started.get();
     }
 
+    synchronized boolean publish(Runnable publication) {
+        if (started.get()) return false;
+        publication.run();
+        return true;
+    }
+
     CompletionStage<Void> close(Supplier<CompletionStage<Void>> cleanup) {
-        if (!started.compareAndSet(false, true)) {
-            return ownershipCleanup;
+        synchronized (this) {
+            if (!started.compareAndSet(false, true)) {
+                return ownershipCleanup;
+            }
         }
         try {
             cleanup.get()

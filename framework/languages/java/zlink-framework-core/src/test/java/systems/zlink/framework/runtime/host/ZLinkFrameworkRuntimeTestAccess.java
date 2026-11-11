@@ -19,7 +19,6 @@ import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDisp
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.locations.ZLinkLocationRuntime;
 import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
-import systems.zlink.framework.runtime.locations.ZLinkStatefulAuthorityRouteRuntime;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 
 import java.util.List;
@@ -37,6 +36,13 @@ public final class ZLinkFrameworkRuntimeTestAccess {
     private ZLinkFrameworkRuntimeTestAccess() {}
 
     public static final class Construction {
+        private java.util.function.Consumer<Runnable> callServicesPublication = Runnable::run;
+
+        public Construction callServicesPublication(java.util.function.Consumer<Runnable> value) {
+            callServicesPublication = value;
+            return this;
+        }
+
         private Supplier<ZLinkMeshDrainCoordinator> meshDrains;
         private ExecutorService channelInfrastructureExecutor;
         private SpotTransportAddressResolver channelSpotAddressResolver;
@@ -243,7 +249,8 @@ public final class ZLinkFrameworkRuntimeTestAccess {
                                             targetAdmissionSealed,
                                             stateMachines,
                                             aggregateRelocationAuthorityStoreDecorator,
-                                            targetNormalizerDecorator));
+                                            targetNormalizerDecorator),
+                    callServicesPublication);
         }
     }
 
@@ -275,16 +282,21 @@ public final class ZLinkFrameworkRuntimeTestAccess {
     }
 
     public static ZLinkChannelRuntime channels(ZLinkFrameworkRuntime runtime) {
-        return runtime.channels;
+        return runtime.channels();
+    }
+
+    public static systems.zlink.framework.runtime.spots.ZLinkSpotRuntime spots(
+            ZLinkFrameworkRuntime runtime) {
+        return runtime.spots();
+    }
+
+    public static systems.zlink.framework.runtime.actors.ZLinkActorRuntime actors(
+            ZLinkFrameworkRuntime runtime) {
+        return runtime.actors();
     }
 
     public static ZLinkMeshDrainCoordinator meshDrains(ZLinkFrameworkRuntime runtime) {
         return runtime.meshDrains;
-    }
-
-    public static ZLinkStatefulAuthorityRouteRuntime authorityRouteRuntime(
-            ZLinkFrameworkRuntime runtime) {
-        return runtime.authorityRouteRuntime;
     }
 
     public static ZLinkLocationRuntime locationRuntime(ZLinkFrameworkRuntime runtime) {
@@ -333,6 +345,25 @@ public final class ZLinkFrameworkRuntimeTestAccess {
                 backendProvider,
                 handlerActivator,
                 eventDispatcher,
+                construction.toRuntimeConstruction());
+    }
+
+    public static ZLinkFrameworkRuntime prepareWithConstruction(
+            DefaultZLinkFrameworkOptions options, Construction construction) {
+        return ZLinkFrameworkRuntime.prepareHost(
+                options, null, construction.toRuntimeConstruction());
+    }
+
+    public static void startPreparedWithConstruction(
+            ZLinkFrameworkRuntime runtime,
+            DefaultZLinkFrameworkOptions options,
+            ZLinkBackendAdapterProvider backend,
+            Construction construction) {
+        ZLinkFrameworkRuntime.startPreparedHost(
+                runtime,
+                options,
+                backend,
+                ZLinkHandlerActivator.reflection(),
                 construction.toRuntimeConstruction());
     }
 
