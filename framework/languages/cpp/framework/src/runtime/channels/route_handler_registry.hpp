@@ -198,6 +198,7 @@ class route_handler_registry_t
                  invoker_t invoker,
                  std::function<void (serializer_registry_t &)> bind_codecs = {});
     void bind_codecs (serializer_registry_t &serializers);
+    std::vector<std::string> router_channel_ids () const;
 
     const route_handler_descriptor_t *find (std::string_view router_channel_id,
                                             runtime::messaging::message_kind_t kind,

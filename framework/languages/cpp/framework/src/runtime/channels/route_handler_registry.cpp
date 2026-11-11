@@ -2,6 +2,7 @@
 
 #include "runtime/channels/route_handler_registry.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace zlink::framework::detail
@@ -28,6 +29,18 @@ void route_handler_registry_t::bind_codecs (serializer_registry_t &serializers)
     for (auto &[_, entry] : _handlers)
         if (entry.bind_codecs)
             entry.bind_codecs (serializers);
+}
+
+std::vector<std::string> route_handler_registry_t::router_channel_ids () const
+{
+    std::vector<std::string> channels;
+    channels.reserve (_handlers.size ());
+    for (const auto &[key, _] : _handlers) {
+        if (std::find (channels.begin (), channels.end (), key.router_channel_id)
+            == channels.end ())
+            channels.push_back (key.router_channel_id);
+    }
+    return channels;
 }
 
 const route_handler_descriptor_t *

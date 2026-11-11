@@ -6,6 +6,7 @@
 
 #include "runtime/channels/route_handler_registry.hpp"
 #include "runtime/channels/route_packet.hpp"
+#include "runtime/channels/route_packet_dispatcher.hpp"
 #include "runtime/channels/route_internal_packet_dispatcher.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 
@@ -13,6 +14,9 @@
 #include <zlink/framework/contracts/handlers/handler_registry.hpp>
 
 #include <functional>
+#include <map>
+#include <string>
+#include <string_view>
 #include <vector>
 #include <memory>
 
@@ -35,7 +39,8 @@ class mesh_record_dispatcher_t
                               const handler_registry_t &filters,
                               retained_dispatch_options_t dispatch_options = {},
                               std::function<void ()> before_application_handler = {},
-                              std::shared_ptr<void> registration = {});
+                              std::shared_ptr<void> registration = {},
+                              std::vector<std::string> route_channels = {});
 
     task_t<std::optional<route_dispatch_reply_t>>
     dispatch (const runtime::host::receive_record_t &record,
@@ -52,7 +57,10 @@ class mesh_record_dispatcher_t
     retained_dispatch_options_t _dispatch_options;
     no_route_internal_packet_dispatcher_t _no_internal_packets;
     std::function<void ()> _before_application_handler;
-    std::shared_ptr<void> _registration;
+    std::weak_ptr<void> _registration;
+    std::
+      map<std::string, std::pair<route_packet_dispatcher_t, route_packet_dispatcher_t>, std::less<>>
+        _route_dispatchers;
 };
 
 } // namespace zlink::framework::detail

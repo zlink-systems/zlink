@@ -24,6 +24,7 @@
 #include "runtime/channels/route_handler_registry.hpp"
 #include "runtime/channels/route_internal_packet_dispatcher.hpp"
 #include "runtime/channels/route_packet_dispatcher.hpp"
+#include "runtime/channels/route_handler_invoker.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
@@ -49,6 +50,8 @@
 #include <zlink/Contracts/Sockets/message_socket_contracts.hpp>
 #include <zlink/Contracts/Sockets/results.hpp>
 #include <zlink/Contracts/Sockets/routed_socket_contracts.hpp>
+
+#include "../support/allocation_counter.hpp"
 
 #include <google/protobuf/wrappers.pb.h>
 
@@ -716,6 +719,60 @@ class scoped_channel_handler_t
     scoped_channel_dependency_t &_dependency;
 };
 
+struct mesh_dispatch_scope_dependency_t
+{
+    mesh_dispatch_scope_dependency_t () : identity (++next_identity) { ++created; }
+    ~mesh_dispatch_scope_dependency_t () { ++destroyed; }
+
+    inline static std::atomic_int next_identity{0};
+    inline static std::atomic_int created{0};
+    inline static std::atomic_int destroyed{0};
+    int identity;
+};
+
+class mesh_dispatch_scope_handler_t
+{
+  public:
+    explicit mesh_dispatch_scope_handler_t (mesh_dispatch_scope_dependency_t &dependency) :
+        dependency (dependency), identity (++next_identity)
+    {
+    }
+
+    void handle (const int &, const zlink::framework::route_message_context_t &)
+    {
+        std::lock_guard lock (observations_mutex);
+        observations.emplace_back (identity, dependency.identity);
+    }
+
+    inline static std::atomic_int next_identity{0};
+    inline static std::mutex observations_mutex;
+    inline static std::vector<std::pair<int, int>> observations;
+
+  private:
+    mesh_dispatch_scope_dependency_t &dependency;
+    int identity;
+};
+
+class mesh_dispatch_throwing_constructor_handler_t
+{
+  public:
+    mesh_dispatch_throwing_constructor_handler_t ()
+    {
+        throw std::runtime_error ("handler construction failed");
+    }
+
+    void handle (const int &, const zlink::framework::route_message_context_t &) {}
+};
+
+class mesh_dispatch_reply_handler_t
+{
+  public:
+    int handle (const int &request, const zlink::framework::route_message_context_t &)
+    {
+        return request + 1;
+    }
+};
+
 class local_internal_dispatcher_t final
     : public zlink::framework::detail::route_internal_packet_dispatcher_t
 {
@@ -828,6 +885,139 @@ await_native_reply (zlink::async_result_t<std::vector<zlink::message_t>> pending
 
 int main ()
 {
+    using namespace zlink::framework;
+    static_assert (
+      !std::is_same_v<detail::route_handler_invoker_t::completion_t,
+                      std::function<result_t<std::optional<detail::route_dispatch_reply_t>> (
+                        const result_t<zlink::message_t> &)>>);
+    detail::route_handler_invoker_t::completion_t completion;
+    auto send_completion = detail::route_send_completion_t{
+      detail::retained_dispatch_options_t{},
+      {},
+      "mesh",
+      detail::route_received_packet_t{zlink::routing_id_t::from (std::uint32_t{1})},
+      runtime::messaging::envelope_header_t{}};
+    const auto completion_allocations = tests::count_allocations (
+      [&] { completion.emplace<detail::route_send_completion_t> (std::move (send_completion)); });
+    if (completion_allocations != 0)
+        return 1;
+    auto request_completion = detail::route_request_completion_t{
+      detail::retained_dispatch_options_t{},
+      {},
+      std::nullopt,
+      detail::route_received_packet_t{zlink::routing_id_t::from (std::uint32_t{1})},
+      runtime::messaging::envelope_header_t{}};
+    const auto request_completion_allocations = tests::count_allocations ([&] {
+        completion.emplace<detail::route_request_completion_t> (std::move (request_completion));
+    });
+    if (request_completion_allocations != 0)
+        return 1;
+
+    {
+        mesh_dispatch_scope_dependency_t::next_identity.store (0);
+        mesh_dispatch_scope_dependency_t::created.store (0);
+        mesh_dispatch_scope_dependency_t::destroyed.store (0);
+        mesh_dispatch_scope_handler_t::next_identity.store (0);
+        mesh_dispatch_scope_handler_t::observations.clear ();
+        service_collection_t scoped_mesh_services;
+        scoped_mesh_services.add_scoped<mesh_dispatch_scope_dependency_t> ();
+        auto scoped_mesh_provider = scoped_mesh_services.build_provider ();
+        serializer_registry_t scoped_mesh_serializers;
+        detail::route_handler_registry_t scoped_mesh_handlers;
+        scoped_mesh_handlers.on_send<mesh_dispatch_scope_handler_t, int> (
+          "mesh", "scope-probe", &mesh_dispatch_scope_handler_t::handle);
+        handler_registry_t scoped_mesh_filters;
+        detail::mesh_record_dispatcher_t dispatch_plan (
+          scoped_mesh_provider, scoped_mesh_serializers, scoped_mesh_handlers, scoped_mesh_filters);
+        runtime::host::receive_record_t record;
+        record.kind = runtime::host::record_kind_t::node_send;
+        record.channel_name = "mesh";
+        runtime::messaging::envelope_header_t header;
+        header.kind = runtime::messaging::message_kind_t::command;
+        header.channel_name = "mesh";
+        header.message_name = "scope-probe";
+        runtime::messaging::envelope_codec_t codec;
+        for (int index = 0; index < 2; ++index) {
+            auto parts = codec.encode_raw_body_parts (header, zlink::message_t::from ("42"));
+            auto decoded = codec.decode_header (parts, false);
+            if (!decoded
+                || !dispatch_plan
+                      .dispatch (record, std::move (parts).take_items (),
+                                 std::move (decoded.value ()))
+                      .result ())
+                return 2;
+        }
+        if (mesh_dispatch_scope_dependency_t::created.load () != 2
+            || mesh_dispatch_scope_dependency_t::destroyed.load () != 2
+            || mesh_dispatch_scope_handler_t::observations.size () != 2
+            || mesh_dispatch_scope_handler_t::observations[0].first
+                 == mesh_dispatch_scope_handler_t::observations[1].first
+            || mesh_dispatch_scope_handler_t::observations[0].second
+                 == mesh_dispatch_scope_handler_t::observations[1].second)
+            return 3;
+    }
+    {
+        service_collection_t services;
+        auto provider = services.build_provider ();
+        serializer_registry_t serializers;
+        detail::route_handler_registry_t handlers;
+        handlers.on_send<mesh_dispatch_throwing_constructor_handler_t, int> (
+          "mesh", "constructor-probe", &mesh_dispatch_throwing_constructor_handler_t::handle);
+        handler_registry_t filters;
+        detail::mesh_record_dispatcher_t dispatch_plan (provider, serializers, handlers, filters);
+        runtime::host::receive_record_t record;
+        record.kind = runtime::host::record_kind_t::node_send;
+        record.channel_name = "mesh";
+        runtime::messaging::envelope_header_t header;
+        header.kind = runtime::messaging::message_kind_t::command;
+        header.channel_name = "mesh";
+        header.message_name = "constructor-probe";
+        runtime::messaging::envelope_codec_t codec;
+        auto parts = codec.encode_raw_body_parts (header, zlink::message_t::from ("42"));
+        auto decoded = codec.decode_header (parts, false);
+        if (!decoded)
+            return 4;
+        int terminal_count = 0;
+        runtime::application_dispatch_terminal_owner_t terminal ({}, [&] { ++terminal_count; });
+        const auto dispatched = dispatch_plan
+                                  .dispatch (record, std::move (parts).take_items (),
+                                             std::move (decoded.value ()), std::move (terminal))
+                                  .result ();
+        if (dispatched || terminal_count != 1)
+            return 5;
+    }
+    {
+        service_collection_t services;
+        auto provider = services.build_provider ();
+        serializer_registry_t serializers;
+        detail::route_handler_registry_t handlers;
+        handlers.on_request<mesh_dispatch_reply_handler_t, int, int> (
+          "mesh", "shutdown-probe", &mesh_dispatch_reply_handler_t::handle);
+        handler_registry_t filters;
+        detail::mesh_record_dispatcher_t dispatch_plan (provider, serializers, handlers, filters);
+        runtime::host::receive_record_t record;
+        record.kind = runtime::host::record_kind_t::node_request;
+        record.channel_name = "mesh";
+        runtime::messaging::envelope_header_t header;
+        header.kind = runtime::messaging::message_kind_t::request;
+        header.channel_name = "mesh";
+        header.message_name = "shutdown-probe";
+        runtime::messaging::envelope_codec_t codec;
+        auto parts = codec.encode_raw_body_parts (header, zlink::message_t::from ("42"));
+        auto decoded = codec.decode_header (parts, false);
+        if (!decoded)
+            return 6;
+        int terminal_count = 0;
+        runtime::application_dispatch_terminal_owner_t terminal ({}, [&] { ++terminal_count; });
+        // An absent host owner must follow the same terminated reply path as shutdown.
+        const auto reply = dispatch_plan
+                             .dispatch (record, std::move (parts).take_items (),
+                                        std::move (decoded.value ()), std::move (terminal))
+                             .result ();
+        if (reply || terminal_count != 1)
+            return 7;
+    }
+
     zlink::framework::completion_owner_t completion_owner;
     // The Mesh classification decode carries flow capture through route dispatch.
     {

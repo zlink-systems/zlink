@@ -2320,31 +2320,29 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
                         host._dispatch_options);
                       if (!decoded_header)
                           return;
-                      std::function<void ()> direct_terminal;
+                      std::optional<application_dispatch_terminal_owner_t> direct_terminal;
                       if (record.kind == host::record_kind_t::node_send) {
-                          // Native receives already own their work; this transfers only
-                          // the existing terminal callbacks, without an application job.
-                          auto terminal = std::make_shared<application_dispatch_terminal_owner_t> (
-                            nullptr, complete_stateful_dispatch, release_mailbox_reservation,
-                            handler_entry_t{});
+                          // Keep the original terminal local until the route either defers it
+                          // or the ordinary route invoker accepts it.
+                          direct_terminal.emplace (nullptr, complete_stateful_dispatch,
+                                                   release_mailbox_reservation, handler_entry_t{});
                           stateful_guard.dismiss ();
                           release_guard.dismiss ();
                           if (retain_mailbox_reservation)
                               retain_mailbox_reservation ();
-                          direct_terminal = [terminal] { terminal->settle (); };
                       }
                       const auto handled = spot_runtime.dispatch_mesh_record (
                         owner, accepted_record, parts, decoded_header.value (), *host._services,
-                        *host._serializers, direct_terminal);
+                        *host._serializers, {}, nullptr, {}, {},
+                        direct_terminal ? &*direct_terminal : nullptr);
                       if (handled || !decoded_header.value ()) {
                           return;
                       }
-                      detail::mesh_record_dispatcher_t dispatcher (
-                        *host._services, *host._serializers, registration->handlers, *host._filters,
-                        host._dispatch_options, {}, registration);
-                      auto pending = dispatcher.dispatch (accepted_record, std::move (parts),
-                                                          std::move (*decoded_header.value ()), {},
-                                                          host._application_dispatch.get ());
+                      auto pending = registration->mesh_record_dispatcher->dispatch (
+                        accepted_record, std::move (parts), std::move (*decoded_header.value ()),
+                        direct_terminal ? std::move (*direct_terminal)
+                                        : application_dispatch_terminal_owner_t{},
+                        host._application_dispatch.get ());
                   });
               },
               accept_application_receive, next_application_receive, readiness))
@@ -2661,8 +2659,18 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
     try {
         _completion_dispatcher = detail::borrow_completion_dispatcher ();
         _services = &services;
-        for (const auto &registration : _registrations)
+        for (const auto &registration : _registrations) {
             registration->handlers.bind_codecs (*_serializers);
+            std::vector<std::string> route_channels{registration->mesh_name};
+            route_channels.reserve (registration->channels.size () + 1);
+            for (const auto &[channel_name, _] : registration->channels)
+                route_channels.push_back (channel_name);
+            registration->mesh_record_dispatcher =
+              std::make_shared<detail::mesh_record_dispatcher_t> (
+                services, *_serializers, registration->handlers, *_filters,
+                detail::retained_dispatch_options_t (_dispatch_options), std::function<void ()>{},
+                registration, std::move (route_channels));
+        }
         const auto actor_gateway = services.get<detail::actor_gateway_runtime_t> ();
         if (actor_gateway) {
             actor_gateway->get ().bind_serializers (*_serializers);
@@ -3822,14 +3830,11 @@ void mesh_node_host_service_t::dispatch_application (
             // The native claim still owns settlement. Transfer its existing release
             // callback to the bounded pipeline handoff, leaving physical work retained.
             terminal_callback_guard_t prefix (terminal.take_mailbox_reservation ());
-            detail::mesh_record_dispatcher_t dispatcher (*services, *serializers,
-                                                         registration->handlers, *filters,
-                                                         dispatch_options, {}, registration);
             auto invocation_terminal = std::move (terminal);
             terminal_deferred = true;
-            auto pending =
-              dispatcher.dispatch (record, std::move (parts), std::move (*decoded_header.value ()),
-                                   std::move (invocation_terminal), executor);
+            auto pending = registration->mesh_record_dispatcher->dispatch (
+              record, std::move (parts), std::move (*decoded_header.value ()),
+              std::move (invocation_terminal), executor);
             trace_mesh_application ("route-dispatch", record, 0,
                                     pending.await_ready () ? "ready" : "pending");
         }

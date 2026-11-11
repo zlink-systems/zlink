@@ -7,6 +7,7 @@
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/execution/task_result.hpp"
+#include "runtime/stateful/public_host_runtime.hpp"
 
 #include <exception>
 #include <optional>
@@ -75,7 +76,7 @@ void trace_route_flow (const dispatch_options_t &options,
 result_t<std::optional<route_dispatch_reply_t>>
 reply_route_error (const dispatch_options_t &options,
                    const std::string &router,
-                   const std::function<result_t<void> (route_dispatch_reply_t &&)> &submit_reply,
+                   const std::optional<route_reply_token_t> &reply_token,
                    const route_received_packet_t &received,
                    const runtime::messaging::envelope_header_t &header,
                    const framework_exception_t &error)
@@ -104,11 +105,13 @@ reply_route_error (const dispatch_options_t &options,
                                             zlink::message_t::from (""));
     route_dispatch_reply_t response{received.source_node_rid, received.request_seq,
                                     std::move (reply)};
-    if (submit_reply) {
-        auto submitted = submit_reply (std::move (response));
-        if (!submitted)
+    if (reply_token) {
+        if (runtime::host::reply (*reply_token, std::move (response.parts).take_items ())
+            != zlink::submit_result_t::ok)
             return propagate_failure<std::optional<route_dispatch_reply_t>> (
-              submitted, "MeshNode error reply submit failed");
+              result_t<void>::failure (framework_error_kind_t::internal_failure,
+                                       "MeshNode error reply submit failed"),
+              "MeshNode error reply submit failed");
         return result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt);
     }
     return result_t<std::optional<route_dispatch_reply_t>>::success (std::move (response));
@@ -131,9 +134,7 @@ route_packet_dispatcher_t::route_packet_dispatcher_t (
   const handler_registry_t *filters,
   handler_dispatch_kind_t send_dispatch_kind,
   handler_dispatch_kind_t request_dispatch_kind,
-  std::function<void ()> before_application_handler,
-  std::shared_ptr<void> registration,
-  std::function<result_t<void> (route_dispatch_reply_t &&)> submit_reply) :
+  std::function<void ()> before_application_handler) :
     _router_channel_id (std::move (router_channel_id)),
     _services (&services),
     _serializers (&serializers),
@@ -143,9 +144,7 @@ route_packet_dispatcher_t::route_packet_dispatcher_t (
     _dispatch_options (std::move (dispatch_options)),
     _send_dispatch_kind (send_dispatch_kind),
     _request_dispatch_kind (request_dispatch_kind),
-    _before_application_handler (std::move (before_application_handler)),
-    _registration (std::move (registration)),
-    _submit_reply (std::move (submit_reply))
+    _before_application_handler (std::move (before_application_handler))
 {
 }
 
@@ -168,7 +167,9 @@ task_t<std::optional<route_dispatch_reply_t>>
 route_packet_dispatcher_t::dispatch (const route_received_packet_t &received,
                                      runtime::messaging::envelope_header_t header,
                                      runtime::application_dispatch_terminal_owner_t terminal,
-                                     runtime::offload_executor_t *executor) const
+                                     runtime::offload_executor_t *executor,
+                                     std::optional<route_reply_token_t> reply_token,
+                                     std::shared_ptr<void> registration) const
 {
     auto flow_scope = runtime::flow_context_t::enter (
       header.flow_id, header.flow_origin, message_flow_tracer_t (_dispatch_options).mode (),
@@ -188,9 +189,11 @@ route_packet_dispatcher_t::dispatch (const route_received_packet_t &received,
 
     switch (header.kind) {
         case runtime::messaging::message_kind_t::command:
-            return dispatch_send (received, std::move (header), std::move (terminal), executor);
+            return dispatch_send (received, std::move (header), std::move (terminal), executor,
+                                  std::move (registration));
         case runtime::messaging::message_kind_t::request:
-            return dispatch_request (received, std::move (header), std::move (terminal), executor);
+            return dispatch_request (received, std::move (header), std::move (terminal), executor,
+                                     std::move (reply_token), std::move (registration));
         default:
             return task_t<std::optional<route_dispatch_reply_t>> (
               result_t<std::optional<route_dispatch_reply_t>>::failure (
@@ -203,7 +206,8 @@ task_t<std::optional<route_dispatch_reply_t>>
 route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &received,
                                           runtime::messaging::envelope_header_t header,
                                           runtime::application_dispatch_terminal_owner_t terminal,
-                                          runtime::offload_executor_t *executor) const
+                                          runtime::offload_executor_t *executor,
+                                          std::shared_ptr<void> registration) const
 {
     if (_internal_packets != nullptr && _internal_packets->can_handle_send (header.message_name)) {
         auto dispatched = _internal_packets->dispatch_send (received, header, *_services);
@@ -300,56 +304,23 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
                                   route_received_packet_t{source, {}, {}, {}}, header);
             }
         };
-    auto complete = [options = _dispatch_options, router = _router_channel_id,
-                     registration = _registration, submit_reply = _submit_reply,
-                     received = route_received_packet_t{received.source_node_rid,
-                                                        received.request_seq,
-                                                        {},
-                                                        received.source_session_rid},
-                     header = std::move (header)] (const result_t<zlink::message_t> &dispatched)
-      -> result_t<std::optional<route_dispatch_reply_t>> {
-        if (!dispatched) {
-            dispatch_error_reporter_t (options).report_lazy ([&] {
-                auto event = message_dispatch_error_event_t{
-                  dispatch_error_surface_t::route_mesh_channel,
-                  dispatch_message_kind_t::send,
-                  dispatch_reason_from_error (dispatched.error_kind ()),
-                  dispatch_error_action_t::drop,
-                  header.message_name,
-                  router,
-                  header.topic,
-                  std::nullopt,
-                  std::nullopt,
-                  received.source_node_rid.to_string (),
-                  header.correlation_id,
-                  dispatched.error () ? std::make_exception_ptr (*dispatched.error ())
-                                      : std::exception_ptr{}};
-                event.flow_id = header.flow_id;
-                event.flow_origin = header.flow_origin;
-                event.mesh_name = router;
-                event.channel_route_kind = "route_mesh";
-                return event;
-            });
-            return detail::propagate_failure<std::optional<route_dispatch_reply_t>> (
-              dispatched, "routed send handler failed");
-        }
-        if (message_flow_tracer_t (options).enabled_for (message_flow_outcome_t::completed)) {
-            trace_route_flow (options, router, message_flow_outcome_t::completed,
-                              dispatch_message_kind_t::send, received, header);
-        }
-        return result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt);
-    };
+    route_send_completion_t complete{
+      _dispatch_options, std::move (registration), _router_channel_id,
+      route_received_packet_t{
+        received.source_node_rid, received.request_seq, {}, received.source_session_rid},
+      std::move (header)};
     return _invoker.invoke (*handler, filters, _send_dispatch_kind, *_services, *_serializers,
                             std::move (body.value ()), std::move (context), std::move (before),
-                            route_handler_invoker_t::callback_completion_t (std::move (complete)),
-                            std::move (terminal), executor);
+                            std::move (complete), std::move (terminal), executor);
 }
 
 task_t<std::optional<route_dispatch_reply_t>> route_packet_dispatcher_t::dispatch_request (
   const route_received_packet_t &received,
   runtime::messaging::envelope_header_t header,
   runtime::application_dispatch_terminal_owner_t terminal,
-  runtime::offload_executor_t *executor) const
+  runtime::offload_executor_t *executor,
+  std::optional<route_reply_token_t> reply_token,
+  std::shared_ptr<void> registration) const
 {
     if (_internal_packets != nullptr
         && _internal_packets->can_handle_request (header.message_name)) {
@@ -359,7 +330,7 @@ task_t<std::optional<route_dispatch_reply_t>> route_packet_dispatcher_t::dispatc
                                                                 ? reply.error ()->what ()
                                                                 : "route internal request failed");
             return task_t<std::optional<route_dispatch_reply_t>> (reply_route_error (
-              _dispatch_options, _router_channel_id, _submit_reply, received, header, error));
+              _dispatch_options, _router_channel_id, reply_token, received, header, error));
         }
         if (message_flow_tracer_t (_dispatch_options)
               .enabled_for (message_flow_outcome_t::replied)) {
@@ -387,7 +358,7 @@ task_t<std::optional<route_dispatch_reply_t>> route_packet_dispatcher_t::dispatc
                                      "No routed request handler is registered for '"
                                        + _router_channel_id + ":" + header.message_name + "'.");
         return task_t<std::optional<route_dispatch_reply_t>> (reply_route_error (
-          _dispatch_options, _router_channel_id, _submit_reply, received, header, error));
+          _dispatch_options, _router_channel_id, reply_token, received, header, error));
     }
 
     auto body = runtime::messaging::envelope_codec_t{}.decode_body (received.parts);
@@ -396,7 +367,7 @@ task_t<std::optional<route_dispatch_reply_t>> route_packet_dispatcher_t::dispatc
                                                            ? body.error ()->what ()
                                                            : "route request body missing");
         return task_t<std::optional<route_dispatch_reply_t>> (reply_route_error (
-          _dispatch_options, _router_channel_id, _submit_reply, received, header, error));
+          _dispatch_options, _router_channel_id, reply_token, received, header, error));
     }
     auto context = make_route_message_context (_router_channel_id, received.source_node_rid, header,
                                                received.received_at);
@@ -414,13 +385,47 @@ task_t<std::optional<route_dispatch_reply_t>> route_packet_dispatcher_t::dispatc
             }
         };
     route_request_completion_t complete{
-      _dispatch_options, _registration, _submit_reply,
+      _dispatch_options, std::move (registration), reply_token,
       route_received_packet_t{
         received.source_node_rid, received.request_seq, {}, received.source_session_rid},
       std::move (header)};
     return _invoker.invoke (*handler, filters, _request_dispatch_kind, *_services, *_serializers,
                             std::move (body.value ()), std::move (context), std::move (before),
                             std::move (complete), std::move (terminal), executor);
+}
+
+result_t<std::optional<route_dispatch_reply_t>>
+route_send_completion_t::operator() (const result_t<zlink::message_t> &reply) const
+{
+    if (!reply) {
+        dispatch_error_reporter_t (options).report_lazy ([&] {
+            auto event = message_dispatch_error_event_t{
+              dispatch_error_surface_t::route_mesh_channel,
+              dispatch_message_kind_t::send,
+              dispatch_reason_from_error (reply.error_kind ()),
+              dispatch_error_action_t::drop,
+              header.message_name,
+              router,
+              header.topic,
+              std::nullopt,
+              std::nullopt,
+              received.source_node_rid.to_string (),
+              header.correlation_id,
+              reply.error () ? std::make_exception_ptr (*reply.error ()) : std::exception_ptr{}};
+            event.flow_id = header.flow_id;
+            event.flow_origin = header.flow_origin;
+            event.mesh_name = router;
+            event.channel_route_kind = "route_mesh";
+            return event;
+        });
+        return propagate_failure<std::optional<route_dispatch_reply_t>> (
+          reply, "routed send handler failed");
+    }
+    if (message_flow_tracer_t (options).enabled_for (message_flow_outcome_t::completed)) {
+        trace_route_flow (options, router, message_flow_outcome_t::completed,
+                          dispatch_message_kind_t::send, received, header);
+    }
+    return result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt);
 }
 
 result_t<std::optional<route_dispatch_reply_t>>
@@ -431,7 +436,7 @@ route_request_completion_t::operator() (const result_t<zlink::message_t> &reply,
         framework_exception_t error (reply.error_kind (), reply.error ()
                                                             ? reply.error ()->what ()
                                                             : "routed request handler failed");
-        return reply_route_error (options, *context.mesh_name, submit_reply, received, header,
+        return reply_route_error (options, *context.mesh_name, reply_token, received, header,
                                   error);
     }
     if (message_flow_tracer_t (options).enabled_for (message_flow_outcome_t::replied)) {
@@ -445,11 +450,13 @@ route_request_completion_t::operator() (const result_t<zlink::message_t> &reply,
         writer.create_reply_header (runtime::messaging::message_kind_t::response,
                                     *context.mesh_name, header),
         reply.value ())};
-    if (submit_reply) {
-        auto submitted = submit_reply (std::move (response));
-        if (!submitted)
+    if (reply_token) {
+        if (runtime::host::reply (*reply_token, std::move (response.parts).take_items ())
+            != zlink::submit_result_t::ok)
             return propagate_failure<std::optional<route_dispatch_reply_t>> (
-              submitted, "MeshNode reply submit failed");
+              result_t<void>::failure (framework_error_kind_t::internal_failure,
+                                       "MeshNode reply submit failed"),
+              "MeshNode reply submit failed");
         return result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt);
     }
     return result_t<std::optional<route_dispatch_reply_t>>::success (std::move (response));

@@ -2793,6 +2793,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   zlink_framework_cpp_add_boost_headers(test_cpp_framework_channel_messaging)
   target_link_libraries(test_cpp_framework_channel_messaging PRIVATE
     zlink::framework_codec_protobuf)
+  target_sources(test_cpp_framework_channel_messaging PRIVATE
+    tests/support/allocation_counter.cpp)
   add_zlink_framework_test(
     test_cpp_framework_fanout_admission
     tests/Zlink.Framework.UnitTests/test_cpp_framework_fanout_admission.cpp

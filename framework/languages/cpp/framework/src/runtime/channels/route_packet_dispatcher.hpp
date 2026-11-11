@@ -32,9 +32,7 @@ class route_packet_dispatcher_t
       const handler_registry_t *filters = nullptr,
       handler_dispatch_kind_t send_dispatch_kind = handler_dispatch_kind_t::node_direct_send,
       handler_dispatch_kind_t request_dispatch_kind = handler_dispatch_kind_t::node_direct_request,
-      std::function<void ()> before_application_handler = {},
-      std::shared_ptr<void> registration = {},
-      std::function<result_t<void> (route_dispatch_reply_t &&)> submit_reply = {});
+      std::function<void ()> before_application_handler = {});
 
     task_t<std::optional<route_dispatch_reply_t>>
     dispatch (const route_received_packet_t &received) const;
@@ -43,20 +41,25 @@ class route_packet_dispatcher_t
     dispatch (const route_received_packet_t &received,
               runtime::messaging::envelope_header_t header,
               runtime::application_dispatch_terminal_owner_t terminal = {},
-              runtime::offload_executor_t *executor = nullptr) const;
+              runtime::offload_executor_t *executor = nullptr,
+              std::optional<route_reply_token_t> reply_token = std::nullopt,
+              std::shared_ptr<void> registration = {}) const;
 
   private:
     task_t<std::optional<route_dispatch_reply_t>>
     dispatch_send (const route_received_packet_t &received,
                    runtime::messaging::envelope_header_t header,
                    runtime::application_dispatch_terminal_owner_t terminal = {},
-                   runtime::offload_executor_t *executor = nullptr) const;
+                   runtime::offload_executor_t *executor = nullptr,
+                   std::shared_ptr<void> registration = {}) const;
 
     task_t<std::optional<route_dispatch_reply_t>>
     dispatch_request (const route_received_packet_t &received,
                       runtime::messaging::envelope_header_t header,
                       runtime::application_dispatch_terminal_owner_t terminal = {},
-                      runtime::offload_executor_t *executor = nullptr) const;
+                      runtime::offload_executor_t *executor = nullptr,
+                      std::optional<route_reply_token_t> reply_token = std::nullopt,
+                      std::shared_ptr<void> registration = {}) const;
 
     std::string _router_channel_id;
     service_provider_t *_services = nullptr;
@@ -69,8 +72,6 @@ class route_packet_dispatcher_t
     handler_dispatch_kind_t _send_dispatch_kind = handler_dispatch_kind_t::node_direct_send;
     handler_dispatch_kind_t _request_dispatch_kind = handler_dispatch_kind_t::node_direct_request;
     std::function<void ()> _before_application_handler;
-    std::shared_ptr<void> _registration;
-    std::function<result_t<void> (route_dispatch_reply_t &&)> _submit_reply;
 };
 
 } // namespace zlink::framework::detail

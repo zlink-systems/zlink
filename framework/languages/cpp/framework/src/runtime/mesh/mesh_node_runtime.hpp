@@ -40,6 +40,8 @@ class zlink_builder_t;
 
 namespace zlink::framework::detail
 {
+
+class mesh_record_dispatcher_t;
 class delay_owner_t;
 
 std::string canonical_actor_join_handoff_id (const std::vector<std::uint8_t> &source_actor_node_rid,
@@ -115,6 +117,7 @@ struct mesh_node_builder_state_t
     std::map<std::string, mesh_channel_registration_t> channels;
     std::function<void (const std::string &)> channel_name_observer;
     route_handler_registry_t handlers;
+    std::shared_ptr<mesh_record_dispatcher_t> mesh_record_dispatcher;
     std::vector<mesh_peer_connection_t> peer_connections;
     std::function<void (const mesh_peer_connection_t &)> runtime_peer_connect;
     std::function<void (const mesh_peer_connection_t &)> runtime_peer_disconnect;
