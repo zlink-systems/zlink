@@ -3,6 +3,7 @@
 #include "../utils/available_processor_count.hpp"
 
 #include "runtime/dispatch/offload_executor.hpp"
+#include "receive_role_measurement.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -368,6 +369,10 @@ offload_executor_t::assign_worker_locked (worker_t *current)
     if (receiver
         && (_stopping || std::holds_alternative<std::shared_ptr<role_t>> (_queue.front ().work)))
         return nullptr;
+    // E counts rotations with an eligible application queue head after the
+    // scheduler try-lock succeeds, before idle availability is considered.
+    if (receiver && receive_role_measurement::receive_rotation)
+        receive_role_measurement::counters ().eligible.fetch_add (1, std::memory_order_relaxed);
     auto *available = current && !receiver ? current : _idle_head;
     if (!available)
         return nullptr;
@@ -387,6 +392,8 @@ offload_executor_t::assign_worker_locked (worker_t *current)
         ++_role_active;
     else if (queue_worker->assignment->cancellation)
         _active_cancellations.push_back (&*queue_worker->assignment->cancellation);
+    if (receiver && receive_role_measurement::receive_rotation)
+        receive_role_measurement::counters ().successes.fetch_add (1, std::memory_order_relaxed);
     return assigned;
 }
 
@@ -413,6 +420,8 @@ void offload_executor_t::wake_workers ()
 
 std::shared_ptr<offload_executor_t::worker_t> offload_executor_t::try_handoff (worker_t &worker)
 {
+    if (receive_role_measurement::receive_rotation)
+        receive_role_measurement::counters ().attempts.fetch_add (1, std::memory_order_relaxed);
     std::unique_lock lock (_mutex, std::try_to_lock);
     if (!lock.owns_lock ())
         return nullptr;
@@ -462,7 +471,9 @@ void offload_executor_t::worker_loop (worker_t &worker)
         if (auto *role = std::get_if<std::shared_ptr<role_t>> (&item.work)) {
             // Neither receive nor publication exceptions enter the application
             // exception boundary. Both stacks return before a handoff.
+            receive_role_measurement::begin_rotation ();
             if ((*role)->run ()) {
+                receive_role_measurement::end_rotation ();
                 bool published;
                 {
                     struct publication_scope_t
@@ -473,12 +484,14 @@ void offload_executor_t::worker_loop (worker_t &worker)
                     published = (*role)->publish ();
                 }
                 auto successor = try_handoff (worker);
+                receive_role_measurement::enter_application (static_cast<bool> (successor));
                 if (successor)
                     successor->ready.notify_one ();
                 if (published || successor)
                     dispatch_pending ();
                 continue;
             }
+            receive_role_measurement::receive_rotation.reset ();
         } else {
             run_application_turn ([&] {
                 std::visit (
@@ -497,6 +510,7 @@ void offload_executor_t::worker_loop (worker_t &worker)
                   item.work);
             });
         }
+        receive_role_measurement::local_turn.reset ();
         const bool was_role = std::holds_alternative<std::shared_ptr<role_t>> (item.work);
         item.work = std::function<void ()>{};
         {

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "runtime/dispatch/receive_role_measurement.hpp"
 
 #include "../utils/available_processor_count.hpp"
 
@@ -3402,6 +3403,17 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                       record.application_permit.emplace (std::move (**receive_permit));
                       receive_permit->reset ();
                       record.application_permit->mark_queued ();
+                  }
+                  // Tag only records accepted during this receive rotation.
+                  // Equality with the former receiver's next queue-head turn
+                  // distinguishes actual local entry from a successful handoff.
+                  if (auto rotation = receive_role_measurement::receive_rotation) {
+                      auto before = std::move (record.before_application_handler);
+                      record.before_application_handler = [rotation, before = std::move (before)] {
+                          if (before)
+                              before ();
+                          receive_role_measurement::record_started (rotation);
+                      };
                   }
                   node->application_work_enqueued ();
               },
