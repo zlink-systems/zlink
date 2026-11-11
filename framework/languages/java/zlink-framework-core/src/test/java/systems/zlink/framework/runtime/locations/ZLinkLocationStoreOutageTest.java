@@ -298,14 +298,13 @@ public final class ZLinkLocationStoreOutageTest {
                             .toCompletableFuture()
                             .join();
                     f.now.set(100L + Duration.ofSeconds(25).toNanos());
-                    assertThrows(
-                            CompletionException.class,
-                            () ->
-                                    creating.enqueue(
-                                                    () -> CompletableFuture.completedFuture(null),
-                                                    null)
-                                            .toCompletableFuture()
-                                            .join());
+                    var pending =
+                            creating.enqueue(() -> CompletableFuture.completedFuture(null), null)
+                                    .toCompletableFuture();
+                    assertFalse(pending.isDone());
+                    f.store.response = null;
+                    assertTrue(f.runtime.renewOwnerLeaseOnce().toCompletableFuture().join());
+                    pending.join();
                 }
             }
         }
@@ -495,14 +494,25 @@ public final class ZLinkLocationStoreOutageTest {
             f.failRenewal();
             bind(f.runtime, creating, () -> true, () -> discard(creating));
             f.now.set(100L + Duration.ofSeconds(25).toNanos());
+            var calls = new java.util.concurrent.atomic.AtomicInteger();
+            var pending = new java.util.ArrayList<CompletableFuture<Void>>();
             for (var queue : java.util.List.of(creating, relocating)) {
-                assertThrows(
-                        CompletionException.class,
-                        () ->
-                                queue.enqueue(() -> CompletableFuture.completedFuture(null), null)
-                                        .toCompletableFuture()
-                                        .join());
+                var accepted =
+                        queue.enqueue(
+                                        () -> {
+                                            calls.incrementAndGet();
+                                            return CompletableFuture.completedFuture(null);
+                                        },
+                                        null)
+                                .toCompletableFuture();
+                assertFalse(accepted.isDone());
+                pending.add(accepted);
             }
+            assertEquals(0, calls.get());
+            f.store.response = null;
+            assertTrue(f.runtime.renewOwnerLeaseOnce().toCompletableFuture().join());
+            pending.forEach(CompletableFuture::join);
+            assertEquals(2, calls.get());
         }
     }
 

@@ -350,8 +350,8 @@ final class ZLinkBoundActorReturnTest {
                                 options("cleanup-source", sourceStore, relocations, null)))) {
             var source = sourceHost.runtime();
             var sourceActors =
-                    (systems.zlink.framework.runtime.actors.ZLinkActorRuntime)
-                            source.actorManager();
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.actors(
+                            source);
             source.actorManager()
                     .create("player-return", "player")
                     .submit()
@@ -443,8 +443,8 @@ final class ZLinkBoundActorReturnTest {
                         ZLinkFrameworkRuntimeTestAccess.start(
                                 options("stale-follow", locations, relocations, null)))) {
             var runtime =
-                    (systems.zlink.framework.runtime.actors.ZLinkActorRuntime)
-                            host.runtime().actorManager();
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.actors(
+                            host.runtime());
             var created =
                     assertInstanceOf(
                             ZLinkActorCreateResult.Created.class,
@@ -457,8 +457,8 @@ final class ZLinkBoundActorReturnTest {
             var actor = runtime.localActor(created.actor().actorId()).orElseThrow();
             var actorRef = runtime.actorRef(actor);
             var node =
-                    ((systems.zlink.framework.runtime.spots.ZLinkSpotRuntime)
-                                    host.runtime().spotManager())
+                    (systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                                    host.runtime()))
                             .primaryNode();
             long oldAuthority = node.actorAuthorityOwnerGeneration(actorRef);
             long ownerLease = node.actorAuthorityOwnerLeaseGeneration(actorRef);

@@ -23,6 +23,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
+import systems.zlink.framework.runtime.locations.ZLinkLiveLocationRows;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -50,6 +51,7 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
     private static final Logger LOGGER =
             Logger.getLogger(ZLinkClientServerLocationRuntime.class.getName());
     private final ZLinkLocationRepository store;
+    private final ZLinkLiveLocationRows liveRows;
     private final Supplier<ZLinkLocationOwnerToken> owner;
     private final ZLinkChannelBackendAdapter backend;
     private final ZLinkBackendAdapterProvider backendFactory;
@@ -72,6 +74,7 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
 
     ZLinkClientServerLocationRuntime(
             ZLinkLocationRepository store,
+            ZLinkLiveLocationRows liveRows,
             Supplier<ZLinkLocationOwnerToken> owner,
             ZLinkBackendAdapterProvider backendFactory,
             ZLinkBackendContext context,
@@ -82,6 +85,7 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
             Duration pollingInterval,
             int pageSize) {
         this.store = Objects.requireNonNull(store, "store");
+        this.liveRows = Objects.requireNonNull(liveRows, "liveRows");
         this.owner = Objects.requireNonNull(owner, "owner");
         this.backendFactory = Objects.requireNonNull(backendFactory, "backendFactory");
         this.backend = this.backendFactory.createChannelAdapter(adapterOptions);
@@ -286,8 +290,7 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
         }
     }
 
-    private CompletionStage<Void> tick(
-            List<ZLinkChannelRuntime.AutoConnectSurface> surfaces, long epoch) {
+    CompletionStage<Void> tick(List<ZLinkChannelRuntime.AutoConnectSurface> surfaces, long epoch) {
         List<CompletionStage<?>> work = new ArrayList<>();
         List<PublishedUpdate> publishes = new ArrayList<>();
         ZLinkLocationOwnerToken ownerToken = owner.get();
@@ -374,7 +377,33 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
             work.add(
                     listAll(channelName)
                             .thenCompose(
-                                    descriptors -> reconcile(channelName, descriptors, epoch)));
+                                    descriptors -> {
+                                        var candidates =
+                                                descriptors.stream()
+                                                        .filter(
+                                                                descriptor ->
+                                                                        descriptor
+                                                                                        .channelName()
+                                                                                        .equals(
+                                                                                                channelName)
+                                                                                && descriptor
+                                                                                                .state()
+                                                                                        != ZLinkFrameworkRuntimeState
+                                                                                                .STOPPED
+                                                                                && descriptor
+                                                                                                .state()
+                                                                                        != ZLinkFrameworkRuntimeState
+                                                                                                .ERROR)
+                                                        .toList();
+                                        return liveRows.clientServers(candidates)
+                                                .thenCompose(
+                                                        live ->
+                                                                reconcile(
+                                                                        channelName,
+                                                                        candidates,
+                                                                        live,
+                                                                        epoch));
+                                    }));
         }
         return all(work);
     }
@@ -398,7 +427,10 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
     }
 
     private CompletionStage<Void> reconcile(
-            String channelName, List<ZLinkClientServerServerDescriptor> descriptors, long epoch) {
+            String channelName,
+            List<ZLinkClientServerServerDescriptor> descriptors,
+            List<ZLinkClientServerServerDescriptor> liveDescriptors,
+            long epoch) {
         Map<String, Connection> currentConnections =
                 inStateLane(
                         () -> {
@@ -410,12 +442,7 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
         if (currentConnections == null) return CompletableFuture.completedFuture(null);
         List<CompletionStage<?>> work = new ArrayList<>();
         Map<String, ZLinkClientServerServerDescriptor> desired = new LinkedHashMap<>();
-        for (ZLinkClientServerServerDescriptor descriptor : descriptors) {
-            if (!descriptor.channelName().equals(channelName)
-                    || descriptor.state() == ZLinkFrameworkRuntimeState.STOPPED
-                    || descriptor.state() == ZLinkFrameworkRuntimeState.ERROR) {
-                continue;
-            }
+        for (ZLinkClientServerServerDescriptor descriptor : liveDescriptors) {
             desired.put(connectionId(descriptor), descriptor);
         }
 
@@ -434,10 +461,17 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
             }
         }
 
-        Set<String> desiredIds = desired.keySet();
+        // Lease expiry excludes new connections without removing an existing bound route.
+        Set<String> retainedIds =
+                descriptors.stream()
+                        .map(ZLinkClientServerLocationRuntime::connectionId)
+                        .collect(java.util.stream.Collectors.toSet());
         for (Connection current : currentConnections.values()) {
             if (!current.expected().channelName().equals(channelName)
-                    || desiredIds.contains(current.connectionId())) {
+                    || desired.containsKey(current.connectionId())
+                    || retainedIds.contains(current.connectionId())
+                            && sockets.isClientServerConnectionReady(
+                                    current.connectionId(), current.dealer())) {
                 continue;
             }
             Set<String> replacements =

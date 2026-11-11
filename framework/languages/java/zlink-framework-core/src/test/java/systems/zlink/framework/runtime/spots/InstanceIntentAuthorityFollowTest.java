@@ -125,8 +125,8 @@ final class InstanceIntentAuthorityFollowTest {
                                 }
                             };
                     pending =
-                            ((systems.zlink.framework.runtime.spots.ZLinkSpotRuntime)
-                                            runtime.spotManager())
+                            (systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess
+                                            .spots(runtime))
                                     .instanceSpotCalls()
                                     .request(
                                             spotId,

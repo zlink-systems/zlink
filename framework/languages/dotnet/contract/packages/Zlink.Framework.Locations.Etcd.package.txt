@@ -6,7 +6,7 @@ entry _rels/.rels
 entry lib/net8.0/Zlink.Framework.Locations.Etcd.dll
 entry lib/net8.0/Zlink.Framework.Locations.Etcd.xml
 entry package/services/metadata/core-properties/{CORE_PROPERTIES}.psmdcp
-content-sha256 lib/net8.0/Zlink.Framework.Locations.Etcd.xml=ab044733fd689ef50a83dbe53c90f39fdc43cde7307999e2743684fded5a3e42
+xml-doc lib/net8.0/Zlink.Framework.Locations.Etcd.xml
 metadata authors=Zlink.Framework.Locations.Etcd
 metadata description=Official etcd Location Store provider for the ZLink .NET framework.
 metadata id=Zlink.Framework.Locations.Etcd

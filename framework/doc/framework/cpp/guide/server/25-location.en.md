@@ -45,11 +45,74 @@ lookup.**
 ## 2. The Store Requirement on a Node That Looks Up
 
 A lookup reads the Store, so the process doing the lookup has to have that Store registered
-**under the same prefix**. The registration code is the one in
-[Spot](21-spot.en.md#2-the-location-store--a-prerequisite-for-registering-a-spot).
+**under the same prefix**. See [Store plugin setup](#store-setup) for registration.
 
 A node that runs neither Spots nor Actors and only calls them needs the Location Store alone.
 The Relocation Store is required only on a node that registered a factory.
+
+### 2.1 Store Plugin Setup {#store-setup}
+
+Choose **Redis** or **Redis with etcd**. Register each of the two Stores once with the existing APIs.
+
+| Plugin | Location Store | Relocation Store | Use when |
+| --- | --- | --- | --- |
+| Redis | Redis | Redis (same server) | Deployments meeting the [Redis durability condition](../../../common/spec/server/05-location-relocation/02-location-store-redis.en.md#1-scope-and-audience). |
+| Redis with etcd | etcd (3 voters) | Redis | Deployments needing automatic failover. |
+
+Run the registration code in the server's Framework configuration callback. Place `using`, `import` and `#include` declarations at file scope. Processes share the Location prefix or etcd namespace; the two Redis Stores use distinct key prefixes.
+
+#### Redis
+
+Production Redis must meet the [durability condition that successful changes never roll back](../../../common/spec/server/05-location-relocation/02-location-store-redis.en.md#1-scope-and-audience). Both Stores use the same Redis server.
+
+Use the `framework-locations-redis` extension from the installed `zlink_framework` package.
+
+```cmake
+find_package(zlink_framework CONFIG REQUIRED)
+target_link_libraries(my_server PRIVATE zlink::framework zlink::framework_locations_redis)
+```
+
+```cpp
+#include <zlink/locations/redis.hpp>
+namespace fw = zlink::framework;
+
+options.add_location_store<fw::redis::redis_location_store_t> ()
+  .set_connection_string ("127.0.0.1:6379")
+  .set_key_prefix ("game:location:");
+options.add_relocation_store<fw::redis::redis_relocation_store_t> ()
+  .set_connection_string ("127.0.0.1:6379")
+  .set_key_prefix ("game:relocation:");
+```
+
+The Framework owns Store lifetime after registration.
+
+#### Redis with etcd
+
+Use this choice for deployments needing automatic failover. Place the Location Store on three etcd voters on separate physical hosts and the Relocation Store on Redis. Install the Redis package as well. Initialize the namespace before use and run the Store management process as described in the [etcd operations requirements](../../../common/spec/server/05-location-relocation/07-location-store-etcd.en.md). The HTTP endpoints below assume a trusted development network; configure production TLS and authentication through the options in that document.
+
+Use the `framework-locations-redis` extension from the installed `zlink_framework` package. Also install `framework-locations-etcd`; build the Framework with `-DZLINK_FRAMEWORK_CPP_WITH_ETCD=ON` and its gRPC dependencies.
+
+```cmake
+find_package(zlink_framework CONFIG REQUIRED)
+target_link_libraries(my_server PRIVATE zlink::framework zlink::framework_locations_redis zlink::framework_locations_etcd)
+```
+
+```cpp
+#include <zlink/locations/etcd.hpp>
+#include <zlink/locations/redis.hpp>
+namespace fw = zlink::framework;
+
+fw::etcd::etcd_location_options_t location;
+location.endpoints = {"http://etcd-1:2379", "http://etcd-2:2379", "http://etcd-3:2379"};
+location.key_namespace = "game";
+options.add_location_store(
+  std::make_shared<fw::etcd::etcd_location_store_t>(location));
+options.add_relocation_store<fw::redis::redis_relocation_store_t> ()
+  .set_connection_string ("127.0.0.1:6379")
+  .set_key_prefix ("game:relocation:");
+```
+
+The Framework owns Store lifetime after registration.
 
 ## 3. Asking Where an Id Is
 

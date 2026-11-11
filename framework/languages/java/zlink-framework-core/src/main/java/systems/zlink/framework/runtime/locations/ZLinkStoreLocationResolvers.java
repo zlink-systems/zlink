@@ -28,7 +28,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.IntStream;
 
 /** Resolves public handles from durable authority without legacy location rows. */
 public final class ZLinkStoreLocationResolvers
@@ -140,34 +139,7 @@ public final class ZLinkStoreLocationResolvers
     }
 
     public CompletionStage<List<ZLinkMeshNodeDescriptor>> listLiveMeshNodes(String meshName) {
-        return listMeshNodes(meshName)
-                .thenCompose(
-                        nodes -> {
-                            List<CompletableFuture<Boolean>> liveness =
-                                    nodes.stream()
-                                            .map(
-                                                    node ->
-                                                            liveRows.ownerLeaseRemaining(
-                                                                            node.ownerId(),
-                                                                            node.leaseGeneration())
-                                                                    .thenApply(
-                                                                            remaining ->
-                                                                                    remaining
-                                                                                            != null)
-                                                                    .toCompletableFuture())
-                                            .toList();
-                            return CompletableFuture.allOf(
-                                            liveness.toArray(CompletableFuture[]::new))
-                                    .thenApply(
-                                            ignored ->
-                                                    IntStream.range(0, nodes.size())
-                                                            .filter(
-                                                                    index ->
-                                                                            liveness.get(index)
-                                                                                    .join())
-                                                            .mapToObj(nodes::get)
-                                                            .toList());
-                        });
+        return listMeshNodes(meshName).thenCompose(liveRows::meshNodes);
     }
 
     private static CompletionStage<List<ZLinkMeshNodeDescriptor>> listMeshNodes(

@@ -518,7 +518,7 @@ Store가 보관하는 것은 주소만이 아니다.
 Store에서 읽어 결정하기 때문이다. channel 메시징만 사용하고 주소를 직접 적는다면 Store 없이도
 동작한다.
 
-등록 코드는 [Spot](21-spot.ko.md#2-location-store--spot-등록의-선행-조건)에, 운영 조회는
+등록 코드는 [Location](25-location.ko.md#store-setup)에, 운영 조회는
 [운영과 lifecycle](12-operations.ko.md#6-location-readiness와-운영-조회)에 있다.
 
 **Location Store와 Relocation Store는 맡는 기록이 다르다.** Location Store는 작은 위치 기록의 원자적 변경을 맡고, Relocation Store는
@@ -535,8 +535,7 @@ Store에서 읽어 결정하기 때문이다. channel 메시징만 사용하고 
 둘 이상 등록하면 socket을 열기 전에 설정 오류다. Store가 없을 때 Framework가 process 안에 대체
 Store를 만들어 주지 않는다 — **단일 node로 조용히 동작하지 않고 실패한다.**
 
-두 Store는 같은 Redis 배포를 사용해도 된다. key prefix는 서로 다르게 둔다. Framework는 Store를
-가로지르는 transaction에 기대지 않으므로 필요하면 물리 Redis도 분리할 수 있다. Store를 등록한 뒤
+[Store plugin 설정](25-location.ko.md#store-setup)에서 Redis 또는 Redis with etcd를 선택한다. Redis 구성은 두 Store를 같은 server에 두고 서로 다른 key prefix를 사용한다. Store를 등록한 뒤
 application이 provider 동작을 직접 호출하거나 정리하지 않는다 — Framework가 Store의 수명과 호출
 순서를 관리한다.
 

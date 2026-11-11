@@ -11,7 +11,6 @@ from __future__ import annotations
 from .analysis import Judgement, Row, ordered_keys
 from .model import (
     G5_SPREAD_LIMIT_PERCENT,
-    JUDGEMENT_THRESHOLD,
     PATTERNS,
     RESULT_METRICS,
     Cell,
@@ -174,10 +173,10 @@ def render_diagnostics_table(rows: dict[CellKey, Row], payload_sizes, implementa
     header = (
         "| Pattern | Size | Implementation | peak_in_flight | window | abandoned "
         "| depth (thr x lat) | drain ms | drain bound hit | source cores "
-        "| saturation metric | reading | declared ceiling | saturated | target received "
+        "| saturation metric | reading | declared ceiling | execution-model ceiling | G6 status | target received "
         "| errors | send counted by |"
     )
-    lines = [header, "|" + "---|" * 17]
+    lines = [header, "|" + "---|" * 18]
     for key in _reportable_keys(rows, payload_sizes, implementations):
         row = rows[key]
         depth = row.in_flight_depth
@@ -199,6 +198,7 @@ def render_diagnostics_table(rows: dict[CellKey, Row], payload_sizes, implementa
             f"| {row.saturation_metric} "
             f"| {_num(row.saturation_value, 3)} "
             f"| {'—' if ceiling is None else f'{ceiling:g}'} "
+            f"| {'—' if row.execution_model_ceiling is None else f'{row.execution_model_ceiling:g}'} "
             f"| {row.saturation_text()} "
             f"| {_num(row.values.get('server_received_at_close'), 0)} "
             f"| {'—' if row.errors is None else row.errors} | {counted} |"
@@ -310,8 +310,8 @@ def render_g5_table(rows: dict[CellKey, Row], payload_sizes, implementations=Non
 def render_judgement_table(judgements: list[Judgement]) -> str:
     """spec 7.2 ratios with the publication decision and the reason for it."""
     lines = [
-        f"| Formula | Payload | Value | Status | Verdict (>= {JUDGEMENT_THRESHOLD:.2f}) | Reason |",
-        "|---|---|---|---|---|---|",
+        "| Formula | Pattern | Payload | Value | Status | Verdict | Reason |",
+        "|---|---:|---:|---:|---|---|---|",
     ]
     for judgement in judgements:
         verdict = judgement.verdict or "—"
@@ -319,8 +319,14 @@ def render_judgement_table(judgements: list[Judgement]) -> str:
             verdict = "**fail**"
         status = judgement.status if judgement.published else "**unsupported**"
         lines.append(
-            f"| `{judgement.formula}` | {judgement.payload_size} | {judgement.value_text()} "
-            f"| {status} | {verdict} | {judgement.reason} |"
+            f"| `{judgement.formula}` | {judgement.numerator.pattern} | {judgement.payload_size} | {judgement.value_text()} "
+            f"| {status} | {verdict} | {judgement.reason} (threshold {judgement.threshold:.2f}) |"
+        )
+    sizes = sorted({j.payload_size for j in judgements})
+    for size in sizes:
+        lines.append(
+            f"| `grpc-<lang>` | request-backpressure | {size} | n/a | n/a | n/a | "
+            "gRPC does not measure request-backpressure |"
         )
     return "\n".join(lines)
 

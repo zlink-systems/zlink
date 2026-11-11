@@ -3,12 +3,15 @@
 #include "raw_wire.hpp"
 #include "send_metrics.hpp"
 
-#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <memory>
+#include <pthread.h>
 
 #include <unistd.h>
 
@@ -25,20 +28,28 @@ constexpr const char *k_request_envelope =
 
 struct callback_state_t
 {
-    std::atomic<uint64_t> completed{0};
-    std::atomic<uint64_t> errors{0};
-    std::atomic<uint64_t> outstanding{0};
-    std::atomic<uint64_t> writable{0};
-    zlink_c_bench::latency_sampler_t *latency = nullptr;
+    std::mutex mutex;
+    std::condition_variable changed;
+    uint64_t completed = 0, active_completed = 0, errors = 0, outstanding = 0, writable_pending = 0;
+    std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::time_point::max ();
+    zlink_c_bench::latency_sampler_t latency;
+    explicit callback_state_t (size_t sample_limit = zlink_c_bench::k_latency_sample_limit) :
+        latency (sample_limit) {}
 };
 
 struct request_metrics_t
 {
-    uint64_t submitted = 0;
-    uint64_t blocked = 0;
-    uint64_t submit_errors = 0;
-    uint64_t max_outstanding = 0;
-    double submit_wait_ms = 0.0;
+    uint64_t submitted = 0, blocked = 0, submit_errors = 0, max_outstanding = 0;
+    double submit_wait_ms = 0;
+};
+
+struct request_context_t
+{
+    std::shared_ptr<callback_state_t> stream;
+    uint32_t run_id;
+    uint64_t seq;
+    size_t size;
+    zlink_c_bench::phase_t phase;
 };
 
 zlink_routing_id_t make_routing_id (const std::string &value)
@@ -71,34 +82,6 @@ bool make_payload_body_msg (
     return serialize_bench_payload (payload, msg);
 }
 
-void on_reply (zlink_request_result_t result,
-               zlink_msg_t *parts,
-               size_t part_count,
-               callback_state_t *state)
-{
-    if (state && result == ZLINK_REQUEST_OK && parts && part_count > 0) {
-        zlink_c_bench::decoded_header_t header{};
-        const zlink_msg_t *body_part = &parts[part_count - 1];
-        zlink::framework::bench::withgrpc::BenchPayload payload;
-        if (payload.ParseFromArray (zlink_msg_data (const_cast<zlink_msg_t *> (body_part)),
-                                    static_cast<int> (zlink_msg_size (body_part)))
-            && zlink_c_bench::decode_payload (payload.body ().data (), payload.body ().size (),
-                                              &header)) {
-            const uint64_t now = zlink_c_bench::now_ns ();
-            const double us =
-              now >= header.sent_ns ? static_cast<double> (now - header.sent_ns) / 1000.0 : 0.0;
-            state->latency->add_us (us);
-            state->completed.fetch_add (1, std::memory_order_relaxed);
-        } else {
-            state->errors.fetch_add (1, std::memory_order_relaxed);
-        }
-    } else if (state) {
-        state->errors.fetch_add (1, std::memory_order_relaxed);
-    }
-    if (state)
-        state->outstanding.fetch_sub (1, std::memory_order_release);
-}
-
 bool make_request_parts (
   size_t size, uint32_t run_id, zlink_c_bench::phase_t phase, uint64_t seq, zlink_msg_t parts[2])
 {
@@ -111,227 +94,135 @@ bool make_request_parts (
     return true;
 }
 
-bool poll_once (void *poller, void *dealer, callback_state_t *state, long timeout_ms)
+void on_reply (const zlink_completion_t &completion, const request_context_t &context)
+{
+    auto &state = *context.stream;
+    zlink::framework::bench::withgrpc::BenchPayload payload;
+    zlink_c_bench::decoded_header_t header{};
+    const bool valid = completion.request_result == ZLINK_REQUEST_OK
+      && completion.reply_part_count == 2
+      && payload.ParseFromArray (zlink_msg_data (&completion.reply_parts[1]),
+           static_cast<int> (zlink_msg_size (&completion.reply_parts[1])))
+      && zlink_c_bench::decode_payload (payload.body ().data (), payload.body ().size (), &header)
+      && header.run_id == context.run_id && header.phase == context.phase
+      && header.seq == context.seq && header.payload_size == context.size
+      && payload.body ().size () == context.size;
+    if (valid) {
+        ++state.completed;
+        if (std::chrono::steady_clock::now () < state.deadline) {
+            ++state.active_completed;
+            state.latency.add_us (static_cast<double> (zlink_c_bench::now_ns () - header.sent_ns) / 1000.0);
+        }
+    } else
+        ++state.errors;
+    --state.outstanding;
+}
+
+bool poll_once (void *poller, void *socket, long timeout_ms,
+                std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::time_point::max ())
 {
     zlink_poller_event_t event{};
     zlink_config_result_t error = ZLINK_CONFIG_OK;
     const int rc = zlink_poller_wait (poller, &event, 1, timeout_ms, &error);
-    if (rc < 0)
-        return zlink_errno () == EINTR;
-    if (rc == 0 || (event.events & ZLINK_POLLCOMPLETION) == 0)
-        return true;
-
-    for (;;) {
-        zlink_completion_t completion{};
-        completion.struct_size = sizeof (completion);
-        const zlink_recv_result_t recv_result =
-          zlink_completion_recv (dealer, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
-        if (recv_result == ZLINK_RECV_NO_DATA)
+    if (rc < 0) {
+        if (zlink_errno () == EINTR)
             return true;
-        if (recv_result != ZLINK_RECV_OK) {
-            if (state)
-                state->errors.fetch_add (1, std::memory_order_relaxed);
-            return false;
+        throw std::runtime_error ("completion poll failed");
+    }
+    if (rc == 0)
+        return true;
+    for (;;) {
+        if (std::chrono::steady_clock::now () >= deadline)
+            return true;
+        zlink_completion_t completion{};
+        completion.struct_size = sizeof completion;
+        const auto received = zlink_completion_recv (socket, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
+        if (received == ZLINK_RECV_NO_DATA)
+            return true;
+        if (received != ZLINK_RECV_OK)
+            throw std::runtime_error ("completion receive failed");
+        std::unique_ptr<request_context_t> context (
+          static_cast<request_context_t *> (completion.user_context));
+        if (context) {
+            auto &state = *context->stream;
+            std::lock_guard lock (state.mutex);
+            if (completion.kind == ZLINK_COMPLETION_WRITABLE) {
+                --state.writable_pending;
+                if (completion.send_result != ZLINK_SEND_ADMITTED)
+                    ++state.errors;
+            } else if (completion.kind == ZLINK_COMPLETION_REQUEST) {
+                on_reply (completion, *context);
+            }
+            state.changed.notify_one ();
         }
-        if (completion.kind == ZLINK_COMPLETION_REQUEST && completion.user_context == state)
-            on_reply (completion.request_result, completion.reply_parts,
-                      completion.reply_part_count, state);
-        else if (completion.kind == ZLINK_COMPLETION_WRITABLE && state)
-            state->writable.fetch_add (1, std::memory_order_relaxed);
         zlink_completion_close (&completion);
     }
 }
 
-bool submit_request_once (void *dealer,
-                          const zlink_routing_id_t *target_rid,
-                          size_t size,
-                          uint32_t run_id,
-                          uint64_t seq,
+bool submit_request_once (void *socket, const zlink_routing_id_t *target,
+                          size_t size, uint32_t run_id, uint64_t seq,
                           zlink_c_bench::phase_t phase,
-                          zlink_send_flags_t flags,
-                          callback_state_t *cb,
-                          request_metrics_t *metrics)
+                          const std::shared_ptr<callback_state_t> &stream,
+                          request_metrics_t &metrics, bool command = false)
 {
     zlink_msg_t parts[2];
     if (!make_request_parts (size, run_id, phase, seq, parts)) {
-        ++metrics->submit_errors;
+        ++metrics.submitted;
+        ++metrics.submit_errors;
         return false;
     }
-
-    cb->outstanding.fetch_add (1, std::memory_order_release);
-    metrics->max_outstanding = std::max<uint64_t> (
-      metrics->max_outstanding, cb->outstanding.load (std::memory_order_acquire));
-    const uint64_t submit_start = zlink_c_bench::now_ns ();
-    const zlink_submit_result_t rc =
-      zlink_request (dealer, target_rid, parts, 2, flags, 5000, cb, NULL);
-    const uint64_t submit_stop = zlink_c_bench::now_ns ();
-    metrics->submit_wait_ms += submit_stop >= submit_start
-                                 ? static_cast<double> (submit_stop - submit_start) / 1000000.0
-                                 : 0.0;
+    auto context = std::make_unique<request_context_t> (
+      request_context_t{stream, run_id, seq, size, phase});
+    // Publish the reservation under this stream's lock so an immediate
+    // completion cannot race the submit result's bookkeeping.
+    std::lock_guard lock (stream->mutex);
+    const auto begin = zlink_c_bench::now_ns ();
+    const auto rc = command
+      ? zlink_send_rid (socket, target, parts, 2, ZLINK_SEND_FLAGS_DONTWAIT, context.get (), nullptr)
+      : zlink_request (socket, target, parts, 2, ZLINK_SEND_FLAGS_DONTWAIT, 5000, context.get (), nullptr);
+    metrics.submit_wait_ms += static_cast<double> (zlink_c_bench::now_ns () - begin) / 1000000.0;
     if (rc == ZLINK_SUBMIT_OK) {
-        ++metrics->submitted;
+        ++metrics.submitted;
+        if (command)
+            ++stream->completed;
+        else {
+            ++stream->outstanding;
+            metrics.max_outstanding = std::max (metrics.max_outstanding, stream->outstanding);
+            context.release ();
+        }
         return true;
     }
-
-    cb->outstanding.fetch_sub (1, std::memory_order_release);
-    if (rc == ZLINK_SUBMIT_BACKPRESSURED || zlink_errno () == EAGAIN
-        || zlink_errno () == EWOULDBLOCK)
-        ++metrics->blocked;
-    else
-        ++metrics->submit_errors;
+    if (rc == ZLINK_SUBMIT_BACKPRESSURED) {
+        ++metrics.blocked;
+        ++stream->writable_pending;
+        context.release ();
+    } else {
+        ++metrics.submitted;
+        ++metrics.submit_errors;
+    }
     return false;
 }
 
-// Bounded drain (README §3): returns how long it waited. The caller reads the remaining
-// outstanding count as `abandoned`.
-double drain_requests (void *poller, void *dealer, callback_state_t *cb)
-{
-    const auto begin = std::chrono::steady_clock::now ();
-    const auto deadline = begin + std::chrono::milliseconds (zlink_c_bench::k_drain_bound_ms);
-    while (cb->outstanding.load (std::memory_order_acquire) > 0
-           && std::chrono::steady_clock::now () < deadline) {
-        (void) poll_once (poller, dealer, cb, k_completion_poll_interval_ms);
-    }
-    return std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - begin)
-      .count ();
-}
-
-// Fills what is known after the active window closed. Throughput inputs (completed, elapsed,
-// CPU, latency) come from capture_active_close, which the caller ran before any drain.
-void fill_request_result (zlink_c_bench::result_t *r,
-                          const char *pattern,
-                          size_t size,
-                          callback_state_t *cb,
-                          const request_metrics_t &metrics)
-{
-    const uint64_t pending = cb->outstanding.load (std::memory_order_acquire);
-    r->implementation = "zlink-c";
-    r->pattern = pattern;
-    r->size = size;
-    r->errors = cb->errors.load (std::memory_order_relaxed) + metrics.submit_errors + pending;
-    r->submitted = metrics.submitted;
-    r->blocked = metrics.blocked;
-    r->peak_in_flight = metrics.max_outstanding;
-    r->submit_wait_ms = metrics.submit_wait_ms;
-}
-
-zlink_c_bench::result_t run_request_serial (void *dealer,
-                                            const zlink_routing_id_t *target_rid,
-                                            void *poller,
-                                            size_t size,
-                                            zlink_c_bench::phase_config_t config)
-{
-    const int duration_s = config.seconds;
-    zlink_c_bench::latency_sampler_t latency (zlink_c_bench::k_latency_sample_limit);
-    callback_state_t cb;
-    cb.latency = &latency;
-    request_metrics_t metrics;
-    const uint32_t run_id = static_cast<uint32_t> (zlink_c_bench::now_ns ());
-    auto resources = zlink_c_bench::resource_start ();
-    const auto start = std::chrono::steady_clock::now ();
-    const auto deadline = start + std::chrono::seconds (duration_s);
-    uint64_t seq = 0;
-    while (std::chrono::steady_clock::now () < deadline) {
-        if (submit_request_once (dealer, target_rid, size, run_id, seq++, config.phase,
-                                 ZLINK_SEND_FLAGS_NONE, &cb, &metrics)) {
-            while (cb.outstanding.load (std::memory_order_acquire) > 0)
-                (void) poll_once (poller, dealer, &cb, k_completion_poll_interval_ms);
-        }
-    }
-    zlink_c_bench::result_t r;
-    zlink_c_bench::capture_active_close (&r, start, resources,
-                                         cb.completed.load (std::memory_order_relaxed), &latency);
-    fill_request_result (&r, "request-serial", size, &cb, metrics);
-    return r;
-}
-
-// Bounded readiness before any measured phase. A ROUTER's first request races
-// the connection handshake, and a 500 ms sleep is not a proof that the route
-// exists. The race is invisible while an application window caps the submit
-// loop at a small depth, because the first hundred requests are slow enough
-// for the route to come up. With no window the loop submits thousands into a
-// route that is not established yet, every one of them expires at its reply
-// timeout, and the cell reports zero completions.
-//
-// The probe drives ONE request at a time through the same submit and poll path
-// the measured phases use, so readiness proves the path the cells will use. It
-// runs outside every measured phase.
-bool await_request_ready (void *dealer,
-                          const zlink_routing_id_t *target_rid,
-                          void *poller,
+bool await_request_ready (void *socket, const zlink_routing_id_t *target, void *poller,
                           int timeout_ms)
 {
-    const auto deadline =
-      std::chrono::steady_clock::now () + std::chrono::milliseconds (timeout_ms);
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::milliseconds (timeout_ms);
+    auto stream = std::make_shared<callback_state_t> ();
+    request_metrics_t metrics;
     uint64_t seq = 0;
     while (std::chrono::steady_clock::now () < deadline) {
-        zlink_c_bench::latency_sampler_t latency (16);
-        callback_state_t cb;
-        cb.latency = &latency;
-        request_metrics_t metrics;
-        if (submit_request_once (dealer, target_rid, 1024, 0, seq++, zlink_c_bench::phase_warmup,
-                                 ZLINK_SEND_FLAGS_DONTWAIT, &cb, &metrics)) {
-            const auto attempt_deadline = std::min (deadline, std::chrono::steady_clock::now ()
-                                                                + std::chrono::milliseconds (250));
-            while (cb.outstanding.load (std::memory_order_acquire) > 0
-                   && std::chrono::steady_clock::now () < attempt_deadline)
-                (void) poll_once (poller, dealer, &cb, 10);
-            if (cb.completed.load (std::memory_order_relaxed) > 0)
+        bool available;
+        {
+            std::lock_guard lock (stream->mutex);
+            if (stream->completed)
                 return true;
+            available = stream->outstanding == 0 && stream->writable_pending == 0;
         }
-        std::this_thread::sleep_for (std::chrono::milliseconds (10));
+        if (available)
+            submit_request_once (socket, target, 1024, 0, seq++, zlink_c_bench::phase_warmup, stream, metrics);
+        poll_once (poller, socket, 10);
     }
     return false;
-}
-
-// request-backpressure (README §2): no application ceiling on outstanding requests, so the
-// only thing that stops submission is the request terminal refusing DONTWAIT admission
-// with ZLINK_SUBMIT_BACKPRESSURED.
-zlink_c_bench::result_t run_request_backpressure (void *dealer,
-                                                  const zlink_routing_id_t *target_rid,
-                                                  void *poller,
-                                                  size_t size,
-                                                  zlink_c_bench::phase_config_t config)
-{
-    const int duration_s = config.seconds;
-    zlink_c_bench::latency_sampler_t latency (zlink_c_bench::k_latency_sample_limit);
-    callback_state_t cb;
-    cb.latency = &latency;
-    request_metrics_t metrics;
-    const uint32_t run_id = static_cast<uint32_t> (zlink_c_bench::now_ns ());
-    auto resources = zlink_c_bench::resource_start ();
-    const auto start = std::chrono::steady_clock::now ();
-    const auto deadline = start + std::chrono::seconds (duration_s);
-    uint64_t seq = 0;
-    uint64_t submitted_since_poll = 0;
-    while (std::chrono::steady_clock::now () < deadline) {
-        bool submitted_any = false;
-        while (std::chrono::steady_clock::now () < deadline) {
-            if (!submit_request_once (dealer, target_rid, size, run_id, seq++, config.phase,
-                                      ZLINK_SEND_FLAGS_DONTWAIT, &cb, &metrics))
-                break;
-            submitted_any = true;
-            if (++submitted_since_poll >= 64) {
-                submitted_since_poll = 0;
-                (void) poll_once (poller, dealer, &cb, 0);
-            }
-        }
-        if (!submitted_any && cb.outstanding.load (std::memory_order_acquire) == 0) {
-            std::this_thread::sleep_for (std::chrono::milliseconds (1));
-            continue;
-        }
-        (void) poll_once (poller, dealer, &cb, 1);
-    }
-    zlink_c_bench::result_t r;
-    zlink_c_bench::capture_active_close (&r, start, resources,
-                                         cb.completed.load (std::memory_order_relaxed), &latency);
-    const double drain_ms = drain_requests (poller, dealer, &cb);
-    fill_request_result (&r, "request-backpressure", size, &cb, metrics);
-    r.has_drain = true;
-    r.abandoned = cb.outstanding.load (std::memory_order_acquire);
-    r.drain_ms = drain_ms;
-    r.drain_bound_hit = r.abandoned > 0;
-    return r;
 }
 
 std::string send_stats_request (void *socket,
@@ -392,89 +283,121 @@ std::string send_stats_request (void *socket,
     throw std::runtime_error ("send stats request exceeded drain bound");
 }
 
-// send-saturation (README §2): one-way DONTWAIT sends; the server counts what it received.
-// A BACKPRESSURED submit holds one completion reservation until its WRITABLE record is taken
-// (core socket spec), so the loop takes completions and waits for WRITABLE before resubmitting.
-zlink_c_bench::result_t run_send_saturation (void *dealer,
-                                             const zlink_routing_id_t *target_rid,
-                                             void *poller,
-                                             size_t size,
-                                             zlink_c_bench::phase_config_t config)
+// One completion pump owns the socket's poller. Each logical stream has one
+// dedicated submit thread and one record; only the phase coordinator merges them.
+zlink_c_bench::result_t run_streams (void *socket, const zlink_routing_id_t *target,
+                                     void *poller, size_t size,
+                                     zlink_c_bench::phase_config_t config,
+                                     const char *pattern)
 {
-    const int duration_s = config.seconds;
+    using clock = std::chrono::steady_clock;
+    const bool command = std::strcmp (pattern, "send-saturation") == 0;
+    const bool serial = std::strcmp (pattern, "request-serial") == 0;
+    const int count = serial ? 1 : zlink_c_bench::k_submit_concurrency;
     const uint32_t run_id = static_cast<uint32_t> (zlink_c_bench::now_ns ());
     auto resources = zlink_c_bench::resource_start ();
-    const auto start = std::chrono::steady_clock::now ();
-    const auto deadline = start + std::chrono::seconds (duration_s);
-    (void) send_stats_request (
-      dealer, target_rid, poller,
-      std::string (zlink_c_bench::k_send_stats_start)
-        + std::to_string (
-          std::chrono::duration_cast<std::chrono::nanoseconds> (deadline.time_since_epoch ())
-            .count ())
-        + " " + std::to_string (config.phase),
-      start + std::chrono::milliseconds (zlink_c_bench::k_drain_bound_ms));
-    uint64_t seq = 0;
-    uint64_t blocked = 0;
-    uint64_t errors = 0;
-    uint64_t submitted_since_poll = 0;
-    double submit_wait_ms = 0.0;
-    callback_state_t cb;
-    while (std::chrono::steady_clock::now () < deadline) {
-        zlink_msg_t parts[2];
-        if (!make_request_parts (size, run_id, config.phase, seq, parts)) {
-            ++errors;
-            continue;
-        }
-        const uint64_t submit_start = zlink_c_bench::now_ns ();
-        const zlink_submit_result_t rc =
-          zlink_send_rid (dealer, target_rid, parts, 2, ZLINK_SEND_FLAGS_DONTWAIT, NULL, NULL);
-        const uint64_t submit_stop = zlink_c_bench::now_ns ();
-        submit_wait_ms += submit_stop >= submit_start
-                            ? static_cast<double> (submit_stop - submit_start) / 1000000.0
-                            : 0.0;
-        if (rc == ZLINK_SUBMIT_OK) {
-            ++seq;
-            if (++submitted_since_poll >= 64) {
-                submitted_since_poll = 0;
-                (void) poll_once (poller, dealer, &cb, 0);
+    const auto start = clock::now ();
+    const auto deadline = start + std::chrono::seconds (config.seconds);
+    if (command)
+        (void) send_stats_request (socket, target, poller,
+          std::string (zlink_c_bench::k_send_stats_start)
+            + std::to_string (std::chrono::duration_cast<std::chrono::nanoseconds> (deadline.time_since_epoch ()).count ())
+            + " " + std::to_string (config.phase),
+          start + std::chrono::milliseconds (zlink_c_bench::k_drain_bound_ms));
+    std::vector<std::shared_ptr<callback_state_t>> streams;
+    std::vector<request_metrics_t> metrics (count);
+    std::vector<std::thread> threads;
+    for (int index = 0; index < count; ++index) {
+        const size_t sample_limit = zlink_c_bench::k_latency_sample_limit / count
+          + (static_cast<size_t> (index) < zlink_c_bench::k_latency_sample_limit % count);
+        auto stream = std::make_shared<callback_state_t> (sample_limit);
+        stream->deadline = deadline;
+        streams.push_back (stream);
+        threads.emplace_back ([&, stream, index] {
+            const auto name = "bench-submit-" + std::to_string (index);
+            pthread_setname_np (pthread_self (), name.c_str ());
+            uint64_t seq = static_cast<uint64_t> (index) << 56;
+            while (clock::now () < deadline) {
+                {
+                    std::unique_lock lock (stream->mutex);
+                    stream->changed.wait_until (lock, deadline, [&] {
+                        return stream->writable_pending == 0 && (!serial || stream->outstanding == 0);
+                    });
+                    if (clock::now () >= deadline)
+                        break;
+                }
+                submit_request_once (socket, target, size, run_id, seq++, config.phase,
+                                     stream, metrics[index], command);
             }
-        } else if (rc == ZLINK_SUBMIT_BACKPRESSURED) {
-            ++blocked;
-            while (cb.writable.load (std::memory_order_relaxed) < blocked
-                   && std::chrono::steady_clock::now () < deadline)
-                if (!poll_once (poller, dealer, &cb, k_completion_poll_interval_ms))
-                    break;
-        } else {
-            ++errors;
-        }
+        });
     }
-    // Source resources close before draining. The receive thread owns the rate and latency.
-    zlink_c_bench::result_t r;
-    zlink_c_bench::capture_active_close (&r, start, resources, seq, nullptr);
-    const auto drain_start = std::chrono::steady_clock::now ();
-    const auto drain_deadline =
-      drain_start + std::chrono::milliseconds (zlink_c_bench::k_drain_bound_ms);
-    while (cb.writable.load (std::memory_order_relaxed) < blocked
-           && std::chrono::steady_clock::now () < drain_deadline)
-        if (!poll_once (poller, dealer, &cb, k_completion_poll_interval_ms))
-            break;
-    const std::string target = send_stats_request (
-      dealer, target_rid, poller, zlink_c_bench::k_send_stats_snapshot, drain_deadline);
-    r.submitted = seq;
-    zlink_c_bench::send_metrics_t::read_snapshot (target, r);
+    while (clock::now () < deadline) {
+        const auto remaining = std::chrono::ceil<std::chrono::milliseconds> (deadline - clock::now ()).count ();
+        poll_once (poller, socket, std::min<long> (k_completion_poll_interval_ms, std::max<long> (1, remaining)), deadline);
+    }
+    for (auto &thread : threads)
+        thread.join ();
+    zlink_c_bench::latency_sampler_t latency (zlink_c_bench::k_latency_sample_limit);
+    uint64_t completed = 0;
+    for (const auto &stream : streams) {
+        std::lock_guard lock (stream->mutex);
+        completed += command ? stream->completed : stream->active_completed;
+        latency.merge (stream->latency);
+    }
+    zlink_c_bench::result_t result;
+    zlink_c_bench::capture_active_close (&result, start, resources, completed, command ? nullptr : &latency);
+    const auto drain_start = clock::now ();
+    const auto drain_deadline = drain_start + std::chrono::milliseconds (zlink_c_bench::k_drain_bound_ms);
+    const auto pending = [&] {
+        uint64_t total = 0;
+        for (const auto &stream : streams) {
+            std::lock_guard lock (stream->mutex);
+            total += stream->outstanding + stream->writable_pending;
+        }
+        return total;
+    };
+    while (pending () && clock::now () < drain_deadline)
+        poll_once (poller, socket, k_completion_poll_interval_ms);
+    result.implementation = "zlink-c";
+    result.pattern = pattern;
+    result.size = size;
+    result.stream_count = count;
+    result.has_drain = true;
+    result.abandoned = pending ();
+    result.drain_bound_hit = result.abandoned != 0;
+    result.terminal_completed = 0;
+    for (int index = 0; index < count; ++index) {
+        const auto &m = metrics[index];
+        result.submitted += m.submitted;
+        result.blocked += m.blocked;
+        result.errors += streams[index]->errors + m.submit_errors;
+        result.terminal_completed = *result.terminal_completed + streams[index]->completed;
+        result.peak_in_flight += command ? 1 : m.max_outstanding;
+        result.submit_wait_ms += m.submit_wait_ms;
+    }
+    if (command) {
+        const auto snapshot = send_stats_request (socket, target, poller,
+          zlink_c_bench::k_send_stats_snapshot, drain_deadline);
+        zlink_c_bench::send_metrics_t::read_snapshot (snapshot, result);
+    }
+    result.drain_ms = std::chrono::duration<double, std::milli> (clock::now () - drain_start).count ();
+    return result;
+}
 
-    r.drain_ms =
-      std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - drain_start)
-        .count ();
-
-    r.implementation = "zlink-c";
-    r.pattern = "send-saturation";
-    r.size = size;
-    r.errors = errors + cb.errors.load (std::memory_order_relaxed);
-    r.blocked = blocked;
-    r.submit_wait_ms = submit_wait_ms;
-    return r;
+zlink_c_bench::result_t run_request_serial (void *socket, const zlink_routing_id_t *target,
+                                            void *poller, size_t size, zlink_c_bench::phase_config_t config)
+{
+    return run_streams (socket, target, poller, size, config, "request-serial");
+}
+zlink_c_bench::result_t run_request_backpressure (void *socket, const zlink_routing_id_t *target,
+                                                  void *poller, size_t size, zlink_c_bench::phase_config_t config)
+{
+    return run_streams (socket, target, poller, size, config, "request-backpressure");
+}
+zlink_c_bench::result_t run_send_saturation (void *socket, const zlink_routing_id_t *target,
+                                             void *poller, size_t size, zlink_c_bench::phase_config_t config)
+{
+    return run_streams (socket, target, poller, size, config, "send-saturation");
 }
 }
 

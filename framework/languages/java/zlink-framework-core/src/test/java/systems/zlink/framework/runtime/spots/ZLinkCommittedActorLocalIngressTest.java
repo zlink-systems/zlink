@@ -15,7 +15,6 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
-import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
@@ -249,7 +248,9 @@ final class ZLinkCommittedActorLocalIngressTest {
                 assertInstanceOf(
                         ZLinkActorJoinCompletion.Accepted.class,
                         PAIR_COMPLETIONS.get(ACTOR).get(WAIT_SECONDS, TimeUnit.SECONDS));
-                var actors = (ZLinkActorRuntime) target.actorManager();
+                var actors =
+                        systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.actors(
+                                target);
                 var first = actors.localActor(ACTOR).orElseThrow();
                 actors.awaitMoveCompletion(first)
                         .toCompletableFuture()
@@ -369,7 +370,9 @@ final class ZLinkCommittedActorLocalIngressTest {
                 assertNotNull(
                         observedRaw.get(WAIT_SECONDS, TimeUnit.SECONDS),
                         "preparation must own the raw Actor");
-                var sourceActors = (ZLinkActorRuntime) source.actorManager();
+                var sourceActors =
+                        systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.actors(
+                                source);
                 sourceActors
                         .awaitMoveCompletion(sourceActors.localActor(ACTOR).orElseThrow())
                         .toCompletableFuture()
@@ -403,7 +406,9 @@ final class ZLinkCommittedActorLocalIngressTest {
                         .get(WAIT_SECONDS, TimeUnit.SECONDS);
                 assertNull(
                         targetNode.actorLookup(ACTOR), "failed target must release the raw Actor");
-                var actors = (ZLinkActorRuntime) target.actorManager();
+                var actors =
+                        systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.actors(
+                                target);
                 assertTrue(actors.localActor(ACTOR).isEmpty());
                 assertNotNull(
                         node(source).actorLookup(ACTOR), "source authority must be preserved");
@@ -491,7 +496,8 @@ final class ZLinkCommittedActorLocalIngressTest {
     }
 
     private static ZLinkInternalSpotNode node(ZLinkFrameworkRuntime host) throws Exception {
-        return ((ZLinkSpotRuntime) host.spotManager()).primaryNode();
+        return (systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(host))
+                .primaryNode();
     }
 
     private static ZLinkFrameworkRuntime start(DefaultZLinkFrameworkOptions options)

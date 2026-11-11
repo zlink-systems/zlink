@@ -203,6 +203,15 @@ public final class ZLinkLocationRuntimeQueryService implements ZLinkLocationRunt
                                 return CompletableFuture.failedFuture(
                                         new IllegalStateException("location scan cursor expired"));
                             if (authorityPage.items().isEmpty()) {
+                                if (authorityPage.nextCursor().isPresent()) {
+                                    return loadObjectPage(
+                                            filter,
+                                            prefix,
+                                            authorityPage.nextCursor(),
+                                            pageSize,
+                                            values,
+                                            encodedBytes);
+                                }
                                 return CompletableFuture.completedFuture(
                                         new ZLinkLocationPage<>(List.copyOf(values), null));
                             }

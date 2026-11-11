@@ -110,21 +110,22 @@ public final class BenchClient {
     private static String streamImplementation(BenchOptions options) {
         if ("zlink-java".equals(options.implementation)
             && "request-backpressure".equals(options.scenario)) {
-            return "one Java platform submit thread; one request per turn, "
-                + "public POLLCOMPLETION progress, uncapped replies";
+            return options.submitConcurrency + " Java platform submit threads; per-stream "
+                + "request submission and metrics; public completion callbacks; uncapped replies";
         }
         if ("zlink-java".equals(options.implementation)
             && "send-saturation".equals(options.scenario)) {
-            return options.sendConcurrency + " Java platform send-stream threads; one shared "
-                + "socket submission gate; one completion-poller thread; OK continues inline, "
-                + "BACKPRESSURED awaits admission";
+            return options.submitConcurrency + " Java platform send-stream threads; per-stream "
+                + "submission and metrics; completion callbacks on binding resources";
         }
         return switch (options.scenario) {
             case "request-serial" -> "one Java platform submit thread; sequential CompletableFuture";
             case "request-backpressure" ->
-                "one Java platform submit thread; uncapped CompletableFuture set";
+                options.submitConcurrency + " Java platform submit threads; per-stream "
+                    + "uncapped CompletableFuture sets";
             case "send-saturation" ->
-                "eight Java platform submit threads; one completion-awaited send each";
+                options.submitConcurrency + " Java platform submit threads; one "
+                    + "completion-awaited send per stream";
             default -> throw new IllegalArgumentException("unknown pattern");
         };
     }

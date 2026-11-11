@@ -23,7 +23,7 @@ User Spot으로 옮겨 간다. Entry Spot은 Object Server가 시작할 때 Fram
 **그래서 handler가 Spot과 Actor를 함께 받는다.** actor id로 보낸 메시지는 그 Actor가 지금
 속한 Spot 안에서 실행되고, 그 Spot의 상태와 Actor의 상태를 한 자리에서 다룰 수 있다.
 
-Actor도 Spot과 같은 Location Store를 사용한다. 등록 코드는 [Spot](21-spot.ko.md#2-location-store--spot-등록의-선행-조건)에
+Actor도 Spot과 같은 Location Store를 사용한다. 등록 코드는 [Location](25-location.ko.md#store-setup)에
 있는 것과 같다.
 
 ## 2. 받는 쪽 — Actor를 호스팅하는 node

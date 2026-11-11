@@ -6,7 +6,7 @@ entry _rels/.rels
 entry lib/net8.0/Zlink.Framework.Codecs.Protobuf.dll
 entry lib/net8.0/Zlink.Framework.Codecs.Protobuf.xml
 entry package/services/metadata/core-properties/{CORE_PROPERTIES}.psmdcp
-content-sha256 lib/net8.0/Zlink.Framework.Codecs.Protobuf.xml=e871f77e14cb4df89c616c6373aea9061a961b610db5743fd39d5ddd5500e5b9
+xml-doc lib/net8.0/Zlink.Framework.Codecs.Protobuf.xml
 metadata authors=Zlink.Framework.Codecs.Protobuf
 metadata description=Protobuf codec extension for the ZLink .NET framework.
 metadata id=Zlink.Framework.Codecs.Protobuf

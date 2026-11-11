@@ -452,6 +452,11 @@ A per-operation call object provides only the settings valid for that capability
 - the ref returned by Create/lookup is used to change that specific incarnation or bind to a
   session, and isn't used as the target of a regular message.
 - STREAM calls preserve session identity and packet correlation.
+- A call on a public client or manager obtained from configuration before the Framework runtime has
+  started ends at its terminal with `InvalidOperation`. The framework doesn't wait for the runtime to
+  start or trigger the start. Calls made during hosted-service startup, after the runtime has started,
+  aren't covered by this rule. A call is used when admission accepts it, so this rejection and a
+  shutdown rejection don't use the call, and the same call can be submitted again.
 
 The server package's one-way send/publish/explicit STREAM reply follows the async-only
 admission contract of the

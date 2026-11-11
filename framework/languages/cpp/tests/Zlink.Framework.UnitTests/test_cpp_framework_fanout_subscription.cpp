@@ -550,7 +550,7 @@ TEST (CppFrameworkFanoutSubscription, PublishDoesNotBindOutsideStartup)
                           .async ()
                           .result ();
     ASSERT_FALSE (result.has_value ());
-    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::unavailable);
+    EXPECT_EQ (result.error_kind (), zlink::framework::framework_error_kind_t::invalid_operation);
     auto provider = app.advanced ().services ().build_provider ();
     EXPECT_THROW (provider.get_required<zlink::framework::framework_runtime_t> ().listener_status (
                     zlink::framework::listener_kind_t::fanout, "startup-events"),

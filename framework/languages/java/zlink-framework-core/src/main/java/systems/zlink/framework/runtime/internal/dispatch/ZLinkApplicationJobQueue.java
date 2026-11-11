@@ -199,11 +199,26 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
                             new CompletableFuture<>() {
                                 @Override
                                 public boolean cancel(boolean mayInterruptIfRunning) {
-                                    return acquisition.cancel(mayInterruptIfRunning);
+                                    if (acquisition.cancel(mayInterruptIfRunning)) return true;
+                                    return completeExceptionally(
+                                            new java.util.concurrent.CompletionException(
+                                                    new java.util.concurrent
+                                                            .CancellationException()));
                                 }
                             };
                     acquisition
-                            .thenCompose(publication)
+                            .thenCompose(
+                                    permit -> {
+                                        var published = publication.apply(permit);
+                                        completion.whenComplete(
+                                                (value, failure) -> {
+                                                    if (failure != null)
+                                                        published
+                                                                .toCompletableFuture()
+                                                                .cancel(false);
+                                                });
+                                        return published;
+                                    })
                             .whenComplete(
                                     (value, failure) -> {
                                         if (failure == null) completion.complete(value);

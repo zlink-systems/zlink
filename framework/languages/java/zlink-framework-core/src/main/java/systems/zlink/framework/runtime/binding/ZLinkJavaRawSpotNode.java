@@ -926,21 +926,32 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         Long requestId = nextActorRequestSequence.getAndIncrement();
         CompletableFuture<List<Message>> completion = new CompletableFuture<>();
         actorRequests.put(requestId, completion);
+        CompletionStage<Void> dispatched;
+        try {
+            dispatched = dispatch.apply(requestId, requestAdmission);
+        } catch (RuntimeException | Error failure) {
+            actorRequests.remove(requestId, completion);
+            throw failure;
+        }
+        if (dispatched == null) {
+            actorRequests.remove(requestId);
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("actor Spot is not local"));
+        }
         if (timeout != null && !timeout.isNegative() && !timeout.isZero()) {
             CompletableFuture.delayedExecutor(timeout.toNanos(), TimeUnit.NANOSECONDS)
                     .execute(
                             () -> {
                                 if (actorRequests.remove(requestId, completion)) {
-                                    completion.completeExceptionally(
-                                            new ZlinkRequestException(RequestResult.TIMED_OUT));
+                                    var deadlineFailure =
+                                            new ZlinkRequestException(RequestResult.TIMED_OUT);
+                                    dispatched.whenComplete(
+                                            (ignored, failure) ->
+                                                    completion.completeExceptionally(
+                                                            deadlineFailure));
+                                    dispatched.toCompletableFuture().cancel(false);
                                 }
                             });
-        }
-        CompletionStage<Void> dispatched = dispatch.apply(requestId, requestAdmission);
-        if (dispatched == null) {
-            actorRequests.remove(requestId);
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("actor Spot is not local"));
         }
         dispatched.whenComplete(
                 (ignored, error) -> {
@@ -948,8 +959,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         completion.completeExceptionally(unwrapActorDispatchFailure(error));
                     }
                 });
-        return completion.whenComplete(
-                (reply, failure) -> dispatched.toCompletableFuture().cancel(false));
+        completion.whenComplete((reply, failure) -> dispatched.toCompletableFuture().cancel(false));
+        return completion;
     }
 
     @Override
@@ -1790,9 +1801,12 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             String spotId,
             long objectGeneration,
             long authorityOwnerGeneration) {
-        spotAuthorities.remove(
+        spotAuthorities.computeIfPresent(
                 new SpotAuthorityKey(targetNodeRid, spotId, objectGeneration),
-                authorityOwnerGeneration);
+                (key, fence) ->
+                        fence.authorityOwnerGeneration() == authorityOwnerGeneration
+                                ? null
+                                : fence);
     }
 
     @Override
@@ -4225,12 +4239,13 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                     completion.completeExceptionally(failure);
                                 }
                             });
-                    return completion.whenComplete(
+                    completion.whenComplete(
                             (reply, failure) -> {
                                 if (completion.isCancelled())
                                     terminal.tryWin(ZLinkTerminalWinner.Cause.CANCELLATION);
                                 dispatched.toCompletableFuture().cancel(false);
                             });
+                    return completion;
                 };
         if (operations != null) {
             var registered = operations.<ZLinkBackendReceived>prepareOperation(operationId);
@@ -4249,7 +4264,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             (accepted, failure) -> {
                                 if (failure != null || !accepted) request.close();
                             });
-            return registered.whenComplete((reply, failure) -> completion.cancel(false));
+            registered.whenComplete((reply, failure) -> completion.cancel(false));
+            return registered;
         }
         if (timeout != null && !timeout.isNegative() && !timeout.isZero()) {
             CompletableFuture.delayedExecutor(timeout.toNanos(), TimeUnit.NANOSECONDS)

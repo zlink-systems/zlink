@@ -9,12 +9,18 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
+import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
+import systems.zlink.framework.runtime.locations.ZLinkTimerAdmissionTestRuntime;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 import systems.zlink.framework.spots.ZLinkTimer;
@@ -23,6 +29,8 @@ import systems.zlink.framework.spots.ZLinkTimerOverrunPolicy;
 import systems.zlink.framework.spots.ZLinkTimerTick;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -37,10 +45,147 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
+import java.util.stream.Stream;
 
 final class ZLinkSpotTimerRegistryTest {
+    static Stream<Arguments> admissionCases() {
+        return Stream.of(false, true)
+                .flatMap(
+                        stop ->
+                                Arrays.stream(ZLinkTimerOverrunPolicy.values())
+                                        .map(policy -> Arguments.of(stop, policy)));
+    }
+
+    @ParameterizedTest
+    @MethodSource("admissionCases")
+    void admissionRejectionPreservesTickWithoutHandlerFailureOrRescheduling(
+            boolean stop, ZLinkTimerOverrunPolicy policy) throws Exception {
+        var executor = new ZLinkRelocatedTimerRebindTest.ManualScheduler();
+        var calls = new ArrayList<ZLinkTimerTick>();
+        var errors = new AtomicInteger();
+        var attempts = new AtomicInteger();
+        var hold = new AtomicBoolean();
+        var queued = new AtomicReference<Supplier<CompletionStage<Void>>>();
+        var queuedCompletion = new CompletableFuture<Void>();
+        var logger = Logger.getLogger(ZLinkSpotTimerRegistry.class.getName());
+        var observer =
+                new Handler() {
+                    public void publish(LogRecord record) {
+                        errors.incrementAndGet();
+                    }
+
+                    public void flush() {}
+
+                    public void close() {}
+                };
+        logger.addHandler(observer);
+        var leaseExecutor = new ScheduledThreadPoolExecutor(1);
+        var now = new AtomicLong();
+        var runtime = ZLinkTimerAdmissionTestRuntime.create(now, leaseExecutor);
+        runtime.start(RoutingId.from("timer-node")).toCompletableFuture().join();
+        var execution = runtime.execution(() -> true, () -> {});
+        execution.ready().toCompletableFuture().join();
+        now.set(Duration.ofSeconds(25).toNanos());
+        ZLinkTimerAdmissionTestRuntime.latch(runtime);
+        var handlers = new ZLinkHandlerInstanceOwner(ignored -> new PreservedTickHandler(calls));
+        var registry =
+                new ZLinkSpotTimerRegistry(
+                        "spot",
+                        executor,
+                        handlers,
+                        List.of(),
+                        "test",
+                        new ZLinkSpotTimerRegistry.Dispatch() {
+                            public boolean paused() {
+                                return execution.paused();
+                            }
+
+                            public CompletionStage<Void> enqueue(
+                                    String name, Supplier<CompletionStage<Void>> operation) {
+                                attempts.incrementAndGet();
+                                try {
+                                    runtime.ensureOwnerAdmissionOpen();
+                                    if (hold.get()) {
+                                        queued.set(operation);
+                                        return queuedCompletion;
+                                    }
+                                    return operation.get();
+                                } catch (RuntimeException failure) {
+                                    return CompletableFuture.failedFuture(failure);
+                                }
+                            }
+                        },
+                        new ZLinkStateLane(Runnable::run));
+        registry.setSpot(new TestSpot());
+        execution.onResume(registry::resume);
+        try {
+            var timer =
+                    registry.add(
+                                    "timer",
+                                    Duration.ofMillis(1),
+                                    PreservedTickHandler.class,
+                                    new ZLinkTimerOptions(policy, 1, stop))
+                            .toCompletableFuture()
+                            .join();
+            var due = executor.due.poll(2, TimeUnit.SECONDS);
+            assertNotNull(due);
+            due.run();
+            assertEquals(0, errors.get(), "admission rejection is not a handler failure");
+            assertEquals(0, calls.size());
+            assertFalse(timer.isDisposed());
+            assertTrue(registry.hasActiveTimers());
+            assertTrue(
+                    executor.due.isEmpty(), "closed admission must not schedule another attempt");
+            assertEquals(0, attempts.get());
+            var frozen = registry.freeze().timers().getFirst();
+            var preserved = frozen.pendingTick().orElseThrow().tick();
+            assertEquals(0, frozen.schedule().deliveryIndex());
+            registry.resume();
+            assertEquals(0, calls.size());
+            assertTrue(executor.due.isEmpty());
+            assertEquals(0, attempts.get());
+            hold.set(true);
+            assertTrue(runtime.renewOwnerLeaseOnce().toCompletableFuture().join());
+            assertEquals(0, calls.size());
+            assertEquals(1, attempts.get());
+            registry.resume();
+            assertEquals(1, attempts.get(), "a queued tick must not be submitted twice on wake");
+            queued.get().get().toCompletableFuture().join();
+            queuedCompletion.complete(null);
+            assertEquals(List.of(preserved), calls);
+            assertEquals(1, calls.getFirst().deliveryIndex());
+            assertEquals(0, errors.get());
+            assertTrue(runtime.renewOwnerLeaseOnce().toCompletableFuture().join());
+            assertEquals(1, calls.size());
+            assertEquals(1, attempts.get());
+        } finally {
+            registry.close();
+            handlers.close();
+            runtime.close();
+            leaseExecutor.shutdownNow();
+            executor.shutdownNow();
+            logger.removeHandler(observer);
+        }
+    }
+
+    public static final class PreservedTickHandler {
+        private final java.util.List<ZLinkTimerTick> calls;
+
+        PreservedTickHandler(java.util.List<ZLinkTimerTick> calls) {
+            this.calls = calls;
+        }
+
+        public void handle(ZLinkSpot<?> spot, ZLinkTimerTick tick) {
+            calls.add(tick);
+        }
+    }
+
     @Test
     void infrastructureResumeRetainsGateThroughTimerHandlerAwait() throws Exception {
         var scheduledTick = new AtomicReference<Runnable>();
@@ -64,9 +209,7 @@ final class ZLinkSpotTimerRegistryTest {
         var handlerEntered = new CountDownLatch(1);
         var releaseHandler = new CompletableFuture<Void>();
         var siblingEntered = new AtomicBoolean();
-        var laneRef =
-                new AtomicReference<
-                        systems.zlink.framework.runtime.internal.execution.ZLinkStateLane>();
+        var laneRef = new AtomicReference<ZLinkStateLane>();
         var registry =
                 new ZLinkSpotTimerRegistry(
                         "spot",
@@ -142,7 +285,7 @@ final class ZLinkSpotTimerRegistryTest {
                     }
                 };
         scheduler.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
-        var delivered = new java.util.ArrayList<ZLinkTimerTick>();
+        var delivered = new ArrayList<ZLinkTimerTick>();
         var handler =
                 new Object() {
                     public void handle(ZLinkSpot<?> spot, ZLinkTimerTick tick) {
@@ -712,12 +855,11 @@ final class ZLinkSpotTimerRegistryTest {
                         "freeze-observer",
                         (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
-        java.util.logging.Logger logger =
-                java.util.logging.Logger.getLogger(ZLinkSpotTimerRegistry.class.getName());
-        java.util.logging.Handler observer =
-                new java.util.logging.Handler() {
+        Logger logger = Logger.getLogger(ZLinkSpotTimerRegistry.class.getName());
+        Handler observer =
+                new Handler() {
                     @Override
-                    public void publish(java.util.logging.LogRecord record) {
+                    public void publish(LogRecord record) {
                         if (!record.getMessage().contains("source=freeze-observer")) return;
                         try {
                             frozen.complete(registry.freeze());
@@ -759,12 +901,11 @@ final class ZLinkSpotTimerRegistryTest {
                         "stop-freeze-observer",
                         (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
-        java.util.logging.Logger logger =
-                java.util.logging.Logger.getLogger(ZLinkSpotTimerRegistry.class.getName());
-        java.util.logging.Handler observer =
-                new java.util.logging.Handler() {
+        Logger logger = Logger.getLogger(ZLinkSpotTimerRegistry.class.getName());
+        Handler observer =
+                new Handler() {
                     @Override
-                    public void publish(java.util.logging.LogRecord record) {
+                    public void publish(LogRecord record) {
                         if (!record.getMessage().contains("source=stop-freeze-observer")) return;
                         try {
                             frozen.complete(registry.freeze());

@@ -106,8 +106,11 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
 
     public async ValueTask Async()
     {
-        var cancellationToken = runtime.ShutdownToken;
         _submission.Claim();
+        using var operation = (
+            await runtime.AdmitOperationAsync(boundExecution: true).ConfigureAwait(false)
+        ).Enter();
+        var cancellationToken = runtime.ShutdownToken;
         var submittedAt = runtime.Registration.TimeProvider.GetUtcNow();
         using var flowScope = ZLinkFlowContext.EnterCurrentOrCreate(
             ZLinkFlowOrigin.Application,
@@ -297,6 +300,9 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
                 terminator,
                 _executionScope
             );
+        using var operation = (
+            await runtime.AdmitOperationAsync(boundExecution: true).ConfigureAwait(false)
+        ).Enter();
         if (_meshSelected && !_instanceIntent)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,

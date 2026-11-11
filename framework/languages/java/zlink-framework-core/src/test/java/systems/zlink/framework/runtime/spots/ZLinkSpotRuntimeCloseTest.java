@@ -35,7 +35,9 @@ final class ZLinkSpotRuntimeCloseTest {
                 .objects()
                 .server();
         try (var framework = ZLinkFrameworkRuntimeTestAccess.start(options)) {
-            var host = (ZLinkSpotRuntime) framework.spotManager();
+            var host =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            framework);
             var nodes = host.nodes;
             var original = nodes.getFirst();
             var failure = new ZlinkCloseException(CloseResult.BUSY, 16);
@@ -76,7 +78,9 @@ final class ZLinkSpotRuntimeCloseTest {
                 .objects()
                 .server();
         try (var framework = ZLinkFrameworkRuntimeTestAccess.start(options)) {
-            var host = (ZLinkSpotRuntime) framework.spotManager();
+            var host =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            framework);
             var nodes = host.nodes;
             var original = nodes.getFirst();
             var terminal = new CompletableFuture<Void>();
