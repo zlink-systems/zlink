@@ -57,6 +57,7 @@
         <Compile Include="AssemblyInfo.cs"/>
         <Compile Include="Support/PerCallAllocation.cs"/>
         <Compile Include="Support/PerCallAllocationTests.cs"/>
+        <Compile Include="Runtime/PrestartCallTests.cs"/>
         <Compile Include="Runtime/InstanceReadyAdmissionTests.cs"/>
         <Compile Include="Runtime/InstanceIntentAuthorityFollowTests.cs"/>
         <Compile Include="Runtime/SessionFailureClassificationTests.cs"/>
