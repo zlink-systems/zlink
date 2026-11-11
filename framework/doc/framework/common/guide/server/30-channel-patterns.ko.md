@@ -113,8 +113,8 @@ RouteMesh 자체에는 방향이 없다. 방향은 node가 ChannelName마다 등
 
 - `Server()`를 등록한 node만 그 channel의 호출을 받는다.
 - `Client()`만 등록한 node는 호출을 시작할 수 있지만 받지는 않는다.
-- **`Server()` role은 송신 기능을 포함한다.** 같은 ChannelName에 `Client()`를 다시 등록하지
-  않는다.
+- **RouteMesh에서는 `Server()` role이 송신 기능을 포함한다.** 같은 ChannelName에 `Client()`를 다시
+  등록하지 않는다. ClientServer는 다르다([3.2](#32-clientserver-방향이-고정된다)).
 
 한 MeshNode 위에 channel을 여러 개 등록할 수 있고 channel마다 role이 다를 수 있다.
 
@@ -170,7 +170,9 @@ client가 server에서 받는 것은 **자신이 시작한 request에 대응하�
 반대 방향 호출이 필요하면 반대쪽 node가 자신의 endpoint를 공개하는 server가 되어야 하며, 그것은
 별도 ChannelName을 가진 별도 channel이다.
 
-한 process가 같은 ChannelName에 Client와 Server를 각각 한 번씩 등록할 수는 있다. 모니터링
+한 process가 같은 ChannelName에 Client와 Server를 각각 한 번씩 등록할 수는 있다. 같은 process에서
+이 channel로 send·request를 시작하려면 `Client()`를 함께 등록해야 한다. `Server()`만 등록하면
+호출은 local handler를 부르지 않고 `NotConfigured`로 끝난다. 모니터링
 snapshot의 `client_and_server`는 그 두 registration이 함께 있다는 표현이며 별도 role이 아니다.
 
 ## 4. ToChannel 호출의 대상 node 선택
