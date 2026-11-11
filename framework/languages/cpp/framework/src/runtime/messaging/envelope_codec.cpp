@@ -563,7 +563,7 @@ envelope_codec_t::encode_header (const envelope_header_t &header,
 }
 
 protocol::application_envelope_encoder_t envelope_codec_t::prepare_service_payload (
-  envelope_header_t header,
+  envelope_header_t &&header,
   zlink::message_t body,
   std::shared_ptr<const detail::request_type_plan_t> type,
   std::shared_ptr<const detail::prepared_header_fragment_t> channel) const
@@ -576,16 +576,42 @@ protocol::application_envelope_encoder_t envelope_codec_t::prepare_service_paylo
     header_writer_t measure;
     write_header (measure, header, header.flow_id ? &*header.flow_id : nullptr, header.flow_origin,
                   channel->bytes, type->middle, type->prefix);
-    return [header = std::move (header), body = std::move (body), type = std::move (type),
-            channel = std::move (channel), size = measure.size ()] (
-             const std::optional<std::string> &flow_id, std::optional<flow_origin_t> flow_origin) {
+    struct state_t
+    {
+        state_t (envelope_header_t &&selected_header,
+                 zlink::message_t selected_body,
+                 std::shared_ptr<const detail::request_type_plan_t> selected_type,
+                 std::shared_ptr<const detail::prepared_header_fragment_t> selected_channel,
+                 std::size_t selected_size) :
+            header (std::move (selected_header)),
+            body (std::move (selected_body)),
+            type (std::move (selected_type)),
+            channel (std::move (selected_channel)),
+            size (selected_size)
+        {
+        }
+
+        envelope_header_t header;
+        zlink::message_t body;
+        std::shared_ptr<const detail::request_type_plan_t> type;
+        std::shared_ptr<const detail::prepared_header_fragment_t> channel;
+        std::size_t size;
+    };
+    auto state = std::make_shared<state_t> (std::move (header), std::move (body), std::move (type),
+                                            std::move (channel), measure.size ());
+    // The encoder captures only one shared_ptr (16 bytes on supported targets),
+    // keeping std::function's target within the common small capture range.
+    return [state] (const std::optional<std::string> &flow_id,
+                    std::optional<flow_origin_t> flow_origin) {
         auto write = [&] (std::span<std::byte> destination) {
             header_writer_t writer (reinterpret_cast<char *> (destination.data ()));
-            write_header (writer, header, header.flow_id ? &*header.flow_id : nullptr,
-                          header.flow_origin, channel->bytes, type->middle, type->prefix);
+            write_header (writer, state->header,
+                          state->header.flow_id ? &*state->header.flow_id : nullptr,
+                          state->header.flow_origin, state->channel->bytes, state->type->middle,
+                          state->type->prefix);
         };
-        return protocol::encode_application_envelope_message (size, std::ref (write), body.bytes (),
-                                                              flow_id, flow_origin);
+        return protocol::encode_application_envelope_message (
+          state->size, std::ref (write), state->body.bytes (), flow_id, flow_origin);
     };
 }
 
