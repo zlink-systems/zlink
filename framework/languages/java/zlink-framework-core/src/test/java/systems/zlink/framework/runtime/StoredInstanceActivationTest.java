@@ -13,7 +13,6 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.service.*;
 import systems.zlink.framework.runtime.locations.*;
-import systems.zlink.framework.runtime.spots.ZLinkSpotRuntime;
 import systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTestAccess;
 
 import java.time.Duration;
@@ -59,7 +58,9 @@ final class StoredInstanceActivationTest {
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
-            var host = (ZLinkSpotRuntime) runtime.spotManager();
+            var host =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            runtime);
             var store = new ZLinkProviderLocationRepository(provider);
             var descriptor =
                     store.listMeshNodes("mesh", new ZLinkPageRequest(10, null))

@@ -32,12 +32,13 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
-final class RouteSpotSendCall implements ZLinkSpotSendCall {
+final class RouteSpotSendCall implements ZLinkSpotSendCall, Runnable {
     private final AtomicBoolean submitGate;
-    private final ZLinkChannelCallRuntime runtime;
+    private final java.util.function.Supplier<ZLinkChannelRuntime> host;
+    private ZLinkChannelCallRuntime runtime;
     private final String channelName;
-    private final SpotTransportAddressResolver resolver;
-    private final Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots;
+    private SpotTransportAddressResolver resolver;
+    private Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots;
     private final String target;
     final ZLinkFrameworkMultipartView payload;
     private final Optional<String> packetName;
@@ -96,7 +97,8 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
                 stableType,
                 selectedMesh,
                 metadata,
-                new AtomicBoolean());
+                new AtomicBoolean(),
+                null);
     }
 
     private RouteSpotSendCall(
@@ -112,8 +114,10 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
             String stableType,
             String selectedMesh,
             ZLinkApplicationMetadata metadata,
-            AtomicBoolean submitGate) {
+            AtomicBoolean submitGate,
+            java.util.function.Supplier<ZLinkChannelRuntime> host) {
         this.submitGate = submitGate;
+        this.host = host;
         this.runtime = runtime;
         this.channelName = channelName;
         this.resolver = resolver;
@@ -142,7 +146,47 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
                 stableType,
                 selectedMesh,
                 metadata,
-                submitGate);
+                submitGate,
+                host);
+    }
+
+    RouteSpotSendCall(
+            java.util.function.Supplier<ZLinkChannelRuntime> host,
+            String channelName,
+            SpotTransportAddressResolver resolver,
+            Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots,
+            String target,
+            ZLinkFrameworkMultipartView payload,
+            Optional<String> packetName,
+            String contentType,
+            boolean instanceIntent,
+            String stableType,
+            String selectedMesh,
+            ZLinkApplicationMetadata metadata) {
+        this(
+                null,
+                channelName,
+                resolver,
+                instanceSpots,
+                target,
+                payload,
+                packetName,
+                contentType,
+                instanceIntent,
+                stableType,
+                selectedMesh,
+                metadata,
+                new AtomicBoolean(),
+                host);
+    }
+
+    @Override
+    public void run() {
+        if (host == null) return;
+        ZLinkChannelRuntime live = host.get();
+        runtime = live.callRuntimeForCalls();
+        resolver = live.spotAddressResolverForCalls();
+        instanceSpots = live::instanceSpotsForCalls;
     }
 
     @Override
@@ -170,7 +214,8 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
                 value,
                 selectedMesh,
                 metadata,
-                submitGate);
+                submitGate,
+                host);
     }
 
     @Override
@@ -189,7 +234,8 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
                 stableType,
                 SpotCallAddresses.requireText(value),
                 metadata,
-                submitGate);
+                submitGate,
+                host);
     }
 
     @Override
@@ -207,7 +253,8 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
                 stableType,
                 selectedMesh,
                 metadata.with(key, value),
-                submitGate);
+                submitGate,
+                host);
     }
 
     @Override
@@ -225,12 +272,13 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
                 stableType,
                 selectedMesh,
                 metadata.withAll(values),
-                submitGate);
+                submitGate,
+                host);
     }
 
     @Override
     public CompletionStage<Void> submit() {
-        CompletionStage<Void> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
+        CompletionStage<Void> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate, this);
         if (duplicate != null) {
             return duplicate;
         }
@@ -318,15 +366,16 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall {
     }
 }
 
-final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
+final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
     private CompletableFuture<Void> requestAdmission;
 
     private final AtomicBoolean submitGate;
-    private final ZLinkChannelCallRuntime runtime;
+    private final java.util.function.Supplier<ZLinkChannelRuntime> host;
+    private ZLinkChannelCallRuntime runtime;
     private final String channelName;
-    private final String callerMeshName;
-    private final SpotTransportAddressResolver resolver;
-    private final Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots;
+    private String callerMeshName;
+    private SpotTransportAddressResolver resolver;
+    private Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots;
     private final String target;
     final ZLinkFrameworkMultipartView payload;
     private final Optional<String> packetName;
@@ -373,7 +422,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                 stableType,
                 selectedMesh,
                 metadata,
-                new AtomicBoolean());
+                new AtomicBoolean(),
+                null);
     }
 
     private RouteSpotRequestCall(
@@ -393,8 +443,10 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
             String stableType,
             String selectedMesh,
             ZLinkApplicationMetadata metadata,
-            AtomicBoolean submitGate) {
+            AtomicBoolean submitGate,
+            java.util.function.Supplier<ZLinkChannelRuntime> host) {
         this.submitGate = submitGate;
+        this.host = host;
         this.runtime = runtime;
         this.channelName = channelName;
         this.callerMeshName = callerMeshName;
@@ -431,7 +483,56 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                 stableType,
                 selectedMesh,
                 metadata,
-                submitGate);
+                submitGate,
+                host);
+    }
+
+    RouteSpotRequestCall(
+            java.util.function.Supplier<ZLinkChannelRuntime> host,
+            String channelName,
+            String callerMeshName,
+            SpotTransportAddressResolver resolver,
+            Supplier<ZLinkInstanceSpotCallRuntime> instanceSpots,
+            String target,
+            ZLinkFrameworkMultipartView payload,
+            Optional<String> packetName,
+            Duration timeout,
+            String contentType,
+            ZLinkChannelEnvelope.PreparedNames channelNames,
+            ZLinkChannelEnvelope.PreparedNames names,
+            boolean instanceIntent,
+            String stableType,
+            String selectedMesh,
+            ZLinkApplicationMetadata metadata) {
+        this(
+                null,
+                channelName,
+                callerMeshName,
+                resolver,
+                instanceSpots,
+                target,
+                payload,
+                packetName,
+                timeout,
+                contentType,
+                channelNames,
+                names,
+                instanceIntent,
+                stableType,
+                selectedMesh,
+                metadata,
+                new AtomicBoolean(),
+                host);
+    }
+
+    @Override
+    public void run() {
+        if (host == null) return;
+        ZLinkChannelRuntime live = host.get();
+        runtime = live.callRuntimeForCalls();
+        resolver = live.spotAddressResolverForCalls();
+        instanceSpots = live::instanceSpotsForCalls;
+        callerMeshName = live.requestSourceMeshName();
     }
 
     @Override
@@ -463,7 +564,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                 value,
                 selectedMesh,
                 metadata,
-                submitGate);
+                submitGate,
+                host);
     }
 
     @Override
@@ -486,7 +588,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                 stableType,
                 SpotCallAddresses.requireText(value),
                 metadata,
-                submitGate);
+                submitGate,
+                host);
     }
 
     @Override
@@ -508,7 +611,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                 stableType,
                 selectedMesh,
                 metadata.with(key, value),
-                submitGate);
+                submitGate,
+                host);
     }
 
     @Override
@@ -530,7 +634,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                 stableType,
                 selectedMesh,
                 metadata.withAll(values),
-                submitGate);
+                submitGate,
+                host);
     }
 
     @Override
@@ -552,12 +657,13 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                 stableType,
                 selectedMesh,
                 metadata,
-                submitGate);
+                submitGate,
+                host);
     }
 
     @Override
     public <TReply> ZLinkRequestStage<TReply> submit(Class<TReply> replyType) {
-        CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
+        CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate, this);
         if (duplicate != null)
             return ZLinkRequestStages.observe(duplicate, new CompletableFuture<>());
         requestAdmission = new CompletableFuture<>();
@@ -601,7 +707,15 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
             ZLinkRequestMetrics.start(metric);
             CompletableFuture<TReply> result =
                     systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
-                            .newCancellationFuture();
+                            .newCancellationFuture(
+                                    failure ->
+                                            ZLinkRequestMetrics.complete(
+                                                    metric,
+                                                    started == ZLinkRequestMetrics.NO_START
+                                                            ? -1L
+                                                            : ZLinkRequestMetrics.elapsed(
+                                                                    started, runtime.nanoTime()),
+                                                    failure));
             CompletionStage<TReply> stage;
             try {
                 var operationFlow =
@@ -661,15 +775,6 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                         failure);
                 throw failure;
             }
-            result.whenComplete(
-                    (ignored, failure) ->
-                            ZLinkRequestMetrics.complete(
-                                    metric,
-                                    started == ZLinkRequestMetrics.NO_START
-                                            ? -1L
-                                            : ZLinkRequestMetrics.elapsed(
-                                                    started, runtime.nanoTime()),
-                                    failure));
             stage.whenComplete(
                     (value, failure) -> {
                         if (failure == null) result.complete(value);

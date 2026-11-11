@@ -20,7 +20,6 @@ import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
 import systems.zlink.framework.handlers.ZLinkSpotActorSend;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
-import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
@@ -385,7 +384,8 @@ final class SessionActorsRuntimeIntegrationTest {
 
     private static ZLinkActor managedActor(
             ZLinkFrameworkRuntime runtime, String actorId, String actorType) {
-        return ((ZLinkActorRuntime) runtime.actorManager())
+        return (systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.actors(
+                        runtime))
                 .getOrCreateManagedActor(actorId, actorType)
                 .toCompletableFuture()
                 .join();
