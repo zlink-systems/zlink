@@ -12,6 +12,15 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 
 ## [Unreleased]
 
+## [1.25.0]
+
+### Fixed
+
+- Recheck the mailbox before detaching an idle asynchronous command owner, so a command arriving at that boundary is not left pending. This also addresses the first inproc send returning `EAGAIN` (#4186, #4234).
+- Handle `SHUTDOWN` during close and preserve submit/close ordering across the bindings (#4060; Java #4193, .NET #4196, Node.js #4195).
+
+Public API and ABI are unchanged; linker SOVERSION remains 0.
+
 ## [1.24.0]
 
 ### Fixed

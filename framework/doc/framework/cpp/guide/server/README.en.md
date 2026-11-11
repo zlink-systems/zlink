@@ -186,13 +186,10 @@ Built-in support for what a production server needs.
 
 When several Play server instances come up, you don't hardcode which server to connect to or
 its endpoint. A shared Redis-backed Location Store tracks addresses, and each server discovers
-them dynamically through `add_location_store<redis::redis_location_store_t> ()`.
+them dynamically. Choose the store plugin and register both Stores in
+[Store plugin setup](25-location.en.md#store-setup).
 
 ```cpp
-options.add_location_store<redis::redis_location_store_t> ()
-  .set_connection_string (topology.redis_endpoint)
-  .set_key_prefix (topology.redis_key_prefix + "location:");
-
 auto room_mesh = options.add_route_mesh (sample_names_t::room_spot_mesh);
 room_mesh.set_routing_id (zlink::routing_id_t::from ("bingo-play-" + topology.play_node))
   .listen (topology.selected_play_spot_router_endpoint ());

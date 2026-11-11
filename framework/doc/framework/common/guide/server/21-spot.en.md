@@ -35,68 +35,7 @@ that **the target is settled to exactly one**.
 A Spot is called by id, not by host. That requires **somewhere to record which node it is on
 right now**. That is the Location Store, and it is required once you register even one Spot.
 
-=== "C#/.NET"
-
-    ```csharp
-    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:location-store"
-    ```
-
-=== "C++"
-
-    ```cpp
-    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:location-store"
-    ```
-
-=== "Java"
-
-    ```java
-    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:location-store"
-    ```
-
-=== "Kotlin"
-
-    ```kotlin
-    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:location-store"
-    ```
-
-=== "Node/TypeScript"
-
-    ```typescript
-    --8<-- "framework/languages/node/tutorial/Server/main.ts:location-store"
-    ```
-
-**Register a Relocation Store alongside it.** Registering a Spot factory is itself the
-condition, so it is required even with relocation turned off as it is in this chapter.
-
-=== "C#/.NET"
-
-    ```csharp
-    --8<-- "framework/languages/dotnet/tutorial/Server/Program.cs:relocation-store"
-    ```
-
-=== "C++"
-
-    ```cpp
-    --8<-- "framework/languages/cpp/tutorial/Server/main.cpp:relocation-store"
-    ```
-
-=== "Java"
-
-    ```java
-    --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/ServerApplication.java:relocation-store"
-    ```
-
-=== "Kotlin"
-
-    ```kotlin
-    --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/ServerApplication.kt:relocation-store"
-    ```
-
-=== "Node/TypeScript"
-
-    ```typescript
-    --8<-- "framework/languages/node/tutorial/Server/main.ts:relocation-store"
-    ```
+Choose Redis or Redis with etcd in [Location Store plugin setup](25-location.en.md#store-setup), and register the Location Store and Relocation Store separately. This chapter's tutorial uses Redis. A node registering a Spot factory requires the Relocation Store even when relocation is disabled.
 
 A node that only calls needs the Location Store alone —
 [the calling side](#4-the-calling-side--the-node-that-calls-a-spot).

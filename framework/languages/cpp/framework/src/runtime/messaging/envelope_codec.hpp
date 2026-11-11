@@ -256,7 +256,7 @@ class envelope_codec_t
                                     const detail::request_type_plan_t &type,
                                     const detail::prepared_header_fragment_t &channel) const;
     protocol::application_envelope_encoder_t prepare_service_payload (
-      envelope_header_t header,
+      envelope_header_t &&header,
       zlink::message_t body,
       std::shared_ptr<const detail::request_type_plan_t> type,
       std::shared_ptr<const detail::prepared_header_fragment_t> channel) const;

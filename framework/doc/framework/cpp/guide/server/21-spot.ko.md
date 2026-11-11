@@ -50,16 +50,7 @@ Spot은 id를 가진다. 같은 id로 보낸 메시지는 언제나 같은 Spot�
 Spot은 host가 아니라 id로 호출된다. 그래서 **지금 어느 node에 있는지를 적어 둘 곳**이
 필요하다. 그것이 Location Store이고, Spot을 하나라도 등록하면 반드시 있어야 한다.
 
-```cpp
---8<-- "framework/languages/cpp/tutorial/Server/main.cpp:location-store"
-```
-
-**Relocation Store도 함께 등록한다.** Spot factory를 등록하는 것 자체가 조건이라, 이 장처럼
-이동을 끄더라도 요구된다.
-
-```cpp
---8<-- "framework/languages/cpp/tutorial/Server/main.cpp:relocation-store"
-```
+[Location의 Store plugin 설정](25-location.ko.md#store-setup)에서 Redis 또는 Redis with etcd를 선택하고 Location Store와 Relocation Store를 각각 등록한다. 이 장의 tutorial은 Redis 구성을 사용한다. Spot factory를 등록한 node는 이동을 꺼도 Relocation Store가 필요하다.
 
 호출만 하는 node에는 Location Store만 있으면 된다 —
 [호출하는 쪽 — Spot을 호출하는 node](#4-호출하는-쪽--spot을-호출하는-node).

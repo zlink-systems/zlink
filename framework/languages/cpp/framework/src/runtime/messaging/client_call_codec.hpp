@@ -41,12 +41,12 @@ class client_call_codec_t
                                           std::string_view content_type) const;
 
     message_parts_t
-    encode_payload_parts (envelope_header_t header,
+    encode_payload_parts (envelope_header_t &&header,
                           encoded_payload_t payload,
                           std::shared_ptr<const detail::request_type_plan_t> type,
                           std::shared_ptr<const detail::prepared_header_fragment_t> channel) const;
     message_parts_t encode_service_payload_parts (
-      envelope_header_t header,
+      envelope_header_t &&header,
       encoded_payload_t payload,
       std::shared_ptr<const detail::request_type_plan_t> type,
       std::shared_ptr<const detail::prepared_header_fragment_t> channel) const;

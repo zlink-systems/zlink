@@ -408,7 +408,7 @@ The Store holds more than addresses.
 on right now" by reading the Store. If you use only channel messaging and write addresses
 directly, it works without one.
 
-The registration code is in [Spot](21-spot.en.md#2-the-location-store--a-prerequisite-for-registering-a-spot),
+The registration code is in [Location](25-location.en.md#store-setup),
 and the operational queries are in
 [Operations and Lifecycle](12-operations.en.md#6-location-readiness-and-operational-queries).
 
@@ -428,8 +428,7 @@ call, and missing a required one or registering more than one is a configuration
 socket opens. The framework does not build a substitute store inside the process when one is absent
 — **it fails rather than quietly running as a single node.**
 
-The two stores may share one Redis deployment. Keep their key prefixes distinct. The framework does
-not rely on transactions spanning the stores, so the physical Redis may be separated as well. After
+Choose Redis or Redis with etcd in [Store plugin setup](25-location.en.md#store-setup). The Redis choice places both Stores on one server with distinct key prefixes. After
 registering a store, the application neither calls the provider's operations directly nor disposes
 of it — the framework manages the store's lifetime and call order.
 

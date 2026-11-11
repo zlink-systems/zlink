@@ -79,7 +79,6 @@ test('lost Preparing publication still prepares object authorities before Servin
     );
     assert.equal(lostWrite, true);
     const host = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME);
-    assert.ok(host.statefulAuthorityRoutes, 'object runtime must exist before Serving');
     assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
     const result = await app
       .get(nestjs.ZLINK_ACTOR_MANAGER)

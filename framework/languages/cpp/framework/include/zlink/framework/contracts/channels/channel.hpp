@@ -1023,7 +1023,7 @@ class route_client_t
                                          std::string packet_name,
                                          node_payload_encoder_t encode_payload,
                                          std::chrono::milliseconds timeout,
-                                         std::map<std::string, std::string> metadata,
+                                         const std::map<std::string, std::string> &metadata,
                                          detail::request_receiver_t<encoded_payload_t> receiver);
 
     static request_task_t<zlink::message_t> submit_channel_request_reply_message_erased (
