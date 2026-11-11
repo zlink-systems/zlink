@@ -4600,6 +4600,31 @@ TEST_P (StoreOutageRetention, AdmissionDeadlineLatchesWithoutHeartbeatAndRenewal
         }
 }
 
+TEST_P (StoreOutageRetention, DelayedAdmissionCallbackDoesNotCloseRenewedLease)
+{
+    location_runtime_t runtime (store (), options, "delayed-deadline-owner");
+    lease_access::clock (runtime, [&] { return clock_now.load (); });
+    claim (runtime);
+    test::manual_internal_scheduler_t scheduler;
+    serial_execution_queue_t queue (scheduler);
+    const auto policy = runtime.execution_policy ();
+    const auto first = lease_access::snapshot (runtime);
+    move_to (*first->admission_deadline);
+    auto callbacks = detail::deadline_scheduler_test_access_t::take_due (clock_now.load ());
+    ASSERT_FALSE (callbacks.empty ());
+    lease_access::accept (runtime, *first->token, *first->renewed_at + 30s, *first->renewed_at,
+                          clock_now.load (), true);
+    const auto renewed = lease_access::snapshot (runtime);
+    ASSERT_GT (*renewed->admission_deadline, clock_now.load ());
+    EXPECT_EQ (serial_execution_queue_t::execution_status_t::allowed, policy (queue));
+    for (auto &callback : callbacks)
+        callback ();
+    EXPECT_EQ (serial_execution_queue_t::execution_status_t::allowed, policy (queue));
+    move_to (*renewed->admission_deadline);
+    detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+    EXPECT_EQ (serial_execution_queue_t::execution_status_t::stopped, policy (queue));
+}
+
 TEST_P (StoreOutageRetention, ExecutionGateConsumesOutageLatchInBothExecutionModes)
 {
     for (bool enabled : {false, true})
