@@ -151,6 +151,9 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
 
     internal event Action<IReadOnlySet<object>>? ExecutionsDiscarded;
 
+    /// <summary>Raised when recovery reopens a preserved execution's gate; held work resumes.</summary>
+    internal event Action<object>? ExecutionResumed;
+
     private IReadOnlySet<object> CaptureSteadyExecutionsOnLane()
     {
         var candidates = CaptureExecutions?.Invoke() ?? new HashSet<object>();
@@ -185,28 +188,38 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
 
     internal bool IsBoundExecutionOpen => IsExecutionAllowed(null);
 
-    internal bool IsExecutionAllowed(object? execution)
+    internal bool IsExecutionAllowed(object? execution) =>
+        GetExecutionStatus(execution) == ZLinkObjectExecutionStatus.Allowed;
+
+    internal ZLinkObjectExecutionStatus GetExecutionStatus(object? execution)
     {
         var health = GetHealthSnapshot();
         var episode = health.StoreOutage;
         if (episode is null)
-            return execution is null
-                ? IsOwnerAdmissionOpenOnLane()
-                : Volatile.Read(ref _ownerAdmissionDeadline) is not null && health.AdmissionOpen;
-        if (Volatile.Read(ref episode.Recovering) != 0 && episode.Executions.Contains(execution!))
-            return false;
+            return Status(
+                execution is null
+                    ? IsOwnerAdmissionOpenOnLane()
+                    : Volatile.Read(ref _ownerAdmissionDeadline) is not null && health.AdmissionOpen
+            );
         var retained = !episode.Discarded && episode.Executions.Count > 0;
+        var preserved = episode.Executions.Contains(execution!);
+        if (retained && preserved && Volatile.Read(ref episode.Recovering) != 0)
+            return ZLinkObjectExecutionStatus.Paused;
         if (execution is null)
-            return retained || IsOwnerAdmissionOpenOnLane();
-        var preserved = episode.Executions.Contains(execution);
+            return Status(retained || IsOwnerAdmissionOpenOnLane());
         if (execution is ZLinkActorRuntimeState { Activation: { } parent })
         {
             if (!episode.Executions.Contains(parent))
-                return IsOwnerAdmissionOpenOnLane() && (!preserved || retained);
-            if (!retained || Volatile.Read(ref episode.Recovering) != 0)
-                return false;
+                return Status(IsOwnerAdmissionOpenOnLane() && (!preserved || retained));
+            if (!retained)
+                return ZLinkObjectExecutionStatus.OwnershipLost;
+            if (Volatile.Read(ref episode.Recovering) != 0)
+                return ZLinkObjectExecutionStatus.Paused;
         }
-        return preserved ? retained : IsOwnerAdmissionOpenOnLane();
+        return Status(preserved ? retained : IsOwnerAdmissionOpenOnLane());
+
+        static ZLinkObjectExecutionStatus Status(bool allowed) =>
+            allowed ? ZLinkObjectExecutionStatus.Allowed : ZLinkObjectExecutionStatus.OwnershipLost;
     }
 
     internal void EnsureRelocationAdmissionOpen()
@@ -967,7 +980,11 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
     {
         if (
             _lastSuccessfulLease is not { } lease
-            || GetHealthSnapshot().StoreOutage is not null
+            || GetHealthSnapshot().StoreOutage is { } previous
+                && (
+                    !previous.Discarded
+                    || lease.Deadline.LeaseOperationStartedAt <= previous.LeaseOperationStartedAt
+                )
             || Volatile.Read(ref _disposeState) != 0
         )
             return null;
