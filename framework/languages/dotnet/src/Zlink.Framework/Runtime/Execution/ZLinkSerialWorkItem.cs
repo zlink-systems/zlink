@@ -184,6 +184,11 @@ internal sealed class ZLinkSerialWorkItem
     )
     {
         var executionStatus = ExecutionStatus;
+        if (
+            executionStatus == ZLinkObjectExecutionStatus.Paused
+            && !cancellationToken.IsCancellationRequested
+        )
+            return ZLinkSerialWorkItemResult.Paused;
         if (executionStatus != ZLinkObjectExecutionStatus.Allowed)
         {
             _relocationRelease?.Invoke();
@@ -408,6 +413,7 @@ internal enum ZLinkSerialWorkItemResult
 {
     Completed,
     Suspended,
+    Paused,
 }
 
 internal sealed record ZLinkAcceptedWorkRecord(ulong AcceptedSequence, ReadOnlyMemory<byte> Payload)

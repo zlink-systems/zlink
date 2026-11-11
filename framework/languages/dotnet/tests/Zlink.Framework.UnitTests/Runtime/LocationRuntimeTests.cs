@@ -104,6 +104,27 @@ public sealed class LocationRuntimeTests
         ZLinkUserSpotExecutionMode mode,
         int target,
         bool discard
+    ) => await VerifyRecoveryBoundary(mode, target, discard, 0);
+
+    [Theory]
+    [InlineData(ZLinkUserSpotExecutionMode.PerActor, 0, false, 1)]
+    [InlineData(ZLinkUserSpotExecutionMode.PerActor, 0, true, 1)]
+    [InlineData(ZLinkUserSpotExecutionMode.SpotWide, 3, false, 1)]
+    [InlineData(ZLinkUserSpotExecutionMode.SpotWide, 3, true, 1)]
+    [InlineData(ZLinkUserSpotExecutionMode.PerActor, 0, false, 2)]
+    [InlineData(ZLinkUserSpotExecutionMode.SpotWide, 3, false, 2)]
+    public async Task Recovery_PreservesWorkAtInvokeAndResumeBoundary(
+        ZLinkUserSpotExecutionMode mode,
+        int target,
+        bool discard,
+        int boundary
+    ) => await VerifyRecoveryBoundary(mode, target, discard, boundary);
+
+    private static async Task VerifyRecoveryBoundary(
+        ZLinkUserSpotExecutionMode mode,
+        int target,
+        bool discard,
+        int boundary
     )
     {
         var time = new ControllableTimeProvider();
@@ -146,7 +167,10 @@ public sealed class LocationRuntimeTests
             .GetServices<IHostedService>()
             .Single(service => service is ZLinkFrameworkHostedService);
         await hosted.StartAsync(CancellationToken.None);
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release =
+            boundary == 2
+                ? new TaskCompletionSource()
+                : new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Task? recovery = null;
         try
@@ -168,6 +192,9 @@ public sealed class LocationRuntimeTests
             Task Execute(Func<CancellationToken, ValueTask> callback) =>
                 target switch
                 {
+                    0 or 3 when boundary == 2 => actor
+                        ._dispatchMailbox._queue.RunAsync(callback, CancellationToken.None)
+                        .AsTask(),
                     0 or 3 => actor.ExecuteDispatchAsync(callback, CancellationToken.None).AsTask(),
                     1 => spot
                         ._serial.ExecuteAsync((_, ct) => callback(ct), CancellationToken.None)
@@ -187,34 +214,74 @@ public sealed class LocationRuntimeTests
             Assert.False(await locations.RenewOwnerLeaseOnceAsync());
             var episode = locations.GetHealthSnapshot().StoreOutage!;
             await episode.CaptureCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            var running = Execute(async _ =>
-            {
-                entered.TrySetResult();
-                await release.Task;
-            });
-            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var calls = 0;
-            var pending = Execute(_ =>
+            var mailbox = actor._dispatchMailbox._queue;
+            void BeginRecovery()
             {
-                Interlocked.Increment(ref calls);
-                return ValueTask.CompletedTask;
-            });
-            Assert.False(pending.IsCompleted);
-            time.Advance(options.OwnerLeaseTtl + options.OwnerLeaseFencingMargin);
-            flaky.HoldRecoveryCas = true;
-            flaky.HoldRecoveryDescriptor = true;
-            flaky.Fail = false;
-            recovery = locations.RenewOwnerLeaseOnceAsync().AsTask();
+                time.Advance(options.OwnerLeaseTtl + options.OwnerLeaseFencingMargin);
+                flaky.HoldRecoveryCas = true;
+                flaky.HoldRecoveryDescriptor = true;
+                flaky.Fail = false;
+                recovery = locations.RenewOwnerLeaseOnceAsync().AsTask();
+            }
+            if (boundary == 1)
+                mailbox.ConsumerSelected = () =>
+                {
+                    mailbox.ConsumerSelected = null;
+                    BeginRecovery();
+                    Assert.True(flaky.RecoveryCasHeld.Task.Wait(TimeSpan.FromSeconds(5)));
+                    Assert.Equal(ZLinkObjectExecutionStatus.Paused, actor.ExecutionStatus);
+                };
+            var running =
+                boundary == 1
+                    ? Task.CompletedTask
+                    : Execute(async ct =>
+                    {
+                        entered.TrySetResult();
+                        if (boundary == 2)
+                        {
+                            await ZLinkSerialTurn.Current!.YieldFrameworkCallAsync(
+                                _ => new ValueTask(release.Task),
+                                ct
+                            );
+                            Interlocked.Increment(ref calls);
+                        }
+                        else
+                            await release.Task;
+                    });
+            if (boundary != 1)
+                await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var pending =
+                boundary == 2
+                    ? running
+                    : Execute(_ =>
+                    {
+                        Interlocked.Increment(ref calls);
+                        return ValueTask.CompletedTask;
+                    });
+            if (boundary != 1)
+                BeginRecovery();
             await flaky.RecoveryCasHeld.Task.WaitAsync(TimeSpan.FromSeconds(5));
             release.TrySetResult();
-            await running.WaitAsync(TimeSpan.FromSeconds(5));
-            // A lifecycle turn observes the consumer after the accepted application turn is released.
-            await spot._serial.ExecuteLifecycleAsync(
-                (_, _) => ValueTask.CompletedTask,
-                CancellationToken.None
-            );
+            if (boundary == 0)
+                await running.WaitAsync(TimeSpan.FromSeconds(5));
+            // Observe the same consumer after the application turn yields.
+            await ObserveConsumer();
             Assert.False(pending.IsCompleted);
             Assert.Equal(0, calls);
+            if (boundary == 1)
+                Assert.Equal(1, mailbox.ApplicationPendingCount);
+            Task ObserveConsumer() =>
+                boundary == 0 || target == 3
+                    ? spot
+                        ._serial.ExecuteLifecycleAsync(
+                            (_, _) => ValueTask.CompletedTask,
+                            CancellationToken.None
+                        )
+                        .AsTask()
+                    : mailbox
+                        .RunLifecycleAsync(_ => ValueTask.CompletedTask, CancellationToken.None)
+                        .AsTask();
             if (discard)
                 time.AdvanceMonotonic(
                     episode.Lifetime - time.GetElapsedTime(episode.LeaseOperationStartedAt)
@@ -223,10 +290,7 @@ public sealed class LocationRuntimeTests
             if (!discard)
             {
                 await flaky.RecoveryDescriptorStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                await spot._serial.ExecuteLifecycleAsync(
-                    (_, _) => ValueTask.CompletedTask,
-                    CancellationToken.None
-                );
+                await ObserveConsumer();
                 Assert.False(pending.IsCompleted);
                 Assert.Equal(0, calls);
             }
