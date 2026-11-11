@@ -283,7 +283,7 @@ client의 제출 호출 수만으로 처리량을 계산하지 않는다.
 | `dotnet` | 프로세스 사용 core 수 | harness가 선언한 병렬도 |
 | `node` | `perf_hooks`의 `performance.eventLoopUtilization()` | `1.0` |
 | `java`·`kotlin` | 제출 스레드의 CPU (`ThreadMXBean`, `jvm_thread_cores`) | harness가 선언한 제출 병렬도 |
-| `cpp` | 제출과 완료 드레인을 실행하는 application thread의 CPU (`CLOCK_THREAD_CPUTIME_ID`, `submit_thread_cores`) | `1` |
+| `cpp` | 제출과 완료 드레인을 실행하는 stream thread들의 CPU 합 (`CLOCK_THREAD_CPUTIME_ID`, `submit_thread_cores`) | stream 수(§10.3) |
 
 프로세스 사용 core 수를 쓰는 것은 `dotnet` 하나뿐이다.
 
@@ -576,7 +576,7 @@ admin 계약을 그대로 쓴다. 요청과 응답은 JSON이고 다섯 언어�
 POST http://127.0.0.1:<A trigger>/bench/start
 { "runId": "...", "cellId": "...", "pattern": "request-backpressure",
   "payloadBytes": 1024, "phase": "warmup" | "active",
-  "durationMs": 5000, "requestWindow": 100, "sendConcurrency": 8 }
+  "durationMs": 5000, "requestWindow": 100, "submitConcurrency": 8 }
 → 200 { "accepted": true, "runId": "...", "cellId": "...", "phase": "active", "startedAt": <monotonic ns> }
 ```
 
@@ -603,11 +603,17 @@ in-flight로 표현한다.
 | 패턴 | stream 수 | stream당 in-flight | 의미 |
 |------|-----------|--------------------|------|
 | `request-serial` | 1 | 1 | 요청 하나를 보내고 reply 뒤 다음 요청 |
-| `request-backpressure` | 1 | 상한 없음 | admission backpressure를 만날 때까지 제출 |
-| `send-saturation` | `send_concurrency`(기본 8) | 1 (send는 완료 통지까지) | reply 없는 command 경로 |
+| `request-backpressure` | `submit_concurrency`(기본 8) | 상한 없음 | stream마다 admission backpressure를 만날 때까지 제출 |
+| `send-saturation` | `submit_concurrency`(기본 8) | 1 (send는 완료 통지까지) | reply 없는 command 경로 |
 
-stream 수와 stream당 in-flight는 셀 원본에 기록한다(§4). 언어 harness가 stream을 어떻게
-구현하는지(thread, task, coroutine, event loop)는 언어마다 다르며 §8.2처럼 결과에 남긴다.
+stream 수와 stream당 in-flight는 셀 원본에 기록한다(§4).
+
+**stream 하나는 제출 thread 하나다.** 실무의 서버는 여러 handler에서 동시에 send·request를
+제출하므로, bench도 여러 OS thread에서 동시에 제출하는 조건으로 잰다. thread를 쓰는 언어(C++,
+.NET, Java, Kotlin)는 stream마다 전용 thread를 두고, 그 thread가 자기 stream의 제출과 집계(in-flight·
+counter·지연 표본)를 소유한다. 완료 callback은 그 언어의 완료 모델이 정한 자원에서 실행하며 bench가
+stream thread로 옮기지 않는다. Node는 실무 실행 모델이 event loop 하나이므로 모든 stream을 event loop 하나에서 돌린다.
+같은 언어의 binding 행과 framework 행은 같은 thread 구성으로 잰다(§7.2).
 
 ### 10.4 셀 순서
 
@@ -651,12 +657,17 @@ runner는 여섯 개다: `c/run_local.sh`, `cpp/run_local.sh`, `dotnet/run_local
 | `IMPLEMENTATIONS` | 그 언어의 구현 전부(§1.1, §1.2) | 측정할 구현 |
 | `RUNS` | `3` | run 수. G5 재현성 판정이 run 3개를 요구한다 |
 | `SKIP_BUILD` | `0` | `0`이면 측정 전에 그 언어의 `<lang>/build.sh`로 빌드하고, `1`이면 이미 빌드된 산출물을 쓴다 |
+| `TARGET_RATE` | 설정 안 함(0, unpaced) | C++ runner의 client 제출률(초당 메시지 수) |
+| `SOURCE_CPUS` | 설정 안 함 | C++ source process에 적용할 `taskset -c` CPU 목록 |
+| `TARGET_CPUS` | 설정 안 함 | C++ target process에 적용할 `taskset -c` CPU 목록 |
 
 - `<lang>`은 `c`, `cpp`, `dotnet`, `java`, `kotlin`, `node` 중 하나다.
 - Kotlin runner의 기본값은 §10.5의 보조 셀인 `request-backpressure`와 `1024`다.
   개별 검증에서는 `PATTERNS=request-backpressure,send-saturation`,
   `PAYLOAD_SIZES=1024,4096` 범위에서 선택할 수 있다.
 - 값이 위 범위를 벗어나면 runner는 측정을 시작하기 전에 거부한다.
+- `TARGET_RATE`, `SOURCE_CPUS`, `TARGET_CPUS`는 C++ runner 전용 선택 입력이다. CPU 목록은 Linux `taskset -c` 형식을 쓴다.
+  C++ runner는 세 값을 셀 JSON `metadata`의 `targetRate`(`0`은 unpaced), `sourceCpus`, `targetCpus`(설정 안 하면 `unpinned`)에 기록한다.
 
 위 표 밖의 값은 입력이 아니다. send concurrency 8과 drain 상한 30초(§3), 포트(§9)는
 runner가 정하고 셀 JSON의 `metadata`에 기록한다.
