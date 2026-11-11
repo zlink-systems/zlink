@@ -51,8 +51,9 @@ class SourceMetrics {
     this.completed = 0;
     this.errors = 0;
     this.inFlight = 0;
-    this.streamInFlight = new Map();
-    this.streamPeakInFlight = new Map();
+    // Indexed by stream number; plain arrays keep the per-message cost a slot write.
+    this.streamInFlight = [];
+    this.streamPeakInFlight = [];
     this.terminalSnapshot = null;
     this.sampleCount = 0;
     this.sampleSumMicros = 0;
@@ -65,9 +66,9 @@ class SourceMetrics {
     const now = header.nowNs();
     this.submitted += 1;
     this.inFlight += 1;
-    const depth = (this.streamInFlight.get(stream) ?? 0) + 1;
-    this.streamInFlight.set(stream, depth);
-    this.streamPeakInFlight.set(stream, Math.max(this.streamPeakInFlight.get(stream) ?? 0, depth));
+    const depth = (this.streamInFlight[stream] ?? 0) + 1;
+    this.streamInFlight[stream] = depth;
+    if (depth > (this.streamPeakInFlight[stream] ?? 0)) this.streamPeakInFlight[stream] = depth;
     return now;
   }
 
@@ -76,7 +77,7 @@ class SourceMetrics {
     const now = header.nowNs();
     const micros = Number(now - started) / 1000;
     this.inFlight -= 1;
-    this.streamInFlight.set(stream, this.streamInFlight.get(stream) - 1);
+    this.streamInFlight[stream] -= 1;
     if (success) this.completed += 1;
     else {
       this.errors += 1;
@@ -140,7 +141,9 @@ class SourceMetrics {
   }
 
   get peakInFlight() {
-    return [...this.streamPeakInFlight.values()].reduce((total, peak) => total + peak, 0);
+    let total = 0;
+    for (const peak of this.streamPeakInFlight) total += peak ?? 0;
+    return total;
   }
 }
 
