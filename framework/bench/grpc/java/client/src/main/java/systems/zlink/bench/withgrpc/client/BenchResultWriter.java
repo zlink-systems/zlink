@@ -62,11 +62,11 @@ public final class BenchResultWriter {
                 streams.put("inFlightPerStream", options.requestWindow);
             }
             case "request-backpressure" -> {
-                streams.put("count", 1);
+                streams.put("count", options.submitConcurrency);
                 streams.put("inFlightPerStream", null);
             }
             case "send-saturation" -> {
-                streams.put("count", options.sendConcurrency);
+                streams.put("count", options.submitConcurrency);
                 streams.put("inFlightPerStream", 1);
             }
             default -> throw new IllegalArgumentException("unknown pattern " + options.scenario);
@@ -98,7 +98,7 @@ public final class BenchResultWriter {
         metadata.put("logicalCores", ClientResources.LOGICAL_CORES);
         metadata.put("clientSaturationMetric", ClientResources.CLIENT_SATURATION_METRIC);
         metadata.put("requestWindow", options.requestWindow);
-        metadata.put("sendConcurrency", options.sendConcurrency);
+        metadata.put("submitConcurrency", options.submitConcurrency);
         metadata.put("warmupSeconds", options.warmupSeconds);
         metadata.put("triggerUrl", options.triggerUrl);
         metadata.put("statsUrl", options.statsUrl);

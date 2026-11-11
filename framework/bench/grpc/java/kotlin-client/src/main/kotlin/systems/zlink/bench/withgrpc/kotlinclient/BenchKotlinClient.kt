@@ -39,11 +39,13 @@ fun main(args: Array<String>) {
             }
             val streamImplementation =
                 if (trigger.pattern() == "send-saturation") {
-                    "platform send workers; coroutine admission terminal per stream"
+                    "${options.submitConcurrency} Java platform submit threads; one send per stream"
                 } else if (options.implementation == "grpc-kotlin") {
-                    "one platform submit thread; uncapped coroutine set; grpc-kotlin coroutine stub"
+                    "${options.submitConcurrency} Java platform submit threads; per-stream uncapped " +
+                        "coroutine submissions; grpc-kotlin coroutine stub"
                 } else {
-                    "one platform submit thread; admission-paced requests; uncapped coroutine replies"
+                    "${options.submitConcurrency} Java platform submit threads; per-stream " +
+                        "admission-paced requests and uncapped coroutine replies"
                 }
             val metadata =
                 linkedMapOf<String, Any>(
