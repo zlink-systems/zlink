@@ -57,6 +57,7 @@ set(unittests
     unittest_msg_auxiliary
     unittest_msg_view
     unittest_ctx_runtime
+    unittest_connect_io_thread_choice
     unittest_socket_runtime
     unittest_typed_option
     unittest_public_contract_headers
