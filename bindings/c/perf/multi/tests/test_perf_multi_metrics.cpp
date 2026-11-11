@@ -165,6 +165,68 @@ void test_latency_send_timestamp_window ()
     assert (!perf_multi_metric::is_expected (header, 1, perf_multi_metric::phase_active, 64));
 }
 
+void test_pubsub_latency_reference_result_lines ()
+{
+    bench_latency_stats_t latency;
+    latency.mean_ns = 2000000.0;
+    latency.p50_ns = 1500000.0;
+    latency.p95_ns = 3000000.0;
+    latency.p99_ns = 4000000.0;
+
+    std::ostringstream caught_output;
+    std::streambuf *saved = std::cout.rdbuf (caught_output.rdbuf ());
+    perf_multi_client::print_client_result_lines ("PUBSUB", "current", "tcp", 256, 1000.0,
+                                                 latency);
+    std::cout.rdbuf (saved);
+    const std::string caught_lines = caught_output.str ();
+    assert (caught_lines.find (",latency,2.000000") != std::string::npos);
+    assert (caught_lines.find ("latency_ref_") == std::string::npos);
+    assert (caught_lines.find ("inflight_floor") == std::string::npos);
+
+    std::ostringstream invalid_output;
+    saved = std::cout.rdbuf (invalid_output.rdbuf ());
+    print_invalid_latency_result ("current", "PUBSUB", "tcp", 256, 1000.0, latency, 8, 10000.0,
+                                  "receiver_not_caught_up_by_deadline");
+    print_sender_late_result ("current", "PUBSUB", "tcp", 256, 3);
+    std::cout.rdbuf (saved);
+    const std::string invalid_lines = invalid_output.str ();
+    assert (invalid_lines.find (",latency,invalid:receiver_not_caught_up_by_deadline")
+            != std::string::npos);
+    assert (invalid_lines.find (",latency_p95,invalid:receiver_not_caught_up_by_deadline")
+            != std::string::npos);
+    assert (invalid_lines.find (",latency_p99,invalid:receiver_not_caught_up_by_deadline")
+            != std::string::npos);
+    assert (invalid_lines.find (",latency_ref_p50,1.500000") != std::string::npos);
+    assert (invalid_lines.find (",latency_ref_p99,4.000000") != std::string::npos);
+    assert (invalid_lines.find (",inflight_floor,8") != std::string::npos);
+    assert (invalid_lines.find (",inflight_floor_ms,0.800000") != std::string::npos);
+    assert (invalid_lines.find (",sender_late,3") != std::string::npos);
+    assert (invalid_lines.find (",latency_ref_p95,") == std::string::npos);
+
+    std::ostringstream no_late_output;
+    saved = std::cout.rdbuf (no_late_output.rdbuf ());
+    print_sender_late_result ("current", "PUBSUB", "tcp", 256, 0);
+    std::cout.rdbuf (saved);
+    assert (no_late_output.str ().empty ());
+}
+
+void test_pubsub_catch_up_rule_keeps_bound_and_hold ()
+{
+    perf_multi_measurement::catch_up_tracker_t tracker (100.0);
+    assert (!tracker.observe (1000000000ULL, 0, 2));
+    assert (!tracker.observe (1100000000ULL, 10, 11));
+    assert (!tracker.observe (1599999999ULL, 59, 60));
+    assert (tracker.observe (1600000000ULL, 60, 61));
+    assert (tracker.in_flight_at_catch_up () == 1);
+
+    perf_multi_measurement::catch_up_tracker_t reset (100.0);
+    assert (!reset.observe (1000000000ULL, 0, 0));
+    assert (!reset.observe (1250000000ULL, 25, 27));
+    assert (!reset.observe (1750000000ULL, 50, 50));
+    assert (!reset.observe (2249999999ULL, 74, 74));
+    assert (reset.observe (2250000000ULL, 75, 75));
+}
+
 void test_request_metrics_separate_active_and_latency ()
 {
     using namespace perf_multi_socket_reqrep;
@@ -685,6 +747,8 @@ int main ()
     test_latency_duration_settings ();
     test_absolute_latency_schedule ();
     test_latency_send_timestamp_window ();
+    test_pubsub_latency_reference_result_lines ();
+    test_pubsub_catch_up_rule_keeps_bound_and_hold ();
     test_request_metrics_separate_active_and_latency ();
     connect_monitor_state_t ready_state;
     zlink_monitor_event_t ready_event = {};

@@ -17,7 +17,7 @@ from perf_common import (
     status_row_text,
     throughput_unit,
 )
-from perf_report import SINGLE_TABLE_HEADER_LINES, single_auto_hwm_detail_lines
+from perf_report import REQUIRED_METRICS, SINGLE_TABLE_HEADER_LINES, single_auto_hwm_detail_lines
 from perf_runtime import configure_runtime
 
 
@@ -521,6 +521,8 @@ def main(argv=None):
         for chunk in emitted_chunks
         for line in chunk.splitlines()
         if line.startswith("RESULT,")
+        and len(line.split(",")) == 7
+        and line.split(",")[5] in REQUIRED_METRICS
     ]
     skipped_cases = 0
     unsupported_cases = 0

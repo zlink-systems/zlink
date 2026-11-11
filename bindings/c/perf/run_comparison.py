@@ -4,6 +4,7 @@ bindings/c/perf - zlink benchmark runner
 """
 import datetime
 import collections
+import math
 import os
 import platform
 import queue
@@ -577,6 +578,8 @@ def run_command_with_metrics(
 
             if stream_name == "stdout":
                 stdout_buffer.append(line)
+                if line.startswith("RESULT,"):
+                    emit_benchmark_diag_line(line)
                 if on_stdout_line is not None:
                     try:
                         on_stdout_line(line)
@@ -864,7 +867,19 @@ def parse_result_line(line, transport, expected_sizes):
         line_transport = parts[3].strip().lower()
         line_size = int(parts[4].strip())
         metric = parts[5].strip().lower()
-        value = float(parts[6].strip())
+        if metric.startswith("latency_ref_") or metric in (
+            "inflight_floor",
+            "inflight_floor_ms",
+            "sender_late",
+        ):
+            return None, None
+        value_text = parts[6].strip()
+        if value_text.startswith("invalid:"):
+            value = float("nan")
+            invalid_reason = value_text[len("invalid:") :]
+        else:
+            value = float(value_text)
+            invalid_reason = None
     except ValueError:
         return None, f"ignored malformed RESULT numeric field: {line.strip()}"
 
@@ -880,7 +895,12 @@ def parse_result_line(line, transport, expected_sizes):
     ):
         return None, f"ignored unknown RESULT metric '{metric}': {line.strip()}"
 
-    return (line_transport, line_size, metric, value), None
+    warning = (
+        f"invalid RESULT metric '{metric}': {invalid_reason}"
+        if invalid_reason is not None
+        else None
+    )
+    return (line_transport, line_size, metric, value), warning
 
 
 _AUTO_HWM_DETAIL_SEEN = set()
@@ -892,6 +912,13 @@ def emit_benchmark_diag_line(line):
     stripped = (line or "").strip()
     if stripped.startswith(("MATCHED_DIAG,", "PACED_DIAG,", "BENCH_DIAG,")):
         print(stripped, flush=True)
+    elif stripped.startswith("RESULT,"):
+        parts = stripped.split(",")
+        if len(parts) == 7 and (
+            parts[5].startswith("latency_ref_")
+            or parts[5] in ("inflight_floor", "inflight_floor_ms", "sender_late")
+        ):
+            print(stripped, flush=True)
 
 
 def forward_multi_phase(line, source, pattern, server, client, expected_sizes):
@@ -899,7 +926,9 @@ def forward_multi_phase(line, source, pattern, server, client, expected_sizes):
     if pattern not in ("DEALER_DEALER", "PUBSUB"):
         return False
     token, separator, size_text = line.strip().partition(",")
-    if not separator or token not in ("PHASE_DRAINED", "PHASE_COMPLETE", "PHASE_DONE"):
+    if not separator or token not in (
+        "PHASE_DRAINED", "PHASE_COMPLETE", "PHASE_DONE", "PHASE_CATCHUP"
+    ):
         return False
     if token in ("PHASE_DRAINED", "PHASE_COMPLETE"):
         size_text, separator, count_text = size_text.partition(",")
@@ -947,7 +976,7 @@ def forward_multi_phase(line, source, pattern, server, client, expected_sizes):
 
 def multi_latency_phase_seconds(duration_seconds):
     latency_duration = parse_env_int("PERF_MULTI_LATENCY_DURATION_SECONDS", duration_seconds)
-    return 0.5 + max(1, latency_duration)
+    return 2 * max(1, latency_duration)
 
 
 def emit_auto_hwm_detail_line(line):
@@ -3079,6 +3108,12 @@ def run_single_test(binary_name, lib_name, transport, size, pattern_name=""):
                 if len(p) >= 7:
                     try:
                         metric = p[5].strip().lower()
+                        if metric.startswith("latency_ref_") or metric in (
+                            "inflight_floor",
+                            "inflight_floor_ms",
+                            "sender_late",
+                        ):
+                            continue
                         parsed.append({"metric": metric, "value": float(p[6])})
                     except ValueError:
                         continue
@@ -4252,9 +4287,14 @@ def emit_result_lines(result_map):
         pattern, transport, size, metric = key
         value = result_map[key]
         precision = 6 if metric.startswith("latency") else 3
+        value_text = (
+            "invalid:receiver_not_caught_up_by_deadline"
+            if metric.startswith("latency") and isinstance(value, float) and math.isnan(value)
+            else f"{value:.{precision}f}"
+        )
         print(
             f"RESULT,current,{display_pattern_name(pattern)},"
-            f"{transport},{size},{metric},{value:.{precision}f}"
+            f"{transport},{size},{metric},{value_text}"
         )
 
 

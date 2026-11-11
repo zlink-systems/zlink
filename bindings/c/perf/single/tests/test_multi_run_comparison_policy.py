@@ -101,6 +101,38 @@ def auto_hwm_detail_line(pattern, transport, component, msg_size, **fields):
 
 
 class MultiRunComparisonPolicyTests(unittest.TestCase):
+    def test_pubsub_reference_result_fields_are_not_judged(self):
+        for metric in (
+            "latency_ref_p50",
+            "latency_ref_p99",
+            "inflight_floor",
+            "inflight_floor_ms",
+            "sender_late",
+        ):
+            parsed, warning = RC.parse_result_line(
+                f"RESULT,current,PUBSUB,tcp,256,{metric},3.0", "tcp", {256}
+            )
+            self.assertIsNone(parsed, metric)
+            self.assertIsNone(warning, metric)
+
+        parsed, warning = RC.parse_result_line(
+            "RESULT,current,PUBSUB,tcp,256,latency,invalid:receiver_not_caught_up_by_deadline",
+            "tcp",
+            {256},
+        )
+        self.assertIsNotNone(parsed)
+        self.assertNotEqual(parsed[3], parsed[3])
+        self.assertIn("receiver_not_caught_up_by_deadline", warning)
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            RC.emit_benchmark_diag_line(
+                "RESULT,current,PUBSUB,tcp,256,latency_ref_p50,1.250000"
+            )
+            RC.emit_benchmark_diag_line("RESULT,current,PUBSUB,tcp,256,sender_late,9")
+        self.assertIn("latency_ref_p50,1.250000", output.getvalue())
+        self.assertIn("sender_late,9", output.getvalue())
+
     def test_one_way_phase_gates_follow_sender_and_receiver_roles(self):
         for pattern, receiver, sender in (
             ("DEALER_DEALER", "server", "client"),
@@ -239,9 +271,9 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
 
     def test_latency_duration_defaults_to_throughput_and_accepts_override(self):
         with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(RC.multi_latency_phase_seconds(7), 7.5)
+            self.assertEqual(RC.multi_latency_phase_seconds(7), 14)
         with mock.patch.dict(os.environ, {"PERF_MULTI_LATENCY_DURATION_SECONDS": "3"}):
-            self.assertEqual(RC.multi_latency_phase_seconds(7), 3.5)
+            self.assertEqual(RC.multi_latency_phase_seconds(7), 6)
         for option in (["--latency-duration", "3"], ["--latency-duration=3"]):
             with mock.patch.object(sys, "argv", ["runner"] + option):
                 self.assertEqual(RC.parse_args()["latency_duration_seconds"], 3)
@@ -279,6 +311,23 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
         self.assertCountEqual(output.getvalue().splitlines(), [
             "PACED_DIAG,source=stdout", "BENCH_DIAG,source=stderr",
         ])
+
+    def test_reference_result_lines_from_client_stdout_are_visible(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = RC.run_command_with_metrics(
+                [sys.executable, "-c", (
+                    "print('RESULT,current,PUBSUB,tcp,256,latency_ref_p50,1.250000', "
+                    "flush=True)"
+                )],
+                os.environ.copy(),
+                10,
+            )
+        self.assertEqual(result["returncode"], 0)
+        self.assertEqual(
+            output.getvalue().strip(),
+            "RESULT,current,PUBSUB,tcp,256,latency_ref_p50,1.250000",
+        )
 
     def test_stream_server_start_ready_token_parser(self):
         self.assertEqual(RC.parse_server_start_ready_size("SERVER_START_READY,1024\n"), 1024)

@@ -4,18 +4,20 @@
 #include "perf_common_multi.hpp"
 #include "../../common/perf_latency_histogram.hpp"
 
+#include <cstdint>
 #include <iomanip>
 #include <iostream>
 #include <string>
 
 struct bench_latency_stats_t
 {
-    bench_latency_stats_t () : mean_ns (0.0), p95_ns (0.0), p99_ns (0.0) {}
+    bench_latency_stats_t () : mean_ns (0.0), p50_ns (0.0), p95_ns (0.0), p99_ns (0.0) {}
     union
     {
         double mean_ns;
         double mean_us;
     };
+    double p50_ns;
     union
     {
         double p95_ns;
@@ -57,6 +59,7 @@ class bench_latency_sampler_t
         if (_histogram.count () == 0)
             return out;
         out.mean_ns = _histogram.sum_ns () / static_cast<double> (_histogram.count ());
+        out.p50_ns = _histogram.percentile (0.50);
         out.p95_ns = _histogram.percentile (0.95);
         out.p99_ns = _histogram.percentile (0.99);
         return out;
@@ -137,6 +140,49 @@ inline void print_result (const std::string &lib_type,
     std::cout << "RESULT," << lib_type << "," << pattern << "," << transport << "," << size
               << ",latency_p99," << std::fixed << std::setprecision (6) << latency_p99_ms
               << std::endl;
+}
+
+inline void print_invalid_latency_result (const std::string &lib_type,
+                                          const std::string &pattern,
+                                          const std::string &transport,
+                                          size_t size,
+                                          double throughput,
+                                          const bench_latency_stats_t &reference,
+                                          uint64_t inflight_floor,
+                                          double target_rate,
+                                          const char *reason)
+{
+    const double bandwidth = bandwidth_mb_per_second (pattern, size, throughput);
+    std::cout << "RESULT," << lib_type << "," << pattern << "," << transport << "," << size
+              << ",throughput," << std::fixed << std::setprecision (3) << throughput << std::endl;
+    std::cout << "RESULT," << lib_type << "," << pattern << "," << transport << "," << size
+              << ",bandwidth," << std::fixed << std::setprecision (3) << bandwidth << std::endl;
+    for (const char *metric : {"latency", "latency_p95", "latency_p99"})
+        std::cout << "RESULT," << lib_type << "," << pattern << "," << transport << "," << size
+                  << "," << metric << ",invalid:" << reason << std::endl;
+    std::cout << "RESULT," << lib_type << ',' << pattern << ',' << transport << ',' << size
+              << ",latency_ref_p50," << std::fixed << std::setprecision (6)
+              << reference.p50_ns / 1000000.0 << std::endl;
+    std::cout << "RESULT," << lib_type << ',' << pattern << ',' << transport << ',' << size
+              << ",latency_ref_p99," << std::fixed << std::setprecision (6)
+              << reference.p99_ns / 1000000.0 << std::endl;
+    std::cout << "RESULT," << lib_type << ',' << pattern << ',' << transport << ',' << size
+              << ",inflight_floor," << inflight_floor << std::endl;
+    std::cout << "RESULT," << lib_type << ',' << pattern << ',' << transport << ',' << size
+              << ",inflight_floor_ms," << std::fixed << std::setprecision (6)
+              << (target_rate > 0.0 ? inflight_floor / target_rate * 1000.0 : 0.0) << std::endl;
+}
+
+inline void print_sender_late_result (const std::string &lib_type,
+                                      const std::string &pattern,
+                                      const std::string &transport,
+                                      size_t size,
+                                      uint64_t late_count)
+{
+    if (late_count == 0)
+        return;
+    std::cout << "RESULT," << lib_type << ',' << pattern << ',' << transport << ',' << size
+              << ",sender_late," << late_count << std::endl;
 }
 
 template <typename MetricsT>

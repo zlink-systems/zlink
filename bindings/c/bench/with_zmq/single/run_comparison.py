@@ -597,6 +597,12 @@ def parse_result_line(line: str, transport: str, expected_size: int):
         line_transport = parts[3]
         line_size = int(parts[4])
         metric = parts[5].strip().lower()
+        if metric.startswith("latency_ref_") or metric in (
+            "inflight_floor",
+            "inflight_floor_ms",
+            "sender_late",
+        ):
+            return None
         value = float(parts[6])
     except ValueError:
         return None

@@ -94,11 +94,19 @@ def parse_report(path: pathlib.Path) -> ParsedReport:
     for line_number, raw_line in enumerate(lines, start=1):
         line = raw_line.strip()
         if line.startswith("RESULT,"):
-            result.result_line_count += 1
             parts = line.split(",")
             if len(parts) != 7:
+                result.result_line_count += 1
                 result.errors.append(f"line {line_number}: malformed RESULT line")
                 continue
+            metric_name = parts[5].strip().lower()
+            if metric_name.startswith("latency_ref_") or metric_name in (
+                "inflight_floor",
+                "inflight_floor_ms",
+                "sender_late",
+            ):
+                continue
+            result.result_line_count += 1
             try:
                 transport = parts[3].strip().lower()
                 msg_size = int(parts[4].strip())

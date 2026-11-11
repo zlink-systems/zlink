@@ -557,6 +557,12 @@ def parse_metric_from_result_line(
         transport = parts[3].strip()
         size = int(parts[4].strip())
         metric = parts[5].strip().lower()
+        if metric.startswith("latency_ref_") or metric in (
+            "inflight_floor",
+            "inflight_floor_ms",
+            "sender_late",
+        ):
+            return None, None
         value = float(parts[6].strip())
     except ValueError:
         return None, f"ignored malformed RESULT numeric field: {line}"

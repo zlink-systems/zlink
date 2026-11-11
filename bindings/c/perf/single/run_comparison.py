@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import math
 import os
 import platform
 import re
@@ -665,7 +666,19 @@ def parse_metric_from_result_line(
         transport = parts[3].strip()
         size = int(parts[4].strip())
         metric = parts[5].strip().lower()
-        value = float(parts[6].strip())
+        if metric.startswith("latency_ref_") or metric in (
+            "inflight_floor",
+            "inflight_floor_ms",
+            "sender_late",
+        ):
+            return None, None
+        value_text = parts[6].strip()
+        value = (
+            float("nan")
+            if metric in ("latency", LATENCY_P95_METRIC, LATENCY_P99_METRIC)
+            and value_text.startswith("invalid:")
+            else float(value_text)
+        )
     except ValueError:
         return None, f"ignored malformed RESULT numeric field: {line}"
     if lib != expected_lib or pattern != expected_pattern.upper():

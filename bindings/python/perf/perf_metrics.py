@@ -494,6 +494,12 @@ def parse_result_lines(output, *, warn=None):
                 warn_fn(f"ignored malformed RESULT line: {line}")
             continue
         _, lib, pattern, transport, size, metric, value = parts
+        if metric.startswith("latency_ref_") or metric in (
+            "inflight_floor",
+            "inflight_floor_ms",
+            "sender_late",
+        ):
+            continue
         rows.append(
             {
                 "lib": lib,

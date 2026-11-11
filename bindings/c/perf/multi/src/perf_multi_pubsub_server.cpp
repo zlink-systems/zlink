@@ -3,6 +3,7 @@
 #include "../common/perf_multi_handshake.hpp"
 #include "../common/perf_multi_metric_header.hpp"
 #include "../common/perf_multi_measurement.hpp"
+#include "../common/perf_multi_metrics.hpp"
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -249,12 +250,34 @@ inline bool run_server_loop (void *ctx,
           perf_multi_measurement::target_rate (received, active_s), epoch);
         if (schedule.rate <= 0.0)
             return false;
-        const uint64_t end_ns =
-          epoch + perf_multi_measurement::settle_ns
+        const uint64_t catch_up_deadline_ns =
+          epoch + static_cast<uint64_t> (settings.latency_duration_seconds) * 1000000000ULL;
+        uint64_t caught_up_ns = 0;
+        const uint64_t phase_deadline_ns =
+          catch_up_deadline_ns
           + static_cast<uint64_t> (settings.latency_duration_seconds) * 1000000000ULL;
         while (!perf_stop_requested ().load (std::memory_order_acquire)
-               && perf_multi_metric::now_ns () < end_ns) {
+               && perf_multi_metric::now_ns () < phase_deadline_ns) {
             const uint64_t now_ns = perf_multi_metric::now_ns ();
+            if (now_ns >= phase_deadline_ns)
+                break;
+            std::chrono::steady_clock::time_point catch_up_receipt;
+            if (caught_up_ns == 0
+                && perf_multi_handshake::query_start (
+                  &g_paced_gate, size, perf_multi_metric::phase_warmup, &catch_up_receipt)) {
+                const uint64_t receipt_ns =
+                  static_cast<uint64_t> (std::chrono::duration_cast<std::chrono::nanoseconds> (
+                                           catch_up_receipt.time_since_epoch ())
+                                           .count ());
+                if (receipt_ns <= catch_up_deadline_ns)
+                    caught_up_ns = receipt_ns;
+            }
+            const bool caught_up = caught_up_ns != 0;
+            const uint64_t end_ns =
+              caught_up
+                ? caught_up_ns
+                    + static_cast<uint64_t> (settings.latency_duration_seconds) * 1000000000ULL
+                : phase_deadline_ns;
             if (now_ns >= end_ns)
                 break;
             if (!schedule.due (now_ns)) {
@@ -266,11 +289,9 @@ inline bool run_server_loop (void *ctx,
                     return false;
                 continue;
             }
-            const perf_multi_metric::phase_t phase =
-              perf_multi_measurement::latency_sample (now_ns, epoch,
-                                                      settings.latency_duration_seconds)
-                ? perf_multi_metric::phase_latency
-                : perf_multi_metric::phase_warmup;
+            const perf_multi_metric::phase_t phase = caught_up && now_ns >= caught_up_ns
+                                                       ? perf_multi_metric::phase_latency
+                                                       : perf_multi_metric::phase_warmup;
             if (!publish_once (server, *payload, size, run_id, phase, &seq, &accepted, &blocked,
                                &waits))
                 return false;
@@ -288,7 +309,9 @@ inline bool run_server_loop (void *ctx,
             return false;
         perf_multi_measurement::print_diagnostic (
           k_pattern, size, active_sends, active_s, schedule, received,
-          paced_received / static_cast<double> (settings.latency_duration_seconds));
+          paced_received / static_cast<double> (settings.latency_duration_seconds),
+          caught_up_ns != 0, caught_up_ns != 0 ? (caught_up_ns - epoch) / 1e9 : -1.0);
+        print_sender_late_result (lib_name, k_pattern, transport, size, schedule.late_count);
     }
     (void) lib_name;
     // Production completed; the receiver's normal STOP may already be present.
@@ -379,6 +402,13 @@ inline int run_server_benchmark (const std::string &lib_name, const std::string 
                 perf_stop_requested ().store (true, std::memory_order_release);
                 perf_multi_handshake::signal_stop (&g_paced_gate);
                 break;
+            }
+            size_t catch_up_size = 0;
+            if (perf_multi_handshake::parse_size_command_line (line, "PHASE_CATCHUP,",
+                                                               &catch_up_size)) {
+                perf_multi_handshake::signal_start (&g_paced_gate, catch_up_size,
+                                                    perf_multi_metric::phase_warmup);
+                continue;
             }
             if (line == "STOP" || line == "QUIT") {
                 perf_stop_requested ().store (true, std::memory_order_release);

@@ -76,6 +76,19 @@ bindings 성능 개선 계획 문서는 실행 규칙과 완료 기준을 정의
 handshake 의미를 바꿔야 할 때는 C perf를 먼저 수정하고, 그 변경을 본 정책과
 suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
 
+### PUBSUB multi latency
+
+- catch-up은 paced 시작 뒤 `max(1, target_rate × 1 ms)` 이하의 추정 in-flight가
+  연속 0.5초 유지된 시각으로 판정한다. 추정 in-flight는 목표 송신 일정의 누적 수에서
+  최소 수신 subscriber의 누적 수를 뺀 값이며, 음수는 0으로 취급한다.
+  catch-up은 기존 latency duration 동안 허용하고, 도달 뒤 같은 시간만큼 표본을 수집한다.
+  deadline까지 도달하지 못하면 `latency`, `latency_p95`, `latency_p99`를
+  `invalid:<reason>`으로 기록하고 throughput은 유효한 측정값을 유지한다.
+- **판정 외 참고값.** latency가 invalid이면 관측 latency 표본의
+  `latency_ref_p50`, `latency_ref_p99`, progress tick에서 최소 subscriber
+  in-flight의 최솟값 `inflight_floor`, 그리고 `inflight_floor_ms`(floor ÷ target rate, ms)를
+  판정에 쓰지 않는 참고값으로 기록한다.
+
 - `bindings/c/perf`는 `doc/guide` 및 `doc/spec/core` 문서에 기술된 public C API만 사용한다.
   내부 헤더나 내부 함수를 직접 호출하지 않는다.
 - `bindings/<lang>/perf`는 해당 언어 binding의 public API만 사용한다. binding
