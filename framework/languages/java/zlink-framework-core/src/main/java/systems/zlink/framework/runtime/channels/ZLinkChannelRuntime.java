@@ -823,6 +823,7 @@ public final class ZLinkChannelRuntime
         ZLinkClientServerLocationRuntime runtime =
                 new ZLinkClientServerLocationRuntime(
                         configuration.store(),
+                        configuration.liveRows(),
                         configuration.owner(),
                         backendFactory,
                         context,

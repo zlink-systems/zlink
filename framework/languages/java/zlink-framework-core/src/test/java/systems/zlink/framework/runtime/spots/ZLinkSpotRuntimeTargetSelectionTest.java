@@ -191,10 +191,7 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
                         ZLinkRegisteredLocationStores.fromUnified(store),
                         new ZLinkLocationOptions());
 
-        var placementRows =
-                ZLinkSpotRuntime.listUserSpotPlacementNodes(store, resolvers, "mesh")
-                        .toCompletableFuture()
-                        .join();
+        var placementRows = resolvers.listLiveMeshNodes("mesh").toCompletableFuture().join();
 
         assertEquals(List.of(replacement), placementRows);
     }
