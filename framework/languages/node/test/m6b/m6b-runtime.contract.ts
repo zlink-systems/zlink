@@ -1,3 +1,4 @@
+import { ZLinkHostServiceRelocationRuntime } from '../../packages/framework/src/runtime/host/service-relocation-host-runtime';
 import { inspectRuntime } from '../../packages/framework/src/runtime/internal-observation';
 import {
   prepareZLinkRequestReply,
@@ -2870,6 +2871,7 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
     storeVersion: 'target-v1'
   };
   assert.equal(await runtime.commitSpotMessageFollowIngress(seal, target, 30_000), true);
+  assert.equal(runtime[inspectRuntime]().directSpotRoute('room'), undefined);
   assert.equal(relayed.length, 2);
   const relayedHeader = decodeStatefulHeader(
     relayed.find((record) => record.target === 'node-b')!.parts[0]!
@@ -2960,13 +2962,25 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
   );
   assert.equal(runtime.abortSpotMessageFollowIngress(abortSeal), true);
   assert.equal(restored.length, 2);
+  assert.equal(
+    await ingress?.({
+      command: M6bServiceWireCommand.spotSend,
+      flags: 0,
+      sourceRoutingId: 'caller',
+      parts: [encodeSpotHeader('spotSend', 'source-spot', abortSource), payload]
+    }),
+    'application',
+    'the next local message is admitted immediately after rollback'
+  );
 
+  const restoredBeforeChained = restored.length;
   runtime.restoreSpotAuthority('chained-room', 'user_spot', 'Room', 9n, 13n);
   const chainedSource = {
     ...source,
     spot: { spotId: 'chained-room', generation: 9n },
     authorityOwnerGeneration: 13n
   };
+  runtime.rememberSpotRoute(chainedSource);
   const chainedSeal = runtime.sealSpotMessageFollowIngress(chainedSource);
   assert.ok(chainedSeal);
   assert.equal(
@@ -2982,19 +2996,151 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
   );
   const relayCount = relayed.length;
   assert.equal(await runtime.commitSpotMessageFollowIngress(chainedSeal, null, 30_000), true);
+  assert.equal(runtime[inspectRuntime]().directSpotRoute('chained-room'), undefined);
   assert.equal(
     await runtime.commitSpotMessageFollowIngress(chainedSeal, null, 30_000),
     false,
     'the seal is consumed once'
   );
   assert.equal(relayed.length, relayCount, 'a chained commit sends no Follow');
-  assert.equal(restored.length, 2, 'a chained commit never restores ingress to the source');
+  assert.equal(
+    restored.length,
+    restoredBeforeChained,
+    'a chained commit never restores ingress to the source'
+  );
   assert.equal(replies.length, 2);
   assert.equal(
     decodeStatefulReply(replies[1]![0]!, 92n, 'spotRequest').failureCode,
     ServiceWireFrameworkErrorCode.actorLocationStale
   );
   runtime.close();
+});
+
+test('confirmed Preserve publishes the affected Instance fence before local rollback admission', async () => {
+  let ingress: ((record: RawServiceIngressRecord) => unknown) | undefined;
+  const raw = {
+    topology: {},
+    mailbox: { tryEnqueue: () => true },
+    setServiceIngress(handler: typeof ingress) {
+      ingress = (record) => handler!(withIngressOwner(record));
+    }
+  } as unknown as RawServiceMeshRuntime;
+  const local = new ServiceStatefulRuntime(raw, 'node-a', 1n);
+  const primary = instanceAuthoritySnapshot({
+    spotId: 'preserved-room',
+    meshName: 'mesh-a',
+    nodeRid: 'node-a',
+    storeVersion: 'source-v1',
+    authorityOwnerGeneration: 7n,
+    state: 'ready'
+  });
+  local.restoreSpotAuthority('preserved-room', 'instance_spot', 'TenantWorker', 11n, 7n);
+  const preserved = { ...primary, kind: 'stored' as const, storeVersion: { value: 'source-v2' } };
+  const key = encodeAuthorityKey('instance_spot', 'preserved-room').value;
+  const relocation = new ZLinkHostServiceRelocationRuntime({
+    locationStore: () => ({
+      async readAuthority() {
+        return primary;
+      },
+      async readOwnerLease() {
+        return {
+          kind: 'found',
+          token: { ownerId: 'owner-a', leaseGeneration: 5n },
+          leaseExpiresAt: new Date(Date.now() + 30_000),
+          storeNow: new Date()
+        };
+      },
+      async compareExchangeAuthority() {
+        return preserved;
+      }
+    }),
+    meshNode: () => local
+  } as never);
+  try {
+    const settlement = await relocation.settleSourceAuthority(
+      {
+        aggregateId: 'preserve-local',
+        aggregateGeneration: 1n,
+        participants: [
+          {
+            key,
+            objectKind: 'instance_spot',
+            stableType: 'TenantWorker',
+            objectGeneration: 11n,
+            authorityOwnerGeneration: 7n,
+            applicationState: Buffer.alloc(0),
+            boundSessionState: Buffer.alloc(0),
+            queuedMessages: [],
+            timers: []
+          }
+        ],
+        memberships: []
+      },
+      primary,
+      { ownerId: 'other-owner', ownerLeaseGeneration: 6n } as never,
+      () => true,
+      undefined
+    );
+    assert.equal(settlement, 'source');
+    assert.equal(
+      local[inspectRuntime]().directSpotRoute('preserved-room')?.storeVersion,
+      'source-v2'
+    );
+    assert.equal(
+      local[inspectRuntime]().instanceRoute('preserved-room')?.storeVersion,
+      'source-v2'
+    );
+    const route = {
+      spot: { spotId: 'preserved-room', generation: 11n },
+      targetNodeRid: 'node-a',
+      targetNodeGeneration: 1n,
+      authorityOwnerGeneration: 7n,
+      ownerLeaseGeneration: 5n,
+      storeVersion: 'source-v2'
+    };
+    assert.equal(
+      await ingress?.({
+        command: M6bServiceWireCommand.spotSend,
+        flags: 0,
+        sourceRoutingId: 'caller',
+        parts: [
+          encodeSpotHeader('spotSend', 'caller-spot', route),
+          encodeApplicationPayload({
+            packetName: 'AfterRollback',
+            contentType: 'application/octet-stream',
+            payload: Buffer.alloc(0)
+          })
+        ]
+      }),
+      'application'
+    );
+    // Membership and recovery completion may have advanced only StoreVersion.
+    local.rememberSpotRoute({ ...route, storeVersion: 'same-owner-later-version' });
+    const intent = local[inspectRuntime]().instanceRoute('preserved-room');
+    assert.ok(intent);
+    local.registerInstanceIntent('TenantWorker', {
+      ...intent,
+      storeVersion: 'same-owner-later-version'
+    });
+    const seal = local.sealSpotMessageFollowIngress(route);
+    assert.ok(seal);
+    await local.commitSpotMessageFollowIngress(
+      seal,
+      {
+        ...route,
+        targetNodeRid: 'node-b',
+        targetNodeGeneration: 2n,
+        authorityOwnerGeneration: 8n,
+        ownerLeaseGeneration: 6n,
+        storeVersion: 'target-v3'
+      },
+      30_000
+    );
+    assert.equal(local[inspectRuntime]().directSpotRoute('preserved-room'), undefined);
+    assert.equal(local[inspectRuntime]().instanceRoute('preserved-room'), undefined);
+  } finally {
+    local.close();
+  }
 });
 
 test('Spot Message Follow does not impose a record-count or stored-byte admission bound', async () => {
@@ -5880,8 +6026,8 @@ test('remote Session bind publishes its exact Location fence for the first Actor
   }
 });
 
-test('authority reconciliation exact-reads complete scans and publishes only Ready mesh-local routes', async () => {
-  const readyV1 = instanceAuthoritySnapshot({
+test('startup recovery scans steady authorities without publishing source routes', async () => {
+  const ready = instanceAuthoritySnapshot({
     spotId: 'tenant:42',
     meshName: 'mesh-b',
     nodeRid: 'node-b',
@@ -5889,75 +6035,25 @@ test('authority reconciliation exact-reads complete scans and publishes only Rea
     authorityOwnerGeneration: 7n,
     state: 'ready'
   });
-  const cold = instanceAuthoritySnapshot({
-    spotId: 'tenant:cold',
-    meshName: 'mesh-a',
-    nodeRid: 'node-a',
-    storeVersion: 'store-cold',
-    authorityOwnerGeneration: 3n,
-    state: 'coldActivating'
-  });
-  const store = new ReconcileAuthorityStore([
-    ['row:tenant:42', readyV1],
-    ['row:tenant:cold', cold]
-  ]);
-  const nodeA = new RecordingAuthorityNode('mesh-a', 'node-a');
-  const nodeB = new RecordingAuthorityNode('mesh-b', 'node-b');
-  const changedSpotIds: string[] = [];
+  const store = new ReconcileAuthorityStore([['row:tenant:42', ready]]);
+  const node = new RecordingAuthorityNode('mesh-b', 'node-b');
   const runtime = new ZLinkStatefulAuthorityRouteRuntime({
     store,
-    meshNodes: new Map([
-      ['mesh-a', nodeA as unknown as ZLinkBackendMeshNode],
-      ['mesh-b', nodeB as unknown as ZLinkBackendMeshNode]
-    ]),
-    pollingIntervalMs: 60_000,
+    meshNodes: new Map([['mesh-b', node as unknown as ZLinkBackendMeshNode]]),
     pageSize: 1,
     reportError: (error) => {
       throw error;
-    },
-    onSpotRouteChanged: (spotId) => changedSpotIds.push(spotId)
+    }
   });
-
-  await runtime.reconcile();
+  await runtime.start();
   assert.deepEqual(store.readKeys, []);
-  assert.equal(nodeA.remembered.length, 0);
-  assert.equal(nodeB.remembered.length, 1);
-  assert.equal(nodeB.remembered[0]!.route.spot.spotId, 'tenant:42');
-  assert.equal(nodeB.intents[0]!.route.storeVersion, 'store-v1');
-  assert.deepEqual(changedSpotIds, ['tenant:42']);
-
-  const readyV2 = instanceAuthoritySnapshot({
-    spotId: 'tenant:42',
-    meshName: 'mesh-b',
-    nodeRid: 'node-b',
-    storeVersion: 'store-v2',
-    authorityOwnerGeneration: 7n,
-    state: 'ready'
-  });
-  store.replace('row:tenant:42', readyV2);
-  await runtime.reconcile();
-  assert.equal(nodeB.intents.at(-1)!.route.storeVersion, 'store-v2');
-  assert.deepEqual(nodeB.forgottenIntents.at(-1), {
-    spotId: 'tenant:42',
-    objectGeneration: 11n,
-    authorityOwnerGeneration: 7n,
-    storeVersion: 'store-v1'
-  });
-  assert.deepEqual(changedSpotIds, ['tenant:42', 'tenant:42']);
-
-  store.scanExpired = true;
-  store.replace('row:tenant:42', cold);
-  const cleanupCount = nodeB.forgottenIntents.length;
-  await runtime.reconcile();
-  assert.equal(nodeB.forgottenIntents.length, cleanupCount);
-
-  store.scanExpired = false;
-  await runtime.reconcile();
-  assert.equal(nodeB.forgottenIntents.at(-1)!.storeVersion, 'store-v2');
-  assert.deepEqual(changedSpotIds, ['tenant:42', 'tenant:42', 'tenant:42']);
+  assert.equal(node.remembered.length, 0);
+  assert.equal(node.intents.length, 0);
+  assert.equal(node.forgotten.length, 0);
+  assert.equal(node.forgottenIntents.length, 0);
 });
 
-test('live Instance route fences reject an older reconcile snapshot', async () => {
+test('local Instance publication rejects an older expected-current route', async () => {
   const raw = {
     topology: { peer: () => undefined },
     observePeerRoute: () => ({ generation: 1n, ready: true }),
@@ -5995,11 +6091,10 @@ test('live Instance route fences reject an older reconcile snapshot', async () =
   // The live terminal completion advances the opaque StoreVersion.
   runtime.registerInstanceIntent('TenantWorker', routeV2);
   runtime.rememberSpotRoute(directV2);
-  // A reconcile started from v1 must not replace the live v2 route.
+  // An older local completion must not replace the live v2 route.
   runtime.registerInstanceIntent('TenantWorker', routeV1, routeV1);
   runtime.rememberSpotRoute(directV1, directV1);
-  // Once the durable snapshot catches up, an already-current live route may
-  // be accepted even though the snapshot baseline is still the older route.
+  // An already-current route remains valid with the earlier expected fence.
   runtime.registerInstanceIntent('TenantWorker', routeV2, routeV1);
   runtime.rememberSpotRoute(directV2, directV1);
 
@@ -6014,13 +6109,12 @@ test('live Instance route fences reject an older reconcile snapshot', async () =
   runtime.close();
 });
 
-test('authority reconciliation refuses startup when the recovery scan expires', async () => {
+test('startup authority recovery refuses startup when the recovery scan expires', async () => {
   const store = new ReconcileAuthorityStore([]);
   store.scanExpired = true;
   const runtime = new ZLinkStatefulAuthorityRouteRuntime({
     store,
     meshNodes: new Map(),
-    pollingIntervalMs: 60_000,
     pageSize: 1,
     reportError: () => undefined
   });
@@ -6028,7 +6122,7 @@ test('authority reconciliation refuses startup when the recovery scan expires', 
   await assert.rejects(runtime.start(), /initial authority recovery scan expired/);
 });
 
-test('authority reconciliation restores the durable Instance inbox before startup returns', async () => {
+test('startup authority recovery restores the durable Instance inbox before startup returns', async () => {
   const recoveryEnvelope = encodeInstanceActivationRecoveryEnvelope({
     target: {
       targetSpotId: 'tenant:recover',
@@ -6074,14 +6168,13 @@ test('authority reconciliation restores the durable Instance inbox before startu
       delete: async () => assert.fail('The authority adapter owns root deletion.')
     },
     meshNodes: new Map([['mesh-a', node as unknown as ZLinkBackendMeshNode]]),
-    pollingIntervalMs: 60_000,
     pageSize: 10,
     reportError: (error) => {
       throw error;
     }
   });
 
-  await runtime.reconcile(undefined, true);
+  await runtime.start();
   assert.equal(node.recovered.length, 1);
   assert.equal(node.recovered[0]!.envelope.target.targetSpotId, 'tenant:recover');
   assert.equal(node.recovered[0]!.route.storeVersion, 'store-recovery');
@@ -6096,16 +6189,16 @@ test('authority reconciliation restores the durable Instance inbox before startu
       delete: async () => assert.fail('The authority adapter owns root deletion.')
     },
     meshNodes: new Map([['mesh-a', staleDescriptorNode as unknown as ZLinkBackendMeshNode]]),
-    pollingIntervalMs: 60_000,
     pageSize: 10,
     reportError: () => undefined
   });
-  await staleDescriptorRuntime.reconcile(undefined, true);
+  await staleDescriptorRuntime.start();
   assert.equal(staleDescriptorNode.recovered.length, 0);
-  assert.equal(staleDescriptorNode.forgotten.length, 1);
+  assert.equal(staleDescriptorNode.remembered.length, 0);
+  assert.equal(staleDescriptorNode.intents.length, 0);
 });
 
-test('authority reconciliation exact-reads Ready Instance activation recovery candidates', async () => {
+test('startup authority recovery exact-reads Ready Instance activation recovery candidates', async () => {
   const recovery = {
     reference: 'relocation:stale-ready',
     sha256: Buffer.alloc(32, 0x5a),
@@ -6142,22 +6235,21 @@ test('authority reconciliation exact-reads Ready Instance activation recovery ca
       delete: async () => assert.fail('The exact Ready snapshot has no recovery pointer.')
     },
     meshNodes: new Map([['mesh-a', node as unknown as ZLinkBackendMeshNode]]),
-    pollingIntervalMs: 60_000,
     pageSize: 10,
     reportError: (error) => {
       throw error;
     }
   });
 
-  await runtime.reconcile(undefined, true);
+  await runtime.start();
 
   assert.deepEqual(store.readKeys, ['row:tenant:stale-ready']);
   assert.equal(node.recovered.length, 0);
-  assert.equal(node.intents.length, 1);
-  assert.equal(node.intents[0]!.route.storeVersion, 'store-exact');
+  assert.equal(node.intents.length, 0);
+  assert.equal(node.remembered.length, 0);
 });
 
-test('authority reconciliation resumes an exact Pending Instance reservation', async () => {
+test('startup authority recovery resumes an exact Pending Instance reservation', async () => {
   const recoveryEnvelope = encodeInstanceActivationRecoveryEnvelope({
     target: {
       targetSpotId: 'tenant:pending',
@@ -6204,14 +6296,13 @@ test('authority reconciliation resumes an exact Pending Instance reservation', a
       delete: async () => assert.fail('The authority adapter owns root deletion.')
     },
     meshNodes: new Map([['mesh-a', node as unknown as ZLinkBackendMeshNode]]),
-    pollingIntervalMs: 60_000,
     pageSize: 10,
     reportError: (error) => {
       throw error;
     }
   });
 
-  await runtime.reconcile(undefined, true);
+  await runtime.start();
   assert.deepEqual(store.readKeys, ['row:tenant:pending']);
   assert.equal(node.recoveredPending.length, 1);
   assert.equal(node.recoveredPending[0]!.pending.reservationId, 'reservation-pending');
@@ -6393,25 +6484,39 @@ test('production Instance authority adapter writes schema ColdActivating then Re
     owner: () => ({ ownerId: 'owner-a', leaseGeneration: 5n })
   });
   let recoveryReleaseCount = 0;
+  const recoveredLocal = new ServiceStatefulRuntime(
+    {
+      topology: {},
+      setServiceIngress() {}
+    } as unknown as RawServiceMeshRuntime,
+    'node-a',
+    1n
+  );
+  recoveredLocal.registerAsyncInstanceActivationAuthority(restartedAuthority);
   const recoveryNode = new RecordingAuthorityNode(
     'mesh-a',
     'node-a',
     async (recoveryTarget, route) => {
       recoveryReleaseCount += 1;
-      return await restartedAuthority.complete(recoveryTarget, route);
+      const released = await recoveredLocal.completeRecoveredInstanceActivation(
+        recoveryTarget,
+        route,
+        null
+      );
+      assert.ok(released);
+      return released;
     }
   );
   const recoveryRuntime = new ZLinkStatefulAuthorityRouteRuntime({
     store,
     relocationStore,
     meshNodes: new Map([['mesh-a', recoveryNode as unknown as ZLinkBackendMeshNode]]),
-    pollingIntervalMs: 60_000,
     pageSize: 10,
     reportError: (error) => {
       throw error;
     }
   });
-  await recoveryRuntime.reconcile(undefined, true);
+  await recoveryRuntime.start();
   assert.equal(recoveryReleaseCount, 1);
   assert.equal(recoveryNode.recovered.length, 0);
   const releasedSnapshot = await store.readAuthority({
@@ -6421,7 +6526,7 @@ test('production Instance authority adapter writes schema ColdActivating then Re
   if (releasedSnapshot.kind !== 'snapshot') throw new Error('Released authority is missing.');
   assert.notEqual(releasedSnapshot.storeVersion.value, committed.route.storeVersion);
   assert.equal(
-    recoveryNode.remembered.at(-1)!.route.storeVersion,
+    recoveredLocal[inspectRuntime]().directSpotRoute('tenant:42')?.storeVersion,
     releasedSnapshot.storeVersion.value
   );
   assert.equal(
@@ -6429,6 +6534,7 @@ test('production Instance authority adapter writes schema ColdActivating then Re
     undefined
   );
   assert.ok(storedRequest !== undefined);
+  recoveredLocal.close();
 });
 
 test('production Instance Ready commit Store rejection is exposed as RequestFailed with the original cause', async () => {
@@ -6626,53 +6732,16 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     leaseGeneration: 1n,
     storeVersion: 'store-v1'
   };
-  const authorityRoutes = new ZLinkStatefulAuthorityRouteRuntime({
-    store: singleAuthorityStore('canonical-authority:tenant:42', {
-      kind: 'snapshot',
-      storeVersion: { value: instanceRoute.storeVersion } as ZLinkAuthoritySnapshot['storeVersion'],
-      payload: encodeServiceInstanceAuthorityPayload({
-        state: 'ready',
-        stableType: 'TenantWorker',
-        spotId: instanceRoute.targetSpotId,
-        ownerId: instanceRoute.ownerId,
-        ownerLeaseGeneration: instanceRoute.leaseGeneration,
-        ownerMeshName: 'm6b-mesh',
-        ownerNodeRid: instanceRoute.targetNodeRid,
-        ownerNodeGeneration: instanceRoute.targetNodeGeneration
-      }),
-      objectGeneration: instanceRoute.objectGeneration,
-      authorityOwnerGeneration: instanceRoute.authorityOwnerGeneration,
-      ownerId: instanceRoute.ownerId,
-      ownerLeaseGeneration: instanceRoute.leaseGeneration,
-      allocation: {
-        state: 'active',
-        objectKind: 'instance_spot',
-        stableType: 'TenantWorker',
-        descriptor: {
-          meshName: 'm6b-mesh',
-          rid: instanceRoute.targetNodeRid
-        },
-        descriptorLifecycleGeneration: instanceRoute.targetNodeGeneration,
-        capacity: {
-          actors: 0,
-          spots: 1,
-          spotType: {
-            objectKind: 'instance_spot',
-            stableType: 'TenantWorker',
-            count: 1
-          }
-        }
-      },
-      storeNow: new Date()
-    }),
-    meshNodes: new Map([['m6b-mesh', backend]]),
-    pollingIntervalMs: 60_000,
-    pageSize: 100,
-    reportError: (error) => {
-      throw error;
-    }
+  // The local activation commit publishes the confirmed Instance intent.
+  backend.registerInstanceIntent('TenantWorker', instanceRoute);
+  backend.rememberSpotRoute({
+    spot: { spotId: instanceRoute.targetSpotId, generation: instanceRoute.objectGeneration },
+    targetNodeRid: instanceRoute.targetNodeRid,
+    targetNodeGeneration: instanceRoute.targetNodeGeneration,
+    authorityOwnerGeneration: instanceRoute.authorityOwnerGeneration,
+    ownerLeaseGeneration: instanceRoute.leaseGeneration,
+    storeVersion: instanceRoute.storeVersion
   });
-  await authorityRoutes.start();
   try {
     const targetSpot = backend.getOrCreateSpot('spot-target').spot;
     const sourceSpot = backend.entrySpot();
@@ -6909,7 +6978,6 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     assert.equal(staleCompletion.terminalResult, RequestResult.Conflict);
     assert.equal(staleCompletion.failureErrno, 21);
   } finally {
-    await authorityRoutes.stop();
     await backend.close();
   }
 });
@@ -8184,26 +8252,6 @@ function createFakeStream(
   };
 }
 
-function singleAuthorityStore(key: string, snapshot: ZLinkAuthoritySnapshot): ZLinkAuthorityStore {
-  const authorityKey = { value: key } as Parameters<ZLinkAuthorityStore['readAuthority']>[0];
-  return {
-    async readAuthority(requested: typeof authorityKey) {
-      return requested.value === key ? snapshot : { kind: 'missing', storeNow: new Date() };
-    },
-    async listAuthorities() {
-      return {
-        kind: 'page',
-        items: [
-          {
-            key: authorityKey,
-            snapshot
-          }
-        ]
-      };
-    }
-  } as unknown as ZLinkAuthorityStore;
-}
-
 function instanceAuthoritySnapshot(options: {
   readonly spotId: string;
   readonly meshName: string;
@@ -8275,12 +8323,6 @@ class ReconcileAuthorityStore implements ZLinkAuthorityStore {
 
   constructor(rows: Array<[string, ZLinkAuthoritySnapshot]>) {
     this.rows = rows;
-  }
-
-  replace(key: string, snapshot: ZLinkAuthoritySnapshot): void {
-    const row = this.rows.find((entry) => entry[0] === key);
-    if (row === undefined) throw new Error(`Missing authority row '${key}'.`);
-    row[1] = snapshot;
   }
 
   async readAuthority(key: ZLinkAuthorityKey) {

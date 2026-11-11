@@ -244,21 +244,7 @@ public sealed class GatewaySession(IZLinkSessionContext context) : IZLinkSession
 
 두 Store capability를 별도로 등록한다.
 
-```csharp
-options.AddLocationStore(
-    new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions
-    {
-        ConnectionString = "redis:6379",
-        KeyPrefix = "game:location"
-    }));
-
-options.AddRelocationStore(
-    new ZLinkRedisRelocationStore(new ZLinkRedisRelocationOptions
-    {
-        ConnectionString = "redis:6379",
-        KeyPrefix = "game:relocation"
-    }));
-```
+[Store plugin 설정](25-location.ko.md#store-setup)에서 두 plugin의 package와 등록 코드를 확인한다.
 
 | Interface | 책임 |
 |---|---|

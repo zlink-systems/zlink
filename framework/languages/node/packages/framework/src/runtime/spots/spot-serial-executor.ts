@@ -1,3 +1,4 @@
+import type { ZLinkExecutionPolicy } from '../admission';
 import { ZLinkUserSpotExecutionMode } from '../../contracts';
 import { ZLinkActorSerialExecutor } from '../actors';
 import type {
@@ -30,13 +31,11 @@ export class ZLinkSpotSerialExecutor {
   private readonly timerSerials = new Map<string, ZLinkSpotSerialTurnExecutor>();
   readonly actorExecutors = new Map<string, ZLinkActorSerialExecutor>();
   private executionBarrier: ZLinkExecutionBarrier | undefined;
-  private captureActorExecutionPolicy?: (
-    actorId: string
-  ) => (owner: object | undefined) => boolean | undefined;
+  private captureActorExecutionPolicy?: (actorId: string) => ZLinkExecutionPolicy | undefined;
   private captureActorExecutionOwner?: (actorId: string) => object | undefined;
 
   setActorExecutionPolicy(
-    capture: (actorId: string) => (owner: object | undefined) => boolean | undefined,
+    capture: (actorId: string) => ZLinkExecutionPolicy | undefined,
     captureOwner?: (actorId: string) => object | undefined
   ): void {
     this.captureActorExecutionPolicy = capture;
@@ -94,7 +93,11 @@ export class ZLinkSpotSerialExecutor {
         await finish?.();
       },
       {
-        canExecuteApplication: (record) => record.context === undefined || !barrier.isCurrent(seal)
+        canExecuteApplication: (record) =>
+          record.context === undefined ||
+          (record.context as import('../execution').ZLinkExecutionBarrierClaim).isSuspended ===
+            true ||
+          !barrier.isCurrent(seal)
       }
     );
     this.preparation = { seal, complete, execution };

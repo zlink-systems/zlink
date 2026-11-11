@@ -13,6 +13,10 @@
 #include <utility>
 #include <mutex>
 
+#if defined(__linux__) || defined(__APPLE__)
+#include <pthread.h>
+#endif
+
 namespace zlink::framework::runtime
 {
 
@@ -102,7 +106,7 @@ bool offload_executor_t::try_submit_internal (std::function<void ()> work)
         if (_stopping && _active == _role_active && application_queue_empty_locked ()) {
             return false;
         }
-        if (idle_worker_count_locked () <= _queue.size () && _live_workers < _max_worker_count) {
+        if (!idle_workers_exceed_locked (_queue.size ()) && _live_workers < _max_worker_count) {
             start_worker_locked ();
         }
         _queue.push_back (work_item_t{std::move (work), std::nullopt});
@@ -164,7 +168,7 @@ bool offload_executor_t::try_submit_application (work_t work)
         if (_stopping) {
             return false;
         }
-        if (idle_worker_count_locked () <= _queue.size () && _live_workers < _max_worker_count) {
+        if (!idle_workers_exceed_locked (_queue.size ()) && _live_workers < _max_worker_count) {
             start_worker_locked ();
         }
         _queue.push_back (work_item_t{std::move (work), std::stop_source{}});
@@ -329,12 +333,13 @@ bool offload_executor_t::publishing_role () const noexcept
     return _publishing_executor == this;
 }
 
-std::size_t offload_executor_t::idle_worker_count_locked () const noexcept
+bool offload_executor_t::idle_workers_exceed_locked (std::size_t count) const noexcept
 {
-    std::size_t count = 0;
+    // Stops at the (count + 1)th idle worker; an empty queue needs only the head.
     for (auto *worker = _idle_head; worker; worker = worker->next_idle)
-        ++count;
-    return count;
+        if (count-- == 0)
+            return true;
+    return false;
 }
 
 void offload_executor_t::add_idle_locked (worker_t &worker) noexcept
@@ -421,6 +426,12 @@ std::shared_ptr<offload_executor_t::worker_t> offload_executor_t::try_handoff (w
 
 void offload_executor_t::worker_loop (worker_t &worker)
 {
+    // Diagnostics read the OS thread name; Linux keeps at most 15 characters.
+#if defined(__linux__)
+    (void) pthread_setname_np (pthread_self (), _thread_name.substr (0, 15).c_str ());
+#elif defined(__APPLE__)
+    (void) pthread_setname_np (_thread_name.substr (0, 15).c_str ());
+#endif
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
     const auto previous_executor = std::exchange (_current_worker_executor, this);
 #endif

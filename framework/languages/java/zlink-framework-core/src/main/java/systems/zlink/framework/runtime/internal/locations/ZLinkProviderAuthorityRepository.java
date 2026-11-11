@@ -847,7 +847,8 @@ final class ZLinkProviderAuthorityRepository {
         ZLinkStoreScanCursor providerCursor =
                 cursor.map(value -> new ZLinkStoreScanCursor(value.encoded())).orElse(null);
         return provider.scan(
-                        new ZLinkStoreScanRequest(AUTHORITY_PREIMAGE_PREFIX, providerCursor, limit),
+                        new ZLinkStoreScanRequest(
+                                authorityScanPrefix(prefix), providerCursor, limit),
                         adapt(cancellation))
                 .thenCompose(
                         result -> {
@@ -4942,6 +4943,17 @@ final class ZLinkProviderAuthorityRepository {
     // {Id} is the raw ActorId/SpotId, not the "zla1:..." wire form the rest
     // of this class carries as its authority-key contract value.
     private static final String AUTHORITY_PREIMAGE_PREFIX = "authority\0";
+
+    private static String authorityScanPrefix(String prefix) {
+        return switch (prefix) {
+            case "" -> AUTHORITY_PREIMAGE_PREFIX;
+            case "zla1:a:" -> AUTHORITY_PREIMAGE_PREFIX + "actor\0";
+            case "zla1:s:" -> AUTHORITY_PREIMAGE_PREFIX + "spot\0";
+            default ->
+                    throw new IllegalArgumentException(
+                            "unsupported authority scan prefix: " + prefix);
+        };
+    }
 
     static ZLinkStoreKey authorityKey(String key) {
         ZLinkAuthorityKeyCodec.AuthorityIdentity identity = ZLinkAuthorityKeyCodec.decode(key);

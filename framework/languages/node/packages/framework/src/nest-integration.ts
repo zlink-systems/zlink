@@ -148,7 +148,8 @@ export function createIntegrationChannelClient(
     registration,
     host.channelTransport,
     host.routeTransport,
-    host.spotRouterChannelIdForMesh
+    host.spotRouterChannelIdForMesh,
+    host.admission
   );
 }
 
@@ -156,7 +157,11 @@ export function createIntegrationFanoutClient(
   registration: ZLinkFrameworkRegistration,
   runtime: ZLinkNestIntegrationRuntimeHost
 ): ZLinkFanoutClient {
-  return new DefaultZLinkFanoutClient(registration, runtimeHost(runtime).channelTransport);
+  return new DefaultZLinkFanoutClient(
+    registration,
+    runtimeHost(runtime).channelTransport,
+    runtimeHost(runtime).admission
+  );
 }
 
 export function createIntegrationRouteClient(
@@ -168,7 +173,8 @@ export function createIntegrationRouteClient(
     registration,
     host.routeTransport,
     host.spotRouterChannelIdForMesh,
-    host.channelTransport
+    host.channelTransport,
+    host.admission
   );
 }
 
@@ -178,7 +184,8 @@ export function createIntegrationSpotPublisherClient(
 ): ZLinkSpotPublisherClient {
   return new DefaultZLinkSpotPublisherClient(
     registration,
-    runtimeHost(runtime).spotPublisherTransport
+    runtimeHost(runtime).spotPublisherTransport,
+    runtimeHost(runtime).admission
   );
 }
 
@@ -265,6 +272,7 @@ export function createIntegrationSpotOutbound(
   const runtimeOptions = host.createSpotManagerOptions();
   return new DefaultZLinkSpotOutbound({
     serial: new ZLinkSpotSerialTurnExecutor(),
+    admission: host.admission,
     routedTransport: host.routeTransport,
     spotRouterChannelIdForMesh: runtimeOptions.spotRouterChannelIdForMesh,
     addressTransport: host.spotAddressTransport

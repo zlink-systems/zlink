@@ -592,7 +592,6 @@ test('startup authority scan submits published Actor roots before admission', as
   const runtime = new ZLinkStatefulAuthorityRouteRuntime({
     store: authority,
     meshNodes: new Map(),
-    pollingIntervalMs: 60_000,
     pageSize: 32,
     reportError: (error) => {
       throw error;
@@ -603,7 +602,6 @@ test('startup authority scan submits published Actor roots before admission', as
   });
 
   await runtime.start();
-  await runtime.stop();
 
   assert.equal(recovered.length, 1);
   assert.equal(recovered[0]?.storeVersion.value, actor.storeVersion.value);

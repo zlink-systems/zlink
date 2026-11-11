@@ -113,8 +113,8 @@ RouteMesh 자체에는 방향이 없다. 방향은 node가 ChannelName마다 등
 
 - `Server()`를 등록한 node만 그 channel의 호출을 받는다.
 - `Client()`만 등록한 node는 호출을 시작할 수 있지만 받지는 않는다.
-- **`Server()` role은 송신 기능을 포함한다.** 같은 ChannelName에 `Client()`를 다시 등록하지
-  않는다.
+- **RouteMesh에서는 `Server()` role이 송신 기능을 포함한다.** 같은 ChannelName에 `Client()`를 다시
+  등록하지 않는다. ClientServer는 다르다([3.2](#32-clientserver--방향이-고정된다)).
 
 한 MeshNode 위에 channel을 여러 개 등록할 수 있고 channel마다 role이 다를 수 있다.
 
@@ -170,7 +170,9 @@ client가 server에서 받는 것은 **자신이 시작한 request에 대응하�
 반대 방향 호출이 필요하면 반대쪽 node가 자신의 endpoint를 공개하는 server가 되어야 하며, 그것은
 별도 ChannelName을 가진 별도 channel이다.
 
-한 process가 같은 ChannelName에 Client와 Server를 각각 한 번씩 등록할 수는 있다. 모니터링
+한 process가 같은 ChannelName에 Client와 Server를 각각 한 번씩 등록할 수는 있다. 같은 process에서
+이 channel로 send·request를 시작하려면 `Client()`를 함께 등록해야 한다. `Server()`만 등록하면
+호출은 local handler를 부르지 않고 `NotConfigured`로 끝난다. 모니터링
 snapshot의 `client_and_server`는 그 두 registration이 함께 있다는 표현이며 별도 role이 아니다.
 
 ## 4. ToChannel 호출의 대상 node 선택
@@ -518,7 +520,7 @@ Store가 보관하는 것은 주소만이 아니다.
 Store에서 읽어 결정하기 때문이다. channel 메시징만 사용하고 주소를 직접 적는다면 Store 없이도
 동작한다.
 
-등록 코드는 [Spot](21-spot.ko.md#2-location-store--spot-등록의-선행-조건)에, 운영 조회는
+등록 코드는 [Location](25-location.ko.md#store-setup)에, 운영 조회는
 [운영과 lifecycle](12-operations.ko.md#6-location-readiness와-운영-조회)에 있다.
 
 **Location Store와 Relocation Store는 맡는 기록이 다르다.** Location Store는 작은 위치 기록의 원자적 변경을 맡고, Relocation Store는
@@ -535,8 +537,7 @@ Store에서 읽어 결정하기 때문이다. channel 메시징만 사용하고 
 둘 이상 등록하면 socket을 열기 전에 설정 오류다. Store가 없을 때 Framework가 process 안에 대체
 Store를 만들어 주지 않는다 — **단일 node로 조용히 동작하지 않고 실패한다.**
 
-두 Store는 같은 Redis 배포를 사용해도 된다. key prefix는 서로 다르게 둔다. Framework는 Store를
-가로지르는 transaction에 기대지 않으므로 필요하면 물리 Redis도 분리할 수 있다. Store를 등록한 뒤
+[Store plugin 설정](25-location.ko.md#store-setup)에서 Redis 또는 Redis with etcd를 선택한다. Redis 구성은 두 Store를 같은 server에 두고 서로 다른 key prefix를 사용한다. Store를 등록한 뒤
 application이 provider 동작을 직접 호출하거나 정리하지 않는다 — Framework가 Store의 수명과 호출
 순서를 관리한다.
 

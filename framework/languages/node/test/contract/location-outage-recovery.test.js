@@ -17,6 +17,22 @@ const {
   rewriteServiceAuthorityOwner
 } = require('../../packages/framework/dist/runtime/foundation/service-authority-payload-codec');
 
+function executionPolicy(runtime, owner) {
+  return {
+    executionDecision: (_owner, wake) => runtime.executionDecision(owner, wake),
+    executionFailure: () => runtime.executionFailure()
+  };
+}
+function fixedPolicy(
+  allowed,
+  failureKind = internal.ZLinkFrameworkInternalErrorKind.RequestRejected
+) {
+  return {
+    executionDecision: () => (allowed() ? 'allowed' : 'lost'),
+    executionFailure: () =>
+      internal.createInternalFrameworkException(failureKind, 'Execution policy closed.')
+  };
+}
 function deferred() {
   let resolve, reject;
   const promise = new Promise((yes, no) => {
@@ -25,7 +41,7 @@ function deferred() {
   });
   return { promise, resolve, reject };
 }
-async function fixture(t, provider, kind = 'actor', capacity = 10, onDiscard) {
+async function fixture(t, provider, kind = 'actor', capacity = 10, onDiscard, retention = true) {
   let now = 100,
     utc = 0;
   const timers = new Set();
@@ -61,7 +77,7 @@ async function fixture(t, provider, kind = 'actor', capacity = 10, onDiscard) {
       peerStore: store
     },
     options: {
-      storeOutageRetention: true,
+      storeOutageRetention: retention,
       ownerLeaseTtlMs: 1000,
       ownerLeaseFencingMarginMs: 100,
       ownerLeaseRenewTimeoutMs: 50
@@ -220,6 +236,18 @@ async function fixture(t, provider, kind = 'actor', capacity = 10, onDiscard) {
     assert.equal(timers.size, 0);
   });
   return {
+    clock: {
+      now: () => now,
+      utcNow: () => now,
+      setTimeout(callback, delay) {
+        const timer = { callback, at: now + delay };
+        timers.add(timer);
+        return timer;
+      },
+      clearTimeout(timer) {
+        timers.delete(timer);
+      }
+    },
     store,
     descriptor,
     runtime,
@@ -1109,7 +1137,7 @@ for (const provider of [false, true]) {
               record.release();
             }
           });
-          serial.setExecutionPolicy(() => () => s.runtime.executionAllowed(s.execution));
+          serial.setExecutionPolicy(() => executionPolicy(s.runtime, s.execution));
           let finish, signalStarted;
           const started = new Promise((resolve) => {
             signalStarted = resolve;
@@ -1160,3 +1188,408 @@ for (const provider of [false, true]) {
     });
   }
 }
+
+for (const provider of [false, true]) {
+  for (const retention of [false, true])
+    test(`second outage uses the new claim lease (${provider}/${retention})`, async (t) => {
+      const s = await fixture(t, provider, 'actor', 10, undefined, retention);
+      await s.outage();
+      s.tick(retention ? 1300 : 1000);
+      assert.equal(s.discarded(), 1);
+      assert.equal(await s.renew(true, 1400), true);
+      await s.publish();
+      await s.lifecycle.reclaimOwnerRows();
+      const next = await s.addActor('second');
+      assert.equal(s.runtime.executionAllowed(next.execution), true);
+      assert.throws(() => s.runtime.executionAllowed(s.execution), {
+        kind: internal.ZLinkFrameworkErrorKind.NotFound
+      });
+      await s.outage(1500);
+      const {
+        inspectRuntime
+      } = require('../../packages/framework/dist/runtime/internal-observation');
+      assert.deepEqual(s.runtime[inspectRuntime]().storeOutage, {
+        startedAtMs: 1500,
+        cutoffMs: retention ? 2600 : 2300,
+        discarded: false
+      });
+      s.tick(retention ? 2599 : 2299);
+      assert.equal(s.runtime.executionAllowed(next.execution), true);
+      s.tick(retention ? 2600 : 2300);
+      assert.equal(next.discarded(), 1);
+      for (const owner of [s.execution, next.execution])
+        assert.throws(() => s.runtime.executionAllowed(owner), {
+          kind: internal.ZLinkFrameworkErrorKind.NotFound
+        });
+    });
+  for (const terminal of ['resume', 'cutoff', 'loss', 'shutdown']) {
+    test(`accepted queue work pauses during recovery (${provider}/${terminal})`, async (t) => {
+      let serial;
+      const s = await fixture(t, provider, 'actor', 10, (error) =>
+        serial.discardPendingApplication(error)
+      );
+      serial = new internal.ZLinkSerialExecutionQueue(async (record) => {
+        try {
+          record.resolve(await record.operation());
+        } catch (error) {
+          record.reject(error);
+        } finally {
+          record.release();
+        }
+      });
+      serial.setExecutionPolicy(() => executionPolicy(s.runtime, s.execution));
+      const started = deferred(),
+        finish = deferred();
+      const running = serial.submit(() => {
+        started.resolve();
+        return finish.promise;
+      });
+      await started.promise;
+      let calls = 0,
+        settled = 0;
+      const pending = [
+        serial.submit(() => {
+          calls++;
+        }),
+        serial.submit(() => {
+          calls++;
+        })
+      ];
+      const outcomes = Promise.allSettled(
+        pending.map((p) =>
+          p.finally(() => {
+            settled++;
+          })
+        )
+      );
+      await s.outage();
+      await s.renew();
+      const publication = deferred();
+      const recovery = s.lifecycle.reclaimOwnerRows(publication.promise);
+      finish.resolve();
+      await running;
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(settled, 0, 'accepted records remain pending');
+      assert.equal(calls, 0);
+      if (terminal === 'cutoff') s.tick(1300);
+      if (terminal === 'loss') s.runtime.discardExecution(s.execution);
+      if (terminal === 'shutdown') await s.runtime.stop();
+      publication.resolve();
+      if (terminal === 'shutdown') await assert.rejects(recovery, /requires a claimed owner token/);
+      else await recovery;
+      const results = await outcomes;
+      assert.equal(calls, terminal === 'resume' ? 2 : 0);
+      for (const result of results) {
+        assert.equal(result.status, terminal === 'resume' ? 'fulfilled' : 'rejected');
+        if (terminal !== 'resume')
+          assert.equal(
+            result.reason.kind,
+            terminal === 'shutdown'
+              ? internal.ZLinkFrameworkErrorKind.ShuttingDown
+              : internal.ZLinkFrameworkErrorKind.NotFound
+          );
+      }
+      if (terminal === 'resume') {
+        const error = new Error('real handler failure');
+        await assert.rejects(
+          serial.submit(() => {
+            throw error;
+          }),
+          (e) => e === error
+        );
+      }
+    });
+  }
+}
+
+for (const mode of [
+  internal.ZLinkUserSpotExecutionMode.PerActor,
+  internal.ZLinkUserSpotExecutionMode.SpotWide
+]) {
+  for (const terminal of ['resume', 'cutoff', 'loss']) {
+    for (const stopOnUnhandledException of [false, true]) {
+      for (const overrunPolicy of Object.values(internal.ZLinkTimerOverrunPolicy)) {
+        test(`pending managed tick and member queues pause (${mode}/${terminal}/${stopOnUnhandledException}/${overrunPolicy})`, async (t) => {
+          let executor;
+          const s = await fixture(t, false, 'user_spot', 10, (error) =>
+            executor.discardPendingApplication(error)
+          );
+          const barrier = new internal.ZLinkExecutionBarrier();
+          barrier.setExecutionPolicy(() => executionPolicy(s.runtime, s.execution));
+          const serial = new internal.ZLinkSpotSerialTurnExecutor();
+          executor = new internal.ZLinkSpotSerialExecutor(serial, mode, 'test-spot');
+          executor.setExecutionBarrier(barrier);
+          executor.setActorExecutionPolicy(() => executionPolicy(s.runtime, s.execution));
+          const running = [],
+            finish = [];
+          const hold = async (submit) => {
+            const ready = deferred(),
+              gate = deferred();
+            running.push(
+              submit(() => {
+                ready.resolve();
+                return gate.promise;
+              })
+            );
+            finish.push(gate.resolve);
+            await ready.promise;
+          };
+          await hold((operation) => executor.executeSpot(operation));
+          if (mode === internal.ZLinkUserSpotExecutionMode.PerActor) {
+            await hold((operation) =>
+              executor.executeActor('member', (actorSerial) => actorSerial.execute(operation))
+            );
+            await hold((operation) => executor.executeTimer('pending', operation));
+          }
+          let calls = 0,
+            settled = 0,
+            failures = 0;
+          const ticks = [];
+          const pending = [
+            executor.executeSpot(() => {
+              calls++;
+            }),
+            executor.executeActor('member', (actorSerial) =>
+              actorSerial.execute(() => {
+                calls++;
+              })
+            )
+          ];
+          let tickWork, pendingTick;
+          const timer = new internal.ZLinkManagedTimer(
+            'pending',
+            100,
+            { overrunPolicy, maxCatchUpTicks: 1, stopOnUnhandledException },
+            (tick) => {
+              pendingTick = tick;
+              tickWork = executor.executeTimer('pending', () => {
+                ticks.push(tick);
+              });
+              return tickWork;
+            },
+            () => {
+              failures++;
+            },
+            () => false,
+            s.clock
+          );
+          t.after(() => timer.cancel());
+          s.tick(200);
+          await new Promise((resolve) => setImmediate(resolve));
+          assert(tickWork);
+          const pendingIdentity = {
+            deliveryIndex: pendingTick.deliveryIndex,
+            scheduledIndex: pendingTick.scheduledIndex
+          };
+          pending.push(tickWork);
+          const outcomes = Promise.allSettled(
+            pending.map((p) =>
+              p.finally(() => {
+                settled++;
+              })
+            )
+          );
+          await s.outage();
+          await s.renew();
+          const publication = deferred();
+          const recovery = s.lifecycle.reclaimOwnerRows(publication.promise);
+          for (const release of finish) release();
+          await Promise.all(running);
+          await new Promise((resolve) => setImmediate(resolve));
+          assert.equal(settled, 0);
+          assert.equal(calls, 0);
+          assert.equal(ticks.length, 0);
+          assert.equal(failures, 0);
+          assert.equal(timer.isDisposed, false);
+          assert.deepEqual(
+            {
+              deliveryIndex: pendingTick.deliveryIndex,
+              scheduledIndex: pendingTick.scheduledIndex
+            },
+            pendingIdentity
+          );
+          if (terminal === 'cutoff') s.tick(1300);
+          if (terminal === 'loss') s.runtime.discardExecution(s.execution);
+          publication.resolve();
+          await recovery;
+          const results = await outcomes;
+          assert.equal(calls, terminal === 'resume' ? 2 : 0);
+          assert.equal(ticks.length, terminal === 'resume' ? 1 : 0);
+          for (const result of results)
+            assert.equal(result.status, terminal === 'resume' ? 'fulfilled' : 'rejected');
+          if (terminal === 'resume') {
+            assert.equal(ticks[0].deliveryIndex, 1n);
+            assert.strictEqual(ticks[0], pendingTick);
+            assert.equal(ticks[0].scheduledIndex, pendingIdentity.scheduledIndex);
+            assert.equal(failures, 0);
+            const error = new Error('actual handler exception');
+            await assert.rejects(
+              executor.executeSpot(() => {
+                throw error;
+              }),
+              (e) => e === error
+            );
+          }
+          await timer.cancel();
+        });
+      }
+    }
+  }
+}
+
+test('admission rejects new work during recovery before queue acceptance', async (t) => {
+  const s = await fixture(t, false);
+  const serial = new internal.ZLinkSerialExecutionQueue(async (record) => {
+    try {
+      record.resolve(await record.operation());
+    } catch (error) {
+      record.reject(error);
+    } finally {
+      record.release();
+    }
+  });
+  serial.setExecutionPolicy(() => executionPolicy(s.runtime, s.execution));
+  const admission = new internal.ZLinkRuntimeAdmissionGate(() => s.runtime.ownerLeaseUsable);
+  admission.setExecutionRuntime(() => s.runtime);
+  admission.register('play');
+  let admitted = 0;
+  const submit = (operation) =>
+    admission.run(
+      'play',
+      'Actor request',
+      () =>
+        serial.submit(operation, {
+          onAdmitted: () => {
+            admitted++;
+          }
+        }),
+      internal.ReceiveKind.ActorRequest
+    );
+  await s.outage();
+  await s.renew();
+  let calls = 0;
+  await assert.rejects(
+    submit(() => {
+      calls++;
+    }),
+    { kind: internal.ZLinkFrameworkErrorKind.ShuttingDown }
+  );
+  assert.equal(calls, 0);
+  assert.equal(admitted, 0);
+  await s.lifecycle.reclaimOwnerRows();
+  await submit(() => {
+    calls++;
+  });
+  assert.equal(calls, 1);
+});
+
+for (const provider of [false, true]) {
+  for (const terminal of ['deadline', 'cancellation']) {
+    test(`deadline latch does not extend an accepted request (${provider}/${terminal})`, async (t) => {
+      const {
+        RequestRuntime
+      } = require('../../packages/framework/dist/runtime/foundation/request-runtime');
+      const requests = new RequestRuntime();
+      t.after(() => requests.close());
+      const s = await fixture(t, provider);
+      const serial = new internal.ZLinkSerialExecutionQueue(async (record) => {
+        try {
+          record.resolve(await record.operation());
+        } catch (error) {
+          record.reject(error);
+        } finally {
+          record.release();
+        }
+      });
+      serial.setExecutionPolicy(() => executionPolicy(s.runtime, s.execution));
+      const started = deferred(),
+        finish = deferred();
+      const holding = serial.submit(() => {
+        started.resolve();
+        return finish.promise;
+      });
+      await started.promise;
+      const controller = new AbortController();
+      let calls = 0,
+        settled = 0,
+        entry,
+        withdrawn = 0;
+      const request = requests.request(10_000, controller.signal, (pending) => {
+        entry = pending;
+        return serial.submit(
+          () => {
+            calls++;
+          },
+          {
+            onWithdrawable: (withdraw) => {
+              const terminal = () => {
+                if (withdraw()) withdrawn++;
+              };
+              void pending.promise.then(terminal, terminal);
+            }
+          }
+        );
+      });
+      const outcome = request.finally(() => {
+        settled++;
+      });
+      const expected =
+        terminal === 'deadline'
+          ? { kind: internal.ZLinkFrameworkErrorKind.DeadlineExceeded }
+          : { name: 'AbortError' };
+      const rejected = assert.rejects(outcome, expected);
+      const deadline = entry.deadlineMs;
+      s.tick(1001);
+      finish.resolve();
+      await holding;
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(calls, 0);
+      assert.equal(settled, 0);
+      assert.equal(entry.deadlineMs, deadline);
+      if (terminal === 'deadline') requests.registry.expire(deadline + 1, Infinity);
+      else controller.abort();
+      await rejected;
+      assert.equal(withdrawn, 1);
+      assert.equal(settled, 1);
+      s.setNow(999);
+      assert.equal(await s.runtime.renewOwnerLeaseOnce(), true);
+      await serial.whenIdle();
+      assert.equal(calls, 0, 'terminal work never starts after renewal');
+      assert.equal(settled, 1);
+    });
+  }
+}
+
+test('a Spot claim resolved during a deadline latch is checked before dequeue', async (t) => {
+  const s = await fixture(t, false);
+  const barrier = new internal.ZLinkExecutionBarrier();
+  barrier.setExecutionPolicy(() => executionPolicy(s.runtime, s.execution));
+  const serial = new internal.ZLinkSpotSerialTurnExecutor();
+  serial.setExecutionBarrier(barrier);
+  const started = deferred(),
+    finish = deferred();
+  const holding = serial.executeControlLifecycleOperation(
+    () => {
+      started.resolve();
+      return finish.promise;
+    },
+    { canExecuteApplication: () => true }
+  );
+  await started.promise;
+  const seal = barrier.seal('relocation');
+  let calls = 0;
+  const accepted = serial.post(() => {
+    calls++;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  s.tick(1001);
+  barrier.abort(seal);
+  finish.resolve();
+  await holding;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 0, 'claim resolution cannot bypass the paused dequeue decision');
+  s.setNow(999);
+  assert.equal(await s.runtime.renewOwnerLeaseOnce(), true);
+  await accepted;
+  assert.equal(calls, 1);
+});

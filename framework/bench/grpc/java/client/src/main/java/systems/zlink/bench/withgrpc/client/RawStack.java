@@ -154,6 +154,11 @@ public final class RawStack implements AutoCloseable {
     public abstract class RawOperation implements BenchOperation {
         public abstract RawSubmission submitRaw(int payloadSize, byte phase, long sequence);
 
+        /** Runs one pass of this socket's single-owner completion poller. */
+        public void pollCompletions(Duration timeout) throws InterruptedException {
+            completionPoller.wait(events, timeout);
+        }
+
         /** Drives this socket's completion poller: one non-blocking pass, then waits for the rest. */
         @Override
         public boolean await(

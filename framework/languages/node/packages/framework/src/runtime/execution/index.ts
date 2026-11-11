@@ -1,3 +1,4 @@
+import type { ZLinkExecutionPolicy } from '../admission';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { startOutsideStateLane } from './state-lane';
 import { isAbortError } from '../abort';
@@ -88,7 +89,13 @@ export class ZLinkSpotSerialTurn {
 
   executionAllowed(): boolean | undefined {
     const claim = this.executionClaim;
-    return claim?.executionAllowed?.(claim.executionOwner);
+    const decision = claim?.executionPolicy?.executionDecision(claim.executionOwner);
+    if (decision === 'lost') throw claim!.executionPolicy!.executionFailure();
+    return decision === undefined ? undefined : decision === 'allowed';
+  }
+
+  get boundExecutionClaim(): ZLinkExecutionBarrierClaim | undefined {
+    return this.executionClaim;
   }
 
   releaseBoundExecutionClaim(): void {
@@ -304,14 +311,17 @@ export interface ZLinkExecutionBarrierClaim {
   suspend(): void;
   resume(): boolean;
   start?(): void;
-  readonly executionAllowed?: (owner: object | undefined) => boolean | undefined;
+  readonly isSuspended?: boolean;
+  readonly executionPolicy?: ZLinkExecutionPolicy;
   readonly executionOwner?: object;
 }
 
 function requireClaimExecution(this: ZLinkExecutionBarrierClaim): void {
-  if (this.executionAllowed?.(this.executionOwner) === false)
+  const decision = this.executionPolicy?.executionDecision(this.executionOwner);
+  if (decision === 'lost') throw this.executionPolicy!.executionFailure();
+  if (decision === 'paused')
     throw createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.RequestRejected,
+      ZLinkFrameworkInternalErrorKind.RuntimeShutdown,
       'Object execution was rejected because Location owner admission is closed.'
     );
 }
@@ -336,12 +346,11 @@ export class ZLinkExecutionBarrier {
   private readonly admissionWaiters: ZLinkExecutionBarrierWaiter[] = [];
   private readonly quiescenceWaiters = new Set<() => void>();
   private committedSeal?: ZLinkExecutionBarrierSeal;
-  private captureExecutionPolicy?: () =>
-    ((owner: object | undefined) => boolean | undefined) | undefined;
+  private captureExecutionPolicy?: () => ZLinkExecutionPolicy | undefined;
   private captureExecutionOwner?: () => object | undefined;
 
   setExecutionPolicy(
-    capture: () => ((owner: object | undefined) => boolean | undefined) | undefined,
+    capture: () => ZLinkExecutionPolicy | undefined,
     captureOwner?: () => object | undefined
   ): void {
     this.captureExecutionPolicy = capture;
@@ -349,7 +358,26 @@ export class ZLinkExecutionBarrier {
   }
 
   allowsExecution(): boolean | undefined {
-    return this.captureExecutionPolicy?.()?.(this.captureExecutionOwner?.());
+    const policy = this.captureExecutionPolicy?.();
+    const decision = policy?.executionDecision(this.captureExecutionOwner?.());
+    if (decision === 'lost') throw policy!.executionFailure();
+    return decision === undefined ? undefined : decision === 'allowed';
+  }
+
+  waitForExecution(): Promise<void> | undefined {
+    const policy = this.captureExecutionPolicy?.();
+    const owner = this.captureExecutionOwner?.();
+    const decision = policy?.executionDecision(owner);
+    if (decision === 'lost') throw policy!.executionFailure();
+    if (decision !== 'paused') return;
+    return new Promise<void>((resolve, reject) => {
+      const wake = (): void => {
+        const current = policy!.executionDecision(owner, wake);
+        if (current === 'lost') reject(policy!.executionFailure());
+        else if (current !== 'paused') resolve();
+      };
+      wake();
+    });
   }
 
   discard(): void {
@@ -489,7 +517,10 @@ export class ZLinkExecutionBarrier {
     };
     const claim: ZLinkExecutionBarrierClaim = {
       release,
-      executionAllowed: allowed,
+      get isSuspended() {
+        return state === 'suspended';
+      },
+      executionPolicy: allowed,
       executionOwner,
       start: requireClaimExecution,
       suspend: () => {
@@ -507,7 +538,6 @@ export class ZLinkExecutionBarrier {
         if (state !== 'suspended') return state === 'active';
         try {
           if (
-            allowed?.(executionOwner) === false ||
             this.committedSeal !== undefined ||
             (this.currentSeal !== undefined && this.currentSeal.kind !== 'close')
           ) {

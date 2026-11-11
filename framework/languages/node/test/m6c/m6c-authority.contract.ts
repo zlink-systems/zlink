@@ -2092,13 +2092,12 @@ test('startup releases previous lifecycle Creating and capacity before deleting 
       }
     } as never,
     meshNodes: new Map([['mesh', sink as never]]),
-    pollingIntervalMs: 1_000,
     pageSize: 100,
     reportError(error) {
       throw error;
     }
   });
-  await runtime.reconcile(undefined, true);
+  await runtime.start();
   assert.equal(rootExists, false);
 });
 

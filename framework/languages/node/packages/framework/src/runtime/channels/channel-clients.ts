@@ -1,3 +1,4 @@
+import type { ZLinkRuntimeAdmissionGate } from '../admission';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
 import {
   createZLinkRequest,
@@ -108,13 +109,15 @@ export class DefaultZLinkChannelClient implements ZLinkChannelClient {
     registration: ZLinkFrameworkRegistration,
     channelTransport?: ZLinkChannelClientTransportSource,
     routeTransport?: ZLinkRouteClientTransport,
-    spotRouterChannelIdForMesh: (meshName: string) => string = (meshName) => meshName
+    spotRouterChannelIdForMesh: (meshName: string) => string = (meshName) => meshName,
+    admission?: ZLinkRuntimeAdmissionGate
   ) {
     this.routeClient = new DefaultZLinkRouteClient(
       registration,
       routeTransport,
       spotRouterChannelIdForMesh,
-      channelTransport
+      channelTransport,
+      admission
     );
   }
 
@@ -130,7 +133,8 @@ export class DefaultZLinkChannelClient implements ZLinkChannelClient {
 export class DefaultZLinkFanoutClient implements ZLinkFanoutClient {
   constructor(
     private readonly registration: ZLinkFrameworkRegistration,
-    private readonly transport?: ZLinkChannelClientTransportSource
+    private readonly transport?: ZLinkChannelClientTransportSource,
+    private readonly admission?: ZLinkRuntimeAdmissionGate
   ) {}
 
   publish(channelName: string, event: unknown): ZLinkFanoutPublishCall;
@@ -153,7 +157,8 @@ export class DefaultZLinkFanoutClient implements ZLinkFanoutClient {
         status: (
           await this.requireTransport().publish(channelName, topic, packetName, event, signal)
         ).status
-      })
+      }),
+      this.admission
     );
   }
 
@@ -196,7 +201,8 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
     private readonly transport?: ZLinkRouteClientTransport,
     private readonly spotRouterChannelIdForMesh: (meshName: string) => string = (meshName) =>
       meshName,
-    private readonly channelTransport?: ZLinkChannelClientTransportSource
+    private readonly channelTransport?: ZLinkChannelClientTransportSource,
+    private readonly admission?: ZLinkRuntimeAdmissionGate
   ) {}
 
   sendToNode(meshName: string, targetNodeRid: string, message: unknown): ZLinkSendCall {
@@ -215,7 +221,7 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
       };
       targets.set(targetNodeRid, prepared);
     }
-    return new DefaultZLinkSendCall(prepared.validate, prepared.submit, message);
+    return new DefaultZLinkSendCall(prepared.validate, prepared.submit, message, this.admission);
   }
 
   requestToNode(meshName: string, targetNodeRid: string, request: unknown): ZLinkRequestCall {
@@ -243,7 +249,8 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
       prepared.validate,
       prepared.submit,
       this.defaultRequestTimeout(meshName),
-      request
+      request,
+      this.admission
     );
   }
 
@@ -266,7 +273,9 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
         return normalizeSubmitResult(
           await this.requireChannelTransport().send(channelName, packetName, message, metadata)
         );
-      }
+      },
+      undefined,
+      this.admission
     );
   }
 
@@ -297,7 +306,9 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
           onAdmitted
         );
       },
-      this.defaultRequestTimeoutForChannel(channelName)
+      this.defaultRequestTimeoutForChannel(channelName),
+      undefined,
+      this.admission
     );
   }
 
@@ -312,7 +323,9 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
           spotRouterChannelIdForMesh: this.spotRouterChannelIdForMesh
         });
         return { status: ZLinkSubmitStatus.Submitted };
-      }
+      },
+      undefined,
+      this.admission
     );
   }
 
@@ -338,7 +351,9 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
           }),
           identityRequestReply
         ),
-      this.registration.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      this.registration.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      undefined,
+      this.admission
     );
   }
 
@@ -428,7 +443,8 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
 export class DefaultZLinkSpotPublisherClient implements ZLinkSpotPublisherClient {
   constructor(
     private readonly registration: ZLinkFrameworkRegistration,
-    private readonly transport?: ZLinkSpotPublisherClientTransport
+    private readonly transport?: ZLinkSpotPublisherClientTransport,
+    private readonly admission?: ZLinkRuntimeAdmissionGate
   ) {}
 
   publish(meshName: string, channelName: string, topic: string, event: unknown): ZLinkPublishCall {
@@ -443,7 +459,8 @@ export class DefaultZLinkSpotPublisherClient implements ZLinkSpotPublisherClient
           event,
           signal,
           metadata
-        )
+        ),
+      this.admission
     );
   }
 
@@ -478,7 +495,8 @@ class DefaultZLinkSendCall implements ZLinkSendCall {
       metadata: ReadonlyMap<string, string>,
       message?: unknown
     ) => ZLinkSubmitResult | Promise<ZLinkSubmitResult>,
-    private readonly message?: unknown
+    private readonly message?: unknown,
+    private readonly admission?: ZLinkRuntimeAdmissionGate
   ) {}
 
   metadata(key: string, value: string): this;
@@ -499,6 +517,7 @@ class DefaultZLinkSendCall implements ZLinkSendCall {
   submit(): Promise<void> {
     try {
       ensureNotExecuted(this.executed);
+      this.admission?.requireCall();
       this.validate();
       this.executed = true;
       const result = this.submitter(
@@ -555,7 +574,8 @@ class DefaultZLinkRequestCall implements ZLinkChannelRequestCall {
     private readonly validate: () => void,
     private readonly submitter: ZLinkRequestSubmitter,
     private readonly defaultRequestTimeoutMs?: number,
-    private readonly message?: unknown
+    private readonly message?: unknown,
+    private readonly admission?: ZLinkRuntimeAdmissionGate
   ) {}
 
   metadata(key: string, value: string): this;
@@ -580,6 +600,7 @@ class DefaultZLinkRequestCall implements ZLinkChannelRequestCall {
   submit<TReply>(signal?: AbortSignal): ZLinkRequest<TReply> {
     return createZLinkRequest((onAdmitted) => {
       throwIfAborted(signal);
+      this.admission?.requireCall();
       this.validate();
       return this.submitter<TReply>(
         undefined,
@@ -595,6 +616,7 @@ class DefaultZLinkRequestCall implements ZLinkChannelRequestCall {
   async yield<TReply>(signal?: AbortSignal): Promise<TReply> {
     const turn = requireZLinkYieldTurn(this.turn);
     throwIfAborted(signal);
+    this.admission?.requireCall();
     this.validate();
     const pending = this.submitter<TReply>(
       undefined,
@@ -618,7 +640,8 @@ class DefaultZLinkPublishCall implements ZLinkPublishCall {
       packetName: string | undefined,
       metadata: ReadonlyMap<string, string>,
       signal?: AbortSignal
-    ) => ZLinkSubmitResult | Promise<ZLinkSubmitResult>
+    ) => ZLinkSubmitResult | Promise<ZLinkSubmitResult>,
+    private readonly admission?: ZLinkRuntimeAdmissionGate
   ) {}
 
   metadata(key: string, value: string): this;
@@ -637,6 +660,7 @@ class DefaultZLinkPublishCall implements ZLinkPublishCall {
 
   async submit(signal?: AbortSignal): Promise<void> {
     ensureNotExecuted(this.executed);
+    this.admission?.requireCall();
     this.validate();
     this.executed = true;
     throwIfAborted(signal);
@@ -650,11 +674,13 @@ class DefaultZLinkFanoutPublishCall implements ZLinkFanoutPublishCall {
 
   constructor(
     private readonly validate: () => void,
-    private readonly submitter: (signal?: AbortSignal) => Promise<ZLinkSubmitResult>
+    private readonly submitter: (signal?: AbortSignal) => Promise<ZLinkSubmitResult>,
+    private readonly admission?: ZLinkRuntimeAdmissionGate
   ) {}
 
   async submit(signal?: AbortSignal): Promise<void> {
     ensureNotExecuted(this.executed);
+    this.admission?.requireCall();
     this.validate();
     this.executed = true;
     throwIfAborted(signal);

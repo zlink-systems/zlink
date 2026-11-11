@@ -136,8 +136,11 @@ export class ZLinkEntrySpotActivation {
       ZLinkUserSpotExecutionMode.PerActor,
       options.nativeSpot.routingId
     );
-    const executionAllowed = (owner: object | undefined) =>
-      options.admission?.executionAllowed(owner) !== false;
+    const executionAllowed = {
+      executionFailure: () => options.admission!.executionFailure(),
+      executionDecision: (owner: object | undefined, wake?: () => void) =>
+        options.admission?.executionDecision(owner, wake)
+    };
     this.spotSerialExecutor.setActorExecutionPolicy(
       () => executionAllowed,
       (actorId) => options.entryActorRuntime?.resolveActor(actorId)

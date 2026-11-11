@@ -48,6 +48,23 @@
 
 namespace zlink::framework::runtime
 {
+struct auto_connect_cache_test_access_t
+{
+    static std::chrono::steady_clock::time_point
+    cache_expiry (store_location_resolvers_t &resolver,
+                  std::string key,
+                  spot_address_t address,
+                  std::chrono::steady_clock::time_point owner_admission_deadline)
+    {
+        const auto route_key = key;
+        resolver
+          .cache_ready_route (resolver._spot_routes, std::move (key), std::move (address),
+                              owner_admission_deadline)
+          .result ();
+        return resolver._spot_routes.at (route_key).expires_at;
+    }
+};
+
 struct location_auto_connect_test_access_t
 {
     static std::vector<std::string>
@@ -97,6 +114,64 @@ using zlink::framework::runtime::location_runtime_t;
 using zlink::framework::runtime::store_location_resolvers_t;
 using zlink::framework::runtime::store_location_runtime_query_t;
 
+class counting_location_store_t final : public zlink::framework::location_store_t
+{
+  public:
+    explicit counting_location_store_t (zlink::framework::location_store_t &inner) : _inner (inner)
+    {
+    }
+
+    zlink::framework::task_t<zlink::framework::store_read_result_t>
+    read (zlink::framework::store_key_t key) override
+    {
+        {
+            std::lock_guard lock (_mutex);
+            ++_read_counts[key.value];
+        }
+        co_return co_await _inner.read (std::move (key));
+    }
+
+    zlink::framework::task_t<zlink::framework::store_write_result_t>
+    write (zlink::framework::store_write_request_t request) override
+    {
+        co_return co_await _inner.write (std::move (request));
+    }
+
+    zlink::framework::task_t<zlink::framework::store_scan_result_t>
+    scan (zlink::framework::store_scan_request_t request) override
+    {
+        co_return co_await _inner.scan (std::move (request));
+    }
+
+    void clear_read_counts ()
+    {
+        std::lock_guard lock (_mutex);
+        _read_counts.clear ();
+    }
+
+    std::size_t read_count (std::string_view key_prefix) const
+    {
+        std::lock_guard lock (_mutex);
+        std::size_t count = 0;
+        for (const auto &[key, value] : _read_counts)
+            if (key.starts_with (key_prefix))
+                count += value;
+        return count;
+    }
+
+    std::size_t exact_read_count (std::string_view key) const
+    {
+        std::lock_guard lock (_mutex);
+        const auto found = _read_counts.find (std::string (key));
+        return found == _read_counts.end () ? 0 : found->second;
+    }
+
+  private:
+    zlink::framework::location_store_t &_inner;
+    mutable std::mutex _mutex;
+    std::map<std::string, std::size_t> _read_counts;
+};
+
 location_owner_token_t live_owner_token (zlink::framework::location_repository_t &store,
                                          const std::string &owner_id)
 {
@@ -108,14 +183,16 @@ location_owner_token_t live_owner_token (zlink::framework::location_repository_t
 }
 
 std::vector<std::byte> user_spot_authority_payload (std::string_view spot_id,
-                                                    std::uint64_t generation)
+                                                    std::uint64_t generation,
+                                                    std::string_view owner_id = "owner-a",
+                                                    std::uint64_t owner_lease_generation = 1)
 {
     return zlink::framework::runtime::encode_user_spot_authority_payload (
       {.state = zlink::framework::runtime::user_spot_authority_state_t::ready,
        .stable_type = "play",
        .spot_id = std::string (spot_id),
-       .owner_id = "owner-a",
-       .owner_lease_generation = 1,
+       .owner_id = std::string (owner_id),
+       .owner_lease_generation = owner_lease_generation,
        .mesh_name = "mesh-a",
        .node_rid = zlink::framework::node_rid_t::from_string ("node-a"),
        .node_generation = generation});
@@ -2035,6 +2112,221 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
     EXPECT_EQ (lookup_counts.front (), lookup_counts.back ());
 }
 
+TEST (ZLinkFrameworkStoreLocationResolvers, ReadyCacheMissReadsOwnerLeaseOnce)
+{
+    test_location_repository_t store;
+    (void) claim_test_owner (store, "owner-a");
+    const auto owner = live_owner_token (store, "owner-a");
+    store.set_authority (
+      "zla1:s:9:spot-once",
+      zlink::framework::authority_snapshot_t{
+        .store_version = "1",
+        .payload = user_spot_authority_payload ("spot-once", 1),
+        .object_generation = 1,
+        .authority_owner_generation = 1,
+        .owner = owner,
+        .allocation = {.state = zlink::framework::placement_allocation_state_t::active,
+                       .object_kind = zlink::framework::placement_object_kind_t::user_spot,
+                       .stable_type = "play",
+                       .target = {.mesh_name = "mesh-a",
+                                  .node_rid = zlink::framework::node_rid_t::from_string ("node-a"),
+                                  .node_lifecycle_generation = 1,
+                                  .owner = owner}}});
+    store.set_authority (
+      "zla1:a:10:actor-once",
+      zlink::framework::authority_snapshot_t{
+        .store_version = "1",
+        .payload = zlink::framework::runtime::encode_actor_authority_payload (
+          zlink::framework::detail::actor_ref_access_t::make (
+            zlink::framework::node_rid_t::from_string ("node-a"), "player", "actor-once", 1),
+          "spot-once", 1),
+        .object_generation = 1,
+        .authority_owner_generation = 1,
+        .owner = owner,
+        .allocation = {.state = zlink::framework::placement_allocation_state_t::active,
+                       .object_kind = zlink::framework::placement_object_kind_t::actor,
+                       .stable_type = "player",
+                       .target = {.mesh_name = "mesh-a",
+                                  .node_rid = zlink::framework::node_rid_t::from_string ("node-a"),
+                                  .node_lifecycle_generation = 1,
+                                  .owner = owner}}});
+
+    location_options_t options;
+    options.route_cache_max_age = std::chrono::seconds (1);
+    store_location_resolvers_t resolvers (
+      store, options, std::make_shared<zlink::framework::runtime::actor_location_observer_t> (),
+      "mesh-a");
+
+    store.owner_read_count = 0;
+    ASSERT_TRUE (resolvers.resolve_spot_address ({}, "spot-once").result ().value ());
+    EXPECT_EQ (1u, store.owner_read_count.load ());
+    ASSERT_TRUE (resolvers.resolve_spot_address ({}, "spot-once").result ().value ());
+    EXPECT_EQ (1u, store.owner_read_count.load ());
+    std::this_thread::sleep_for (std::chrono::milliseconds (1100));
+    ASSERT_TRUE (resolvers.resolve_spot_address ({}, "spot-once").result ().value ());
+    EXPECT_EQ (2u, store.owner_read_count.load ());
+
+    auto no_cache_options = options;
+    no_cache_options.route_cache_max_age = std::chrono::milliseconds::zero ();
+    store_location_resolvers_t uncached (
+      store, no_cache_options,
+      std::make_shared<zlink::framework::runtime::actor_location_observer_t> (), "mesh-a");
+    store.owner_read_count = 0;
+    ASSERT_TRUE (uncached.resolve_spot_address ({}, "spot-once").result ().value ());
+    ASSERT_TRUE (uncached.resolve_spot_address ({}, "spot-once").result ().value ());
+    EXPECT_EQ (2u, store.owner_read_count.load ());
+
+    store.owner_read_count = 0;
+    ASSERT_TRUE (resolvers.resolve_actor_address ("actor-once").result ().value ());
+    EXPECT_EQ (1u, store.owner_read_count.load ());
+    ASSERT_TRUE (resolvers.resolve_actor_address ("actor-once").result ().value ());
+    EXPECT_EQ (1u, store.owner_read_count.load ());
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers, ReadyRouteCacheDoesNotOutliveOwnerAdmission)
+{
+    location_options_t options;
+    options.route_cache_max_age = std::chrono::seconds (5);
+    test_location_repository_t store;
+    store_location_resolvers_t resolvers (store, options);
+    const auto admission_read_at = std::chrono::steady_clock::now ();
+    const auto owner_admission_lifetime = std::chrono::milliseconds (200);
+    const auto owner_admission_deadline = admission_read_at + owner_admission_lifetime;
+    std::this_thread::sleep_for (std::chrono::milliseconds (50));
+
+    zlink::framework::runtime::spot_address_t address{
+      "mesh-a", zlink::routing_id_t::from ("node-a"), "spot-deadline", 1};
+    address.store_version = "1";
+    address.object_generation = 1;
+    address.authority_owner_generation = 1;
+    address.owner = {"owner-a", 1};
+    const auto cache_expiry =
+      zlink::framework::runtime::auto_connect_cache_test_access_t::cache_expiry (
+        resolvers, "spot-deadline", std::move (address), owner_admission_deadline);
+
+    EXPECT_LE (cache_expiry, owner_admission_deadline);
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers, ReadySpotMissCountsRawProviderReadsByKey)
+{
+    using namespace std::chrono_literals;
+    namespace fw = zlink::framework;
+    fw::runtime::in_memory_location_store_t provider;
+    counting_location_store_t counted_provider (provider);
+    fw::runtime::provider_location_repository_t repository (counted_provider);
+    repository.configure_reclaim_margin (std::chrono::milliseconds::zero ());
+    const auto claim = repository.claim_owner_lease ("owner-raw", 30s).result ().value ();
+    const auto *claimed = std::get_if<fw::owner_lease_claimed_t> (&claim);
+    ASSERT_NE (claimed, nullptr);
+
+    fw::mesh_node_descriptor_t descriptor;
+    descriptor.mesh_name = "mesh-raw";
+    descriptor.rid = zlink::routing_id_t::from (std::string{"node-raw"});
+    descriptor.lifecycle_generation = 1;
+    descriptor.descriptor_revision = 1;
+    descriptor.endpoint = "tcp://127.0.0.1:7001";
+    descriptor.owner_id = claimed->token.owner_id;
+    descriptor.lease_generation = claimed->token.lease_generation;
+    descriptor.object_role = fw::object_role_t::server;
+    descriptor.state = fw::framework_runtime_state_t::serving;
+    descriptor.object_capabilities.push_back ({fw::placement_object_kind_t::user_spot, "room",
+                                               fw::maintenance_policy_kind_t::snapshot, true, 10});
+    descriptor.object_capabilities.push_back ({fw::placement_object_kind_t::actor, "player",
+                                               fw::maintenance_policy_kind_t::snapshot, true, 10});
+    descriptor.capacity.actors.limit = 10;
+    descriptor.capacity.spots.limit = 10;
+    descriptor.capacity.spot_types.push_back (
+      {fw::placement_object_kind_t::user_spot, "room", {0, 0, 10}});
+    ASSERT_EQ (repository.update_mesh_node (descriptor, fw::location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               fw::location_write_status_t::stored);
+
+    fw::object_reserve_request_t request;
+    request.key = {fw::placement_object_kind_t::user_spot, "spot-raw"};
+    request.intent.stable_type = "room";
+    request.target = {"mesh-raw", fw::node_rid_t::from_string ("node-raw"), 1, claimed->token};
+    request.creating_payload = {std::byte{0}};
+    request.capacity_bundle.spot_slots = 1;
+    request.capacity_bundle.spot_type =
+      fw::spot_type_capacity_delta_t{fw::placement_object_kind_t::user_spot, "room", 1};
+    const auto reserved = repository.reserve (request).result ().value ();
+    const auto *reservation = std::get_if<fw::object_reserved_t> (&reserved);
+    ASSERT_NE (reservation, nullptr);
+    ASSERT_TRUE (std::holds_alternative<fw::object_committed_t> (
+      repository
+        .commit ({request.key, reservation->fence, user_spot_authority_payload ("spot-raw", 1)})
+        .result ()
+        .value ()));
+
+    location_options_t options;
+    options.route_cache_max_age = 1s;
+    store_location_resolvers_t resolvers (repository, options);
+    counted_provider.clear_read_counts ();
+    ASSERT_TRUE (resolvers.resolve_spot_address ({}, "spot-raw").result ().value ());
+
+    const std::string authority_key{"authority\0spot\0spot-raw", 23};
+    const std::string owner_key{"owner-lease\0owner-raw", 21};
+    EXPECT_EQ (1u, counted_provider.exact_read_count (authority_key));
+    EXPECT_EQ (1u, counted_provider.exact_read_count (owner_key));
+    EXPECT_EQ (1u, counted_provider.read_count ("zlink:v11:aggregate-lock:"));
+
+    auto unrelated_descriptor = descriptor;
+    unrelated_descriptor.mesh_name = "noise-mesh";
+    unrelated_descriptor.rid = zlink::routing_id_t::from (std::string{"noise-node"});
+    ASSERT_EQ (
+      repository.update_mesh_node (unrelated_descriptor, fw::location_write_intent_t::new_claim)
+        .result ()
+        .value ()
+        .status,
+      fw::location_write_status_t::stored);
+    auto unrelated_request = request;
+    unrelated_request.key.global_id = "spot-noise";
+    const auto unrelated_reserved = repository.reserve (unrelated_request).result ().value ();
+    const auto *unrelated_reservation = std::get_if<fw::object_reserved_t> (&unrelated_reserved);
+    ASSERT_NE (unrelated_reservation, nullptr);
+    ASSERT_TRUE (std::holds_alternative<fw::object_committed_t> (
+      repository
+        .commit ({unrelated_request.key, unrelated_reservation->fence,
+                  user_spot_authority_payload ("spot-noise", 1)})
+        .result ()
+        .value ()));
+
+    fw::object_reserve_request_t actor_request;
+    actor_request.key = {fw::placement_object_kind_t::actor, "actor-raw"};
+    actor_request.intent.stable_type = "player";
+    actor_request.target = request.target;
+    actor_request.creating_payload = {std::byte{0}};
+    actor_request.capacity_bundle.actor_slots = 1;
+    const auto actor_reserved = repository.reserve (actor_request).result ().value ();
+    const auto *actor_reservation = std::get_if<fw::object_reserved_t> (&actor_reserved);
+    ASSERT_NE (actor_reservation, nullptr);
+    const auto actor_ref = fw::detail::actor_ref_access_t::make (
+      fw::node_rid_t::from_string ("node-raw"), "player", "actor-raw",
+      actor_reservation->fence.object_generation);
+    ASSERT_TRUE (std::holds_alternative<fw::object_committed_t> (
+      repository
+        .commit ({actor_request.key, actor_reservation->fence,
+                  fw::runtime::encode_actor_authority_payload (actor_ref, "spot-raw", 1)})
+        .result ()
+        .value ()));
+
+    counted_provider.clear_read_counts ();
+    ASSERT_TRUE (resolvers.resolve_spot_address ({}, "spot-noise").result ().value ());
+    const std::string unrelated_authority_key{"authority\0spot\0spot-noise", 25};
+    EXPECT_EQ (1u, counted_provider.exact_read_count (unrelated_authority_key));
+    EXPECT_EQ (1u, counted_provider.exact_read_count (owner_key));
+    EXPECT_EQ (1u, counted_provider.read_count ("zlink:v11:aggregate-lock:"));
+
+    counted_provider.clear_read_counts ();
+    ASSERT_TRUE (resolvers.resolve_actor_address ("actor-raw").result ().value ());
+    const std::string actor_authority_key{"authority\0actor\0actor-raw", 25};
+    EXPECT_EQ (1u, counted_provider.exact_read_count (actor_authority_key));
+    EXPECT_EQ (1u, counted_provider.exact_read_count (owner_key));
+    EXPECT_EQ (1u, counted_provider.read_count ("zlink:v11:aggregate-lock:"));
+}
+
 TEST (ZLinkFrameworkStoreLocationResolvers, DirectReadyRouteUsesPositiveCacheOnly)
 {
     test_location_repository_t store;
@@ -2528,6 +2820,73 @@ TEST (ZLinkFrameworkStoreLocationResolvers, SessionBindRefreshesAuthorityAfterRe
     EXPECT_EQ (binding->authority_owner_generation, normal->authority_owner_generation);
     EXPECT_EQ (binding->owner.owner_id, normal->owner.owner_id);
     EXPECT_EQ (binding->owner.lease_generation, normal->owner.lease_generation);
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers,
+      ReadyAuthorityWithMismatchedOwnerGenerationIsUnavailable)
+{
+    test_location_repository_t store;
+    const auto current_owner = claim_test_owner (store, "owner-generation-mismatch");
+    const location_owner_token_t stale_owner{current_owner.owner_id,
+                                             current_owner.lease_generation + 1};
+    store.set_authority (
+      "zla1:s:15:mismatched-spot",
+      zlink::framework::authority_snapshot_t{
+        .store_version = "1",
+        .payload = user_spot_authority_payload ("mismatched-spot", 1, stale_owner.owner_id,
+                                                stale_owner.lease_generation),
+        .object_generation = 1,
+        .authority_owner_generation = 1,
+        .owner = stale_owner,
+        .allocation = {
+          .state = zlink::framework::placement_allocation_state_t::active,
+          .object_kind = zlink::framework::placement_object_kind_t::user_spot,
+          .stable_type = "play",
+          .target = {.mesh_name = "mesh-mismatch",
+                     .node_rid = zlink::framework::node_rid_t::from_string ("node-mismatch"),
+                     .node_lifecycle_generation = 1,
+                     .owner = stale_owner}}});
+
+    store_location_resolvers_t resolvers (store);
+    try {
+        (void) resolvers.resolve_spot_address ({}, "mismatched-spot").result ().value ();
+        FAIL () << "an authority owner generation mismatch must be unavailable";
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        EXPECT_EQ (zlink::framework::framework_error_kind_t::unavailable, error.kind ());
+    }
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers, ReadyAuthorityWithMissingOwnerIsUnavailable)
+{
+    test_location_repository_t store;
+    const location_owner_token_t missing_owner{"owner-missing", 1};
+    store.set_authority (
+      "zla1:s:12:missing-spot",
+      zlink::framework::authority_snapshot_t{
+        .store_version = "1",
+        .payload = user_spot_authority_payload ("missing-spot", 1, missing_owner.owner_id,
+                                                missing_owner.lease_generation),
+        .object_generation = 1,
+        .authority_owner_generation = 1,
+        .owner = missing_owner,
+        .allocation = {
+          .state = zlink::framework::placement_allocation_state_t::active,
+          .object_kind = zlink::framework::placement_object_kind_t::user_spot,
+          .stable_type = "play",
+          .target = {.mesh_name = "mesh-missing",
+                     .node_rid = zlink::framework::node_rid_t::from_string ("node-missing"),
+                     .node_lifecycle_generation = 1,
+                     .owner = missing_owner}}});
+
+    store_location_resolvers_t resolvers (store);
+    try {
+        (void) resolvers.resolve_spot_address ({}, "missing-spot").result ().value ();
+        FAIL () << "an authority with a missing owner lease must be unavailable";
+    }
+    catch (const zlink::framework::framework_exception_t &error) {
+        EXPECT_EQ (zlink::framework::framework_error_kind_t::unavailable, error.kind ());
+    }
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers, ReadyAuthorityWithExpiredOwnerIsUnavailable)

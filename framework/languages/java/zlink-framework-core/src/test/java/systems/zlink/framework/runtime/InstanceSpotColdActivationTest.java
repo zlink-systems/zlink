@@ -421,7 +421,8 @@ final class InstanceSpotColdActivationTest {
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
             var sourceHost =
-                    (systems.zlink.framework.runtime.spots.ZLinkSpotRuntime) source.spotManager();
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            source);
             var nodes = ZLinkSpotRuntimeTestAccess.routeMeshNodesByName(sourceHost);
             var node = nodes.get("cold-test");
             long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
@@ -528,12 +529,10 @@ final class InstanceSpotColdActivationTest {
                 assertTrue(envelope.operationHigh() != 0 || envelope.operationLow() != 0);
                 assertTrue(envelope.deadlineUnixMs() > 0);
                 assertEquals(1, initialized.get());
-                var routes =
-                        systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess
-                                .authorityRouteRuntime(runtime);
-                routes.reconcile().toCompletableFuture().get(5, TimeUnit.SECONDS);
                 assertEquals(
-                        1, handled.get(), "live reconciliation must not replay the first record");
+                        1,
+                        handled.get(),
+                        "the first record must execute once while its handler is pending");
             } finally {
                 release.complete(null);
             }
@@ -652,7 +651,8 @@ final class InstanceSpotColdActivationTest {
                             .toCompletableFuture();
             echoHandled.get(5, TimeUnit.SECONDS);
             var host =
-                    (systems.zlink.framework.runtime.spots.ZLinkSpotRuntime) runtime.spotManager();
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            runtime);
             var snapshot =
                     assertInstanceOf(
                             ZLinkAuthoritySnapshot.class,

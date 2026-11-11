@@ -63,6 +63,7 @@ public final class ZLinkActorCreationCoordinator
     private final String meshName;
     private final ZLinkInternalMeshNode node;
     private final ZLinkLocationRepository locations;
+    private final ZLinkStoreLocationResolvers locationResolvers;
     private final ZLinkActorRuntime actors;
     private final ZLinkMessageSerializer serializer;
     private final ZLinkActivationAdmission activationAdmission;
@@ -79,6 +80,7 @@ public final class ZLinkActorCreationCoordinator
             String meshName,
             ZLinkInternalMeshNode node,
             ZLinkLocationRepository locations,
+            ZLinkStoreLocationResolvers locationResolvers,
             ZLinkActorRuntime actors,
             ZLinkMessageSerializer serializer,
             ZLinkActivationAdmission activationAdmission,
@@ -87,6 +89,7 @@ public final class ZLinkActorCreationCoordinator
         this.meshName = Objects.requireNonNull(meshName, "meshName");
         this.node = Objects.requireNonNull(node, "node");
         this.locations = Objects.requireNonNull(locations, "locations");
+        this.locationResolvers = Objects.requireNonNull(locationResolvers, "locationResolvers");
         this.actors = Objects.requireNonNull(actors, "actors");
         this.serializer = Objects.requireNonNull(serializer, "serializer");
         this.activationAdmission =
@@ -884,7 +887,8 @@ public final class ZLinkActorCreationCoordinator
                         capability.objectKind() == ZLinkPlacementObjectKind.ACTOR
                                 && capability.stableType().equals(actorType)
                                 && (!newActor || capability.entryAccepted());
-        return ZLinkStoreLocationResolvers.listMeshNodes(locations, meshName)
+        return locationResolvers
+                .listLiveMeshNodes(meshName)
                 .toCompletableFuture()
                 .orTimeout(
                         Math.max(1L, deadline - System.currentTimeMillis()), TimeUnit.MILLISECONDS)

@@ -78,7 +78,7 @@ public final class RawProgressTest {
                                     "warmup",
                                     200,
                                     options.requestWindow,
-                                    options.sendConcurrency);
+                                    options.submitConcurrency);
                     drivers.runWarmup(trigger, request);
                     BenchHttpApplication.Counters first = drivers.counters();
                     check(

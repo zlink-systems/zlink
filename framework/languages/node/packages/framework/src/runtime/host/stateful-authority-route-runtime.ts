@@ -13,14 +13,9 @@ import type { ZLinkRelocationStore } from '../../contracts/Locations/RelocationS
 import { relocationBlobReference } from '../locations/relocation-blob';
 import type { ZLinkBackendMeshNode } from '../backend/contracts';
 import type { ServicePendingInstanceActivation } from '../foundation/service-stateful-runtime';
-import type {
-  ServiceDirectSpotRouteFence,
-  ServiceInstanceRouteFence,
-  ServiceSpotRouteFence
-} from '../foundation/service-stateful-wire-codec';
+import type { ServiceInstanceRouteFence } from '../foundation/service-stateful-wire-codec';
 import { routingIdsEqual } from '../routing-id';
 import {
-  decodeServiceClosingSpotAuthority,
   decodeServiceInstanceAuthorityPayload,
   decodeServiceReadySpotAuthority,
   type ServiceActivationRecoveryState
@@ -37,26 +32,6 @@ import { decodeActorAuthorityIdentity } from '../actors';
 
 interface StatefulAuthorityRouteSink {
   status(): ReturnType<ZLinkBackendMeshNode['status']>;
-  rememberSpotRoute(
-    route: ServiceDirectSpotRouteFence,
-    expectedCurrentRoute?: ServiceDirectSpotRouteFence | null
-  ): void;
-  forgetSpotRoute(
-    spot: ServiceSpotRouteFence['spot'],
-    authorityOwnerGeneration: bigint,
-    storeVersion: string
-  ): void;
-  registerInstanceIntent(
-    instanceType: string,
-    route: ServiceInstanceRouteFence,
-    expectedCurrentRoute?: ServiceInstanceRouteFence | null
-  ): void;
-  forgetInstanceIntent(
-    spotId: string,
-    objectGeneration: bigint,
-    authorityOwnerGeneration: bigint,
-    storeVersion: string
-  ): void;
   recoverInstanceActivation(
     envelope: ServiceInstanceActivationRecoveryEnvelope,
     route: ServiceInstanceRouteFence,
@@ -74,14 +49,11 @@ interface StatefulAuthorityRouteSink {
   ): Promise<ServiceInstanceRouteFence | undefined>;
 }
 
-interface AppliedAuthorityRoute {
-  readonly kind: 'user_spot' | 'instance_spot';
-  readonly closing: boolean;
+interface InstanceActivationRecoveryRoute {
   readonly stableType: string;
   readonly meshName: string;
-  readonly spotRoute: ServiceDirectSpotRouteFence;
   readonly instanceRoute: ServiceInstanceRouteFence;
-  readonly activationRecovery?: ServiceActivationRecoveryState;
+  readonly activationRecovery: ServiceActivationRecoveryState;
 }
 
 interface PendingInstanceActivationRecovery {
@@ -94,7 +66,7 @@ interface PendingInstanceActivationRecovery {
 }
 
 interface CompleteAuthoritySnapshot {
-  readonly routes: Map<string, AppliedAuthorityRoute>;
+  readonly routes: Map<string, InstanceActivationRecoveryRoute>;
   readonly pending: readonly PendingInstanceActivationRecovery[];
   readonly actors: readonly ZLinkAuthoritySnapshot[];
 }
@@ -104,59 +76,25 @@ export interface ZLinkStatefulAuthorityRouteRuntimeOptions {
   readonly creationStore?: ZLinkObjectCreationStore;
   readonly relocationStore?: ZLinkRelocationStore;
   readonly meshNodes: ReadonlyMap<string, ZLinkBackendMeshNode>;
-  readonly pollingIntervalMs: number;
   readonly pageSize: number;
   readonly reportError: (error: unknown) => void;
   readonly recoverActor?: (
     authority: ZLinkAuthoritySnapshot,
     signal?: AbortSignal
   ) => Promise<void>;
-  readonly onSpotRouteChanged?: (spotId: string) => void;
 }
 
-/**
- * Reconciles durable Spot authority into the raw service runtime. The Location
- * Store remains authoritative; this object only maintains fenced routing cache.
- */
+/** Restores durable activation work before the host admits application messages. */
 export class ZLinkStatefulAuthorityRouteRuntime {
-  private readonly abortController = new AbortController();
-  private readonly appliedByMesh = new Map<string, Map<string, AppliedAuthorityRoute>>();
-  private loop?: Promise<void>;
-
   constructor(private readonly options: ZLinkStatefulAuthorityRouteRuntimeOptions) {}
 
-  async start(parentSignal?: AbortSignal): Promise<void> {
-    if (this.loop !== undefined) return;
-    if (parentSignal?.aborted === true) throw parentSignal.reason;
-    const onParentAbort = () => this.abortController.abort(parentSignal?.reason);
-    parentSignal?.addEventListener('abort', onParentAbort, { once: true });
-    try {
-      await this.reconcile(this.abortController.signal, true);
-      this.loop = this.run(this.abortController.signal).finally(() => {
-        parentSignal?.removeEventListener('abort', onParentAbort);
-      });
-    } catch (error) {
-      parentSignal?.removeEventListener('abort', onParentAbort);
-      throw error;
-    }
-  }
-
-  async stop(): Promise<void> {
-    this.abortController.abort();
-    await this.loop;
-    this.loop = undefined;
-    this.appliedByMesh.clear();
-  }
-
-  async reconcile(signal?: AbortSignal, requireComplete = false): Promise<void> {
+  async start(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     const snapshot = await this.readCompleteSnapshot(signal);
     if (snapshot === undefined) {
-      if (requireComplete) {
-        throw new Error(
-          'The initial authority recovery scan expired before a complete snapshot was read.'
-        );
-      }
-      return;
+      throw new Error(
+        'The initial authority recovery scan expired before a complete snapshot was read.'
+      );
     }
     const current = snapshot.routes;
 
@@ -164,15 +102,9 @@ export class ZLinkStatefulAuthorityRouteRuntime {
       await this.options.recoverActor?.(actor, signal);
     }
 
-    const sinks: Array<{
-      readonly meshName: string;
-      readonly sink: StatefulAuthorityRouteSink;
-    }> = [];
     for (const [meshName, node] of this.options.meshNodes) {
       const sink = asStatefulAuthorityRouteSink(node);
       if (sink === undefined) continue;
-      sinks.push({ meshName, sink });
-      const previous = this.appliedByMesh.get(meshName) ?? new Map();
 
       const status = sink.status();
       for (const pending of snapshot.pending) {
@@ -198,131 +130,36 @@ export class ZLinkStatefulAuthorityRouteRuntime {
         }
       }
 
-      for (const [key, route] of current) {
-        if (route.meshName !== meshName) continue;
-        const previousRoute = previous.get(key);
-        const expectedSpotRoute = previousRoute?.spotRoute ?? null;
-        const expectedInstanceRoute =
-          previousRoute?.kind === 'instance_spot' ? previousRoute.instanceRoute : null;
-        sink.rememberSpotRoute(route.spotRoute, expectedSpotRoute);
-        if (route.kind === 'instance_spot' && !route.closing) {
-          const status = sink.status();
-          if (
-            routingIdsEqual(status.routingId, route.instanceRoute.targetNodeRid) &&
-            status.lifecycleGeneration === route.instanceRoute.targetNodeGeneration
-          ) {
-            if (route.activationRecovery !== undefined) {
-              if (
-                route.activationRecovery.replayCursor === route.activationRecovery.inboxSequence
-              ) {
-                const released = await sink.completeRecoveredInstanceActivation(
-                  {
-                    targetSpotId: route.instanceRoute.targetSpotId,
-                    stableType: route.stableType,
-                    targetNodeRid: route.instanceRoute.targetNodeRid,
-                    targetNodeGeneration: route.instanceRoute.targetNodeGeneration,
-                    descriptorVersion: status.descriptorRevision.toString()
-                  },
-                  route.instanceRoute,
-                  expectedInstanceRoute
-                );
-                if (released === undefined) continue;
-                const { activationRecovery: _, ...routeWithoutRecovery } = route;
-                const completed: AppliedAuthorityRoute = {
-                  ...routeWithoutRecovery,
-                  spotRoute: {
-                    ...route.spotRoute,
-                    spot: {
-                      spotId: released.targetSpotId,
-                      generation: released.objectGeneration
-                    },
-                    targetNodeRid: released.targetNodeRid,
-                    targetNodeGeneration: released.targetNodeGeneration,
-                    authorityOwnerGeneration: released.authorityOwnerGeneration,
-                    ownerLeaseGeneration: released.leaseGeneration,
-                    storeVersion: released.storeVersion
-                  },
-                  instanceRoute: released
-                };
-                current.set(key, completed);
-                sink.rememberSpotRoute(completed.spotRoute, completed.spotRoute);
-                sink.registerInstanceIntent(route.stableType, released, released);
-                continue;
-              } else {
-                const recovered = await this.recoverInstanceActivation(
-                  sink,
-                  route,
-                  route.activationRecovery,
-                  expectedInstanceRoute,
-                  signal
-                );
-                if (!recovered) {
-                  sink.forgetSpotRoute(
-                    route.spotRoute.spot,
-                    route.instanceRoute.authorityOwnerGeneration,
-                    route.instanceRoute.storeVersion
-                  );
-                  continue;
-                }
-                sink.registerInstanceIntent(
-                  route.stableType,
-                  route.instanceRoute,
-                  route.instanceRoute
-                );
-                continue;
-              }
-            }
-            sink.registerInstanceIntent(
-              route.stableType,
-              route.instanceRoute,
-              expectedInstanceRoute
-            );
-          }
-        }
-      }
-    }
-
-    // Publish every successor before cleaning old entries. Conditional cleanup
-    // then cannot remove a route or intent installed for a newer generation.
-    for (const { meshName, sink } of sinks) {
-      const previous = this.appliedByMesh.get(meshName) ?? new Map();
-      const meshCurrent = new Map([...current].filter(([, route]) => route.meshName === meshName));
-      const changedSpotIds = new Set<string>();
-      for (const [key, oldRoute] of previous) {
-        const next = meshCurrent.get(key);
-        if (oldRoute.meshName === meshName && !sameAppliedRoute(oldRoute, next)) {
-          changedSpotIds.add(String(oldRoute.spotRoute.spot.spotId));
-          sink.forgetSpotRoute(
-            oldRoute.spotRoute.spot,
-            oldRoute.spotRoute.authorityOwnerGeneration,
-            oldRoute.instanceRoute.storeVersion
+      for (const route of current.values()) {
+        const recovery = route.activationRecovery;
+        if (
+          route.meshName !== meshName ||
+          !routingIdsEqual(status.routingId, route.instanceRoute.targetNodeRid) ||
+          status.lifecycleGeneration !== route.instanceRoute.targetNodeGeneration
+        )
+          continue;
+        if (recovery.replayCursor === recovery.inboxSequence) {
+          await sink.completeRecoveredInstanceActivation(
+            {
+              targetSpotId: route.instanceRoute.targetSpotId,
+              stableType: route.stableType,
+              targetNodeRid: route.instanceRoute.targetNodeRid,
+              targetNodeGeneration: route.instanceRoute.targetNodeGeneration,
+              descriptorVersion: status.descriptorRevision.toString()
+            },
+            route.instanceRoute,
+            null
           );
-          if (oldRoute.kind === 'instance_spot' && oldRoute.meshName === meshName) {
-            sink.forgetInstanceIntent(
-              oldRoute.instanceRoute.targetSpotId,
-              oldRoute.instanceRoute.objectGeneration,
-              oldRoute.instanceRoute.authorityOwnerGeneration,
-              oldRoute.instanceRoute.storeVersion
-            );
-          }
+        } else {
+          await this.recoverInstanceActivation(sink, route, recovery, null, signal);
         }
-      }
-      for (const [key, nextRoute] of meshCurrent) {
-        const previousRoute = previous.get(key);
-        if (previousRoute === undefined || !sameAppliedRoute(previousRoute, nextRoute)) {
-          changedSpotIds.add(String(nextRoute.spotRoute.spot.spotId));
-        }
-      }
-      this.appliedByMesh.set(meshName, meshCurrent);
-      for (const spotId of changedSpotIds) {
-        this.options.onSpotRouteChanged?.(spotId);
       }
     }
   }
 
   private async recoverInstanceActivation(
     sink: StatefulAuthorityRouteSink,
-    route: AppliedAuthorityRoute,
+    route: InstanceActivationRecoveryRoute,
     recovery: ServiceActivationRecoveryState,
     expectedCurrentRoute: ServiceInstanceRouteFence | null,
     signal?: AbortSignal
@@ -439,18 +276,6 @@ export class ZLinkStatefulAuthorityRouteRuntime {
     return decodeInstanceActivationRecoveryEnvelope(payload);
   }
 
-  private async run(signal: AbortSignal): Promise<void> {
-    while (!signal.aborted) {
-      try {
-        await wait(this.options.pollingIntervalMs, signal);
-        await this.reconcile(signal);
-      } catch (error) {
-        if (aborted(signal)) return;
-        this.options.reportError(error);
-      }
-    }
-  }
-
   private async readCompleteSnapshot(
     signal?: AbortSignal
   ): Promise<CompleteAuthoritySnapshot | undefined> {
@@ -477,7 +302,7 @@ export class ZLinkStatefulAuthorityRouteRuntime {
       cursor = page.nextCursor;
     } while (cursor !== undefined);
 
-    const result = new Map<string, AppliedAuthorityRoute>();
+    const result = new Map<string, InstanceActivationRecoveryRoute>();
     const pending: PendingInstanceActivationRecovery[] = [];
     const actors: ZLinkAuthoritySnapshot[] = [];
     const relocationCodec = new ServiceRelocationAuthorityPayloadCodec();
@@ -488,7 +313,7 @@ export class ZLinkStatefulAuthorityRouteRuntime {
         if (current.kind !== 'snapshot') continue;
       }
       const route = authorityRoute(current);
-      if (route !== undefined) result.set(authorityRouteKey(route), route);
+      if (route !== undefined) result.set(key.value, route);
       if (
         current.allocation.state === 'active' &&
         current.allocation.objectKind === 'actor' &&
@@ -568,16 +393,18 @@ function pendingInstanceActivation(
   };
 }
 
-function authorityRoute(snapshot: ZLinkAuthoritySnapshot): AppliedAuthorityRoute | undefined {
+function authorityRoute(
+  snapshot: ZLinkAuthoritySnapshot
+): InstanceActivationRecoveryRoute | undefined {
   const allocation = snapshot.allocation;
   const payload = serviceRelocationAuthorityApplicationPayload(snapshot.payload);
-  const ready = decodeServiceReadySpotAuthority(payload);
-  const decoded = ready ?? decodeServiceClosingSpotAuthority(payload);
+  const decoded = decodeServiceReadySpotAuthority(payload);
   if (
     allocation.state !== 'active' ||
-    allocation.objectKind === 'actor' ||
+    allocation.objectKind !== 'instance_spot' ||
     allocation.descriptor.meshName.length === 0 ||
     decoded === undefined ||
+    decoded.activationRecovery === undefined ||
     decoded.kind !== allocation.objectKind ||
     decoded.stableType !== allocation.stableType ||
     decoded.ownerId !== snapshot.ownerId ||
@@ -590,20 +417,9 @@ function authorityRoute(snapshot: ZLinkAuthoritySnapshot): AppliedAuthorityRoute
   }
   const spotId = decoded.spotId;
   const targetNodeRid = String(allocation.descriptor.rid);
-  const spotRoute: ServiceDirectSpotRouteFence = {
-    spot: { spotId, generation: snapshot.objectGeneration },
-    targetNodeRid,
-    targetNodeGeneration: allocation.descriptorLifecycleGeneration,
-    authorityOwnerGeneration: snapshot.authorityOwnerGeneration,
-    ownerLeaseGeneration: snapshot.ownerLeaseGeneration,
-    storeVersion: snapshot.storeVersion.value
-  };
   return {
-    kind: allocation.objectKind,
-    closing: ready === undefined,
     stableType: allocation.stableType,
     meshName: allocation.descriptor.meshName,
-    spotRoute,
     instanceRoute: {
       targetNodeRid,
       targetNodeGeneration: allocation.descriptorLifecycleGeneration,
@@ -614,67 +430,16 @@ function authorityRoute(snapshot: ZLinkAuthoritySnapshot): AppliedAuthorityRoute
       leaseGeneration: snapshot.ownerLeaseGeneration,
       storeVersion: snapshot.storeVersion.value
     },
-    ...(decoded.activationRecovery === undefined
-      ? {}
-      : { activationRecovery: decoded.activationRecovery })
+    activationRecovery: decoded.activationRecovery
   };
-}
-
-function authorityRouteKey(route: AppliedAuthorityRoute): string {
-  return (
-    `${route.meshName}\0${route.spotRoute.spot.spotId}\0` + `${route.spotRoute.spot.generation}`
-  );
-}
-
-function sameAppliedRoute(
-  left: AppliedAuthorityRoute,
-  right: AppliedAuthorityRoute | undefined
-): boolean {
-  if (right === undefined) return false;
-  return (
-    left.kind === right.kind &&
-    left.closing === right.closing &&
-    left.stableType === right.stableType &&
-    left.meshName === right.meshName &&
-    left.instanceRoute.targetNodeRid === right.instanceRoute.targetNodeRid &&
-    left.instanceRoute.targetNodeGeneration === right.instanceRoute.targetNodeGeneration &&
-    left.instanceRoute.authorityOwnerGeneration === right.instanceRoute.authorityOwnerGeneration &&
-    left.instanceRoute.storeVersion === right.instanceRoute.storeVersion
-  );
 }
 
 function asStatefulAuthorityRouteSink(
   node: ZLinkBackendMeshNode
 ): StatefulAuthorityRouteSink | undefined {
   const candidate = node as ZLinkBackendMeshNode & Partial<StatefulAuthorityRouteSink>;
-  return typeof candidate.rememberSpotRoute === 'function' &&
-    typeof candidate.forgetSpotRoute === 'function' &&
-    typeof candidate.registerInstanceIntent === 'function' &&
-    typeof candidate.forgetInstanceIntent === 'function' &&
-    typeof candidate.recoverInstanceActivation === 'function' &&
+  return typeof candidate.recoverInstanceActivation === 'function' &&
     typeof candidate.completeRecoveredInstanceActivation === 'function'
     ? (candidate as StatefulAuthorityRouteSink)
     : undefined;
-}
-
-function aborted(signal: AbortSignal): boolean {
-  return signal.aborted;
-}
-
-function wait(timeoutMs: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      reject(signal.reason);
-      return;
-    }
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(signal.reason);
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    }, timeoutMs);
-    signal.addEventListener('abort', onAbort, { once: true });
-  });
 }

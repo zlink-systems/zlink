@@ -19,7 +19,7 @@ const TRIGGER_FIELDS = new Set([
   'phase',
   'durationMs',
   'requestWindow',
-  'sendConcurrency'
+  'submitConcurrency'
 ]);
 
 class BenchPhaseController {
@@ -115,7 +115,7 @@ function validateTrigger(request) {
   }
   if (!PATTERNS.has(request.pattern)) throw new TypeError('unknown benchmark pattern');
   if (!PHASES.has(request.phase)) throw new TypeError('phase must be warmup or active');
-  for (const name of ['payloadBytes', 'durationMs', 'requestWindow', 'sendConcurrency']) {
+  for (const name of ['payloadBytes', 'durationMs', 'requestWindow', 'submitConcurrency']) {
     if (!Number.isInteger(request[name]) || request[name] <= 0) {
       throw new TypeError(`${name} must be a positive integer`);
     }

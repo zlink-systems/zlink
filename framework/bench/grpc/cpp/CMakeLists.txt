@@ -83,7 +83,9 @@ set(ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX
 list(PREPEND CMAKE_PREFIX_PATH
   "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}"
   "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}")
-find_package(zlink_cpp ${ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION} EXACT CONFIG REQUIRED)
+if(NOT ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE)
+  find_package(zlink_cpp ${ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION} EXACT CONFIG REQUIRED)
+endif()
 
 # Consume the repository Framework through its own public CMake targets.
 foreach(option_name IN ITEMS ZLINK_FRAMEWORK_CPP_BUILD_TESTS
@@ -173,3 +175,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_options(bench_cpp_framework_completion_test PRIVATE -Wl,--wrap=pthread_mutex_lock)
 endif()
 add_test(NAME bench_cpp_framework_completion COMMAND bench_cpp_framework_completion_test)
+
+add_executable(bench_cpp_submit_threads_test tests/submit_threads_test.cpp ${BENCH_PROTO_CC} ${BENCH_GRPC_CC})
+bench_target(bench_cpp_submit_threads_test)
+bench_grpc_target(bench_cpp_submit_threads_test)
+target_link_libraries(bench_cpp_submit_threads_test PRIVATE zlink::framework_codec_protobuf)
+add_test(NAME bench_cpp_submit_threads COMMAND bench_cpp_submit_threads_test)

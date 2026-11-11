@@ -8,11 +8,11 @@ namespace WithGrpcBench.Client;
 
 internal static class BenchMeasurement
 {
-    internal static void ConfigureThreadPool(int sendConcurrency)
+    internal static void ConfigureThreadPool(int submitConcurrency)
     {
         ThreadPool.GetMinThreads(out var workers, out var completionPorts);
         ThreadPool.SetMinThreads(
-            Math.Max(workers, sendConcurrency + Environment.ProcessorCount * 2),
+            Math.Max(workers, submitConcurrency + Environment.ProcessorCount * 2),
             completionPorts
         );
     }
@@ -29,6 +29,8 @@ internal static class BenchMeasurement
         operationCancellation.CancelAfter(options.Timeout);
         using var adminCancellation = CancellationTokenSource.CreateLinkedTokenSource(stopping);
         adminCancellation.CancelAfter(options.Timeout);
+        if (transport is RawBenchTransport rawTransport)
+            rawTransport.StartCompletionPump();
         using var http = new HttpClient { Timeout = options.Timeout };
         using (
             var reset = await http.PostAsync(
@@ -86,32 +88,16 @@ internal static class BenchMeasurement
                 );
                 break;
             case "request-backpressure":
-                if (transport is RawBenchTransport raw)
-                {
-                    await RunRawRequestBackpressureAsync(
-                        raw,
-                        metrics,
-                        trigger,
-                        runId,
-                        next,
-                        deadline,
-                        operationCancellation,
-                        options.DrainBoundMs
-                    );
-                }
-                else
-                {
-                    await RunRequestBackpressureAsync(
-                        transport,
-                        metrics,
-                        trigger,
-                        runId,
-                        next,
-                        deadline,
-                        operationCancellation,
-                        options.DrainBoundMs
-                    );
-                }
+                RunRequestBackpressureStreams(
+                    transport,
+                    metrics,
+                    trigger,
+                    runId,
+                    next,
+                    deadline,
+                    operationCancellation,
+                    options.DrainBoundMs
+                );
                 break;
             case "send-saturation":
                 await RunSendWorkersAsync(
@@ -121,7 +107,7 @@ internal static class BenchMeasurement
                     runId,
                     next,
                     deadline,
-                    trigger.sendConcurrency,
+                    trigger.submitConcurrency,
                     operationCancellation.Token
                 );
                 break;
@@ -212,33 +198,45 @@ internal static class BenchMeasurement
         CancellationToken cancellationToken
     )
     {
-        var tasks = Enumerable
-            .Range(0, workers)
-            .Select(_ =>
-                Task.Run(
-                    async () =>
-                    {
-                        while (Stopwatch.GetTimestamp() < deadline)
-                        {
-                            var sequence = next.Next();
-                            await ExecuteRequestAsync(
-                                transport,
-                                metrics,
-                                trigger,
-                                runId,
-                                stream,
-                                sequence,
-                                cancellationToken
-                            );
-                        }
-                    },
+        if (workers > 1)
+        {
+            var tasks = Enumerable.Range(0, workers).Select(_ => Task.Run(async () =>
+            {
+                while (Stopwatch.GetTimestamp() < deadline)
+                {
+                    var sequence = next.Next();
+                    await ExecuteRequestAsync(
+                        transport, metrics, trigger, runId, stream, sequence, cancellationToken
+                    );
+                }
+            }, cancellationToken));
+            await transport.DriveAsync(Task.WhenAll(tasks));
+            return;
+        }
+        var local = new SourceMetrics[workers];
+        RunDedicatedStreams(workers, index =>
+        {
+            var streamMetrics = local[index] = new SourceMetrics(metrics.SampleLimit);
+            streamMetrics.Reset(deadline, metrics.Phase);
+            while (Stopwatch.GetTimestamp() < deadline)
+            {
+                var sequence = next.Next();
+                ExecuteRequestAsync(
+                    transport,
+                    streamMetrics,
+                    trigger,
+                    runId,
+                    stream,
+                    sequence,
                     cancellationToken
-                )
-            );
-        await transport.DriveAsync(Task.WhenAll(tasks));
+                ).GetAwaiter().GetResult();
+            }
+        });
+        foreach (var streamMetrics in local)
+            metrics.MergeFrom(streamMetrics);
     }
 
-    private static async Task RunRequestBackpressureAsync(
+    private static void RunRequestBackpressureStreams(
         IBenchTransport transport,
         SourceMetrics metrics,
         BenchTriggerRequest trigger,
@@ -249,201 +247,92 @@ internal static class BenchMeasurement
         int drainBoundMs
     )
     {
-        var pending = new HashSet<Task>();
-        var issuedSincePump = 0;
-        while (Stopwatch.GetTimestamp() < deadline)
+        var locals = new SourceMetrics[trigger.submitConcurrency];
+        RunDedicatedStreams(trigger.submitConcurrency, stream =>
         {
-            var sequence = next.Next();
-            if (transport is FrameworkBenchTransport framework)
+            var streamMetrics = locals[stream] = new SourceMetrics(metrics.SampleLimit);
+            streamMetrics.Reset(deadline, metrics.Phase);
+            var pending = new List<Task>();
+            var issuedSincePrune = 0;
+            while (Stopwatch.GetTimestamp() < deadline)
             {
+                var sequence = next.Next();
                 var payload = BenchMetricHeaders.CreatePayload(
                     trigger.payloadBytes,
                     runId,
-                    metrics.Phase,
+                    streamMetrics.Phase,
                     sequence
                 );
-                var started = metrics.Begin();
-                var request = framework.SubmitRequest(payload, operationCancellation.Token);
-                pending.Add(
-                    ObserveRequestReplyAsync(
-                        request.AsTask(),
-                        metrics,
+                var started = streamMetrics.Begin();
+                try
+                {
+                    Task<BenchPayload> reply;
+                    Task? admitted = null;
+                    if (transport is RawBenchTransport raw)
+                    {
+                        var submission = raw.SubmitRequest(payload, operationCancellation.Token);
+                        reply = submission.Reply;
+                        if (submission.Result == SubmitResult.Backpressured)
+                            admitted = submission.Admitted;
+                        else if (submission.Result != SubmitResult.Ok)
+                            throw new InvalidOperationException(
+                                $"Raw request submit returned {submission.Result}."
+                            );
+                    }
+                    else if (transport is FrameworkBenchTransport framework)
+                    {
+                        var request = framework.SubmitRequest(payload, operationCancellation.Token);
+                        reply = request.AsTask();
+                        admitted = request.Admitted.AsTask();
+                    }
+                    else
+                    {
+                        reply = transport.RequestAsync(stream, payload, operationCancellation.Token).AsTask();
+                    }
+                    pending.Add(ObserveRequestReplyAsync(
+                        reply,
+                        streamMetrics,
                         trigger,
                         runId,
                         sequence,
                         started,
                         operationCancellation.Token
-                    )
-                );
-                await request.Admitted;
-            }
-            else
-            {
-                pending.Add(
-                    ExecuteRequestAsync(
-                        transport,
-                        metrics,
-                        trigger,
-                        runId,
-                        0,
-                        sequence,
-                        operationCancellation.Token
-                    )
-                );
-            }
-            if (++issuedSincePump == 256)
-            {
-                pending.RemoveWhere(static task => task.IsCompleted);
-                issuedSincePump = 0;
-                await Task.Yield();
-            }
-        }
-
-        if (pending.Count == 0)
-            return;
-        try
-        {
-            await Task.WhenAll(pending)
-                .WaitAsync(TimeSpan.FromMilliseconds(drainBoundMs), operationCancellation.Token);
-        }
-        catch (TimeoutException)
-        {
-            metrics.FreezeTerminal();
-            operationCancellation.Cancel();
-            try
-            {
-                await Task.WhenAll(pending).WaitAsync(TimeSpan.FromSeconds(5));
-            }
-            catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
-            {
-                // The drain-bound cancellation is already represented by abandoned.
-            }
-            catch (TimeoutException)
-            {
-                // The recorded abandoned count is the bounded observation result.
-            }
-        }
-    }
-
-    private static async Task RunRawRequestBackpressureAsync(
-        RawBenchTransport transport,
-        SourceMetrics metrics,
-        BenchTriggerRequest trigger,
-        uint runId,
-        Sequence next,
-        long deadline,
-        CancellationTokenSource operationCancellation,
-        int drainBoundMs
-    )
-    {
-        var pendingReplies = new HashSet<Task>();
-        Task? pendingAdmission = null;
-        Task[] pending;
-
-        while (Stopwatch.GetTimestamp() < deadline)
-        {
-            var submitted = false;
-            if (pendingAdmission is null || pendingAdmission.IsCompleted)
-            {
-                pendingAdmission = null;
-                var sequence = next.Next();
-                var payload = BenchMetricHeaders.CreatePayload(
-                    trigger.payloadBytes,
-                    runId,
-                    metrics.Phase,
-                    sequence
-                );
-                var started = metrics.Begin();
-                try
-                {
-                    RawRequestSubmission submission = transport.SubmitRequest(
-                        payload,
-                        operationCancellation.Token
-                    );
-                    pendingReplies.Add(
-                        ObserveRequestReplyAsync(
-                            submission.Reply,
-                            metrics,
-                            trigger,
-                            runId,
-                            sequence,
-                            started,
-                            operationCancellation.Token
-                        )
-                    );
-                    submitted = true;
-                    if (submission.Result == SubmitResult.Backpressured)
+                    ));
+                    admitted?.GetAwaiter().GetResult();
+                    if (++issuedSincePrune == 256)
                     {
-                        // The reply observer is already running. Only this raw
-                        // socket waits for its writable admission completion.
-                        pendingAdmission = ObserveRawAdmissionAsync(
-                            submission.Admitted,
-                            operationCancellation.Token
-                        );
-                    }
-                    else if (submission.Result != SubmitResult.Ok)
-                    {
-                        throw new InvalidOperationException(
-                            $"Raw request submit returned {submission.Result}."
-                        );
+                        pending.RemoveAll(static task => task.IsCompleted);
+                        issuedSincePrune = 0;
+                        Thread.Yield();
                     }
                 }
-                catch (OperationCanceledException)
-                    when (operationCancellation.IsCancellationRequested)
+                catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
                 {
-                    metrics.Cancel();
+                    streamMetrics.Cancel();
                     throw;
                 }
                 catch (Exception error)
                 {
-                    metrics.Complete(started, false, error);
+                    streamMetrics.Complete(started, false, error);
                 }
             }
-
-            pendingReplies.RemoveWhere(static task => task.IsCompleted);
-            var waitMs = submitted ? 0 : RemainingPollTimeoutMs(deadline);
-            transport.WaitRequestCompletion(waitMs);
-        }
-
-        pending = pendingAdmission is null
-            ? pendingReplies.ToArray()
-            : pendingReplies.Append(pendingAdmission).ToArray();
-        if (pending.Length == 0)
-            return;
-        var allPending = Task.WhenAll(pending);
-        var drainDeadline =
-            Stopwatch.GetTimestamp()
-            + checked((long)(Stopwatch.Frequency * (drainBoundMs / 1000.0)));
-        while (
-            !allPending.IsCompleted
-            && Stopwatch.GetTimestamp() < drainDeadline
-            && !operationCancellation.IsCancellationRequested
-        )
-            transport.WaitRequestCompletion(RemainingPollTimeoutMs(drainDeadline));
-        try
-        {
-            await allPending.WaitAsync(TimeSpan.Zero, operationCancellation.Token);
-        }
-        catch (TimeoutException)
-        {
-            metrics.FreezeTerminal();
-            operationCancellation.Cancel();
             try
             {
-                var cancellationDeadline = Stopwatch.GetTimestamp() + 5 * Stopwatch.Frequency;
-                while (!allPending.IsCompleted && Stopwatch.GetTimestamp() < cancellationDeadline)
-                    transport.WaitRequestCompletion(RemainingPollTimeoutMs(cancellationDeadline));
-                await allPending.WaitAsync(TimeSpan.Zero);
-            }
-            catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
-            {
-                // The drain-bound cancellation is already represented by abandoned.
+                Task.WhenAll(pending).WaitAsync(TimeSpan.FromMilliseconds(drainBoundMs), operationCancellation.Token)
+                    .GetAwaiter().GetResult();
             }
             catch (TimeoutException)
             {
-                // The recorded abandoned count is the bounded observation result.
+                streamMetrics.FreezeTerminal();
+                operationCancellation.Cancel();
             }
-        }
+            catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
+            {
+                streamMetrics.FreezeTerminal();
+            }
+        });
+        foreach (var streamMetrics in locals)
+            metrics.MergeFrom(streamMetrics);
     }
 
     private static async Task ObserveRequestReplyAsync(
@@ -473,38 +362,7 @@ internal static class BenchMeasurement
         }
     }
 
-    private static async Task ObserveRawAdmissionAsync(
-        Task admission,
-        CancellationToken cancellationToken
-    )
-    {
-        try
-        {
-            await admission;
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            // Reply observation accounts for the cancelled request.
-        }
-        catch
-        {
-            // Reply observation accounts for the failed request.
-        }
-    }
-
-    private static int RemainingPollTimeoutMs(long deadline)
-    {
-        var remainingTicks = deadline - Stopwatch.GetTimestamp();
-        if (remainingTicks <= 0)
-            return 0;
-        var remainingMs = remainingTicks * 1000.0 / Stopwatch.Frequency;
-        return Math.Min(
-            BenchPolling.CompletionPollIntervalMs,
-            Math.Max(1, (int)Math.Ceiling(remainingMs))
-        );
-    }
-
-    private static async Task RunSendWorkersAsync(
+    private static Task RunSendWorkersAsync(
         IBenchTransport transport,
         SourceMetrics metrics,
         BenchTriggerRequest trigger,
@@ -515,43 +373,57 @@ internal static class BenchMeasurement
         CancellationToken cancellationToken
     )
     {
-        var tasks = Enumerable
-            .Range(0, workers)
-            .Select(stream =>
-                Task.Run(
-                    async () =>
-                    {
-                        while (Stopwatch.GetTimestamp() < deadline)
-                        {
-                            var sequence = next.Next();
-                            var payload = BenchMetricHeaders.CreatePayload(
-                                trigger.payloadBytes,
-                                runId,
-                                metrics.Phase,
-                                sequence
-                            );
-                            var started = metrics.Begin();
-                            try
-                            {
-                                await transport.SendAsync(stream, payload, cancellationToken);
-                                metrics.Complete(started, true);
-                            }
-                            catch (OperationCanceledException)
-                                when (cancellationToken.IsCancellationRequested)
-                            {
-                                metrics.Cancel();
-                                throw;
-                            }
-                            catch (Exception error)
-                            {
-                                metrics.Complete(started, false, error);
-                            }
-                        }
-                    },
-                    cancellationToken
-                )
-            );
-        await transport.DriveAsync(Task.WhenAll(tasks));
+        var locals = new SourceMetrics[workers];
+        RunDedicatedStreams(workers, stream =>
+        {
+            var streamMetrics = locals[stream] = new SourceMetrics(metrics.SampleLimit);
+            streamMetrics.Reset(deadline, metrics.Phase);
+            while (Stopwatch.GetTimestamp() < deadline)
+            {
+                var sequence = next.Next();
+                var payload = BenchMetricHeaders.CreatePayload(
+                    trigger.payloadBytes,
+                    runId,
+                    streamMetrics.Phase,
+                    sequence
+                );
+                var started = streamMetrics.Begin();
+                try
+                {
+                    transport.SendAsync(stream, payload, cancellationToken)
+                        .AsTask()
+                        .GetAwaiter()
+                        .GetResult();
+                    streamMetrics.Complete(started, true);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    streamMetrics.Cancel();
+                    throw;
+                }
+                catch (Exception error)
+                {
+                    streamMetrics.Complete(started, false, error);
+                }
+            }
+        });
+        foreach (var streamMetrics in locals)
+            metrics.MergeFrom(streamMetrics);
+        return Task.CompletedTask;
+    }
+
+    private static void RunDedicatedStreams(int count, Action<int> submit)
+    {
+        var errors = new Exception?[count];
+        var threads = Enumerable.Range(0, count).Select(index => new Thread(() =>
+        {
+            try { submit(index); }
+            catch (Exception error) { errors[index] = error; }
+        }) { IsBackground = true, Name = $"bench-submit-{index}" }).ToArray();
+        foreach (var thread in threads) thread.Start();
+        foreach (var thread in threads) thread.Join();
+        var failures = errors.Where(static error => error is not null).Cast<Exception>().ToArray();
+        if (failures.Length > 0) throw new AggregateException(failures);
     }
 
     private static async Task ExecuteRequestAsync(

@@ -28,9 +28,10 @@ C 기준 run과 대상 언어 run을 함께 넘기면 `zlink-<lang> / zlink-c` �
 
 ## 셀 원본과 server-driven 셀
 
-`throughput_per_second`는 언제나 초당 완료 수다. 깊이·drain·오염 표시와 규격 §5.1의 core 수·선언 상한은
-셀 JSON의 필드로 전달한다(FB-021). 상한을 선언하지 않은 셀은 포화를 **판정하지 않은** 것으로
-표시하며(`not judged`) 판정을 막지도 않는다.
+`throughput_per_second`는 언제나 초당 완료 수다. 깊이·drain·오염 표시와 규격 §5.1의 계측기,
+선언 상한, 실행 모델 상한은 셀 JSON의 필드로 전달한다(FB-021). 실행 모델 상한은 thread 기반
+드라이버에서 `streams.count`, Node에서 `1.0`이다. 선언 상한이 없으면 실행 모델 상한 기준으로
+포화를 판정하고, 포화 셀은 G6에서 제외한다.
 
 `role`이 없는 `with-grpc-cell-v1` 레코드는 client-driven 원본으로 읽는다. `role`은 없거나(client-driven) `"source"`(server-driven, 규격 §4)다. 기준 필드 이름을 바꾸거나 별칭을 만들지 않는다.
 B(target)의 결과는 runner가 source 셀의 `target_stats`와 `server_*` 자원으로 합쳐 쓴다. 집계기는

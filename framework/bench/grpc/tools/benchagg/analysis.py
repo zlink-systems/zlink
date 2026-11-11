@@ -13,14 +13,16 @@ import statistics
 from dataclasses import dataclass, field
 
 from .model import (
-    CLIENT_SATURATION_FRACTION,
     G5_SPREAD_LIMIT_PERCENT,
-    JUDGEMENT_PATTERN,
-    JUDGEMENT_THRESHOLD,
+    BINDING_JUDGEMENT,
+    FRAMEWORK_JUDGEMENT,
     PATTERNS,
+    SUPPLEMENTARY_LANGUAGES,
     Cell,
     CellKey,
     RunSet,
+    client_saturated,
+    saturation_evaluated,
 )
 
 _MEDIAN_FIELDS = (
@@ -62,6 +64,7 @@ class Row:
     #: spec 5.1: the ceiling the client harness declared. Constant within a run,
     #: so it is carried rather than averaged.
     client_parallelism_ceiling: float | None = None
+    execution_model_ceiling: float | None = None
     #: FB-023 / FB-032 / FB-037: the instrument the harness declared for this row.
     #: Rows that name none are read as ``client_cores``, which is what every
     #: result predating the declaration meant.
@@ -89,6 +92,7 @@ class Row:
     excluded_runs: list[str] = field(default_factory=list)
     incomplete_runs: list[str] = field(default_factory=list)
     incomplete_reasons: list[str] = field(default_factory=list)
+    warmup_seconds: list[float | None] = field(default_factory=list)
 
     @property
     def g5_pass(self) -> bool:
@@ -118,25 +122,52 @@ class Row:
 
     @property
     def saturation_evaluated(self) -> bool:
-        return self.saturation_value is not None and bool(self.client_parallelism_ceiling)
+        return saturation_evaluated(
+            self.saturation_value,
+            self.client_parallelism_ceiling,
+            self.execution_model_ceiling,
+        )
 
     @property
     def client_saturated(self) -> bool:
-        """spec 5.1 on the row medians, against the declared ceiling.
+        """spec 5.1 on the row medians, against the declared or model ceiling.
 
         FB-023: which number this compares is chosen by the harness, not assumed
         here. Comparing process cores against Node's ceiling would mark every
         Node cell, because the binding's I/O threads are counted but run no user
         code.
         """
-        if not self.saturation_evaluated:
-            return False
-        return self.saturation_value >= CLIENT_SATURATION_FRACTION * self.client_parallelism_ceiling
+        return client_saturated(
+            self.saturation_value,
+            self.client_parallelism_ceiling,
+            self.execution_model_ceiling,
+        )
+
+    @property
+    def g6_excluded(self) -> bool:
+        return self.client_saturated and (
+            self.client_parallelism_ceiling is None
+            or self.execution_model_ceiling is None
+            or self.client_parallelism_ceiling < self.execution_model_ceiling
+        )
+
+    @property
+    def execution_model_ceiling_reached(self) -> bool:
+        return (
+            self.client_saturated
+            and self.client_parallelism_ceiling is not None
+            and self.execution_model_ceiling is not None
+            and self.client_parallelism_ceiling == self.execution_model_ceiling
+        )
 
     def saturation_text(self) -> str:
         if not self.saturation_evaluated:
             return "not judged"
-        return "**yes**" if self.client_saturated else "no"
+        if self.execution_model_ceiling_reached:
+            return "실행 모델 상한 도달"
+        if self.g6_excluded:
+            return "G6 제외"
+        return "no" if not self.client_saturated else "포화; 판정 유지"
 
     def g5_text(self) -> str:
         if self.spread_percent is None:
@@ -181,6 +212,7 @@ def build_row(run_set: RunSet, key: CellKey, min_runs_for_g5: int = 3) -> Row | 
         incomplete_reasons=sorted(
             {c.incomplete_reason or "unstated" for c in incomplete}
         ),
+        warmup_seconds=[c.warmup_seconds for c in all_cells],
     )
     for name in _MEDIAN_FIELDS:
         row.values[name] = _median(cells, name)
@@ -203,6 +235,8 @@ def build_row(run_set: RunSet, key: CellKey, min_runs_for_g5: int = 3) -> Row | 
     row.abandoned = max(abandoned) if abandoned else None
     ceilings = [c.client_parallelism_ceiling for c in cells if c.client_parallelism_ceiling]
     row.client_parallelism_ceiling = max(ceilings) if ceilings else None
+    model_ceilings = [c.execution_model_ceiling for c in cells if c.execution_model_ceiling]
+    row.execution_model_ceiling = max(model_ceilings) if model_ceilings else None
     metrics = {c.client_saturation_metric for c in cells if c.client_saturation_metric}
     if len(metrics) > 1:
         # Runs of one cell that declare different instruments cannot be compared
@@ -265,6 +299,7 @@ class Judgement:
     verdict: str | None = None
     value: float | None = None
     reason: str = ""
+    threshold: float = 0.0
 
     @property
     def published(self) -> bool:
@@ -300,11 +335,16 @@ def _block_reason(role: str, row: Row | None, key: CellKey) -> str | None:
         return f"{role} {key} has {row.abandoned} abandoned request(s) (spec 5.2)"
     if row.errors:
         return f"{role} {key} has {row.errors} error(s) (spec 5.2)"
-    if row.client_saturated:
+    if row.g6_excluded:
+        if row.client_parallelism_ceiling is None:
+            return (
+                f"{role} {key} is client-saturated at {row.saturation_value:.2f} with "
+                "no declared client parallelism ceiling (spec 5.1, G6)"
+            )
         return (
             f"{role} {key} is client-saturated at {row.saturation_value:.2f} of "
             f"{row.client_parallelism_ceiling:g} declared {row.saturation_metric} "
-            f"(spec 5.1, G6)"
+            "(spec 5.1, G6)"
         )
     if row.send_server_counted is False:
         return f"{role} {key} throughput is client-counted, not server-counted (G3, FB-014)"
@@ -317,13 +357,31 @@ def judge_pair(
     numerator_impl: str,
     denominator_impl: str,
     payload_size: int,
-    pattern: str = JUDGEMENT_PATTERN,
+    pattern: str,
+    threshold: float,
 ) -> Judgement:
     """Decide one ratio. FB-011: both rows must pass G5 or nothing is published."""
     numerator_key = CellKey(numerator_impl, pattern, payload_size)
     denominator_key = CellKey(denominator_impl, pattern, payload_size)
     numerator = rows.get(numerator_key)
     denominator = rows.get(denominator_key)
+
+    warmup_blockers = []
+    for role, key, row in (("numerator", numerator_key, numerator),
+                           ("denominator", denominator_key, denominator)):
+        if row is None:
+            continue
+        recorded = row.warmup_seconds or [None]
+        invalid = [value for value in recorded
+                   if value is None or value != 30.0]
+        if invalid:
+            descriptions = sorted({
+                "missing" if value is None else f"{value:g}s"
+                for value in invalid
+            })
+            warmup_blockers.append(
+                f"{role} {key}: warmup {', '.join(descriptions)}, spec requires 30s"
+            )
 
     value = None
     if (
@@ -341,7 +399,7 @@ def judge_pair(
             _block_reason("denominator", denominator, denominator_key),
         )
         if reason
-    ]
+    ] + warmup_blockers
     if blockers:
         return Judgement(
             formula=formula,
@@ -351,9 +409,10 @@ def judge_pair(
             status="unsupported",
             value=value,
             reason="; ".join(blockers),
+            threshold=threshold,
         )
 
-    verdict = "pass" if value is not None and value >= JUDGEMENT_THRESHOLD else "fail"
+    verdict = "pass" if value is not None and value >= threshold else "fail"
     return Judgement(
         formula=formula,
         numerator=numerator_key,
@@ -363,6 +422,7 @@ def judge_pair(
         verdict=verdict,
         value=value,
         reason="both rows pass G5",
+        threshold=threshold,
     )
 
 
@@ -371,30 +431,33 @@ def judge_language(
     lang: str,
     baseline: str = "zlink-c",
     payload_sizes: tuple[int, ...] = (1024, 4096),
-    pattern: str = JUDGEMENT_PATTERN,
 ) -> list[Judgement]:
-    """The spec 7.2 pair of formulas, per payload size (FB-005)."""
+    """Apply both spec 7.2 gates independently at every payload size."""
+    if lang in SUPPLEMENTARY_LANGUAGES:
+        return []
     out = []
-    for size in payload_sizes:
-        out.append(
-            judge_pair(rows, f"zlink-{lang} / {baseline}", f"zlink-{lang}", baseline, size, pattern)
-        )
-    for size in payload_sizes:
-        out.append(
-            judge_pair(
-                rows,
-                f"zlink-framework-{lang} / zlink-{lang}",
-                f"zlink-framework-{lang}",
-                f"zlink-{lang}",
-                size,
-                pattern,
-            )
-        )
+    binding_threshold, binding_patterns = BINDING_JUDGEMENT
+    framework_threshold, framework_patterns = FRAMEWORK_JUDGEMENT
+    for cell_pattern in binding_patterns:
+        for size in payload_sizes:
+            out.append(judge_pair(
+                rows, f"zlink-{lang} / {baseline}", f"zlink-{lang}", baseline,
+                size, cell_pattern, binding_threshold,
+            ))
+    for cell_pattern in framework_patterns:
+        for size in payload_sizes:
+            out.append(judge_pair(
+                rows, f"zlink-framework-{lang} / zlink-{lang}",
+                f"zlink-framework-{lang}", f"zlink-{lang}", size,
+                cell_pattern, framework_threshold,
+            ))
     return out
 
 
 def language_verdict(judgements: list[Judgement]) -> tuple[str, str]:
     """FB-005: a language passes only when every size is published and passes."""
+    if not judgements:
+        return "n/a", "no spec 7.2 judgement cells (supplementary language cells only)"
     unsupported = [j for j in judgements if not j.published]
     if unsupported:
         return (
@@ -405,8 +468,9 @@ def language_verdict(judgements: list[Judgement]) -> tuple[str, str]:
     failed = [j for j in judgements if j.verdict == "fail"]
     if failed:
         names = ", ".join(f"{j.formula}@{j.payload_size}={j.value:.3f}" for j in failed)
-        return "fail", f"below {JUDGEMENT_THRESHOLD:.2f}: {names}"
-    return "pass", f"all judgements published and at or above {JUDGEMENT_THRESHOLD:.2f}"
+        thresholds = sorted({j.threshold for j in failed})
+        return "fail", f"below {', '.join(f'{t:.2f}' for t in thresholds)}: {names}"
+    return "pass", "all judgements published and at or above their layer thresholds"
 
 
 def ordered_keys(rows: dict[CellKey, Row], payload_sizes, implementations=None):

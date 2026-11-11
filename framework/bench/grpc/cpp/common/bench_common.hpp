@@ -203,6 +203,14 @@ class latency_sampler_t
             _samples.push_back (value);
     }
 
+    void merge (const latency_sampler_t &other)
+    {
+        _sum += other._sum;
+        _count += other._count;
+        const auto count = std::min (_cap - _samples.size (), other._samples.size ());
+        _samples.insert (_samples.end (), other._samples.begin (), other._samples.begin () + count);
+    }
+
     void reset ()
     {
         _sum = 0.0;

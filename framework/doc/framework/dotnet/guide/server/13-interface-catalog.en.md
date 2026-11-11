@@ -246,21 +246,7 @@ For the exact interfaces, see
 
 Register the two Store capabilities separately.
 
-```csharp
-options.AddLocationStore(
-    new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions
-    {
-        ConnectionString = "redis:6379",
-        KeyPrefix = "game:location"
-    }));
-
-options.AddRelocationStore(
-    new ZLinkRedisRelocationStore(new ZLinkRedisRelocationOptions
-    {
-        ConnectionString = "redis:6379",
-        KeyPrefix = "game:relocation"
-    }));
-```
+[Store plugin setup](25-location.en.md#store-setup) covers packages and both registration calls for each plugin.
 
 | Interface | Responsibility |
 |---|---|

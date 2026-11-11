@@ -11,6 +11,19 @@ import java.util.concurrent.CompletableFuture;
 /** A reply completed by drain remains a correctness count, not an active operation. */
 public final class ActiveBoundaryTest {
     public static void main(String[] args) throws Exception {
+        var aggregate = new BenchDrivers.SourceMetrics(10, Long.MAX_VALUE);
+        var streams = aggregate.createStreams(2);
+        long firstStreamRequest = streams.get(0).begin();
+        long firstStreamRequest2 = streams.get(0).begin();
+        streams.get(0).complete(firstStreamRequest, null, 1);
+        streams.get(0).complete(firstStreamRequest2, null, 1);
+        long secondStreamRequest = streams.get(1).begin();
+        streams.get(1).complete(secondStreamRequest, null, 1);
+        aggregate.freezeTerminal();
+        if (aggregate.peakInFlight() != 3) {
+            throw new AssertionError("peak_in_flight must sum the stream maxima");
+        }
+
         var metrics = new BenchDrivers.SourceMetrics(10, 10);
         long first = metrics.begin();
         long second = metrics.begin();
