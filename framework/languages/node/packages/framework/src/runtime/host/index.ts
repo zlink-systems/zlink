@@ -2419,6 +2419,8 @@ export class ZLinkFrameworkRuntimeHost
     if (locationStore === undefined) {
       throw new ZLinkConfigurationException('User Spot creation requires a Location Store.');
     }
+    const liveRows = new ZLinkLiveRowFilter();
+    const leaseTracker = this.locationOwner.currentLeaseTracker!;
     this.actorPlacement ??= new ZLinkActorPlacementCoordinator({
       store: locationStore,
       actorRelocationPolicy: (meshName, stableType) =>
@@ -2470,7 +2472,11 @@ export class ZLinkFrameworkRuntimeHost
           );
         }
         const meshNode = this.spotNodeRuntime?.meshNode(meshName);
-        const descriptors = await listAllMeshNodeDescriptors(locationStore, meshName, signal);
+        const descriptors = await liveRows.filter(
+          await listAllMeshNodeDescriptors(locationStore, meshName, signal),
+          (descriptor, signal) => leaseTracker.isOwnerTokenLive(descriptor, signal),
+          signal
+        );
         const selected = await selectReadyLocationPlacementDescriptor(
           descriptors,
           meshNode,
@@ -2546,8 +2552,6 @@ export class ZLinkFrameworkRuntimeHost
       }
       return meshName;
     };
-    const liveRows = new ZLinkLiveRowFilter();
-    const leaseTracker = this.locationOwner.currentLeaseTracker!;
     const coordinator = (this.userSpotCoordinator = new ZLinkUserSpotCreationCoordinator({
       store: locationStore,
       leaseTracker,
