@@ -48,7 +48,7 @@ internal static class PackageContractSnapshot
 
             foreach (var repository in metadata.Elements()
                          .Where(static element => element.Name.LocalName == "repository"))
-                lines.Add($"metadata repository{FormatAttributes(repository, version, normalizeCommit: true)}");
+                lines.Add($"metadata repository{FormatAttributes(repository, version, buildContext: true)}");
 
             foreach (var group in metadata.Descendants()
                          .Where(static element => element.Name.LocalName == "group")
@@ -79,13 +79,16 @@ internal static class PackageContractSnapshot
     private static string FormatAttributes(
         XElement element,
         string version,
-        bool normalizeCommit = false)
+        bool buildContext = false)
     {
+        // The repository commit and branch come from the build checkout, not from the package
+        // contract: a merge-queue build records its queue branch, a pull request build records none.
         var values = element.Attributes()
+            .Where(attribute => !(buildContext && attribute.Name.LocalName == "branch"))
             .OrderBy(static attribute => attribute.Name.LocalName, StringComparer.Ordinal)
             .Select(attribute =>
             {
-                var value = normalizeCommit && attribute.Name.LocalName == "commit"
+                var value = buildContext && attribute.Name.LocalName == "commit"
                     ? "{COMMIT}"
                     : Normalize(attribute.Value, version);
                 return $" {attribute.Name.LocalName}={value}";
