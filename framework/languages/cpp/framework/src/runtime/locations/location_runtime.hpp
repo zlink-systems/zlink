@@ -109,8 +109,6 @@ class location_runtime_t
         std::shared_ptr<task_t<bool>> publication;
         std::vector<std::function<void (serial_execution_queue_t::execution_admission_t)>>
           discard_requests;
-        std::shared_ptr<detail::deadline_state_t> deadline =
-          std::make_shared<detail::deadline_state_t> ();
 
         bool latch (std::chrono::steady_clock::time_point now)
         {
@@ -142,12 +140,36 @@ class location_runtime_t
         std::chrono::steady_clock::time_point admission_deadline;
     };
 
+    enum class execution_gate_state_t : std::uint64_t
+    {
+        open,
+        admission_closed,
+        episode
+    };
+    static constexpr std::uint64_t execution_gate_state_mask = 3;
+
+    struct owner_deadlines_t
+    {
+        std::shared_ptr<detail::deadline_state_t> reservation =
+          std::make_shared<detail::deadline_state_t> ();
+
+        void cancel ()
+        {
+            auto pending = std::atomic_exchange_explicit (
+              &reservation, std::shared_ptr<detail::deadline_state_t>{}, std::memory_order_acq_rel);
+            if (pending)
+                pending->cancelled.store (true, std::memory_order_release);
+            detail::deadline_scheduler_t::instance ().wake ();
+        }
+    };
+
     struct owner_lease_snapshot_t
     {
         std::optional<location_owner_token_t> token;
         std::optional<std::chrono::steady_clock::time_point> admission_deadline;
         std::optional<successful_lease_t> last_successful_lease;
         std::shared_ptr<store_outage_t> outage;
+        std::shared_ptr<owner_deadlines_t> deadlines = std::make_shared<owner_deadlines_t> ();
         bool healthy = false;
         std::optional<std::chrono::system_clock::time_point> renewed_at;
     };
@@ -325,10 +347,14 @@ class location_runtime_t
 
     serial_execution_queue_t::execution_admission_t execution_policy () const
     {
-        return [lease = _owner_lease, open = _episode_open,
+        return [gate = _execution_gate, lease = _owner_lease,
                 now = _lease_now] (const serial_execution_queue_t &queue) {
-            if (!open->load (std::memory_order_acquire))
+            const auto state = static_cast<execution_gate_state_t> (
+              gate->load (std::memory_order_acquire) & execution_gate_state_mask);
+            if (state == execution_gate_state_t::open)
                 return serial_execution_queue_t::execution_status_t::allowed;
+            if (state == execution_gate_state_t::admission_closed)
+                return serial_execution_queue_t::execution_status_t::stopped;
             const auto snapshot =
               std::atomic_load_explicit (lease.get (), std::memory_order_acquire);
             return execution_admission (snapshot->outage, queue.execution_ready_at (), *now);
@@ -845,24 +871,78 @@ class location_runtime_t
         return std::nullopt;
     }
 
+    static void schedule_owner_deadlines (
+      const std::shared_ptr<owner_deadlines_t> &deadlines,
+      const std::shared_ptr<std::atomic<std::uint64_t>> &gate,
+      std::uint64_t generation,
+      std::optional<std::chrono::steady_clock::time_point> admission,
+      const std::shared_ptr<store_outage_t> &episode,
+      const std::shared_ptr<std::function<std::chrono::steady_clock::time_point ()>> &now)
+    {
+        const auto at = (*now) ();
+        if (admission && at >= *admission) {
+            auto expected = generation | static_cast<std::uint64_t> (execution_gate_state_t::open);
+            gate->compare_exchange_strong (
+              expected,
+              generation | static_cast<std::uint64_t> (execution_gate_state_t::admission_closed),
+              std::memory_order_acq_rel, std::memory_order_acquire);
+        }
+        if (episode)
+            episode->latch (at);
+        std::optional<std::chrono::steady_clock::time_point> next;
+        if (admission && at < *admission)
+            next = admission;
+        if (episode && !episode->discarded.load (std::memory_order_acquire)
+            && !episode->owner->stop.load (std::memory_order_acquire))
+            next = next ? std::min (*next, episode->cutoff) : episode->cutoff;
+        if (!next)
+            return;
+        auto previous =
+          std::atomic_load_explicit (&deadlines->reservation, std::memory_order_acquire);
+        if (!previous)
+            return;
+        auto pending = std::make_shared<detail::deadline_state_t> ();
+        if (!std::atomic_compare_exchange_strong_explicit (&deadlines->reservation, &previous,
+                                                           pending, std::memory_order_acq_rel,
+                                                           std::memory_order_acquire))
+            return;
+        detail::deadline_scheduler_t::instance ().schedule (
+          *next, pending,
+          [weak = std::weak_ptr{deadlines}, gate, generation, admission, episode, now] {
+              if (auto active = weak.lock ())
+                  schedule_owner_deadlines (active, gate, generation, admission, episode, now);
+          });
+    }
+
     template <typename Work>
     static void update_owner_lease_on_lane (
       const std::shared_ptr<std::shared_ptr<const owner_lease_snapshot_t>> &owner_lease,
-      const std::shared_ptr<std::atomic_bool> &episode_open,
+      const std::shared_ptr<std::atomic<std::uint64_t>> &gate,
+      const std::shared_ptr<std::function<std::chrono::steady_clock::time_point ()>> &now,
       Work work)
     {
-        auto lease = *std::atomic_load_explicit (owner_lease.get (), std::memory_order_acquire);
+        const auto previous =
+          std::atomic_load_explicit (owner_lease.get (), std::memory_order_acquire);
+        auto lease = *previous;
+        lease.deadlines = std::make_shared<owner_deadlines_t> ();
         work (lease);
-        const bool open = static_cast<bool> (lease.outage);
-        std::atomic_store_explicit (
-          owner_lease.get (), std::make_shared<const owner_lease_snapshot_t> (std::move (lease)),
-          std::memory_order_release);
-        episode_open->store (open, std::memory_order_release);
+        previous->deadlines->cancel ();
+        const auto at = (*now) ();
+        const auto state = lease.outage ? execution_gate_state_t::episode
+                           : !lease.admission_deadline || at >= *lease.admission_deadline
+                             ? execution_gate_state_t::admission_closed
+                             : execution_gate_state_t::open;
+        const auto generation = ((gate->load (std::memory_order_relaxed) >> 2) + 1) << 2;
+        const auto snapshot = std::make_shared<const owner_lease_snapshot_t> (std::move (lease));
+        std::atomic_store_explicit (owner_lease.get (), snapshot, std::memory_order_release);
+        gate->store (generation | static_cast<std::uint64_t> (state), std::memory_order_release);
+        schedule_owner_deadlines (snapshot->deadlines, gate, generation,
+                                  snapshot->admission_deadline, snapshot->outage, now);
     }
 
     template <typename Work> void update_owner_lease_on_lane (Work work) const
     {
-        update_owner_lease_on_lane (_owner_lease, _episode_open, std::move (work));
+        update_owner_lease_on_lane (_owner_lease, _execution_gate, _lease_now, std::move (work));
     }
 
     void clear_owner_lease_on_lane () const
@@ -900,11 +980,6 @@ class location_runtime_t
                 episode->discard_requests.push_back (request.discard);
             lease.outage = episode;
             episode->latch (episode->observed_at);
-            detail::deadline_scheduler_t::instance ().schedule (
-              episode->cutoff, episode->deadline, [weak = std::weak_ptr{episode}] {
-                  if (auto active = weak.lock ())
-                      active->latch (active->cutoff);
-              });
         });
     }
 
@@ -1244,7 +1319,7 @@ class location_runtime_t
       std::shared_ptr<task_t<void>> recovery,
       std::shared_ptr<state_lane_t> lane,
       std::shared_ptr<std::shared_ptr<const owner_lease_snapshot_t>> owner_lease,
-      std::shared_ptr<std::atomic_bool> episode_open,
+      std::shared_ptr<std::atomic<std::uint64_t>> gate,
       std::shared_ptr<store_outage_t> episode,
       location_owner_token_t token,
       std::shared_ptr<std::function<std::chrono::steady_clock::time_point ()>> now)
@@ -1256,18 +1331,16 @@ class location_runtime_t
             co_await episode->terminal.task ();
         auto completed = std::make_shared<task_completion_source_t<void>> ();
         auto posted = lane->try_post (
-          [owner_lease, episode_open, episode, token, now, recovery, completed] {
+          [owner_lease, gate, episode, token, now, recovery, completed] {
               if (!episode->owner->stop.load (std::memory_order_acquire)
                   && episode->recovery == recovery) {
                   const auto at = (*now) ();
                   episode->latch (at);
-                  update_owner_lease_on_lane (owner_lease, episode_open, [&] (auto &lease) {
+                  update_owner_lease_on_lane (owner_lease, gate, now, [&] (auto &lease) {
                       if (lease.outage != episode || !lease.token
                           || lease.token->owner_id != token.owner_id
                           || lease.token->lease_generation != token.lease_generation)
                           return;
-                      episode->deadline->cancelled.store (true, std::memory_order_release);
-                      detail::deadline_scheduler_t::instance ().wake ();
                       lease.outage.reset ();
                       episode->terminal.complete (
                         result_t<serial_execution_queue_t::execution_operation_t>::success (
@@ -1363,7 +1436,7 @@ class location_runtime_t
                 return recovery;
             });
             auto finishing = finish_execution_recovery (
-              recovery, runtime->_lane, runtime->_owner_lease, runtime->_episode_open, episode,
+              recovery, runtime->_lane, runtime->_owner_lease, runtime->_execution_gate, episode,
               token, runtime->_lease_now);
             if (recovery->await_ready () && detail::task_result_access_t::read (*recovery))
                 co_await finishing;
@@ -1730,8 +1803,8 @@ class location_runtime_t
             return _lane->run_task ([this] {
                 const auto lease =
                   std::atomic_load_explicit (_owner_lease.get (), std::memory_order_acquire);
+                lease->deadlines->cancel ();
                 if (lease->outage) {
-                    lease->outage->deadline->cancelled.store (true, std::memory_order_release);
                     lease->outage->terminal.complete (
                       result_t<serial_execution_queue_t::execution_operation_t>::success (
                         {serial_execution_queue_t::execution_status_t::stopped, {}}));
@@ -1868,6 +1941,9 @@ class location_runtime_t
     std::shared_ptr<std::function<std::chrono::steady_clock::time_point ()>> _lease_now =
       std::make_shared<std::function<std::chrono::steady_clock::time_point ()>> (
         &std::chrono::steady_clock::now);
+    std::shared_ptr<std::atomic<std::uint64_t>> _execution_gate =
+      std::make_shared<std::atomic<std::uint64_t>> (
+        static_cast<std::uint64_t> (execution_gate_state_t::open));
     std::atomic_bool _draining = false;
     std::vector<std::pair<std::string, std::string>> _metric_scopes;
     std::shared_ptr<framework::detail::monitoring_runtime_state_t> _monitoring;
@@ -1878,8 +1954,6 @@ class location_runtime_t
     mutable std::shared_ptr<std::shared_ptr<const owner_lease_snapshot_t>> _owner_lease{
       std::make_shared<std::shared_ptr<const owner_lease_snapshot_t>> (
         std::make_shared<const owner_lease_snapshot_t> ())};
-    // One shared episode indicator outlives the runtime with its execution policies.
-    std::shared_ptr<std::atomic_bool> _episode_open = std::make_shared<std::atomic_bool> (false);
     mutable std::optional<std::string> _last_error;
     mutable std::vector<std::shared_ptr<repository_operation_t>> _descriptor_publications;
 
