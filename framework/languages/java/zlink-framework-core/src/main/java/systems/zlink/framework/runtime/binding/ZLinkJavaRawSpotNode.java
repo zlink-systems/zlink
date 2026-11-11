@@ -948,8 +948,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         completion.completeExceptionally(unwrapActorDispatchFailure(error));
                     }
                 });
-        return completion.whenComplete(
-                (reply, failure) -> dispatched.toCompletableFuture().cancel(false));
+        completion.whenComplete((reply, failure) -> dispatched.toCompletableFuture().cancel(false));
+        return completion;
     }
 
     @Override
@@ -4225,12 +4225,13 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                     completion.completeExceptionally(failure);
                                 }
                             });
-                    return completion.whenComplete(
+                    completion.whenComplete(
                             (reply, failure) -> {
                                 if (completion.isCancelled())
                                     terminal.tryWin(ZLinkTerminalWinner.Cause.CANCELLATION);
                                 dispatched.toCompletableFuture().cancel(false);
                             });
+                    return completion;
                 };
         if (operations != null) {
             var registered = operations.<ZLinkBackendReceived>prepareOperation(operationId);
@@ -4249,7 +4250,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             (accepted, failure) -> {
                                 if (failure != null || !accepted) request.close();
                             });
-            return registered.whenComplete((reply, failure) -> completion.cancel(false));
+            registered.whenComplete((reply, failure) -> completion.cancel(false));
+            return registered;
         }
         if (timeout != null && !timeout.isNegative() && !timeout.isZero()) {
             CompletableFuture.delayedExecutor(timeout.toNanos(), TimeUnit.NANOSECONDS)

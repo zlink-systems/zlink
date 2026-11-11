@@ -1521,6 +1521,13 @@ final class ZLinkP4RuntimeRecoveryTest {
                 f.at(35, 0);
                 await(f.runtime.renewOwnerLeaseOnce());
                 assertTrue(a.paused());
+                assertEquals(
+                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                        assertThrows(
+                                        systems.zlink.framework.errors.ZLinkFrameworkException
+                                                .class,
+                                        f.runtime::ensureOwnerAdmissionOpen)
+                                .kind());
                 assertEquals(0, applied.get());
                 assertEquals(1, f.writes);
                 assertEquals(1, attempts.get());
@@ -1533,6 +1540,7 @@ final class ZLinkP4RuntimeRecoveryTest {
                 assertEquals(
                         1, f.writes, "exact authority confirmation never repeats the applied CAS");
                 assertFalse(a.paused());
+                assertDoesNotThrow(f.runtime::ensureOwnerAdmissionOpen);
                 assertEquals(1, applied.get());
                 assertEquals(0, disposed.get());
             }
