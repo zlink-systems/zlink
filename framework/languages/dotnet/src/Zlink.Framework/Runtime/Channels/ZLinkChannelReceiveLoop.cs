@@ -95,8 +95,7 @@ internal sealed class ZLinkChannelReceiveLoop(
                                 var admitted = await identity
                                     .ObserveReceivedRecordAsync(
                                         applicationSource,
-                                        received.RouteGeneration,
-                                        System.Diagnostics.Stopwatch.GetTimestamp()
+                                        received.RouteGeneration
                                     )
                                     .ConfigureAwait(false);
                                 if (ZLinkClientServerControlProtocol.IsControl(received.Parts))
