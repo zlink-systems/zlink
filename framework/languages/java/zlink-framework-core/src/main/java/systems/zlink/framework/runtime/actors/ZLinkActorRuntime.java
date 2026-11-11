@@ -90,7 +90,6 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -100,6 +99,8 @@ import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDirectory {
+    private final ZLinkActorManagerCalls callFactories;
+
     private static final Logger LOGGER = Logger.getLogger(ZLinkActorRuntime.class.getName());
 
     @FunctionalInterface
@@ -799,6 +800,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         this.meshName = spotNode.routingId().toString();
         this.factories = Map.copyOf(factories);
         this.defaultRequestTimeout = defaultRequestTimeout;
+        this.callFactories = new ZLinkActorManagerCalls(() -> this, defaultRequestTimeout);
         this.messageFollowDuration =
                 messageFollowDuration == null ? Duration.ofSeconds(5) : messageFollowDuration;
         Objects.requireNonNull(locationOptions, "locationOptions");
@@ -880,10 +882,10 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     @Override
     public ZLinkActorCreateCall create(String actorId, String actorType) {
         rejectAfterRelocationReady("Actor create");
-        return new ActorCreateCall(actorId, actorType);
+        return callFactories.create(actorId, actorType);
     }
 
-    private CompletionStage<ZLinkActorCreateResult> submitCreate(
+    CompletionStage<ZLinkActorCreateResult> submitCreate(
             String actorId,
             String actorType,
             ZLinkMessage createRequest,
@@ -2533,157 +2535,12 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     @Override
     public ZLinkActorGetOrCreateCall getOrCreate(String actorId, String actorType) {
         rejectAfterRelocationReady("Actor getOrCreate");
-        return new ActorGetOrCreateCall(actorId, actorType);
+        return callFactories.getOrCreate(actorId, actorType);
     }
 
-    private static void rejectAfterRelocationReady(String operation) {
+    static void rejectAfterRelocationReady(String operation) {
         systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                 .rejectAfterRelocationReady(operation);
-    }
-
-    private abstract class ActorCreationCall {
-        private final String actorId;
-        private final String actorType;
-        private final boolean getOrCreate;
-        private final AtomicBoolean submitted = new AtomicBoolean();
-        private String selectedMesh;
-        private ZLinkMessage request = ZLinkMessage.empty();
-        private boolean requestSet;
-        private Duration timeout = defaultRequestTimeout;
-        private boolean timeoutSet;
-
-        ActorCreationCall(String actorId, String actorType, boolean getOrCreate) {
-            this.actorId = actorId;
-            this.actorType = actorType;
-            this.getOrCreate = getOrCreate;
-        }
-
-        final void setMesh(String value) {
-            if (selectedMesh != null) {
-                throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.INVALID_OPERATION, "Mesh was already set");
-            }
-            if (value == null || value.isBlank()) {
-                throw new IllegalArgumentException("meshName is required");
-            }
-            selectedMesh = value;
-        }
-
-        final void setRequest(ZLinkMessage value) {
-            if (requestSet) {
-                throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.INVALID_OPERATION, "request was already set");
-            }
-            request = Objects.requireNonNull(value, "request");
-            requestSet = true;
-        }
-
-        final void setTimeout(Duration value) {
-            if (timeoutSet) {
-                throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.INVALID_OPERATION, "timeout was already set");
-            }
-            if (value == null || value.isZero() || value.isNegative()) {
-                throw new IllegalArgumentException("timeout must be positive");
-            }
-            timeout = value;
-            timeoutSet = true;
-        }
-
-        final CompletionStage<ZLinkActorCreateResult> submitOperation() {
-            if (!submitted.compareAndSet(false, true)) {
-                return CompletableFuture.failedFuture(
-                        new ZLinkFrameworkException(
-                                ZLinkFrameworkErrorKind.INVALID_OPERATION,
-                                "Actor creation call was already submitted"));
-            }
-            return submitCreate(actorId, actorType, request, getOrCreate, selectedMesh, timeout);
-        }
-
-        final CompletionStage<ZLinkActorCreateResult> yieldOperation() {
-            systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
-                    .requireYieldAllowed("Actor creation");
-            return ZLinkSerialExecutionQueue.yieldCurrent(submitOperation());
-        }
-    }
-
-    private final class ActorCreateCall extends ActorCreationCall implements ZLinkActorCreateCall {
-        ActorCreateCall(String actorId, String actorType) {
-            super(actorId, actorType, false);
-        }
-
-        @Override
-        public ActorCreateCall inMesh(String value) {
-            setMesh(value);
-            return this;
-        }
-
-        @Override
-        public ActorCreateCall request(Object value) {
-            return request(ZLinkMessage.of(value));
-        }
-
-        @Override
-        public ActorCreateCall request(ZLinkMessage value) {
-            setRequest(value);
-            return this;
-        }
-
-        @Override
-        public ActorCreateCall timeout(Duration value) {
-            setTimeout(value);
-            return this;
-        }
-
-        @Override
-        public CompletionStage<ZLinkActorCreateResult> submit() {
-            return submitOperation();
-        }
-
-        @Override
-        public CompletionStage<ZLinkActorCreateResult> yield() {
-            return yieldOperation();
-        }
-    }
-
-    private final class ActorGetOrCreateCall extends ActorCreationCall
-            implements ZLinkActorGetOrCreateCall {
-        ActorGetOrCreateCall(String actorId, String actorType) {
-            super(actorId, actorType, true);
-        }
-
-        @Override
-        public ActorGetOrCreateCall inMesh(String value) {
-            setMesh(value);
-            return this;
-        }
-
-        @Override
-        public ActorGetOrCreateCall request(Object value) {
-            return request(ZLinkMessage.of(value));
-        }
-
-        @Override
-        public ActorGetOrCreateCall request(ZLinkMessage value) {
-            setRequest(value);
-            return this;
-        }
-
-        @Override
-        public ActorGetOrCreateCall timeout(Duration value) {
-            setTimeout(value);
-            return this;
-        }
-
-        @Override
-        public CompletionStage<ZLinkActorCreateResult> submit() {
-            return submitOperation();
-        }
-
-        @Override
-        public CompletionStage<ZLinkActorCreateResult> yield() {
-            return yieldOperation();
-        }
     }
 
     private CompletionStage<ZLinkActorCreateResult> getOrCreateActorOperation(
