@@ -2338,11 +2338,18 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
                       if (handled || !decoded_header.value ()) {
                           return;
                       }
-                      auto pending = registration->mesh_record_dispatcher->dispatch (
-                        accepted_record, std::move (parts), std::move (*decoded_header.value ()),
-                        direct_terminal ? std::move (*direct_terminal)
-                                        : application_dispatch_terminal_owner_t{},
-                        host._application_dispatch.get ());
+                      auto dispatch_route = [&] {
+                          auto pending = registration->mesh_record_dispatcher->dispatch (
+                            accepted_record, std::move (parts),
+                            std::move (*decoded_header.value ()), {},
+                            host._application_dispatch.get ());
+                      };
+                      if (direct_terminal) {
+                          dispatch_with_stack_terminal_owner (std::move (*direct_terminal),
+                                                              dispatch_route);
+                      } else {
+                          dispatch_route ();
+                      }
                   });
               },
               accept_application_receive, next_application_receive, readiness))

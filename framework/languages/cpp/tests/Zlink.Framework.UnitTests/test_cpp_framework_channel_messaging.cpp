@@ -914,6 +914,91 @@ int main ()
         return 1;
 
     {
+        service_collection_t services;
+        auto provider = services.build_provider ();
+        serializer_registry_t serializers;
+        detail::route_handler_registry_t handlers;
+        handler_registry_t filters;
+        auto dispatch_errors = std::make_shared<dispatch_error_log_t> ();
+        dispatch_options_t options;
+        detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+          options, [dispatch_errors] (const message_dispatch_error_event_t &event) {
+              std::lock_guard lock (dispatch_errors->mutex);
+              dispatch_errors->events.push_back (event);
+          });
+        detail::mesh_record_dispatcher_t dispatch_plan (provider, serializers, handlers, filters,
+                                                        options);
+        runtime::messaging::envelope_codec_t codec;
+
+        runtime::host::receive_record_t request_record;
+        request_record.kind = runtime::host::record_kind_t::node_request;
+        request_record.channel_name = "unregistered-mesh-channel";
+        runtime::host::host_options_t reply_host_options;
+        reply_host_options.mesh.descriptor = {"reply-token-host",
+                                              {'s'},
+                                              1,
+                                              1,
+                                              "tcp://127.0.0.1:0",
+                                              {},
+                                              runtime::mesh::service_node_state_t::preparing};
+        reply_host_options.mesh.descriptor.lifecycle_generation = 1;
+        reply_host_options.mesh =
+          test::runtime_failure_options (std::move (reply_host_options.mesh));
+        auto reply_host =
+          std::make_shared<runtime::host::public_host_runtime_t> (std::move (reply_host_options));
+        request_record.reply_token.host = reply_host;
+        std::vector<zlink::message_t> request_error_parts;
+        int request_error_count = 0;
+        request_record.reply_token.local_reply = [&] (const auto &parts) {
+            ++request_error_count;
+            request_error_parts = parts;
+            return true;
+        };
+        auto request_header = runtime::messaging::envelope_header_t{};
+        request_header.kind = runtime::messaging::message_kind_t::request;
+        request_header.channel_name = request_record.channel_name;
+        request_header.message_name = "missing-request";
+        auto request_parts =
+          codec.encode_raw_body_parts (request_header, zlink::message_t::from ("1"));
+        const auto request_result =
+          dispatch_plan
+            .dispatch (request_record, std::move (request_parts).take_items (), request_header)
+            .result ();
+        if (!request_result || request_result.value () || request_error_count != 1
+            || request_error_parts.empty ())
+            return 2;
+        auto error_header =
+          codec.decode_header (runtime::messaging::message_parts_t (request_error_parts));
+        if (!error_header || error_header.value ().kind != runtime::messaging::message_kind_t::error
+            || error_header.value ().error_code.value_or ("") != "not_found")
+            return 3;
+
+        runtime::host::receive_record_t send_record;
+        send_record.kind = runtime::host::record_kind_t::node_send;
+        send_record.channel_name = request_record.channel_name;
+        auto send_header = runtime::messaging::envelope_header_t{};
+        send_header.kind = runtime::messaging::message_kind_t::command;
+        send_header.channel_name = send_record.channel_name;
+        send_header.message_name = "missing-send";
+        auto send_parts = codec.encode_raw_body_parts (send_header, zlink::message_t::from ("1"));
+        int terminal_count = 0;
+        runtime::application_dispatch_terminal_owner_t terminal ({}, [&] { ++terminal_count; });
+        const auto send_result = dispatch_plan
+                                   .dispatch (send_record, std::move (send_parts).take_items (),
+                                              send_header, std::move (terminal))
+                                   .result ();
+        if (!send_result || send_result.value () || terminal_count != 1)
+            return 4;
+        const auto errors = wait_dispatch_errors (dispatch_errors->events, dispatch_errors->mutex);
+        if (errors.size () != 2 || errors[0].reason != dispatch_error_reason_t::handler_missing
+            || errors[0].action != dispatch_error_action_t::reply_error
+            || errors[1].message_kind != dispatch_message_kind_t::send
+            || errors[1].reason != dispatch_error_reason_t::handler_missing
+            || errors[1].action != dispatch_error_action_t::drop)
+            return 5;
+    }
+
+    {
         mesh_dispatch_scope_dependency_t::next_identity.store (0);
         mesh_dispatch_scope_dependency_t::created.store (0);
         mesh_dispatch_scope_dependency_t::destroyed.store (0);

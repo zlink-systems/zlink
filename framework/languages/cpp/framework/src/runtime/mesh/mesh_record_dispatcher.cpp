@@ -73,10 +73,18 @@ mesh_record_dispatcher_t::dispatch (const runtime::host::receive_record_t &recor
     const auto channel_dispatch =
       record.kind == record_kind_t::channel_send || record.kind == record_kind_t::channel_request;
     const auto route = _route_dispatchers.find (dispatch_channel);
-    if (route == _route_dispatchers.end ())
-        return task_t<std::optional<route_dispatch_reply_t>> (
-          result_t<std::optional<route_dispatch_reply_t>>::failure (
-            framework_error_kind_t::protocol_error, "MeshNode route plan was not registered"));
+    if (route == _route_dispatchers.end ()) {
+        route_packet_dispatcher_t dispatcher (
+          std::string (dispatch_channel), *_services, *_serializers, *_handlers,
+          _no_internal_packets, _dispatch_options, _filters,
+          handler_dispatch_kind_t::node_direct_send, handler_dispatch_kind_t::node_direct_request,
+          _before_application_handler);
+        return dispatcher.dispatch (
+          route_received_packet_t{
+            record.source_node_rid, {}, std::move (message_parts), {}, record.received_at},
+          std::move (header), std::move (terminal), executor, record.reply_token,
+          _registration.lock ());
+    }
     const auto &dispatcher = channel_dispatch ? route->second.second : route->second.first;
     return dispatcher.dispatch (
       route_received_packet_t{
