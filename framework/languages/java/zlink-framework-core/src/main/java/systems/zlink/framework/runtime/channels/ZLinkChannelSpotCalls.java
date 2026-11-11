@@ -599,6 +599,9 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                             ? ZLinkRequestMetrics.instanceSpot(metricMeshName)
                             : ZLinkRequestMetrics.spot(metricMeshName);
             ZLinkRequestMetrics.start(metric);
+            CompletableFuture<TReply> result =
+                    systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
+                            .newCancellationFuture();
             CompletionStage<TReply> stage;
             try {
                 var operationFlow =
@@ -638,6 +641,10 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                                                                             : submitExisting(
                                                                                     address,
                                                                                     replyType);
+                                                            systems.zlink.framework.runtime.internal
+                                                                    .ZLinkCompletionBridge
+                                                                    .forwardCancellation(
+                                                                            result, submitted);
                                                             return !instanceIntent
                                                                             && resolver != null
                                                                     ? resolver.observeTerminal(
@@ -654,7 +661,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                         failure);
                 throw failure;
             }
-            stage.whenComplete(
+            result.whenComplete(
                     (ignored, failure) ->
                             ZLinkRequestMetrics.complete(
                                     metric,
@@ -663,7 +670,12 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                                             : ZLinkRequestMetrics.elapsed(
                                                     started, runtime.nanoTime()),
                                     failure));
-            return ZLinkSerialExecutionQueue.manageCurrent(stage);
+            stage.whenComplete(
+                    (value, failure) -> {
+                        if (failure == null) result.complete(value);
+                        else result.completeExceptionally(failure);
+                    });
+            return ZLinkSerialExecutionQueue.manageCurrent(result);
         }
     }
 
@@ -708,7 +720,8 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                         operationId,
                         channelNames,
                         names);
-        return runtime.requestToSpot(
+        var request =
+                runtime.requestToSpot(
                         address.routerChannelId(),
                         address.targetNodeRid(),
                         address.spotId(),
@@ -718,8 +731,9 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                         requestParts,
                         timeout,
                         operationId,
-                        requestAdmission)
-                .handle(
+                        requestAdmission);
+        var decoded =
+                request.handle(
                         (replyParts, failure) -> {
                             try {
                                 if (failure != null) {
@@ -733,6 +747,9 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall {
                                 }
                             }
                         });
+        systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
+                decoded.toCompletableFuture(), request);
+        return decoded;
     }
 
     @Override

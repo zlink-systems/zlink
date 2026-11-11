@@ -1809,8 +1809,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                 ignored ->
                                                         CompletableFuture.failedFuture(
                                                                 new IllegalStateException(
-                                                                        "Object client Mesh is not"
-                                                                                + " configured: "
+                                                                        "Object client Mesh is not configured: "
                                                                                 + meshName)));
                             }
                             var fence =
@@ -5862,6 +5861,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ZLinkApplicationJobQueue.Origin origin,
             Supplier<CompletionStage<T>> operation) {
         Objects.requireNonNull(operation, "operation");
+        try {
+            ensureOwnerAdmissionOpen();
+        } catch (ZLinkFrameworkException rejection) {
+            return CompletableFuture.failedFuture(rejection);
+        }
         return applicationJobQueue.acquireAndPublish(
                 origin,
                 task ->
@@ -5870,7 +5874,13 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                     task.run();
                                     return CompletableFuture.completedFuture(null);
                                 }),
-                permit -> publishApplicationJob(permit, operation));
+                permit ->
+                        publishApplicationJob(
+                                permit,
+                                () -> {
+                                    ensureOwnerAdmissionOpen();
+                                    return operation.get();
+                                }));
     }
 
     private <T> CompletionStage<T> publishApplicationJob(
@@ -5911,7 +5921,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ownership.close();
             return CompletableFuture.failedFuture(failure);
         }
-        return result.whenComplete((ignored, failure) -> ownership.close());
+        result.whenComplete((ignored, failure) -> ownership.close());
+        return result;
     }
 
     private void attachRouteMeshSpotBridges(
@@ -6076,8 +6087,16 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 handlers,
                 suspendHandlerInvokers,
                 primaryNodeSourceName,
-                (timerName, operation) ->
-                        dispatch.enqueue(
+                new ZLinkSpotTimerRegistry.Dispatch() {
+                    @Override
+                    public boolean paused() {
+                        return dispatch.paused();
+                    }
+
+                    @Override
+                    public CompletionStage<Void> enqueue(
+                            String timerName, Supplier<CompletionStage<Void>> operation) {
+                        return dispatch.enqueue(
                                 timerName,
                                 () -> {
                                     if (spotLifecycle.spotActivationFor(spotId) == null
@@ -6094,7 +6113,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                             ZLinkFlowContext.enter(timerFlow)) {
                                         return operation.get();
                                     }
-                                }),
+                                });
+                    }
+                },
                 timerStateLaneFactory.get());
     }
 

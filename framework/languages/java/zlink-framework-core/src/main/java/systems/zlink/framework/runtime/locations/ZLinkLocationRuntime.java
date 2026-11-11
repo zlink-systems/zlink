@@ -417,10 +417,10 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         @Override
         public boolean paused() {
             StoreOutage episode = outage;
-            return cleanup.get() != null
-                    && episode != null
-                    && episode.records.containsKey(this)
-                    && (episode.publication != null || !Objects.equals(episode.token, ownerToken));
+            if (!started || cleanup.get() == null) return false;
+            if (episode == null || !episode.records.containsKey(this))
+                return !executionOpen && !isOwnerAdmissionOpenCore();
+            return recoveringCore(episode);
         }
 
         @Override
@@ -562,23 +562,30 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         final long cutoffNanos;
         volatile boolean discarded;
         // This owner index is the sole retention/recovery decision record read by each gate.
-        final java.util.Map<Execution, Preservation> records = new ConcurrentHashMap<>();
+        final java.util.Map<Execution, Preservation> records;
         volatile CompletionStage<Void> publication;
         CompletableFuture<Void> recovery;
         final Map<ZLinkMeshNodeDescriptorKey, DescriptorPublication> descriptors =
                 new ConcurrentHashMap<>();
 
-        StoreOutage(ZLinkLocationOwnerToken token, long observedAtNanos, long cutoffNanos) {
+        StoreOutage(
+                ZLinkLocationOwnerToken token,
+                long observedAtNanos,
+                long cutoffNanos,
+                java.util.Map<Execution, Preservation> records) {
             this.token = token;
             this.observedAtNanos = observedAtNanos;
             this.cutoffNanos = cutoffNanos;
+            this.records = records;
         }
     }
 
     private void observeStoreCommunicationFailureCore(Throwable failure) {
         if (unwrap(failure) instanceof CancellationException) return;
         executionOpen = false;
-        if (!started || outage != null || lastSuccessfulLeaseRequestStartedNanos == null) return;
+        if (!started
+                || (outage != null && !outage.discarded)
+                || lastSuccessfulLeaseRequestStartedNanos == null) return;
         long cutoff =
                 storeOutageRetention
                         ? saturatingAdd(
@@ -587,9 +594,16 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                         .plus(ownerLeaseFencingMargin.multipliedBy(2))
                                         .toNanos())
                         : ownerAdmissionDeadlineNanos;
-        StoreOutage episode = new StoreOutage(ownerToken, monotonicNow.getAsLong(), cutoff);
+        // Reuse the index so earlier cleanup continuations can still remove their records.
+        // Only the new episode supplies timing and collects live Ready executions.
+        StoreOutage episode =
+                new StoreOutage(
+                        ownerToken,
+                        monotonicNow.getAsLong(),
+                        cutoff,
+                        outage == null ? new ConcurrentHashMap<>() : outage.records);
         for (Execution execution : executions.values()) {
-            if (execution.steady.getAsBoolean())
+            if (execution.cleanup.get() != null && execution.steady.getAsBoolean())
                 episode.records.put(execution, new Preservation(execution));
         }
         outage = episode;
@@ -794,6 +808,13 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
 
     public void ensureOwnerAdmissionOpen() {
         ensureOwnerAdmissionOpenCore();
+        if (recoveringCore(outage)) throw new OwnerLeaseAdmissionClosedException();
+    }
+
+    private boolean recoveringCore(StoreOutage episode) {
+        return episode != null
+                && !episode.discarded
+                && (episode.publication != null || !Objects.equals(episode.token, ownerToken));
     }
 
     public String lastError() {
@@ -1059,7 +1080,16 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                                         admissionWasOpen);
                                                         return () ->
                                                                 recovery.get()
-                                                                        .thenApply(ignored -> true);
+                                                                        .thenApply(
+                                                                                ignored -> {
+                                                                                    if (!admissionWasOpen)
+                                                                                        executions
+                                                                                                .values()
+                                                                                                .forEach(
+                                                                                                        Execution
+                                                                                                                ::resumeCore);
+                                                                                    return true;
+                                                                                });
                                                     }
                                                     recordRenewalFailureCore(
                                                             "owner lease renewal was stale");

@@ -194,10 +194,11 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                                 replyRoute.completeLocal();
                                 throw failure;
                             }
-                            return admitted.whenComplete(
+                            admitted.whenComplete(
                                     (done, failure) -> {
                                         if (failure != null) replyRoute.completeLocal();
                                     });
+                            return admitted;
                         });
         dispatched.whenComplete(
                 (done, failure) -> {
