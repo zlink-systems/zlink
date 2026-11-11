@@ -105,6 +105,7 @@ call의 결과를 바꾸지 않는다. Framework는 이 실패를 metric, log와
 - 대상이나 handler가 없으면 `NotFound`다.
 - Route, connection 또는 current owner를 사용할 수 없으면 `Unavailable`이다. 최초 message의
   `Reserve`에서 진 경우에도 선택된 receiver가 그 operation을 수락할 수 없으므로 `Unavailable`이다.
+  Request가 연결 준비를 기다리는 경우와 그 결과는 [Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)가 정한다.
 - Reply를 deadline 안에 받지 못하면 `DeadlineExceeded`다.
 - Wire, payload 또는 reply type을 처리할 수 없으면 `ProtocolError`다.
 - Runtime이 종료 중이면 `ShuttingDown`이다.
@@ -128,7 +129,7 @@ Framework exception으로 변환하는 경우 원래 예외를 cause로 연결�
   할 일이 아니라 무슨 일이 있었는지 알리는 값이다. 느린 관찰자 때문에 일이 밀리지 않도록
   최신 것만 남기거나 합칠 수 있다. 이것은 일을 버리는 것이 아니다.
 - **놓을 자리가 없는 것은 다르다.** Spot을 둘 node가 하나도 없으면 늦춘다고 생기지 않는다.
-  이때는 `Unavailable`로 끝낸다
+  후보가 없거나 아직 준비되지 않았을 때의 대기와 결과는 [MeshNode §5.2](../03-spot-actor/03-mesh-node.ko.md#52-target-node를-선택하는-조건)가 정한다
   ([Spot Actor](../03-spot-actor/05-spot-actor-membership.ko.md), [Spot 주소 메시징](../03-spot-actor/06-spot-address-messaging.ko.md)).
 - **Actor나 Spot이 relocation된 뒤에도 이전 owner node에 도착한 message를 새 owner에게
   대신 전달하는 동작인 [Message Follow](02-glossary.ko.md#message-follow) relay queue와
@@ -204,7 +205,7 @@ wait다.
 **줄이 가득 찼을 때**
 
 - 같은 runtime이든 다른 node든, Framework가 소유한 줄에 자리가 없다는 이유로 끝나는 request가 없다.
-- Spot을 둘 node가 하나도 없으면 `Unavailable`로 끝난다.
+- Spot을 둘 node가 없거나 아직 준비되지 않았을 때의 대기와 결과가 [MeshNode §5.2](../03-spot-actor/03-mesh-node.ko.md#52-target-node를-선택하는-조건)와 같다.
 
 **Typed Rejected 구분**
 

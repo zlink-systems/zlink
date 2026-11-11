@@ -959,43 +959,42 @@ mesh_node_host_service_t::create_actor (bool exclusive,
              std::decay_t<decltype (source_rid)> source_rid)
         {
             std::vector<mesh_node_descriptor_t> candidates;
-            location_page_request_t page;
-            do {
-                auto listed = co_await self->_location_store->list_mesh_nodes (selected_mesh, page);
-                for (auto &descriptor : listed.items) {
-                    if (mesh_name && descriptor.mesh_name != *mesh_name)
-                        continue;
-                    const auto capability =
-                      std::find_if (descriptor.object_capabilities.begin (),
-                                    descriptor.object_capabilities.end (),
-                                    [&] (const object_capability_t &value) {
-                                        return value.object_kind == placement_object_kind_t::actor
-                                               && value.stable_type == stable_type;
-                                    });
-                    //  Actor model §6.3: a new Actor is created only where an Entry Spot accepts its type.
-                    if (descriptor.state != framework_runtime_state_t::serving
-                        || descriptor.object_role != object_role_t::server
-                        || descriptor.placement_weight <= 0
-                        || capability == descriptor.object_capabilities.end ()
-                        || !capability->entry_accepted)
-                        continue;
-                    if (unavailable_targets.contains ({descriptor.rid.to_hex (),
-                                                       descriptor.lifecycle_generation,
-                                                       std::nullopt}))
-                        continue;
-                    if (descriptor.rid == source_rid) {
-                        candidates.push_back (std::move (descriptor));
-                        continue;
-                    }
-                    const auto epoch = source_node->admitted_peer_epoch (
-                      descriptor.rid, descriptor.lifecycle_generation);
-                    if (epoch
-                        && !unavailable_targets.contains (
-                          {descriptor.rid.to_hex (), descriptor.lifecycle_generation, *epoch}))
-                        candidates.push_back (std::move (descriptor));
+            auto listed = co_await await_result (
+              self->_services->get_required<store_location_resolvers_t> ().list_live_mesh_nodes (
+                selected_mesh));
+            if (!listed.has_value ())
+                co_return detail::propagate_failure<std::vector<mesh_node_descriptor_t>> (
+                  listed, "Actor target lookup failed");
+            for (auto &descriptor : std::move (listed).value ()) {
+                if (mesh_name && descriptor.mesh_name != *mesh_name)
+                    continue;
+                const auto capability = std::find_if (
+                  descriptor.object_capabilities.begin (), descriptor.object_capabilities.end (),
+                  [&] (const object_capability_t &value) {
+                      return value.object_kind == placement_object_kind_t::actor
+                             && value.stable_type == stable_type;
+                  });
+                //  Actor model §6.3: a new Actor is created only where an Entry Spot accepts its type.
+                if (descriptor.state != framework_runtime_state_t::serving
+                    || descriptor.object_role != object_role_t::server
+                    || descriptor.placement_weight <= 0
+                    || capability == descriptor.object_capabilities.end ()
+                    || !capability->entry_accepted)
+                    continue;
+                if (unavailable_targets.contains (
+                      {descriptor.rid.to_hex (), descriptor.lifecycle_generation, std::nullopt}))
+                    continue;
+                if (descriptor.rid == source_rid) {
+                    candidates.push_back (std::move (descriptor));
+                    continue;
                 }
-                page.continuation_token = std::move (listed.continuation_token);
-            } while (page.continuation_token);
+                const auto epoch = source_node->admitted_peer_epoch (
+                  descriptor.rid, descriptor.lifecycle_generation);
+                if (epoch
+                    && !unavailable_targets.contains (
+                      {descriptor.rid.to_hex (), descriptor.lifecycle_generation, *epoch}))
+                    candidates.push_back (std::move (descriptor));
+            }
             co_return candidates;
         }
     };

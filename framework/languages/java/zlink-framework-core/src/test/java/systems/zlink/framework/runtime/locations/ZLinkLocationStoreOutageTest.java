@@ -6,6 +6,7 @@ import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.*;
@@ -364,7 +365,7 @@ public final class ZLinkLocationStoreOutageTest {
                     .join();
             assertEquals(2, calls.get());
             if (retention)
-                assertThrows(IllegalStateException.class, f.runtime::ensureOwnerAdmissionOpen);
+                assertThrows(ZLinkFrameworkException.class, f.runtime::ensureOwnerAdmissionOpen);
             var hold = new CompletableFuture<Void>();
             var started = new CompletableFuture<Void>();
             var active =
@@ -601,6 +602,26 @@ public final class ZLinkLocationStoreOutageTest {
 
     private static void discard(systems.zlink.framework.execution.ZLinkSerialExecutionQueue queue) {
         queue.discardApplications().toCompletableFuture().join();
+    }
+
+    /**
+     * Location runtime §5: after the admission deadline no new application turn starts, even when
+     * no Store failure has been observed yet (the renewal did not run, for example after a pause).
+     */
+    @Test
+    void admissionDeadlineWithoutObservedOutageClosesNewApplicationTurns() {
+        try (var f = new Fixture(false, true)) {
+            var execution = f.runtime.execution(() -> true, () -> {});
+            execution.ready().toCompletableFuture().join();
+            long admission = TTL.minus(MARGIN).toNanos();
+            f.now.set(100L + admission - 1L);
+            execution.check(true);
+            f.now.set(100L + admission);
+            f.fireCutoff();
+            assertNull(f.runtime.ownerLeaseSnapshot().outageCutoffNanos());
+            var closed = assertThrows(RuntimeException.class, () -> execution.check(true));
+            assertEquals("The owner lease admission deadline has expired.", closed.getMessage());
+        }
     }
 
     public static final class Fixture implements AutoCloseable {

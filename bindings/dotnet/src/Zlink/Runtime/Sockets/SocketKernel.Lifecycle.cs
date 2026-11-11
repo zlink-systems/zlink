@@ -35,14 +35,14 @@ internal sealed partial class SocketKernel : IDisposable
         {
             _handle.Dispose();
         }
-        catch
+        finally
         {
-            if (finalizing)
+            // A finalized socket can never be closed again, so its pending
+            // operations end even when the native close failed.
+            if (_handle.IsClosed || finalizing)
                 _completion?.CompleteClose();
-            throw;
+            if (_handle.IsClosed && !finalizing)
+                GC.SuppressFinalize(this);
         }
-        _completion?.CompleteClose();
-        if (!finalizing)
-            GC.SuppressFinalize(this);
     }
 }

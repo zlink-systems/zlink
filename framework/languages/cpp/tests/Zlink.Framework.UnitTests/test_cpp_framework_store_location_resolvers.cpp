@@ -3436,6 +3436,200 @@ class ended_user_request_entry_t final
     zlink::framework::entry_spot_context_t _context;
 };
 
+
+class lease_target_actor_t final : public zlink::framework::actor_t
+{
+  public:
+    explicit lease_target_actor_t (zlink::framework::actor_context_t context) :
+        _context (std::move (context))
+    {
+    }
+    zlink::framework::actor_context_t &context () noexcept override { return _context; }
+    const zlink::framework::actor_context_t &context () const noexcept override { return _context; }
+
+  private:
+    zlink::framework::actor_context_t _context;
+};
+
+class lease_target_actor_entry_t final : public zlink::framework::entry_spot_t<lease_target_actor_t>
+{
+  public:
+    explicit lease_target_actor_entry_t (zlink::framework::entry_spot_context_t context) :
+        _context (std::move (context))
+    {
+    }
+    zlink::framework::entry_spot_context_t &context () noexcept override { return _context; }
+    const zlink::framework::entry_spot_context_t &context () const noexcept override
+    {
+        return _context;
+    }
+    void configure () override {}
+    zlink::framework::task_t<void> on_actor_joined (lease_target_actor_t &) override { co_return; }
+    zlink::framework::task_t<void> on_leave_actor (lease_target_actor_t &) override { co_return; }
+
+  private:
+    zlink::framework::entry_spot_context_t _context;
+};
+
+class lease_target_actor_factory_t final
+    : public zlink::framework::actor_factory_t<lease_target_actor_t>
+{
+  public:
+    zlink::framework::task_t<std::shared_ptr<lease_target_actor_t>>
+    create (zlink::framework::actor_context_t context, std::stop_token) override
+    {
+        ++calls;
+        co_return std::make_shared<lease_target_actor_t> (std::move (context));
+    }
+    std::atomic<int> calls{0};
+};
+
+class actor_candidate_lease_store_t final : public zlink::framework::location_store_t
+{
+  public:
+    enum class view_t
+    {
+        missing,
+        expired,
+        replaced,
+        live,
+        missing_expiry,
+        read_failure
+    };
+    explicit actor_candidate_lease_store_t (view_t view) : view (view) {}
+
+    zlink::framework::task_t<zlink::framework::store_read_result_t>
+    read (zlink::framework::store_key_t key) override
+    {
+        using namespace zlink::framework;
+        const auto &flow = runtime::flow_context_t::current ();
+        const bool observed = flow && flow->flow_id == flow_id;
+        if (observed && key.value.find ("lease-new-actor") != std::string::npos)
+            ++authority_reads;
+        auto result = co_await inner.read (key);
+        if (observed && key.value.starts_with (std::string ("owner-lease") + '\0')) {
+            ++owner_reads;
+            if (view == view_t::read_failure)
+                throw framework_exception_t (framework_error_kind_t::unavailable,
+                                             "injected Actor candidate owner read failure");
+            if (auto *found = std::get_if<store_found_t> (&result)) {
+                // Candidate reads use a Store clock independent of the host clock.
+                found->value.store_now =
+                  std::chrono::system_clock::time_point (std::chrono::hours (24));
+                found->value.expires_at = found->value.store_now + std::chrono::minutes (1);
+                if (view == view_t::missing)
+                    co_return store_read_result_t{store_missing_t{found->value.store_now}};
+                if (view == view_t::expired)
+                    found->value.expires_at = found->value.store_now;
+                if (view == view_t::missing_expiry)
+                    found->value.expires_at.reset ();
+                if (view == view_t::replaced) {
+                    auto record = nlohmann::json::parse (
+                      reinterpret_cast<const char *> (found->value.bytes.data ()),
+                      reinterpret_cast<const char *> (found->value.bytes.data ()
+                                                      + found->value.bytes.size ()));
+                    record["leaseGeneration"] = "9223372036854775807";
+                    const auto encoded = record.dump ();
+                    found->value.bytes.assign (
+                      reinterpret_cast<const std::byte *> (encoded.data ()),
+                      reinterpret_cast<const std::byte *> (encoded.data () + encoded.size ()));
+                }
+            }
+        }
+        co_return result;
+    }
+    zlink::framework::task_t<zlink::framework::store_write_result_t>
+    write (zlink::framework::store_write_request_t request) override
+    {
+        return inner.write (std::move (request));
+    }
+    zlink::framework::task_t<zlink::framework::store_scan_result_t>
+    scan (zlink::framework::store_scan_request_t request) override
+    {
+        return inner.scan (std::move (request));
+    }
+
+    in_memory_location_store_t inner;
+    const view_t view;
+    const std::string flow_id = zlink::framework::runtime::flow_id_t::create ();
+    std::atomic<int> owner_reads{0};
+    std::atomic<int> authority_reads{0};
+};
+
+TEST (ZLinkFrameworkStoreLocationResolvers, ActorCandidatesRequireLiveDescriptorOwner)
+{
+    namespace fw = zlink::framework;
+    using view_t = actor_candidate_lease_store_t::view_t;
+    for (const auto view : {view_t::missing, view_t::expired, view_t::replaced, view_t::live,
+                            view_t::missing_expiry, view_t::read_failure}) {
+        SCOPED_TRACE (static_cast<int> (view));
+        auto store = std::make_shared<actor_candidate_lease_store_t> (view);
+        auto factory = std::make_shared<lease_target_actor_factory_t> ();
+        auto app = fw::app_t::create ();
+        app.add_zlink_framework ([&] (fw::zlink_framework_options_t &options) {
+            options.configure_locations ().owner_lease_renew_interval =
+              std::chrono::milliseconds (10);
+            options.configure_locations ().owner_lease_fencing_margin =
+              std::chrono::milliseconds (1);
+            options.add_location_store (store);
+            options.add_route_mesh ("actor-lease-mesh")
+              .set_object_role (fw::object_role_t::server)
+              .set_routing_id (zlink::routing_id_t::from ("only-actor-target"))
+              .set_placement_weight (1)
+              .listen ("tcp://127.0.0.1:0")
+              .add_entry_spot<lease_target_actor_entry_t> ([] (fw::entry_spot_context_t context) {
+                  return std::make_shared<lease_target_actor_entry_t> (std::move (context));
+              })
+              .add_actor_factory<lease_target_actor_t, lease_target_actor_factory_t> (
+                "lease-actor", factory, [] (auto &options) { options.disable_relocation (); });
+        });
+        app.set_message_flow_mode (fw::message_flow_log_mode_t::normal);
+        int app_result = -1;
+        auto services = app.advanced ().services ().build_provider ();
+        std::jthread host ([&] { app_result = app.run (0, nullptr); });
+        bool created = false;
+        std::optional<fw::framework_error_kind_t> error;
+        try {
+            fw::test::wait_for_serving (services);
+            fw::runtime::flow_context_t::scope_t flow (
+              fw::runtime::flow_value_t{store->flow_id, fw::flow_origin_t::application,
+                                        fw::message_flow_log_mode_t::normal, std::nullopt});
+            const auto result = services.get_required<fw::actor_manager_t> ()
+                                  .create (fw::actor_id_t ("lease-new-actor"), "lease-actor")
+                                  .in_mesh ("actor-lease-mesh")
+                                  .timeout (std::chrono::seconds (2))
+                                  .async ()
+                                  .result ();
+            created =
+              result && std::holds_alternative<fw::actor_create_created_t> (result.value ());
+            if (!result)
+                error = result.error_kind ();
+        }
+        catch (const fw::framework_exception_t &failure) {
+            error = failure.kind ();
+        }
+        app.stop ();
+        host.join ();
+        EXPECT_EQ (0, app_result);
+        EXPECT_GT (store->owner_reads.load (), 0);
+        if (view == view_t::live) {
+            EXPECT_TRUE (created);
+            EXPECT_FALSE (error.has_value ());
+            EXPECT_EQ (1, factory->calls.load ());
+        } else {
+            EXPECT_FALSE (created);
+            EXPECT_EQ (0, factory->calls.load ());
+            // Exclusive creation has no authority fallback: no reservation or activation is reached.
+            EXPECT_EQ (0, store->authority_reads.load ());
+            EXPECT_EQ (std::optional<fw::framework_error_kind_t> (
+                         view == view_t::missing_expiry
+                           ? fw::framework_error_kind_t::internal_failure
+                           : fw::framework_error_kind_t::unavailable),
+                       error);
+        }
+    }
+}
+
 class ended_user_reclaim_client_t final : public zlink::framework::hosted_service_t
 {
   public:

@@ -1562,3 +1562,37 @@ test('nonterminal execution pause preserves the existing yielded-turn result', a
   await rejected;
   await serial.whenIdle();
 });
+
+for (const mode of [
+  internal.ZLinkUserSpotExecutionMode.PerActor,
+  internal.ZLinkUserSpotExecutionMode.SpotWide
+]) {
+  test(`scheduled admission deadline closes Actor Spot and timer turns until renewal (mode=${mode})`, async (t) => {
+    const s = await objectScenario(t, false, mode);
+    let calls = 0;
+    const turns = [
+      () => s.activation.executeActor('a', (serial) => serial.execute(() => { calls++; })),
+      () => s.activation.serialExecutor.executeSpot(() => { calls++; }),
+      () => s.activation.serialExecutor.executeTimer('deadline', () => { calls++; })
+    ];
+    s.advance(999);
+    for (const turn of turns) await turn();
+    assert.equal(calls, 3, 'turns start immediately before the admission deadline');
+    s.advance(1001);
+    assert.equal(s.runtime.ownerLeaseHealthy, true, 'heartbeat has not observed expiry');
+    assert.equal(s.snapshot().storeOutage, undefined);
+    const reads = s.clockReads();
+    for (const turn of turns) await assert.rejects(turn());
+    assert.equal(calls, 3, 'scheduled deadline prevents new application callbacks');
+    assert.equal(s.clockReads(), reads, 'closed admission uses its latch without reading time');
+    s.setNow(999);
+    for (const turn of turns) await assert.rejects(turn());
+    assert.equal(calls, 3, 'clock movement alone cannot reopen admission');
+    assert.equal(await s.runtime.renewOwnerLeaseOnce(), true);
+    for (const turn of turns) await turn();
+    assert.equal(calls, 6, 'successful renewal reopens the same execution gates');
+    s.advance(1899);
+    for (const turn of turns) await assert.rejects(turn());
+    assert.equal(calls, 6, 'renewal reschedules the admission deadline');
+  });
+}

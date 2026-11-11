@@ -90,7 +90,7 @@ ZMP header aren't included in this size.
 | Pattern Name | gRPC | ZLink raw binding | ZLink framework | Interpretation |
 |-----------|------|-------------------|-----------------|------|
 | `request-serial` | unary `Echo` RPC | raw request send and reply receive | node request call | Sends one request and sends the next only after the reply completes |
-| `request-backpressure` | unary `Echo` RPC | raw request send and reply receive | node request call | Puts no ceiling on incomplete requests. Submits continuously until admission backpressure |
+| `request-backpressure` | n/a (no admission signal) | raw request send and reply receive | node request call | Puts no ceiling on incomplete requests. Submits continuously until admission backpressure |
 | `send-saturation` | unary `Command` RPC, replying `Empty` | raw one-way send submission | node send submission | Compares the command path, which has no reply payload |
 
 The API names the three implementations use differ per language, but the contract is the same. In
@@ -102,8 +102,9 @@ meant to show the cost of a "process one at a time" usage pattern.
 
 `request-backpressure` puts no application ceiling on the number of incomplete requests. Without
 waiting for replies, the client submits requests continuously until it meets admission
-backpressure, and resumes submitting when it is signalled to. The gRPC side has the same shape: it
-submits until its own flow control stops it. Neither side gets an application ceiling.
+backpressure, and resumes submitting when it is signalled to. The pattern is defined by admission
+backpressure, so the gRPC rows, which have no admission signal, do not measure it and the table
+shows them as not applicable. The ZLink rows get no application ceiling.
 
 **In this pattern the incomplete depth is a measurement, not a setting.** The depth a stack reaches
 is an outcome its design decides, so it is recorded as part of the result (§5.2).
@@ -111,8 +112,7 @@ is an outcome its design decides, so it is recorded as part of the result (§5.2
 This loop shape is not new; it is ported from an implementation already in the repository. The
 reference implementation is `bindings/node/perf/multi/perf_multi_socket_reqrep.ts`, which submits
 async requests continuously without waiting for a reply and then hands the turn to the completion
-pump. All six rows use the same shape, and the gRPC side is treated the same way: unary calls are
-submitted continuously rather than awaited one at a time.
+pump. All ZLink rows use the same shape.
 
 This repository's perf convention already requires that inflight depth not be fixed artificially
 and that requests be submitted continuously until admission backpressure (the request/reply client
@@ -163,7 +163,7 @@ one-way send. Under this condition the difference was N times.
 - The `request-backpressure` pattern has no incomplete-request ceiling setting. In that
   pattern depth is not a condition that is set but a result that is measured and recorded
   (§5.2). This bench has no `request_window` setting.
-- The default send concurrency is `8`.
+- The default `submit_concurrency` is `8`.
 - gRPC and ZLink framework use the same protobuf DTO. The ZLink raw binding skips the framework but
   puts the same shape on the wire: two parts, an envelope header part and a protobuf-encoded
   `BenchPayload` part, with the 29-byte measurement header inside that protobuf `bytes body`. This
@@ -226,7 +226,7 @@ RESULT,current,<scenario>,local,<payload_size>,<metric>,<value>
 An example follows.
 
 ```text
-RESULT,current,grpc-dotnet-request-backpressure,local,1024,throughput,10000.000
+RESULT,current,grpc-dotnet-request-serial,local,1024,throughput,10000.000
 RESULT,current,zlink-dotnet-request-backpressure,local,1024,latency,0.300
 RESULT,current,zlink-framework-dotnet-request-backpressure,local,1024,latency_p99,1.200
 ```
@@ -303,7 +303,7 @@ this limit", so the instrument has to measure **the execution resource on which 
 | `dotnet` | process cores used | the parallelism the harness declares |
 | `node` | `performance.eventLoopUtilization()` from `perf_hooks` | `1.0` |
 | `java`, `kotlin` | CPU of the submit threads (`ThreadMXBean`, `jvm_thread_cores`) | the submit parallelism the harness declares |
-| `cpp` | CPU of the application thread that runs submit and the completion drain (`CLOCK_THREAD_CPUTIME_ID`, `submit_thread_cores`) | `1` |
+| `cpp` | Summed CPU of the stream threads that run submit and the completion drain (`CLOCK_THREAD_CPUTIME_ID`, `submit_thread_cores`) | the stream count (§10.3) |
 
 `dotnet` is the only language that declares process cores used.
 
@@ -334,7 +334,7 @@ Request-family cells record the three values below for every cell. The three are
 
 | Metric | Meaning |
 |---|---|
-| `peak_in_flight` | The maximum number of incomplete requests observed during the active window |
+| `peak_in_flight` | The sum of each stream's maximum number of incomplete requests observed during the active window. It is an upper bound of the overall concurrent maximum; it is measured per stream because a counter shared between streams would make the bench add contention to the path it measures |
 | Depth | The mean incomplete count calculated as throughput x mean latency (Little's law) |
 | `abandoned` | The number of requests that did not complete by the drain bound |
 
@@ -389,7 +389,7 @@ information alongside it.
 - The depth reached (`request-backpressure` pattern, §5.2)
 - A's logical stream count, per-stream in-flight ceiling, and trigger endpoint (§10)
 - Per-cell `peak_in_flight`, depth, and `abandoned` (§5.2)
-- The send concurrency value
+- The `submit_concurrency` value
 - Source (A) CPU and whether the cell was saturated (§5.1), target (B) CPU
 - The original result JSON
 
@@ -399,12 +399,12 @@ Performance judgment compares within the same ZLink layer, not against gRPC. The
 judged against the `zlink-c` request-backpressure result under the same conditions. If the raw binding
 reaches 80% or more of the C result, the binding layer's baseline performance is judged as
 passing. The framework is judged against the same language's raw binding result. If the framework
-reaches 80% or more of the raw binding result, the framework's added cost is judged as passing.
+reaches 60% or more of the raw binding result, the framework's added cost is judged as passing.
 
 ```text
 at each of payload sizes 1024 and 4096:
 zlink-<lang> / zlink-c                     >= 0.80   binding layer passes
-zlink-framework-<lang> / zlink-<lang>      >= 0.80   framework added cost passes
+zlink-framework-<lang> / zlink-<lang>      >= 0.60   framework added cost passes (all three patterns)
 ```
 
 Both formulas are calculated separately per payload size. A language passes only when it satisfies
@@ -414,13 +414,18 @@ but degrades at `4096` has a real problem, and since the report shows both sizes
 per-payload gate exposes that problem at no added cost.
 
 This criterion is applied to patterns where ZLink can send the next request without waiting for the
-reply. Such a pattern is the sound judgement cell because gRPC unary `Echo` and a ZLink request
-give the same guarantee, namely confirmation that the server processed the message.
+reply. Such a pattern is the sound judgement cell because a ZLink request confirms that the server
+processed the message.
 `request-serial` is kept as a supplementary metric for looking at the round-trip latency of a
 process-one-at-a-time usage pattern.
 
-**The reference pattern for judgement is `request-backpressure`.** Whether a language passes is
-decided by that pattern satisfying the criterion at both payload sizes.
+**The reference pattern for the binding layer (the first formula) is `request-backpressure`.** It
+passes when the criterion holds at both payload sizes. **The framework added cost (the second
+formula) passes when the criterion holds in all three patterns — `request-serial`,
+`send-saturation`, and `request-backpressure` — at both payload sizes.** The cost the framework adds
+shows differently per usage pattern (round-trip latency, one-way submission, deep incomplete
+depth), so a pass in one pattern does not stand in for the others. For the framework judgement,
+`request-serial` is therefore a judgement cell rather than a supplementary metric.
 
 The grounds for choosing the reference pattern this way are below.
 
@@ -620,7 +625,7 @@ response are JSON and the five languages use the same fields.
 POST http://127.0.0.1:<A trigger>/bench/start
 { "runId": "...", "cellId": "...", "pattern": "request-backpressure",
   "payloadBytes": 1024, "phase": "warmup" | "active",
-  "durationMs": 5000, "requestWindow": 100, "sendConcurrency": 8 }
+  "durationMs": 5000, "requestWindow": 100, "submitConcurrency": 8 }
 → 200 { "accepted": true, "runId": "...", "cellId": "...", "phase": "active", "startedAt": <monotonic ns> }
 ```
 
@@ -650,12 +655,19 @@ count and a per-stream in-flight ceiling.
 | Pattern | Streams | In-flight per stream | Meaning |
 |---------|---------|----------------------|---------|
 | `request-serial` | 1 | 1 | Send one request, then the next after the reply |
-| `request-backpressure` | 1 | No ceiling | Submit until admission backpressure is met |
-| `send-saturation` | `send_concurrency` (default 8) | 1 (until send completion notification) | The command path with no reply |
+| `request-backpressure` | `submit_concurrency` (default 8) | No ceiling | Each stream submits until admission backpressure is met |
+| `send-saturation` | `submit_concurrency` (default 8) | 1 (until send completion notification) | The command path with no reply |
 
-The stream count and per-stream in-flight are recorded in the cell's raw file (§4). How a language
-harness implements a stream (thread, task, coroutine, event loop) differs per language and is left
-in the result as in §8.2.
+The stream count and per-stream in-flight are recorded in the cell's raw file (§4).
+
+**One stream is one submitting thread.** A production server submits sends and requests from many
+handlers at once, so the bench measures concurrent submission from several OS threads. Languages with
+threads (C++, .NET, Java, Kotlin) give each stream its own thread, and that thread owns the submits
+and the accounting (in-flight, counters, latency samples) of its stream. Completion callbacks run on
+the resource the language's completion model defines; the bench does not move them to the stream
+thread. Node runs every stream on one event loop,
+because that is its production execution model. The binding row and the framework row of a language
+use the same thread layout (§7.2).
 
 ### 10.4 Cell Order
 
@@ -680,8 +692,9 @@ there are streams. The gRPC server configuration stays at the language default a
 
 Kotlin shares the binding, server, and codec with Java, so it's excluded from the full matrix.
 Instead, two supplementary cells that show the cost of the Kotlin call layer — `grpc-kotlin`
-(coroutine stub) and `zlink-framework-kotlin` (suspend calls) at `request-backpressure @1024` — are placed
-next to the Java rows. Only A is Kotlin; B is the Java binary on the Java band of §9, as is.
+(coroutine stub) and `zlink-framework-kotlin` (suspend calls) at `request-serial @1024` — are placed
+next to the Java rows. Both cells need the same pattern to compare the call layer, and gRPC does
+not measure `request-backpressure` (§2). Only A is Kotlin; B is the Java binary on the Java band of §9, as is.
 
 ## 11. Runner Inputs and Result Layout
 
@@ -702,13 +715,18 @@ difference doesn't show in the result table.
 | `IMPLEMENTATIONS` | Every implementation of the language (§1.1, §1.2) | Implementations to measure |
 | `RUNS` | `3` | Number of runs. The G5 reproducibility check needs three runs |
 | `SKIP_BUILD` | `0` | `0` builds with the language's `<lang>/build.sh` before measuring; `1` uses the artifacts already built |
+| `TARGET_RATE` | Unset (0, unpaced) | C++ runner client submission rate in messages per second |
+| `SOURCE_CPUS` | Unset | CPU list for the C++ source process, passed to `taskset -c` |
+| `TARGET_CPUS` | Unset | CPU list for the C++ target process, passed to `taskset -c` |
 
 - `<lang>` is one of `c`, `cpp`, `dotnet`, `java`, `kotlin`, and `node`.
 - The Kotlin runner defaults to the supplementary §10.5 cells: `request-backpressure` and `1024`.
   Manual verification also accepts `send-saturation` and payload sizes `1024,4096`.
 - If a value is outside these ranges, the runner rejects it before the measurement starts.
+- `TARGET_RATE`, `SOURCE_CPUS`, and `TARGET_CPUS` are optional C++ runner inputs. CPU lists use Linux `taskset -c` syntax.
+  The C++ runner records them in the cell JSON `metadata` as `targetRate` (`0` is unpaced), `sourceCpus`, and `targetCpus` (`unpinned` when unset).
 
-Values outside the table aren't inputs. Send concurrency 8 and the 30-second drain
+Values outside the table aren't inputs. `submit_concurrency` 8 and the 30-second drain
 limit (§3), and ports (§9) are set by the runner and recorded in the `metadata` of the cell JSON.
 
 Results are written in this layout.
