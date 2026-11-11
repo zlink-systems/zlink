@@ -45,12 +45,12 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
+import systems.zlink.framework.runtime.locations.ZLinkInstanceActivationStartupRecovery;
 import systems.zlink.framework.runtime.locations.ZLinkLocationAutoConnectHost;
 import systems.zlink.framework.runtime.locations.ZLinkLocationLifecycle;
 import systems.zlink.framework.runtime.locations.ZLinkLocationReadinessService;
 import systems.zlink.framework.runtime.locations.ZLinkLocationRuntime;
 import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
-import systems.zlink.framework.runtime.locations.ZLinkStatefulAuthorityRouteRuntime;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 import systems.zlink.framework.runtime.mesh.ZLinkMeshNodesRuntime;
@@ -125,7 +125,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     private ZLinkLocationRuntimeQuery locationRuntimeQuery;
     private ZLinkLocationLifecycle locationLifecycle;
     ZLinkLocationAutoConnectHost locationAutoConnectHost;
-    ZLinkStatefulAuthorityRouteRuntime authorityRouteRuntime;
+    private ZLinkInstanceActivationStartupRecovery instanceActivationStartupRecovery;
     private systems.zlink.framework.runtime.internal.locations.ZLinkObjectServerDescriptorPublisher
             objectDescriptors;
     private volatile ZLinkRouteMeshRuntimeOptions routeMeshRuntimeOptions;
@@ -400,22 +400,14 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         this.spots = spotSubsystem.spots();
         if (spots != null) spots.setCountChanged(routeMeshRuntime::signalAll);
 
-        this.authorityRouteRuntime =
+        this.instanceActivationStartupRecovery =
                 this.locationStores != null
                                 && this.locationStores.authorityStore() != null
                                 && !this.meshNodes.nodesByName().isEmpty()
-                        ? new ZLinkStatefulAuthorityRouteRuntime(
+                        ? new ZLinkInstanceActivationStartupRecovery(
                                 this.locationStores.authorityStore(),
                                 this.registration.relocationStore(),
-                                this.meshNodes.nodesByName(),
-                                this.registration.locations().options().pollingInterval(),
-                                failure ->
-                                        Logger.getLogger(
-                                                        ZLinkStatefulAuthorityRouteRuntime.class
-                                                                .getName())
-                                                .warning(
-                                                        "Durable authority route reconcile failed: "
-                                                                + failure.getMessage()))
+                                this.meshNodes.nodesByName())
                         : null;
 
         ZLinkFrameworkActorSubsystem actorSubsystem =
@@ -790,9 +782,9 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                         : this.spotRetire.startup())
                 .thenCompose(
                         ignored ->
-                                this.authorityRouteRuntime == null
+                                this.instanceActivationStartupRecovery == null
                                         ? CompletableFuture.completedFuture(null)
-                                        : this.authorityRouteRuntime.start())
+                                        : this.instanceActivationStartupRecovery.start())
                 .thenCompose(
                         ignored ->
                                 ZLinkFrameworkAutoConnectSubsystem.start(
@@ -2350,9 +2342,6 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             shutdown.defer("context_close", this::closeBackendContext);
         }
         shutdown.defer("route_mesh_close", routeMeshRuntime::close);
-        if (authorityRouteRuntime != null) {
-            shutdown.defer("authority_route_close", authorityRouteRuntime::close);
-        }
         if (storeLocationResolvers != null) {
             shutdown.defer("location_resolvers_close", storeLocationResolvers::close);
         }
