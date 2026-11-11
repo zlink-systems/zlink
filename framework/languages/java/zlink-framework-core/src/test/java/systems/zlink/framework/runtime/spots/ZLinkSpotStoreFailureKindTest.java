@@ -109,7 +109,7 @@ final class ZLinkSpotStoreFailureKindTest {
                                             .spot("key"),
                                     () -> false);
                     case "write" -> boundary.claimOwnerLease("owner", Duration.ofSeconds(30));
-                    case "scan" -> boundary.list("prefix", Optional.empty(), 1, () -> false);
+                    case "scan" -> boundary.list("zla1:s:", Optional.empty(), 1, () -> false);
                     default -> throw new AssertionError(operation);
                 };
         var terminal =
