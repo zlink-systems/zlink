@@ -55,9 +55,8 @@ internal sealed partial class ZLinkLocationRuntime
             )
                 return;
             _ownerAdmissionDeadline = null;
-            _storeOutageTimer?.Dispose();
-            _storeOutageTimer = null;
             UpdateHealth(health => health with { StoreOutage = current with { Discarded = true } });
+            ScheduleOwnerDeadlinesOnLane();
             ExecutionsDiscarded?.Invoke(current.Executions);
         });
 
@@ -124,9 +123,8 @@ internal sealed partial class ZLinkLocationRuntime
             {
                 if (!IsBeforeRecoveryDeadline(episode) || episode.Executions.Count != 0)
                     return;
-                _storeOutageTimer?.Dispose();
-                _storeOutageTimer = null;
                 UpdateHealth(health => health with { StoreOutage = null });
+                ScheduleOwnerDeadlinesOnLane();
             })
             .ConfigureAwait(false);
 
