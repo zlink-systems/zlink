@@ -7,9 +7,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkRequestException;
@@ -37,10 +40,11 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkMonitoringBackendAd
 import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptorKey;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
+import systems.zlink.framework.runtime.locations.ZLinkCandidateLeaseFixture;
+import systems.zlink.framework.runtime.locations.ZLinkCandidateLeaseFixture.Lease;
 import systems.zlink.framework.testing.ZLinkLocationStoreTestAdapter;
 
 import java.lang.reflect.Proxy;
@@ -753,7 +757,19 @@ final class ZLinkClientServerM6ARuntimeTest {
         assertStoreAdmission(true);
     }
 
+    @ParameterizedTest
+    @EnumSource(
+            value = Lease.class,
+            names = {"MISSING", "EXPIRED", "REPLACED", "WRONG_OWNER", "LIVE", "CORRUPT", "FAILED"})
+    void discoveryConnectsOnlyLiveOwners(Lease lease) {
+        assertStoreAdmission(false, lease);
+    }
+
     private void assertStoreAdmission(boolean timeoutFirst) {
+        assertStoreAdmission(timeoutFirst, Lease.LIVE);
+    }
+
+    private void assertStoreAdmission(boolean timeoutFirst, Lease lease) {
         ZLinkClientServerServerDescriptor descriptor =
                 descriptor(
                         "orders",
@@ -831,7 +847,8 @@ final class ZLinkClientServerM6ARuntimeTest {
                                                     throw new UnsupportedOperationException(
                                                             method.getName());
                                         });
-        ZLinkLocationRepository store = new SingleDescriptorStore(descriptor);
+        var store = new SingleDescriptorStore(descriptor, lease);
+        var ticker = new java.util.concurrent.atomic.AtomicLong();
         ZLinkBackendContext context =
                 (ZLinkBackendContext)
                         Proxy.newProxyInstance(
@@ -850,6 +867,7 @@ final class ZLinkClientServerM6ARuntimeTest {
         ZLinkClientServerLocationRuntime runtime =
                 new ZLinkClientServerLocationRuntime(
                         store,
+                        ZLinkCandidateLeaseFixture.liveRows(store, ticker::get),
                         () -> new ZLinkLocationOwnerToken("owner", 1),
                         provider,
                         context,
@@ -883,7 +901,20 @@ final class ZLinkClientServerM6ARuntimeTest {
                         List.of());
 
         try {
-            runtime.start(List.of(client, server)).toCompletableFuture().join();
+            var started = runtime.start(List.of(client, server)).toCompletableFuture();
+            if (lease == Lease.CORRUPT || lease == Lease.FAILED) {
+                assertThrows(java.util.concurrent.CompletionException.class, started::join);
+                assertEquals(0, creates.get());
+                assertEquals(0, connects.get());
+                assertTrue(runtime.connections.isEmpty());
+                return;
+            }
+            started.join();
+            if (lease != Lease.LIVE) {
+                assertEquals(0, creates.get(), "expired owner must not create a transport");
+                assertEquals(0, connects.get());
+                return;
+            }
 
             assertSame(
                     dealer,
@@ -902,6 +933,26 @@ final class ZLinkClientServerM6ARuntimeTest {
             assertEquals(timeoutFirst ? 2 : 1, requests.get());
             assertEquals(1, creates.get());
             assertEquals(1, connects.get());
+            assertEquals(0, disconnects.get());
+            var connectionCount = runtime.connections.size();
+            store.lease = Lease.EXPIRED;
+            ticker.addAndGet(Duration.ofSeconds(31).toNanos());
+            try {
+                var tick =
+                        ZLinkClientServerLocationRuntime.class.getDeclaredMethod(
+                                "tick", List.class, long.class);
+                tick.setAccessible(true);
+                ((CompletionStage<?>) tick.invoke(runtime, List.of(client, server), 1L))
+                        .toCompletableFuture()
+                        .join();
+            } catch (ReflectiveOperationException failure) {
+                throw new AssertionError(failure);
+            }
+            assertEquals(
+                    connectionCount,
+                    runtime.connections.size(),
+                    "lease expiry must retain the bound connection");
+            assertEquals(1, creates.get());
             assertEquals(0, disconnects.get());
             runtime.stop().toCompletableFuture().join();
         } finally {
@@ -957,6 +1008,10 @@ final class ZLinkClientServerM6ARuntimeTest {
         ZLinkClientServerLocationRuntime runtime =
                 new ZLinkClientServerLocationRuntime(
                         store,
+                        systems.zlink.framework.runtime.locations.ZLinkLiveLocationRows.create(
+                                systems.zlink.framework.runtime.locations
+                                        .ZLinkRegisteredLocationStores.fromUnified(store),
+                                new systems.zlink.framework.locations.ZLinkLocationOptions()),
                         () -> new ZLinkLocationOwnerToken("owner", 1),
                         provider,
                         context,
@@ -1097,8 +1152,22 @@ final class ZLinkClientServerM6ARuntimeTest {
     private static final class SingleDescriptorStore extends ZLinkLocationStoreTestAdapter {
         private final ZLinkClientServerServerDescriptor descriptor;
 
-        private SingleDescriptorStore(ZLinkClientServerServerDescriptor descriptor) {
+        private Lease lease;
+
+        private SingleDescriptorStore(ZLinkClientServerServerDescriptor descriptor, Lease lease) {
             this.descriptor = descriptor;
+            this.lease = lease;
+        }
+
+        @Override
+        public CompletionStage<
+                        systems.zlink.framework.runtime.internal.locations
+                                .ZLinkOwnerLeaseReadResult>
+                readOwnerLease(String ownerId) {
+            return ZLinkCandidateLeaseFixture.read(
+                    "healthy-owner".equals(ownerId) ? Lease.LIVE : lease,
+                    ownerId,
+                    descriptor.leaseGeneration());
         }
 
         @Override
@@ -1117,8 +1186,25 @@ final class ZLinkClientServerM6ARuntimeTest {
         @Override
         public CompletionStage<ZLinkLocationPage<ZLinkClientServerServerDescriptor>>
                 listClientServers(String channelName, ZLinkPageRequest page) {
+            var healthy =
+                    new ZLinkClientServerServerDescriptor(
+                            descriptor.channelName(),
+                            RoutingId.from("healthy-server"),
+                            descriptor.lifecycleGeneration(),
+                            descriptor.descriptorRevision(),
+                            descriptor.endpoint(),
+                            descriptor.weight(),
+                            descriptor.state(),
+                            descriptor.securityIdentity(),
+                            "healthy-owner",
+                            descriptor.leaseGeneration(),
+                            descriptor.updatedAt());
             return CompletableFuture.completedFuture(
-                    new ZLinkLocationPage<>(List.of(descriptor), null));
+                    new ZLinkLocationPage<>(
+                            lease == Lease.CORRUPT || lease == Lease.FAILED
+                                    ? List.of(healthy, descriptor)
+                                    : List.of(descriptor),
+                            null));
         }
     }
 

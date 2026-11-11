@@ -6,8 +6,12 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkActivationConcurrency;
 import systems.zlink.framework.locations.ZLinkCapacityUsage;
 import systems.zlink.framework.locations.ZLinkLocationPage;
@@ -27,6 +31,8 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerSource;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
+import systems.zlink.framework.runtime.locations.ZLinkCandidateLeaseFixture;
+import systems.zlink.framework.runtime.locations.ZLinkCandidateLeaseFixture.Lease;
 import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 
@@ -103,11 +109,90 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
         assertEquals(failure, thrown.getCause());
     }
 
+    @ParameterizedTest
+    @EnumSource(
+            value = Lease.class,
+            names = {"MISSING", "EXPIRED", "REPLACED", "WRONG_OWNER", "LIVE", "CORRUPT", "FAILED"})
+    void newActorCandidatesRequireLiveOwner(Lease lease) {
+        var sideEffects = new AtomicInteger();
+        var coordinator =
+                coordinator(
+                        request ->
+                                CompletableFuture.completedFuture(
+                                        new ZLinkLocationPage<>(
+                                                List.of(
+                                                        descriptor(
+                                                                RoutingId.from("local-node"), 1)),
+                                                null)),
+                        lease,
+                        sideEffects);
+        var selection =
+                coordinator
+                        .selectEntrySpotTarget("player", Duration.ofSeconds(1))
+                        .toCompletableFuture();
+        if (lease == Lease.LIVE) {
+            assertEquals(RoutingId.from("local-node"), selection.join().nodeRid());
+        } else {
+            var failure = assertThrows(CompletionException.class, selection::join);
+            if (lease == Lease.FAILED)
+                org.junit.jupiter.api.Assertions.assertSame(
+                        ZLinkCandidateLeaseFixture.READ_FAILURE, failure.getCause());
+            else
+                assertEquals(
+                        lease == Lease.CORRUPT
+                                ? ZLinkFrameworkErrorKind.INTERNAL_FAILURE
+                                : ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        ((ZLinkFrameworkException) failure.getCause()).kind());
+            var create =
+                    coordinator
+                            .submit(
+                                    "new-actor",
+                                    "player",
+                                    systems.zlink.framework.messaging.ZLinkMessage.of("create"),
+                                    false,
+                                    Duration.ofSeconds(1))
+                            .toCompletableFuture();
+            var createFailure = assertThrows(CompletionException.class, create::join);
+            if (lease == Lease.FAILED)
+                org.junit.jupiter.api.Assertions.assertSame(
+                        ZLinkCandidateLeaseFixture.READ_FAILURE, createFailure.getCause());
+            else
+                assertEquals(
+                        lease == Lease.CORRUPT
+                                ? ZLinkFrameworkErrorKind.INTERNAL_FAILURE
+                                : ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        ((ZLinkFrameworkException) createFailure.getCause()).kind());
+            assertEquals(
+                    0,
+                    sideEffects.get(),
+                    "excluded candidate must not reserve or activate an Actor");
+        }
+    }
+
     private static ZLinkActorCreationCoordinator coordinator(
             Function<
                             ZLinkPageRequest,
                             CompletableFuture<ZLinkLocationPage<ZLinkMeshNodeDescriptor>>>
                     pages) {
+        return coordinator(pages, Lease.LIVE);
+    }
+
+    private static ZLinkActorCreationCoordinator coordinator(
+            Function<
+                            ZLinkPageRequest,
+                            CompletableFuture<ZLinkLocationPage<ZLinkMeshNodeDescriptor>>>
+                    pages,
+            Lease lease) {
+        return coordinator(pages, lease, new AtomicInteger());
+    }
+
+    private static ZLinkActorCreationCoordinator coordinator(
+            Function<
+                            ZLinkPageRequest,
+                            CompletableFuture<ZLinkLocationPage<ZLinkMeshNodeDescriptor>>>
+                    pages,
+            Lease lease,
+            AtomicInteger sideEffects) {
         var local = RoutingId.from("local-node");
         var node =
                 (ZLinkInternalMeshNode)
@@ -118,9 +203,11 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
                                         switch (method.getName()) {
                                             case "status" -> status(local, MeshNodeState.READY, 1);
                                             case "peers" -> List.of();
-                                            default ->
-                                                    throw new AssertionError(
-                                                            "Unexpected mesh call: " + method);
+                                            default -> {
+                                                sideEffects.incrementAndGet();
+                                                throw new AssertionError(
+                                                        "Unexpected mesh call: " + method);
+                                            }
                                         });
         var repository =
                 (ZLinkLocationRepository)
@@ -128,6 +215,15 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
                                 ZLinkLocationRepository.class.getClassLoader(),
                                 new Class<?>[] {ZLinkLocationRepository.class},
                                 (proxy, method, arguments) -> {
+                                    if (method.getName().equals("readCreationTerminal"))
+                                        return CompletableFuture.completedFuture(
+                                                new systems.zlink.framework.runtime.internal
+                                                        .locations.ZLinkCreationTerminalMissing());
+                                    if (method.getName().equals("readOwnerLease"))
+                                        return ZLinkCandidateLeaseFixture.read(
+                                                lease, (String) arguments[0], 1);
+                                    if (!method.getName().equals("listMeshNodes"))
+                                        sideEffects.incrementAndGet();
                                     assertEquals("listMeshNodes", method.getName());
                                     assertEquals("mesh", arguments[0]);
                                     return pages.apply((ZLinkPageRequest) arguments[1]);
@@ -138,6 +234,8 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
                                 ZLinkInternalSpotNode.class.getClassLoader(),
                                 new Class<?>[] {ZLinkInternalSpotNode.class},
                                 (proxy, method, arguments) -> {
+                                    if (!method.getName().equals("routingId"))
+                                        sideEffects.incrementAndGet();
                                     assertEquals("routingId", method.getName());
                                     return local;
                                 });
@@ -147,6 +245,10 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
                 "mesh",
                 node,
                 repository,
+                new systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers(
+                        systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores
+                                .fromUnified(repository),
+                        new systems.zlink.framework.locations.ZLinkLocationOptions()),
                 actors,
                 serializer,
                 new ZLinkActivationAdmission(1),
