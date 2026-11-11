@@ -27,10 +27,246 @@ application이 그 기록을 직접 읽는 방법을 다루며, Store가 무엇�
 ## 2. 조회하는 node의 Store 등록 요건
 
 조회는 Store를 읽는 일이므로, 조회하는 process가 그 Store를 **같은 prefix로** 등록하고 있어야
-한다. 등록 코드는 [Spot](21-spot.ko.md#2-location-store--spot-등록의-선행-조건)에 있는 것과 같다.
+한다. 등록 코드는 [Store plugin 설정](#store-setup)에 있다.
 
 Spot도 Actor도 실행하지 않고 호출만 하는 node라면 Location Store 하나로 충분하다. Relocation
 Store는 factory를 등록한 node에만 요구된다.
+
+### 2.1 Store plugin 설정 {#store-setup}
+
+**Redis** 또는 **Redis with etcd** 중 하나를 고른다. 두 Store는 기존 API로 각각 한 번 등록한다.
+
+| Plugin | Location Store | Relocation Store | 사용 조건 |
+| --- | --- | --- | --- |
+| Redis | Redis | Redis (같은 server) | [Redis 내구성 조건](../../../common/spec/server/05-location-relocation/02-location-store-redis.ko.md#1-범위와-독자)을 충족하는 배포. |
+| Redis with etcd | etcd (3 voters) | Redis | 자동 장애 전환이 필요한 배포. |
+
+아래 코드는 server의 Framework 설정 callback 안에서 실행한다. `using`·`import`·`#include`는 파일 맨 위에 둔다. 각 process는 같은 Location prefix 또는 etcd namespace를 공유하고, Redis의 두 Store는 서로 다른 key prefix를 사용한다.
+
+#### Redis
+
+운영 환경에서는 [성공한 변경이 되돌아가지 않는 Redis 내구성 조건](../../../common/spec/server/05-location-relocation/02-location-store-redis.ko.md#1-범위와-독자)을 충족해야 한다. 두 Store를 같은 Redis server에 둔다.
+
+=== "C#/.NET"
+
+    ```sh
+    dotnet add package Zlink.Framework.Locations.Redis
+    ```
+
+    ```csharp
+    using Zlink.Framework.Locations.Redis;
+
+    options.AddLocationStore(new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions
+    {
+        ConnectionString = "127.0.0.1:6379",
+        KeyPrefix = "game:location:"
+    }));
+    options.AddRelocationStore(new ZLinkRedisRelocationStore(new ZLinkRedisRelocationOptions
+    {
+        ConnectionString = "127.0.0.1:6379",
+        KeyPrefix = "game:relocation:"
+    }));
+    ```
+
+=== "C++"
+
+    `framework-locations-redis` extension을 설치한 `zlink_framework` package에서 가져온다.
+
+    ```cmake
+    find_package(zlink_framework CONFIG REQUIRED)
+    target_link_libraries(my_server PRIVATE zlink::framework zlink::framework_locations_redis)
+    ```
+
+    ```cpp
+    #include <zlink/locations/redis.hpp>
+    namespace fw = zlink::framework;
+
+    options.add_location_store<fw::redis::redis_location_store_t> ()
+      .set_connection_string ("127.0.0.1:6379")
+      .set_key_prefix ("game:location:");
+    options.add_relocation_store<fw::redis::redis_relocation_store_t> ()
+      .set_connection_string ("127.0.0.1:6379")
+      .set_key_prefix ("game:relocation:");
+    ```
+
+=== "Java"
+
+    Framework core와 같은 version을 사용한다. Kotlin도 같은 Java package를 설치한다.
+
+    ```kotlin
+    implementation("systems.zlink:zlink-framework-locations-redis:$zlinkFrameworkVersion")
+    ```
+
+    ```java
+    import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
+    import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
+    import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
+    import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
+
+    options.addLocationStore(new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions()
+        .setConnectionString("127.0.0.1:6379").setKeyPrefix("game:location:")));
+    options.addRelocationStore(new ZLinkRedisRelocationStore(new ZLinkRedisRelocationOptions()
+        .setConnectionString("127.0.0.1:6379").setKeyPrefix("game:relocation:")));
+    ```
+
+=== "Kotlin"
+
+    Framework core와 같은 version을 사용한다. Kotlin도 같은 Java package를 설치한다.
+
+    ```kotlin
+    implementation("systems.zlink:zlink-framework-locations-redis:$zlinkFrameworkVersion")
+    ```
+
+    ```kotlin
+    import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions
+    import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
+    import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions
+    import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore
+
+    options.addLocationStore(ZLinkRedisLocationStore(ZLinkRedisLocationOptions()
+        .setConnectionString("127.0.0.1:6379").setKeyPrefix("game:location:")))
+    options.addRelocationStore(ZLinkRedisRelocationStore(ZLinkRedisRelocationOptions()
+        .setConnectionString("127.0.0.1:6379").setKeyPrefix("game:relocation:")))
+    ```
+
+=== "Node/TypeScript"
+
+    ```sh
+    npm install @zlink-systems/framework-locations-redis
+    ```
+
+    ```typescript
+    import { ZLinkRedisLocationStore, ZLinkRedisRelocationStore }
+      from '@zlink-systems/framework-locations-redis';
+
+    builder.addLocationStore(new ZLinkRedisLocationStore({
+      url: 'redis://127.0.0.1:6379', keyPrefix: 'game:location:'
+    }));
+    builder.addRelocationStore(new ZLinkRedisRelocationStore({
+      url: 'redis://127.0.0.1:6379', keyPrefix: 'game:relocation:'
+    }));
+    ```
+
+등록 뒤 Store 수명은 Framework가 관리한다.
+
+#### Redis with etcd
+
+자동 장애 전환이 필요한 배포에서 선택한다. Location Store는 서로 다른 물리 host의 etcd voter 3대에 두고, Relocation Store는 Redis에 둔다. Redis package도 설치한다. 사용 전에 namespace를 초기화하고 Store 관리 process를 운영한다. [etcd 운영 절차](../../../common/spec/server/05-location-relocation/07-location-store-etcd.ko.md)를 따른다. 아래 HTTP endpoint는 신뢰할 수 있는 개발 network용이며, 운영 환경의 TLS·인증은 같은 문서의 option으로 설정한다.
+
+=== "C#/.NET"
+
+    ```sh
+    dotnet add package Zlink.Framework.Locations.Redis
+    dotnet add package Zlink.Framework.Locations.Etcd
+    ```
+
+    ```csharp
+    using Zlink.Framework.Locations.Etcd;
+    using Zlink.Framework.Locations.Redis;
+
+    options.AddLocationStore(new ZLinkEtcdLocationStore(o =>
+    {
+        o.Endpoints.Add("http://etcd-1:2379");
+        o.Endpoints.Add("http://etcd-2:2379");
+        o.Endpoints.Add("http://etcd-3:2379");
+        o.Namespace = "game";
+    }));
+    options.AddRelocationStore(new ZLinkRedisRelocationStore(new ZLinkRedisRelocationOptions
+    {
+        ConnectionString = "127.0.0.1:6379",
+        KeyPrefix = "game:relocation:"
+    }));
+    ```
+
+=== "C++"
+
+    `framework-locations-redis` extension을 설치한 `zlink_framework` package에서 가져온다. `framework-locations-etcd`도 설치한다. Framework를 빌드할 때 `-DZLINK_FRAMEWORK_CPP_WITH_ETCD=ON`으로 gRPC 의존성을 포함한다.
+
+    ```cmake
+    find_package(zlink_framework CONFIG REQUIRED)
+    target_link_libraries(my_server PRIVATE zlink::framework zlink::framework_locations_redis zlink::framework_locations_etcd)
+    ```
+
+    ```cpp
+    #include <zlink/locations/etcd.hpp>
+    #include <zlink/locations/redis.hpp>
+    namespace fw = zlink::framework;
+
+    fw::etcd::etcd_location_options_t location;
+    location.endpoints = {"http://etcd-1:2379", "http://etcd-2:2379", "http://etcd-3:2379"};
+    location.key_namespace = "game";
+    options.add_location_store(
+      std::make_shared<fw::etcd::etcd_location_store_t>(location));
+    options.add_relocation_store<fw::redis::redis_relocation_store_t> ()
+      .set_connection_string ("127.0.0.1:6379")
+      .set_key_prefix ("game:relocation:");
+    ```
+
+=== "Java"
+
+    Framework core와 같은 version을 사용한다. Kotlin도 같은 Java package를 설치한다.
+
+    ```kotlin
+    implementation("systems.zlink:zlink-framework-locations-redis:$zlinkFrameworkVersion")
+    implementation("systems.zlink:zlink-framework-locations-etcd:$zlinkFrameworkVersion")
+    ```
+
+    ```java
+    import java.util.List;
+    import systems.zlink.framework.locations.etcd.ZLinkEtcdLocationOptions;
+    import systems.zlink.framework.locations.etcd.ZLinkEtcdLocationStore;
+    import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
+    import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
+
+    options.addLocationStore(new ZLinkEtcdLocationStore(new ZLinkEtcdLocationOptions()
+        .setEndpoints(List.of("http://etcd-1:2379", "http://etcd-2:2379", "http://etcd-3:2379"))
+        .setNamespace("game")));
+    options.addRelocationStore(new ZLinkRedisRelocationStore(new ZLinkRedisRelocationOptions()
+        .setConnectionString("127.0.0.1:6379").setKeyPrefix("game:relocation:")));
+    ```
+
+=== "Kotlin"
+
+    Framework core와 같은 version을 사용한다. Kotlin도 같은 Java package를 설치한다.
+
+    ```kotlin
+    implementation("systems.zlink:zlink-framework-locations-redis:$zlinkFrameworkVersion")
+    implementation("systems.zlink:zlink-framework-locations-etcd:$zlinkFrameworkVersion")
+    ```
+
+    ```kotlin
+    import systems.zlink.framework.locations.etcd.ZLinkEtcdLocationOptions
+    import systems.zlink.framework.locations.etcd.ZLinkEtcdLocationStore
+    import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions
+    import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore
+
+    options.addLocationStore(ZLinkEtcdLocationStore(ZLinkEtcdLocationOptions()
+        .setEndpoints(listOf("http://etcd-1:2379", "http://etcd-2:2379", "http://etcd-3:2379"))
+        .setNamespace("game")))
+    options.addRelocationStore(ZLinkRedisRelocationStore(ZLinkRedisRelocationOptions()
+        .setConnectionString("127.0.0.1:6379").setKeyPrefix("game:relocation:")))
+    ```
+
+=== "Node/TypeScript"
+
+    ```sh
+    npm install @zlink-systems/framework-locations-redis @zlink-systems/framework-locations-etcd
+    ```
+
+    ```typescript
+    import { ZLinkEtcdLocationStore } from '@zlink-systems/framework-locations-etcd';
+    import { ZLinkRedisRelocationStore } from '@zlink-systems/framework-locations-redis';
+
+    builder.addLocationStore(new ZLinkEtcdLocationStore({
+      endpoints: ['http://etcd-1:2379', 'http://etcd-2:2379', 'http://etcd-3:2379'],
+      namespace: 'game'
+    }));
+    builder.addRelocationStore(new ZLinkRedisRelocationStore({
+      url: 'redis://127.0.0.1:6379', keyPrefix: 'game:relocation:'
+    }));
+    ```
+
+등록 뒤 Store 수명은 Framework가 관리한다.
 
 ## 3. id로 위치 조회
 

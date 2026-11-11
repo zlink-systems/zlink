@@ -53,16 +53,7 @@ that **the target is settled to exactly one**.
 A Spot is called by id, not by host. That requires **somewhere to record which node it is on
 right now**. That is the Location Store, and it is required once you register even one Spot.
 
-```cpp
---8<-- "framework/languages/cpp/tutorial/Server/main.cpp:location-store"
-```
-
-**Register a Relocation Store alongside it.** Registering a Spot factory is itself the
-condition, so it is required even with relocation turned off as it is in this chapter.
-
-```cpp
---8<-- "framework/languages/cpp/tutorial/Server/main.cpp:relocation-store"
-```
+Choose Redis or Redis with etcd in [Location Store plugin setup](25-location.en.md#store-setup), and register the Location Store and Relocation Store separately. This chapter's tutorial uses Redis. A node registering a Spot factory requires the Relocation Store even when relocation is disabled.
 
 A node that only calls needs the Location Store alone —
 [the calling side](#4-the-calling-side--the-node-that-calls-a-spot).
