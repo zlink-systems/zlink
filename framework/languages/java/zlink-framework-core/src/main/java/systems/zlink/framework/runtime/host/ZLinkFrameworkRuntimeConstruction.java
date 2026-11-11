@@ -57,7 +57,8 @@ record ZLinkFrameworkRuntimeConstruction(
         UnaryOperator<Function<Object, CompletionStage<Void>>> targetNormalizerDecorator,
         ChannelRuntimeFactory channelRuntimeFactory,
         SpotRuntimeFactory spotRuntimeFactory,
-        SpotRetireRuntimeFactory spotRetireRuntimeFactory) {
+        SpotRetireRuntimeFactory spotRetireRuntimeFactory,
+        java.util.function.Consumer<Runnable> callServicesPublication) {
 
     static ZLinkFrameworkRuntimeConstruction defaults() {
         return new ZLinkFrameworkRuntimeConstruction(
@@ -147,7 +148,8 @@ record ZLinkFrameworkRuntimeConstruction(
                                 applicationVersion,
                                 maintenanceWave,
                                 sessionRelocationSealTimeout,
-                                targetAdmissionSealed));
+                                targetAdmissionSealed),
+                Runnable::run);
     }
 
     @FunctionalInterface

@@ -199,7 +199,9 @@ final class ZLinkEntrySpotJoinPayloadOwnershipTest {
             var context =
                     assertInstanceOf(
                             ZLinkActorRuntime.DefaultActorContext.class, PLAYER_CONTEXT.get());
-            var actors = (ZLinkActorRuntime) runtime.actorManager();
+            var actors =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.actors(
+                            runtime);
             try (var routes =
                     new ZLinkStoreLocationResolvers(
                             ZLinkRegisteredLocationStores.fromUnified(
