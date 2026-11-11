@@ -3,10 +3,8 @@
 
 #include "perf_multi_client_helpers.hpp"
 
-#include <algorithm>
 #include <cerrno>
 #include <chrono>
-#include <vector>
 
 namespace perf_multi_echo_policy
 {
@@ -21,11 +19,6 @@ namespace perf_multi_echo_policy
 // - Pattern files still own poller wait timing and recv drain execution.
 // - After POLLIN, patterns must keep their DONTWAIT recv drain loop.
 
-template <typename Slot> inline void echo_reset_slot_latency (Slot *slot)
-{
-    slot->latency = bench_latency_sampler_t ();
-}
-
 inline bool echo_is_blocked_send_errno (int err)
 {
     return err == EAGAIN;
@@ -38,23 +31,6 @@ template <typename State> inline void echo_mark_fatal (State *state, int err)
 
     state->fatal.store (true, std::memory_order_release);
     state->fatal_errno.store (err != 0 ? err : EIO, std::memory_order_release);
-}
-
-inline double echo_percentile_from_sorted (const std::vector<double> &sorted_samples,
-                                           double quantile)
-{
-    if (sorted_samples.empty ())
-        return 0.0;
-    if (quantile <= 0.0)
-        return sorted_samples.front ();
-    if (quantile >= 1.0)
-        return sorted_samples.back ();
-
-    const double pos = (static_cast<double> (sorted_samples.size ()) - 1.0) * quantile;
-    const size_t lo = static_cast<size_t> (pos);
-    const size_t hi = lo + 1 < sorted_samples.size () ? lo + 1 : lo;
-    const double frac = pos - static_cast<double> (lo);
-    return sorted_samples[lo] + (sorted_samples[hi] - sorted_samples[lo]) * frac;
 }
 
 template <typename State>
@@ -89,46 +65,6 @@ template <typename Slot> inline void echo_stop_phase_slot (Slot *slot)
     slot->send_enabled = false;
     slot->send_pending = false;
     slot->auto_send_on_recv = false;
-}
-
-template <typename Slot>
-inline void echo_append_slot_latency (const Slot *slot,
-                                      unsigned long long *latency_count_out,
-                                      double *latency_sum_ns_out,
-                                      std::vector<double> *latency_samples_out)
-{
-    if (latency_count_out)
-        *latency_count_out += slot->latency.count ();
-    if (latency_sum_ns_out)
-        *latency_sum_ns_out += slot->latency.sum_ns ();
-    if (latency_samples_out)
-        slot->latency.append_samples (latency_samples_out);
-}
-
-inline bool echo_finalize_latency_stats (unsigned long long latency_count,
-                                         double latency_sum_ns,
-                                         std::vector<double> &latency_samples,
-                                         bench_latency_stats_t *latency_out)
-{
-    if (!latency_out)
-        return latency_count > 0;
-
-    if (latency_count == 0) {
-        *latency_out = bench_latency_stats_t ();
-        return false;
-    }
-
-    latency_out->mean_ns = latency_sum_ns / static_cast<double> (latency_count);
-    if (latency_samples.empty ()) {
-        latency_out->p95_ns = latency_out->mean_ns;
-        latency_out->p99_ns = latency_out->mean_ns;
-        return true;
-    }
-
-    std::sort (latency_samples.begin (), latency_samples.end ());
-    latency_out->p95_ns = echo_percentile_from_sorted (latency_samples, 0.95);
-    latency_out->p99_ns = echo_percentile_from_sorted (latency_samples, 0.99);
-    return true;
 }
 
 inline bool echo_emit_client_results (const char *pattern,

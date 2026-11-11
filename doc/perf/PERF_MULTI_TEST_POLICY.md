@@ -726,12 +726,10 @@ latency는 패턴 유형에 따라 측정 방식을 분리한다.
 - p95: 샘플의 95th percentile
 - p99: 샘플의 99th percentile
 - mean은 active 유효 record 전체의 count와 합으로 정확히 계산한다.
-- p95/p99는 메모리가 처리량에 비례해 증가하지 않도록 bounded reservoir sample로
-  계산한다. sample 상한은 메시지 queue, HWM, 송신률 또는 완료 수를 제한하지 않는다.
-- percentile 보간식, 여러 프로세스 reservoir를 병합할 때의 weight 규칙,
-  sample을 하나도 보관하지 않은 경우(`PERF_MULTI_LATENCY_SAMPLE_CAP=0` 포함)의
-  p95/p99 보고 값은 [PERF_POLICY.md § 1.1](PERF_POLICY.md)의 공통 규칙을 따른다.
-  matched-client 가중 병합 경로도 같은 보간식을 사용한다.
+- C perf 엔진 외 구현의 p95/p99는 메모리가 처리량에 비례해 증가하지 않도록 bounded reservoir sample로
+  계산한다. C 기준은 전체 메시지를 histogram에 기록한다.
+- non-C 구현의 percentile 보간식과 reservoir 병합 규칙은
+  [PERF_POLICY.md § 1.1](PERF_POLICY.md)의 공통 규칙을 따른다. C 기준은 histogram bucket 대표값을 보고한다.
 - RTT 샘플(echo): `sample_ns = (recv_ts_ns - sent_ts_ns) / 2`
 - 단방향 샘플(one-way): 수신 메시지에 포함된 송신 타임스탬프 기준 `now_ns - sent_ts_ns`
 - active 구간 밖의 데이터는 계산에서 제외한다.
@@ -1295,7 +1293,7 @@ bindings/c/perf/run_benchmarks_multi.sh --pattern STREAM --transports tcp --msg-
 | `PERF_MULTI_CONNECT_CONCURRENCY` | 동시 연결 수 | auto (clients≥10000: 1024, 기타: 128) |
 | `PERF_MULTI_CONNECT_READY_TIMEOUT_MS` | 연결 준비 타임아웃(ms) | 10000 |
 | `PERF_MULTI_SERVICE_CLIENTS` | 서비스 클라이언트 수 상한 (0=제한 없음) | 0 |
-| `PERF_MULTI_LATENCY_SAMPLE_CAP` | 공통 multi p95/p99 reservoir 상한. `0`이면 sample 미보관 | 65,536 |
+| `PERF_MULTI_LATENCY_SAMPLE_CAP` | C perf 엔진 외 구현의 p95/p99 reservoir 상한 | 65,536 |
 
 ### 12.3 송수신 제어
 

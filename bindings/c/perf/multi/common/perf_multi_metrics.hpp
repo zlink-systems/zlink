@@ -2,18 +2,11 @@
 #define PERF_MULTI_METRICS_HPP
 
 #include "perf_common_multi.hpp"
+#include "../../common/perf_latency_histogram.hpp"
 
-#include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <cstdlib>
-#include <cstring>
 #include <iomanip>
 #include <iostream>
-#include <limits>
 #include <string>
-#include <thread>
-#include <vector>
 
 struct bench_latency_stats_t
 {
@@ -38,126 +31,39 @@ struct bench_latency_stats_t
 class bench_latency_sampler_t
 {
   public:
-    explicit bench_latency_sampler_t (
-      size_t maximum_sample_cap_ = std::numeric_limits<size_t>::max ()) :
-        _count (0),
-        _sum_ns (0.0),
-        _sample_cap (std::min (resolve_sample_cap (), maximum_sample_cap_)),
-        _samples_seen (0),
-        _rng (0xA341316Cu)
+    void add (double latency_ns_) { _histogram.add (latency_ns_); }
+    void reset () { _histogram.reset (); }
+    unsigned long long count () const { return _histogram.count (); }
+    double sum_ns () const { return _histogram.sum_ns (); }
+    double min_ns () const { return _histogram.min_ns (); }
+    double max_ns () const { return _histogram.max_ns (); }
+    const uint64_t *buckets () const { return _histogram.buckets (); }
+    void merge_buckets (const uint64_t *buckets_,
+                        uint64_t count_,
+                        double sum_ns_,
+                        double min_ns_,
+                        double max_ns_)
     {
-        if (_sample_cap > 0)
-            _samples.reserve (_sample_cap);
+        _histogram.merge_buckets (buckets_, count_, sum_ns_, min_ns_, max_ns_);
     }
-
-    void add (double latency_ns_)
+    void merge (const bench_latency_sampler_t &other)
     {
-        const double sample = latency_ns_ >= 0.0 ? latency_ns_ : 0.0;
-        ++_count;
-        _sum_ns += sample;
-        add_sample (sample);
-    }
-
-    void reset ()
-    {
-        _count = 0;
-        _sum_ns = 0.0;
-        _samples_seen = 0;
-        _rng = 0xA341316Cu;
-        _samples.clear ();
-    }
-
-    unsigned long long count () const { return _count; }
-    double sum_ns () const { return _sum_ns; }
-
-    void append_samples (std::vector<double> *out_) const
-    {
-        if (!out_ || _samples.empty ())
-            return;
-        out_->insert (out_->end (), _samples.begin (), _samples.end ());
+        _histogram.merge (other._histogram);
     }
 
     bench_latency_stats_t snapshot () const
     {
         bench_latency_stats_t out;
-        if (_count == 0)
+        if (_histogram.count () == 0)
             return out;
-
-        out.mean_ns = _sum_ns / static_cast<double> (_count);
-        if (_samples.empty ()) {
-            out.p95_ns = out.mean_ns;
-            out.p99_ns = out.mean_ns;
-            return out;
-        }
-
-        // Percentile calculation must not reorder the reservoir.  Matched
-        // clients export that reservoir to their parent after snapshot(), and
-        // sorting it here would turn a bounded reservoir into a low-tail
-        // prefix when the IPC sample cap is smaller.
-        std::vector<double> sorted (_samples);
-        std::sort (sorted.begin (), sorted.end ());
-        out.p95_ns = percentile_from_sorted (sorted, 0.95);
-        out.p99_ns = percentile_from_sorted (sorted, 0.99);
+        out.mean_ns = _histogram.sum_ns () / static_cast<double> (_histogram.count ());
+        out.p95_ns = _histogram.percentile (0.95);
+        out.p99_ns = _histogram.percentile (0.99);
         return out;
     }
 
   private:
-    static double percentile_from_sorted (const std::vector<double> &sorted_, double q_)
-    {
-        if (sorted_.empty ())
-            return 0.0;
-        if (q_ <= 0.0)
-            return sorted_.front ();
-        if (q_ >= 1.0)
-            return sorted_.back ();
-
-        const double pos = (sorted_.size () - 1) * q_;
-        const size_t lo = static_cast<size_t> (pos);
-        const size_t hi = lo + 1 < sorted_.size () ? lo + 1 : lo;
-        const double frac = pos - static_cast<double> (lo);
-        return sorted_[lo] + (sorted_[hi] - sorted_[lo]) * frac;
-    }
-
-    unsigned long long _count;
-    double _sum_ns;
-    size_t _sample_cap;
-    unsigned long long _samples_seen;
-    uint32_t _rng;
-    std::vector<double> _samples;
-
-    static size_t resolve_sample_cap ()
-    {
-        const char *value = std::getenv ("PERF_MULTI_LATENCY_SAMPLE_CAP");
-        if (!value || !*value)
-            return 65536;
-
-        char *end = NULL;
-        const unsigned long long parsed = std::strtoull (value, &end, 10);
-        if (!end || *end != '\0')
-            return 65536;
-        return static_cast<size_t> (parsed);
-    }
-
-    uint32_t next_random ()
-    {
-        _rng = (_rng * 1664525u) + 1013904223u;
-        return _rng;
-    }
-
-    void add_sample (double sample_)
-    {
-        ++_samples_seen;
-        if (_sample_cap == 0)
-            return;
-        if (_samples.size () < _sample_cap) {
-            _samples.push_back (sample_);
-            return;
-        }
-
-        const unsigned long long slot = next_random () % _samples_seen;
-        if (slot < _samples.size ())
-            _samples[static_cast<size_t> (slot)] = sample_;
-    }
+    perf_latency_histogram_t _histogram;
 };
 
 inline bool is_echo_pattern (const std::string &pattern)

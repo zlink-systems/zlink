@@ -795,10 +795,10 @@ inline void normalize_latency_stats (double lat_sum,
     bench_latency_stats_t stats = samples ? samples->snapshot () : bench_latency_stats_t ();
     if (stats.mean_ns <= 0.0)
         stats.mean_ns = lat_sum / static_cast<double> (lat_count);
-    if (stats.p95_ns <= 0.0)
+    if (!samples || samples->count () == 0) {
         stats.p95_ns = stats.mean_ns;
-    if (stats.p99_ns <= 0.0)
-        stats.p99_ns = stats.p95_ns;
+        stats.p99_ns = stats.mean_ns;
+    }
     *latency_out = stats;
 }
 
@@ -954,8 +954,7 @@ inline bool run_echo_window_round_robin (
   double *lat_sum,
   long *lat_count,
   bench_latency_stats_t *latency_stats,
-  std::vector<double> *latency_samples_out = NULL,
-  size_t maximum_latency_sample_cap = std::numeric_limits<size_t>::max (),
+  bench_latency_sampler_t *latency_histogram_out = NULL,
   uint64_t *accepted_out = NULL,
   perf_multi_measurement::schedule_t *schedule = NULL,
   uint64_t *paced_received_out = NULL)
@@ -980,7 +979,7 @@ inline bool run_echo_window_round_robin (
     long local_recv = 0;
     double lat_sum_local = 0.0;
     long lat_count_local = 0;
-    bench_latency_sampler_t lat_samples (maximum_latency_sample_cap);
+    bench_latency_sampler_t lat_samples;
     size_t rr = 0;
     uint64_t sequence = 1;
     uint64_t accepted = 0;
@@ -1270,10 +1269,10 @@ inline bool run_echo_window_round_robin (
         else
             normalize_latency_stats (lat_sum_local, lat_count_local, &lat_samples, latency_stats);
     }
-    if (latency_samples_out) {
-        latency_samples_out->clear ();
+    if (latency_histogram_out) {
+        latency_histogram_out->reset ();
         if (collect_latency)
-            lat_samples.append_samples (latency_samples_out);
+            *latency_histogram_out = lat_samples;
     }
 
     return !fatal_error;
@@ -1309,7 +1308,7 @@ inline bool run_echo_duration (const std::vector<void *> &sockets,
                                       client_router_send, run_id, perf_multi_metric::phase_active,
                                       scratch_capacity, active_seconds, true, false,
                                       per_socket_payload, &recv_count, NULL, NULL, NULL, NULL,
-                                      std::numeric_limits<size_t>::max (), &accepted))
+                                      &accepted))
         return false;
     if (recv_count <= 0 || accepted == 0)
         return false;
@@ -1324,8 +1323,8 @@ inline bool run_echo_duration (const std::vector<void *> &sockets,
           sockets, settings, payload, payload_size, msg_size, server_id, client_router_send, run_id,
           perf_multi_metric::phase_latency, scratch_capacity,
           0.5 + settings.latency_duration_seconds, true, true, per_socket_payload, NULL,
-          &latency_sum, &latency_count, latency_out, NULL, std::numeric_limits<size_t>::max (),
-          NULL, &schedule, &paced_received))
+          &latency_sum, &latency_count, latency_out, NULL, NULL, &schedule,
+          &paced_received))
         return false;
     perf_multi_measurement::print_diagnostic (
       client_router_send ? "ROUTER_ROUTER_SENDSEND" : "DEALER_ROUTER_SENDSEND", msg_size, accepted,

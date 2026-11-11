@@ -629,12 +629,11 @@ single perf의 기본 `PERF_IO_THREADS`는 모든 언어와 모든 패턴에서 
 | `PERF_SINGLE_RCVTIMEO_MS` | 수신 타임아웃(ms) | 200 |
 | `PERF_SINGLE_PUBSUB_RCVTIMEO_MS` | PUBSUB 수신 타임아웃(ms) | `PERF_SINGLE_RCVTIMEO_MS` |
 | `PERF_SINGLE_PUBSUB_READY_SETTLE_MS` | PUBSUB post-ready settle(ms) | 1000 |
-| `PERF_SINGLE_LATENCY_SAMPLE_CAP` | percentile 계산에 보관할 최대 sample 수. `0`이면 sample을 보관하지 않는다 | 1,000,000 |
+| `PERF_SINGLE_LATENCY_SAMPLE_CAP` | C perf 엔진 외 구현이 percentile 계산에 보관할 최대 sample 수 | 1,000,000 |
 | `PERF_SINGLE_PUBSUB_XPUB_NODROP` | PUBSUB의 `ZLINK_XPUB_NODROP` 기본값 | (바이너리별) |
 
-- percentile sample을 하나도 보관하지 않은 경우(`PERF_SINGLE_LATENCY_SAMPLE_CAP=0`
-  또는 유효 sample 0개)의 `latency_p95`·`latency_p99` 보고 값과 percentile 보간식은
-  [PERF_POLICY.md § 1.1](PERF_POLICY.md)의 공통 규칙을 따른다.
+- C perf 엔진 외 구현의 percentile sample이 없을 때의 보고 값과 보간식은
+  [PERF_POLICY.md § 1.1](PERF_POLICY.md)의 공통 규칙을 따른다. C 기준은 전체 메시지를 histogram에 기록한다.
 - backpressure 검증은 `core/tests/integration`로 분리한다. one-way 통합 범위는
   `DEALER_DEALER`, `DEALER_ROUTER`, `ROUTER_ROUTER`, `PUBSUB` 이며, `STREAM`, echo,
   `PAIR` 은 제외한다.

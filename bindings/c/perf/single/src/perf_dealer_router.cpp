@@ -27,14 +27,13 @@ enum dealer_router_recv_result_t
 
 struct dealer_router_recv_state_t
 {
-    dealer_router_recv_state_t () : run_id (0), msg_size (0), payload_size (0), active_received (0)
+    dealer_router_recv_state_t () : run_id (0), msg_size (0), payload_size (0)
     {
     }
 
     uint32_t run_id;
     size_t msg_size;
     size_t payload_size;
-    std::atomic<unsigned long long> active_received;
     latency_stats_builder_t latency;
 };
 

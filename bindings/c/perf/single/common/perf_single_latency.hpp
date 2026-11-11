@@ -1,18 +1,11 @@
 #ifndef PERF_SINGLE_LATENCY_HPP
 #define PERF_SINGLE_LATENCY_HPP
 
-#include <algorithm>
-#include <cerrno>
-#include <cstddef>
-#include <cstdint>
-#include <cstdlib>
-#include <limits>
-#include <vector>
+#include "../../common/perf_latency_histogram.hpp"
 
 struct latency_stats_t
 {
     latency_stats_t () : mean_ns (0.0), p95_ns (0.0), p99_ns (0.0) {}
-
     double mean_ns;
     double p95_ns;
     double p99_ns;
@@ -21,102 +14,23 @@ struct latency_stats_t
 class latency_stats_builder_t
 {
   public:
-    latency_stats_builder_t () : latency_stats_builder_t (default_sample_cap ()) {}
+    void add (double latency_ns_) { _histogram.add (latency_ns_); }
+    unsigned long long count () const { return _histogram.count (); }
+    void reset () { _histogram.reset (); }
 
-    explicit latency_stats_builder_t (size_t sample_cap_) :
-        _count (0),
-        _sum_ns (0.0),
-        _sample_cap (sample_cap_),
-        _rng (0xA341316Cu)
-    {
-        if (_sample_cap > 0)
-            _samples.reserve (_sample_cap);
-    }
-
-    void add (double latency_ns_)
-    {
-        const double sample = latency_ns_ >= 0.0 ? latency_ns_ : 0.0;
-        ++_count;
-        _sum_ns += sample;
-        if (_sample_cap == 0)
-            return;
-        if (_samples.size () < _sample_cap) {
-            _samples.push_back (sample);
-            return;
-        }
-        const unsigned long long slot = next_random () % _count;
-        if (slot < _samples.size ())
-            _samples[static_cast<size_t> (slot)] = sample;
-    }
-
-    unsigned long long count () const { return _count; }
-
-    latency_stats_t snapshot ()
+    latency_stats_t snapshot () const
     {
         latency_stats_t out;
-        if (_count == 0)
+        if (_histogram.count () == 0)
             return out;
-
-        out.mean_ns = _sum_ns / static_cast<double> (_count);
-        if (_samples.empty ()) {
-            out.p95_ns = out.mean_ns;
-            out.p99_ns = out.mean_ns;
-            return out;
-        }
-
-        std::sort (_samples.begin (), _samples.end ());
-        out.p95_ns = percentile_from_sorted (_samples, 0.95);
-        out.p99_ns = percentile_from_sorted (_samples, 0.99);
+        out.mean_ns = _histogram.sum_ns () / static_cast<double> (_histogram.count ());
+        out.p95_ns = _histogram.percentile (0.95);
+        out.p99_ns = _histogram.percentile (0.99);
         return out;
     }
 
   private:
-    static double percentile_from_sorted (const std::vector<double> &sorted_, double q_)
-    {
-        if (sorted_.empty ())
-            return 0.0;
-        if (q_ <= 0.0)
-            return sorted_.front ();
-        if (q_ >= 1.0)
-            return sorted_.back ();
-
-        const double pos = (sorted_.size () - 1) * q_;
-        const size_t lo = static_cast<size_t> (pos);
-        const size_t hi = lo + 1 < sorted_.size () ? lo + 1 : lo;
-        const double frac = pos - static_cast<double> (lo);
-        return sorted_[lo] + (sorted_[hi] - sorted_[lo]) * frac;
-    }
-
-    unsigned long long _count;
-    double _sum_ns;
-    size_t _sample_cap;
-    uint32_t _rng;
-    std::vector<double> _samples;
-
-    uint32_t next_random ()
-    {
-        _rng = (_rng * 1664525u) + 1013904223u;
-        return _rng;
-    }
-
-    // PERF_SINGLE_TEST_POLICY § 7: the sample cap is an unsigned count.
-    // A negative or otherwise unparsable value falls back to the default
-    // instead of wrapping through strtoull into a huge cap.
-    static size_t default_sample_cap ()
-    {
-        const size_t fallback = 1000000;
-        const char *value = std::getenv ("PERF_SINGLE_LATENCY_SAMPLE_CAP");
-        if (!value || !*value || *value == '-')
-            return fallback;
-
-        char *end = NULL;
-        errno = 0;
-        const unsigned long long parsed = std::strtoull (value, &end, 10);
-        if (errno != 0 || end == value || !end || *end != '\0'
-            || parsed > static_cast<unsigned long long> (std::numeric_limits<size_t>::max ()))
-            return fallback;
-        return static_cast<size_t> (parsed);
-    }
+    perf_latency_histogram_t _histogram;
 };
 
 #endif

@@ -103,24 +103,8 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
   메시지가 회수되지 않거나, Core가 backpressure를 반환하지 않아 OOM이 발생하면
   성능 시험 조건을 낮추지 않는다. 재현 test를 추가하고 Core 버그로 수정한 뒤 같은
   조건을 다시 실행한다.
-- p95/p99 계산용 sample 저장 상한은 메시지 queue나 요청 동시성을 제한하지 않는
-  계측 메모리 보호다. 전체 완료 수와 지연 시간 합계는 계속 기록하며, 이 상한을
-  전송률 제한이나 송신 간격으로 사용하면 안 된다.
-- **percentile 보간식을 고정한다.** 오름차순 정렬한 `n`개 sample `s[0..n-1]`과
-  `q`(0.95 / 0.99)에 대해 `pos = (n - 1) * q`, `lo = floor(pos)`,
-  `hi = min(lo + 1, n - 1)`, `frac = pos - lo` 로 두고
-  `value = s[lo] + (s[hi] - s[lo]) * frac` 로 계산한다. `n == 1`이면 그 sample 값이다.
-- 여러 프로세스의 reservoir를 병합해 계산하는 경로도 **같은 보간식**을 사용한다.
-  각 sample의 weight는 `그 프로세스의 유효 관측 수 / 그 프로세스가 보관한 sample 수`
-  이며, 값 기준 오름차순 정렬 후 누적 weight `c_i = Σ_{j<=i} w_j`, 전체 weight
-  `W = Σ w_j`, `pos = (W - 1) * q` 로 두고 누적 weight 축에서 위와 같은 선형 보간을
-  수행한다(위치 `p`의 sample은 `c_i - 1 >= p` 를 만족하는 가장 작은 `i`). 모든
-  weight가 `1`이면 이 식은 앞 항목의 식과 정확히 같다. 같은 이름의 metric을 경로마다
-  다른 추정식으로 계산하면 안 된다.
-- percentile sample을 하나도 보관하지 않은 경우(sample cap `0`, 또는 유효 sample
-  0개)의 `latency_p95`·`latency_p99`는 **평균 latency와 같은 값**으로 보고한다.
-  `0`으로 보고하지 않는다. 전체 count와 sum은 sample 보관 여부와 무관하게 계속
-  누적한다.
+- C 기준 벤치의 p50/p95/p99는 유효 수신된 모든 메시지를 고정 log-linear histogram에 기록해 계산한다.
+  각 bucket 대표값의 상대 오차는 폭 1/128 이하이며, 평균은 전체 메시지의 정확한 합과 건수로 계산한다.
 - public API 동작에 문제가 있으면 perf 코드에서 우회하지 않고 GitHub Issue로
   버그를 레포팅한다. 버그는 회귀테스트를 작성해서 재현을 확인하고 수정한다.
   버그를 우선 수정하고 이어서 perf 작업을 계속한다.
@@ -1553,10 +1537,10 @@ perf 벤치마크 코드와 실행 인프라를 리팩토링할 때는 아래 �
 | `PERF_DISABLE_RESOURCE_METRICS` | 리소스 메트릭(CPU/메모리) 수집 비활성화 (`1`로 활성화) | 0 |
 | `PERF_STREAM_NON_TCP_CLIENTS_MAX` | STREAM 계열 non-tcp transport의 최대 client cap | 10000 |
 | `PERF_RESULTS_MAX_FILES` | report/ 디렉터리 최대 파일 수 (multi 전용) | 100 |
-| `PERF_MULTI_LATENCY_SAMPLE_CAP` | multi sampler 하나가 보관하는 percentile sample 상한 | 65,536 |
-| `PERF_SINGLE_LATENCY_SAMPLE_CAP` | single sampler 하나가 보관하는 percentile sample 상한 | 1,000,000 |
+| `PERF_MULTI_LATENCY_SAMPLE_CAP` | C perf 엔진 외 구현의 percentile sample 상한 | 65,536 |
+| `PERF_SINGLE_LATENCY_SAMPLE_CAP` | C perf 엔진 외 구현의 percentile sample 상한 | 1,000,000 |
 
-- 위 환경 변수는 C 기준과 모든 바인딩에서 동일하게 적용된다 (단, `PERF_RESULTS_MAX_FILES`는 multi 엔진만 참조하며, single 엔진은 100 하드코딩).
+- 나머지 공통 환경 변수는 C 기준과 모든 바인딩에서 동일하게 적용된다. 두 latency sample cap 변수는 C perf 엔진 외 구현에서 사용하며, `PERF_RESULTS_MAX_FILES`는 multi 엔진만 참조한다 (single 엔진은 100 하드코딩).
 - suite별 고유 환경 변수는 개별 정책 문서를 참조한다:
   - Single: [PERF_SINGLE_TEST_POLICY.md § 7](PERF_SINGLE_TEST_POLICY.md)
   - Multi: [PERF_MULTI_TEST_POLICY.md § 12](PERF_MULTI_TEST_POLICY.md)

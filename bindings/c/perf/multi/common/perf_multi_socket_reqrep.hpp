@@ -80,8 +80,7 @@ struct client_slot_t
 
 struct client_state_t
 {
-    explicit client_state_t (
-      size_t maximum_latency_sample_cap = std::numeric_limits<size_t>::max ()) :
+    client_state_t () :
         poller (NULL),
         active_run_id (0),
         accepted_count (0),
@@ -97,7 +96,7 @@ struct client_state_t
         fatal (false),
         slots (),
         events (),
-        latency (maximum_latency_sample_cap)
+        latency ()
     {
     }
 
