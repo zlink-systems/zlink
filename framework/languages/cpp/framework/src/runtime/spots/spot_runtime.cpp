@@ -2424,10 +2424,17 @@ task_t<void> spot_context_state_t::complete_preparation (bool ready)
           });
 }
 
-bool spot_context_state_t::admit_timer_fire ()
+bool spot_context_state_t::admit_timer_fire (
+  const std::shared_ptr<runtime::serial_execution_queue_t> &queue)
 {
-    return state_sync (
-      [this] { return channel_runtime && channel_runtime->serializers && admit_core (true); });
+    return state_sync ([this, &queue] {
+        const auto &execution = queue ? queue : serial_queue;
+        return channel_runtime && channel_runtime->serializers
+               && (!execution
+                   || execution->execution_status ()
+                        == runtime::serial_execution_queue_t::execution_status_t::allowed)
+               && admit_core (true);
+    });
 }
 
 void spot_context_state_t::enter_callback ()
@@ -15162,6 +15169,29 @@ void spot_node_runtime_t::observe_location_authority (authority_key_t key,
     });
 }
 
+void spot_node_runtime_t::resume_location_execution ()
+{
+    const auto state = _state;
+    state->lane.try_post ([state] {
+        for (const auto &[_, context] : state->spot_contexts_by_id) {
+            const auto spot = context._state;
+            if (!spot || !spot->spot_serial_executor)
+                continue;
+            spot->spot_serial_executor->execution_operation_changed ();
+            for (const auto &timer : spot->timers) {
+                bool pending;
+                {
+                    std::lock_guard lock (timer->mutex);
+                    pending = !timer->disposed && !timer->pending_fire && !timer->running
+                              && timer->pending_fire_count != 0;
+                }
+                if (pending)
+                    timer_runtime_t::post_fire_count (spot, timer, timer->serial_queue, 0);
+            }
+        }
+    });
+}
+
 void spot_node_runtime_t::request_location_execution_discard (
   runtime::serial_execution_queue_t::execution_admission_t allowed)
 {
@@ -15173,8 +15203,11 @@ void spot_node_runtime_t::request_location_execution_discard (
           std::shared_ptr<spot_node_builder_state_t> state,
           std::shared_ptr<std::vector<discarded_spot_t>> spots,
           std::vector<std::pair<actor_ref_t, runtime::serial_execution_queue_t::execution_status_t>>
-            actors)
+            actors,
+          runtime::serial_execution_queue_t::execution_admission_t retained_fence)
         {
+            // Keep the discarded episode's fence until the existing cleanup continuation finishes.
+            (void) retained_fence;
             for (const auto &[actor, status] : actors) {
                 const auto result =
                   co_await spot_node_runtime_t (state).discard_local_actor_async (actor, status);
@@ -15229,6 +15262,7 @@ void spot_node_runtime_t::request_location_execution_discard (
                 if (executor
                     && allowed (*executor->queue ())
                          != runtime::serial_execution_queue_t::execution_status_t::allowed) {
+                    executor->queue ()->cancel_pending (allowed (*executor->queue ()));
                     actors.emplace_back (
                       ::zlink::framework::detail::actor_ref_access_t::make (
                         spot->node_rid, type, id, state->actor_generations.at (key)),
@@ -15240,8 +15274,10 @@ void spot_node_runtime_t::request_location_execution_discard (
             return;
         // Existing Close uses its infrastructure executor outside the owner turn.
         const auto submitted = state->worker_executor->try_submit_internal (
-          [state, spots = std::move (spots), actors = std::move (actors)] () mutable {
-              auto cleanup = cleanup_t::run (state, std::move (spots), std::move (actors));
+          [state, spots = std::move (spots), actors = std::move (actors),
+           allowed = std::move (allowed)] () mutable {
+              auto cleanup =
+                cleanup_t::run (state, std::move (spots), std::move (actors), std::move (allowed));
               detail::observe_task_terminal (cleanup, [state] (const result_t<void> &result) {
                   if (!result)
                       report_spot_close_diagnostic (state, {}, "location_discard_failed",

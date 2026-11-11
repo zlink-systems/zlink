@@ -728,6 +728,17 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
         return preparation->terminal.task ();
     }
 
+    void execution_operation_changed ()
+    {
+        assert_on_lane ();
+        if (_spot_queue)
+            _spot_queue->execution_operation_changed ();
+        for (const auto &[_, executor] : _actor_executors)
+            executor->queue ()->execution_operation_changed ();
+        for (const auto &[_, queue] : _timer_queues)
+            queue->execution_operation_changed ();
+    }
+
     const queue_ptr_t &spot_queue () const noexcept { return _spot_queue; }
 
     bool execute_spot (std::string name,
@@ -1071,7 +1082,7 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
               preparation_policy (std::atomic_load (&_preparation)));
             if (_execution_admission)
                 queue->set_execution_policy (
-                  [spot = _spot_queue] { return spot->execution_allowed (); });
+                  [spot = _spot_queue] (const queue_t &) { return spot->execution_status (); });
         }
         return queue;
     }
@@ -1292,7 +1303,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
                 const instance_spot_retained_message_t *retained_record = nullptr);
     framework_exception_t admission_error () const;
     // Admits a timer callback claim; payload is selected in its execution turn.
-    bool admit_timer_fire ();
+    bool admit_timer_fire (const std::shared_ptr<runtime::serial_execution_queue_t> &queue = {});
     // Counts a lifecycle callback that its lane admitted earlier.
     void enter_callback ();
     void leave_callback (std::function<void ()> settle_owner_state = {}) noexcept;
@@ -1992,6 +2003,7 @@ class spot_node_runtime_t
     void record_core_actor_transfer_activation (std::string actor_id,
                                                 std::uint64_t membership_epoch);
     void bind_location_lifecycle (runtime::location_lifecycle_t &lifecycle);
+    void resume_location_execution ();
     void request_location_execution_discard (
       runtime::serial_execution_queue_t::execution_admission_t allowed);
     void observe_location_authority (authority_key_t key,

@@ -777,6 +777,10 @@ task_t<void> mesh_node_runtime_t::start (
                   return runtime::stateful::stateful_object_runtime_t::recover_location_execution (
                     {host, &host->objects ()}, std::move (recover), observed_at);
               return task_t<void> (result_t<void>::success ());
+          },
+          [weak = std::weak_ptr (spot_state)] {
+              if (auto state = weak.lock ())
+                  spot_node_runtime_t (state).resume_location_execution ();
           });
         node->configure_location_execution (
           spot_state->location_lifecycle->execution_runtime ().execution_clock (),

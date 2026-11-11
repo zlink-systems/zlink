@@ -14,6 +14,7 @@
 #include "runtime/utils/available_processor_count.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/location_runtime.hpp"
+#include "runtime/execution/serial_handler_participant.hpp"
 #include "runtime/stateful/public_store_adapters.hpp"
 #include "runtime/locations/location_auto_connect_host_service.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"
@@ -99,6 +100,32 @@ struct public_host_runtime_test_access_t
     }
 };
 }
+
+struct serial_execution_queue_test_access_t
+{
+    static void select_then (serial_execution_queue_t &queue, std::function<void ()> close)
+    {
+        auto selected = [&queue, close = std::move (close)] {
+            serial_execution_queue_t::work_item_t item;
+            {
+                std::lock_guard lock (queue._mutex);
+                item = queue.take_next_locked ();
+                ++queue._active;
+                queue._active_lane = item.lane;
+                queue._active_bytes = item.byte_cost;
+            }
+            close ();
+            if (item.actor_mailbox)
+                queue.execute_actor_head (std::move (item));
+            else
+                queue.execute_item (std::move (item));
+        };
+        if (queue.owns_shared_gate ())
+            queue.notify_control ("selected-before-pause", std::move (selected));
+        else
+            selected ();
+    }
+};
 
 struct state_lane_test_access_t
 {
@@ -3898,7 +3925,9 @@ void StoreOutageRetention::discard_retained (bool shared, bool retained, bool re
         ++context->actor_count;
         stateful::object_ref_t object{
           stateful::object_kind_t::actor, id, 1, 1, "discard-mesh", "discard-node"};
-        mesh.native_node ().create_reserved_actor_async ("player", object).result ().value ();
+        auto creating = mesh.native_node ().create_reserved_actor_async ("player", object);
+        EXPECT_TRUE (scheduler->run_until (creating));
+        creating.result ().value ();
         EXPECT_TRUE (mesh.native_node ().objects ().find (stateful::object_kind_t::actor, id));
         auto queue = context->ensure_spot_serial_executor ()->actor_executor (key)->queue ();
         if (ready)
@@ -3953,7 +3982,7 @@ void StoreOutageRetention::discard_retained (bool shared, bool retained, bool re
         check (store ().read_authority (actor_authority_key ("rejoined-actor")).result ());
         check (store ().list_mesh_nodes ("discard-mesh").result ());
     };
-    if (rejoin) {
+    if (rejoin && retained) {
         move_to (*lease_access::snapshot (runtime)->admission_deadline + 1ms);
         ASSERT_LT (clock_now.load (), episode->cutoff);
         detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
@@ -4055,7 +4084,9 @@ void StoreOutageRetention::discard_retained (bool shared, bool retained, bool re
     auto current = lease_access::snapshot (runtime);
     auto token = *current->token;
     if (rejoin) {
-        advance (1ms);
+        move_to (std::max (clock_now.load () + 1ms, current->last_successful_lease->started_at
+                                                      + options.owner_lease_ttl
+                                                      + options.owner_lease_fencing_margin));
         check_store_closed ();
         // Release the fixture Store lease to model expiry without waiting on wall time.
         ASSERT_TRUE (std::holds_alternative<owner_lease_released_t> (
@@ -4064,7 +4095,7 @@ void StoreOutageRetention::discard_retained (bool shared, bool retained, bool re
         const auto recovered = lease_access::snapshot (runtime);
         ASSERT_TRUE (lease_access::usable_at (runtime, clock_now.load ()));
         EXPECT_NE (token.lease_generation, recovered->token->lease_generation);
-        EXPECT_EQ (episode, recovered->outage);
+        EXPECT_FALSE (recovered->outage);
         EXPECT_TRUE (episode->discarded.load ());
 
         mesh_node_descriptor_t descriptor;
@@ -4107,6 +4138,72 @@ void StoreOutageRetention::discard_retained (bool shared, bool retained, bool re
         EXPECT_TRUE (nodes);
         if (nodes)
             EXPECT_EQ (1u, nodes.value ().items.size ());
+        try {
+            const auto *reserved =
+              reservation ? std::get_if<object_reserved_t> (&reservation.value ()) : nullptr;
+            ASSERT_TRUE (reserved);
+            const auto payload = encode_actor_authority_payload (actor_authority_payload_t{
+              .state = actor_authority_state_t::ready,
+              .stable_type = "player",
+              .actor_id = "rejoined-actor",
+              .current_spot_id = "entry",
+              .current_spot_generation = 1,
+              .current_spot_kind = actor_authority_spot_kind_t::entry,
+              .owner_id = recovered->token->owner_id,
+              .owner_lease_generation =
+                static_cast<std::uint64_t> (recovered->token->lease_generation),
+              .mesh_name = descriptor.mesh_name,
+              .node_rid = entry->node_rid,
+              .node_generation = 1});
+            advance (1ms);
+            add_actor ("rejoined-actor", entry, false);
+            const auto published =
+              store ().commit ({request.key, reserved->fence, payload}).result ().value ();
+            EXPECT_TRUE (std::holds_alternative<object_committed_t> (published));
+            gates.at ("rejoined-actor")->confirm_execution_ready (clock_now.load ());
+            scheduler->run_all ();
+            advance (1ms);
+            lease_access::communication_failure (runtime);
+            const auto second = lease_access::snapshot (runtime)->outage;
+            EXPECT_NE (episode, second);
+            if (second != episode) {
+                EXPECT_EQ (clock_now.load (), second->observed_at);
+                move_to (*recovered->admission_deadline + (retained ? 1ms : -1ms));
+                detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+                int second_calls = 0;
+                ASSERT_TRUE (gates.at ("rejoined-actor")->try_post ("second-retained", [&] {
+                    ++second_calls;
+                }));
+                scheduler->run_all ();
+                EXPECT_EQ (1, second_calls);
+                move_to (second->cutoff);
+                detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+                EXPECT_TRUE (second->discarded.load ());
+                const auto cleanup_deadline = std::chrono::steady_clock::now () + 5s;
+                bool removed = false;
+                while (std::chrono::steady_clock::now () < cleanup_deadline) {
+                    scheduler->run_all ();
+                    removed = node->lane.run_sync ([&] {
+                        return !node->actor_types_by_id.contains ("rejoined-actor");
+                    })
+                              && !mesh.native_node ().objects ().find (
+                                stateful::object_kind_t::actor, "rejoined-actor");
+                    if (removed)
+                        break;
+                    std::this_thread::yield ();
+                }
+                EXPECT_TRUE (removed);
+                EXPECT_FALSE (mesh.native_node ().objects ().find (stateful::object_kind_t::actor,
+                                                                   "rejoined-actor"));
+                EXPECT_FALSE (gates.at ("rejoined-actor")->try_post ("second-discarded", [&] {
+                    ++second_calls;
+                }));
+                EXPECT_EQ (1, second_calls);
+            }
+        }
+        catch (const std::exception &error) {
+            ADD_FAILURE () << "Second object setup: " << error.what ();
+        }
     } else {
         ++token.lease_generation;
         lease_access::accept (runtime, token, *current->renewed_at + 30s, *current->renewed_at,
@@ -4443,6 +4540,14 @@ TEST_P (StoreOutageRetention, NewClaimReopensStoreAfterDiscardSpotWide)
 {
     discard_retained (true, true, true);
 }
+TEST_P (StoreOutageRetention, SecondOutageDiscardsNewPerActorWithoutRetention)
+{
+    discard_retained (false, false, true);
+}
+TEST_P (StoreOutageRetention, SecondOutageDiscardsNewSpotWideWithoutRetention)
+{
+    discard_retained (true, false, true);
+}
 TEST_P (StoreOutageRetention, DiscardRetainedPerActorDefault)
 {
     discard_retained (false, false);
@@ -4538,6 +4643,17 @@ TEST_P (StoreOutageRetention, AdmissionDeadlineLatchesWithoutHeartbeatAndRenewal
                 queue->set_execution_policy (runtime.execution_policy ());
                 queue->confirm_execution_ready (clock_now.load ());
             }
+            runtime
+              .on_execution_discard (
+                [] (auto) {}, {}, {},
+                [actor = std::weak_ptr (actor), timer = std::weak_ptr (timer_queue)] {
+                    if (auto queue = actor.lock ())
+                        queue->execution_operation_changed ();
+                    if (auto queue = timer.lock ())
+                        queue->execution_operation_changed ();
+                })
+              .result ()
+              .value ();
             auto context = std::make_shared<detail::spot_context_state_t> ();
             context->serial_executor = scheduler;
             context->channel_runtime = std::make_shared<detail::channel_runtime_state_t> ();
@@ -4585,6 +4701,8 @@ TEST_P (StoreOutageRetention, AdmissionDeadlineLatchesWithoutHeartbeatAndRenewal
                        actor->execution_status ());
             EXPECT_EQ (serial_execution_queue_t::execution_status_t::allowed,
                        timer_queue->execution_status ());
+            EXPECT_EQ (2, actor_calls);
+            EXPECT_EQ (2, timer_calls);
             ASSERT_TRUE (actor->try_post ("renewed", [&] { ++actor_calls; }));
             ASSERT_TRUE (timer_queue->try_post ("renewed-timer-lane", [] {}));
             scheduler->run_all ();
@@ -4598,6 +4716,490 @@ TEST_P (StoreOutageRetention, AdmissionDeadlineLatchesWithoutHeartbeatAndRenewal
             spot->cancel_pending ();
             scheduler->run_all ();
         }
+}
+
+TEST_P (StoreOutageRetention, SecondOutageUsesNewSuccessfulLease)
+{
+    for (bool retained : {false, true}) {
+        options.store_outage_retention = retained;
+        location_runtime_t runtime (store (), options,
+                                    "second-outage-" + std::to_string (retained));
+        lease_access::clock (runtime, [&] { return clock_now.load (); });
+        claim (runtime);
+        test::manual_internal_scheduler_t scheduler;
+        std::vector<std::shared_ptr<serial_execution_queue_t>> queues;
+        runtime
+          .on_execution_discard ([&] (auto policy) {
+              for (const auto &queue : queues)
+                  if (policy (*queue)
+                      == serial_execution_queue_t::execution_status_t::ownership_lost)
+                      queue->cancel_pending (
+                        serial_execution_queue_t::execution_status_t::ownership_lost);
+          })
+          .result ()
+          .value ();
+        const auto add = [&] {
+            auto queue = std::make_shared<serial_execution_queue_t> (scheduler);
+            queue->set_execution_policy (runtime.execution_policy ());
+            queue->confirm_execution_ready (clock_now.load ());
+            queues.push_back (queue);
+            scheduler.run_all ();
+            return queue;
+        };
+        auto first = add ();
+        advance (5s);
+        lease_access::communication_failure (runtime);
+        const auto old = lease_access::snapshot (runtime)->outage;
+        move_to (old->cutoff);
+        detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+        scheduler.run_all ();
+        ASSERT_TRUE (old->discarded.load ());
+        EXPECT_EQ (serial_execution_queue_t::execution_status_t::ownership_lost,
+                   first->execution_status ());
+        store ().release_owner_lease (*lease_access::snapshot (runtime)->token).result ().value ();
+        move_to (std::max (clock_now.load (),
+                           lease_access::snapshot (runtime)->last_successful_lease->started_at
+                             + options.owner_lease_ttl + options.owner_lease_fencing_margin));
+        lease_access::heartbeat (runtime, clock_now.load ());
+        const auto success = lease_access::snapshot (runtime)->last_successful_lease;
+        ASSERT_NE (old->token.lease_generation, success->token.lease_generation);
+        advance (1ms);
+        auto second = add ();
+        advance (1ms);
+        lease_access::communication_failure (runtime);
+        const auto current = lease_access::snapshot (runtime)->outage;
+        ASSERT_NE (old, current);
+        EXPECT_EQ (clock_now.load (), current->observed_at);
+        EXPECT_EQ (retained ? success->started_at + options.owner_lease_ttl
+                                + 2 * options.owner_lease_fencing_margin
+                            : success->admission_deadline,
+                   current->cutoff);
+        move_to (current->cutoff - 1ms);
+        int calls = 0;
+        ASSERT_TRUE (second->try_post ("second-retained", [&] { ++calls; }));
+        scheduler.run_all ();
+        EXPECT_EQ (1, calls);
+        move_to (current->cutoff);
+        detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+        scheduler.run_all ();
+        EXPECT_TRUE (current->discarded.load ());
+        EXPECT_EQ (serial_execution_queue_t::execution_status_t::ownership_lost,
+                   second->execution_status ());
+        EXPECT_EQ (serial_execution_queue_t::execution_status_t::ownership_lost,
+                   first->execution_status ());
+        EXPECT_FALSE (first->try_post ("old-object", [&] { ++calls; }));
+        EXPECT_FALSE (second->try_post ("discarded-second", [&] { ++calls; }));
+        EXPECT_EQ (1, calls);
+    }
+}
+
+TEST_P (StoreOutageRetention, PausedAdmissionRejectsNewOperationAndTimerTick)
+{
+    for (const auto policy :
+         {timer_overrun_policy_t::skip_late_ticks, timer_overrun_policy_t::catch_up_bounded,
+          timer_overrun_policy_t::delay_next_tick})
+        for (bool stop : {false, true})
+            for (bool recovery : {false, true}) {
+                location_runtime_t runtime (store (), options,
+                                            "paused-admission-" + std::to_string (int (policy))
+                                              + std::to_string (stop) + std::to_string (recovery));
+                lease_access::clock (runtime, [&] { return clock_now.load (); });
+                claim (runtime);
+                auto scheduler = std::make_shared<test::manual_internal_scheduler_t> ();
+                auto queue = std::make_shared<serial_execution_queue_t> (*scheduler);
+                queue->set_execution_policy (runtime.execution_policy ());
+                queue->confirm_execution_ready (clock_now.load ());
+                scheduler->run_all ();
+                auto context = std::make_shared<detail::spot_context_state_t> ();
+                context->serial_executor = scheduler;
+                context->serial_queue = queue;
+                context->channel_runtime = std::make_shared<detail::channel_runtime_state_t> ();
+                serializer_registry_t serializers;
+                context->channel_runtime->serializers = &serializers;
+                auto timer = std::make_shared<detail::timer_state_t> ();
+                timer->name = "paused-tick";
+                timer->options.overrun_policy = policy;
+                timer->options.stop_on_unhandled_exception = stop;
+                timer->serial_queue = queue;
+                auto timer_handler = std::make_shared<int> (0);
+                timer->handler_instance = timer_handler;
+                int calls = 0;
+                timer->handler_invoker = [&] (void *, void *, serializer_registry_t &,
+                                              const timer_tick_t &) {
+                    ++calls;
+                    return task_t<zlink::message_t> (result_t<zlink::message_t>::success ({}));
+                };
+                const auto lease = lease_access::snapshot (runtime);
+                task_completion_source_t<serial_execution_queue_t::execution_operation_t> recovered;
+                if (recovery)
+                    queue->set_execution_operation (recovered.task ());
+                else {
+                    move_to (*lease->admission_deadline);
+                    detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+                }
+                auto operation = queue->try_post_cancellable_async (
+                  "new-paused", [] (auto complete) { complete ([] {}); }, [] {});
+                EXPECT_FALSE (operation);
+                if (!operation)
+                    EXPECT_EQ (framework_error_kind_t::shutting_down, operation.error_kind ());
+                EXPECT_FALSE (queue->try_post ("new-paused-raw", [] {}));
+                detail::timer_runtime_t::post_fire_count (context, timer, queue, 1);
+                scheduler->run_all ();
+                EXPECT_EQ (0, queue->pending_count (serial_work_lane_t::application));
+                EXPECT_EQ (1, timer->pending_fire_count);
+                EXPECT_FALSE (timer->pending_fire);
+                EXPECT_EQ (0, timer->delivery_index);
+                EXPECT_TRUE (timer->failure_events.empty ());
+                EXPECT_FALSE (timer->disposed);
+                if (recovery)
+                    recovered.complete (
+                      result_t<serial_execution_queue_t::execution_operation_t>::success (
+                        {serial_execution_queue_t::execution_status_t::allowed,
+                         clock_now.load ()}));
+                else
+                    lease_access::accept (runtime, *lease->token, *lease->renewed_at + 30s,
+                                          *lease->renewed_at, clock_now.load (), true);
+                detail::timer_runtime_t::post_fire_count (context, timer, queue, 0);
+                scheduler->run_all ();
+                EXPECT_EQ (1, calls);
+                EXPECT_EQ (1, timer->delivery_index);
+                timer->handler_invoker = [] (void *, void *, serializer_registry_t &,
+                                             const timer_tick_t &) -> task_t<zlink::message_t> {
+                    throw std::runtime_error ("actual timer handler failure");
+                };
+                detail::timer_runtime_t::post_fire_count (context, timer, queue, 1);
+                scheduler->run_all ();
+                ASSERT_EQ (1, timer->failure_events.size ());
+                EXPECT_EQ (stop, timer->disposed.load ());
+                EXPECT_EQ (stop, timer->failure_events.front ().stopped);
+                queue->cancel_pending ();
+                scheduler->run_all ();
+            }
+}
+
+TEST_P (StoreOutageRetention, SelectedApplicationReturnsToHeadWhenPaused)
+{
+    for (int layout : {0, 1, 2}) {
+        const bool shared = layout != 0;
+        location_runtime_t runtime (store (), options,
+                                    "selected-paused-" + std::to_string (layout));
+        lease_access::clock (runtime, [&] { return clock_now.load (); });
+        claim (runtime);
+        test::manual_internal_scheduler_t scheduler;
+        auto queue = std::make_shared<serial_execution_queue_t> (
+          scheduler, serial_execution_queue_options_t{},
+          serial_execution_queue_t::error_handler_t{},
+          shared ? serial_lane_policy_t::spot_wide () : serial_lane_policy_t::actor_delivery ());
+        auto owner = queue;
+        if (layout == 2) {
+            queue = std::make_shared<serial_execution_queue_t> (scheduler);
+            queue->attach_spot_gate (owner);
+            owner->set_execution_policy (runtime.execution_policy ());
+            runtime
+              .on_execution_discard ([] (auto) {}, {}, {},
+                                     [weak = std::weak_ptr (owner)] {
+                                         if (auto queue = weak.lock ())
+                                             queue->execution_operation_changed ();
+                                     })
+              .result ()
+              .value ();
+        }
+        queue->set_execution_policy (runtime.execution_policy ());
+        runtime
+          .on_execution_discard ([] (auto) {}, {}, {},
+                                 [weak = std::weak_ptr (queue)] {
+                                     if (auto queue = weak.lock ())
+                                         queue->execution_operation_changed ();
+                                 })
+          .result ()
+          .value ();
+        scheduler.run_all ();
+        std::vector<int> calls;
+        ASSERT_TRUE (queue->try_post ("selected", [&] { calls.push_back (1); }));
+        ASSERT_TRUE (queue->try_post ("following", [&] { calls.push_back (2); }));
+        const auto lease = lease_access::snapshot (runtime);
+        serial_execution_queue_test_access_t::select_then (*owner, [&] {
+            move_to (*lease->admission_deadline);
+            detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+        });
+        scheduler.run_all ();
+        EXPECT_TRUE (calls.empty ());
+        EXPECT_EQ (2, queue->pending_count (serial_work_lane_t::application));
+        lease_access::accept (runtime, *lease->token, *lease->renewed_at + 30s, *lease->renewed_at,
+                              clock_now.load (), true);
+        runtime
+          .on_execution_discard ([] (auto) {}, {}, {},
+                                 [weak = std::weak_ptr (queue)] {
+                                     if (auto queue = weak.lock ())
+                                         queue->execution_operation_changed ();
+                                 })
+          .result ()
+          .value ();
+        scheduler.run_all ();
+        EXPECT_EQ ((std::vector<int>{1, 2}), calls);
+        queue->cancel_pending ();
+        scheduler.run_all ();
+    }
+}
+
+TEST_P (StoreOutageRetention, YieldedResumeWaitsThroughTemporaryClosure)
+{
+    location_runtime_t runtime (store (), options, "yield-paused");
+    lease_access::clock (runtime, [&] { return clock_now.load (); });
+    claim (runtime);
+    test::manual_internal_scheduler_t scheduler;
+    int errors = 0, resumes = 0;
+    auto queue = std::make_shared<serial_execution_queue_t> (
+      scheduler, serial_execution_queue_options_t{},
+      [&] (const std::string &, std::exception_ptr error) {
+          ++errors;
+          EXPECT_THROW (std::rethrow_exception (error), std::runtime_error);
+      },
+      serial_lane_policy_t::spot_wide ());
+    queue->set_execution_policy (runtime.execution_policy ());
+    runtime
+      .on_execution_discard ([] (auto) {}, {}, {},
+                             [weak = std::weak_ptr (queue)] {
+                                 if (auto queue = weak.lock ())
+                                     queue->execution_operation_changed ();
+                             })
+      .result ()
+      .value ();
+    scheduler.run_all ();
+    std::shared_ptr<detail::serial_turn_t> handler;
+    ASSERT_TRUE (queue->try_post_async (
+      "yield-before-pause", [&] (auto) { handler = detail::capture_current_serial_turn (); }));
+    scheduler.run_all ();
+    ASSERT_TRUE (handler);
+    ASSERT_TRUE (handler->release ());
+    scheduler.run_all ();
+    const auto lease = lease_access::snapshot (runtime);
+    move_to (*lease->admission_deadline);
+    detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+    handler->resume_scheduler () ([&] {
+        ++resumes;
+        handler->finish_handler ([] {}, true);
+    });
+    scheduler.run_all ();
+    lease_access::accept (runtime, *lease->token, *lease->renewed_at + 30s, *lease->renewed_at,
+                          clock_now.load (), true);
+    const auto renewed = lease_access::snapshot (runtime);
+    serial_execution_queue_test_access_t::select_then (*queue, [&] {
+        move_to (*renewed->admission_deadline);
+        detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+    });
+    scheduler.run_all ();
+    auto observed = queue->observe_handler_terminal ();
+    ASSERT_TRUE (observed);
+    scheduler.run_all ();
+    auto terminal = observed.value ()->run ();
+    EXPECT_FALSE (terminal.await_ready ());
+    EXPECT_EQ (0, resumes);
+    EXPECT_EQ (0, errors);
+    lease_access::accept (runtime, *lease->token, *lease->renewed_at + 30s, *lease->renewed_at,
+                          clock_now.load (), true);
+    scheduler.run_all ();
+    EXPECT_EQ (1, resumes);
+    scheduler.run_until (terminal);
+    EXPECT_TRUE (terminal.await_ready ());
+    observed.value ()->cancel ();
+    ASSERT_TRUE (
+      queue->try_post ("actual-handler-failure", [] { throw std::runtime_error ("handler"); }));
+    scheduler.run_all ();
+    EXPECT_EQ (1, errors);
+    queue->cancel_pending ();
+    scheduler.run_all ();
+}
+
+TEST_P (StoreOutageRetention, PausedCancellationIsTerminalBeforeReopening)
+{
+    for (int stage : {0, 1, 2}) {
+        location_runtime_t runtime (store (), options, "cancel-paused-" + std::to_string (stage));
+        lease_access::clock (runtime, [&] { return clock_now.load (); });
+        claim (runtime);
+        test::manual_internal_scheduler_t scheduler;
+        auto queue = std::make_shared<serial_execution_queue_t> (scheduler);
+        queue->set_execution_policy (runtime.execution_policy ());
+        runtime
+          .on_execution_discard ([] (auto) {}, {}, {},
+                                 [weak = std::weak_ptr (queue)] {
+                                     if (auto queue = weak.lock ())
+                                         queue->execution_operation_changed ();
+                                 })
+          .result ()
+          .value ();
+        scheduler.run_all ();
+        int calls = 0, cancellations = 0;
+        auto submission = queue->try_post_cancellable_async (
+          "cancel-paused",
+          [&] (auto complete) {
+              ++calls;
+              complete ([] {});
+          },
+          [&] { ++cancellations; });
+        ASSERT_TRUE (submission);
+        const auto lease = lease_access::snapshot (runtime);
+        const auto close = [&] {
+            move_to (*lease->admission_deadline);
+            detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+        };
+        if (stage != 0)
+            serial_execution_queue_test_access_t::select_then (*queue, [&] {
+                close ();
+                if (stage == 2) {
+                    auto active = queue->cancel_submission (submission.value ());
+                    scheduler.run_until (active);
+                    EXPECT_EQ (serial_cancel_submission_outcome_t::active_cancel_requested,
+                               active.result ().value ());
+                }
+            });
+        else
+            close ();
+        scheduler.run_all ();
+        auto cancelled = queue->cancel_submission (submission.value ());
+        scheduler.run_all ();
+        EXPECT_EQ (stage == 2 ? serial_cancel_submission_outcome_t::already_terminal
+                              : serial_cancel_submission_outcome_t::queued_cancelled,
+                   cancelled.result ().value ());
+        EXPECT_EQ (1, cancellations);
+        lease_access::accept (runtime, *lease->token, *lease->renewed_at + 30s, *lease->renewed_at,
+                              clock_now.load (), true);
+        scheduler.run_all ();
+        EXPECT_EQ (0, calls);
+        auto again = queue->cancel_submission (submission.value ());
+        scheduler.run_all ();
+        EXPECT_EQ (serial_cancel_submission_outcome_t::already_terminal, again.result ().value ());
+        EXPECT_EQ (1, cancellations);
+        queue->cancel_pending ();
+        scheduler.run_all ();
+    }
+}
+
+TEST_P (StoreOutageRetention, PausedDeadlineEndsOnceWithoutExecutingAfterRenewal)
+{
+    location_runtime_t runtime (store (), options, "deadline-paused");
+    lease_access::clock (runtime, [&] { return clock_now.load (); });
+    claim (runtime);
+    test::manual_internal_scheduler_t scheduler;
+    auto queue = std::make_shared<serial_execution_queue_t> (scheduler);
+    queue->set_execution_policy (runtime.execution_policy ());
+    runtime
+      .on_execution_discard ([] (auto) {}, {}, {},
+                             [weak = std::weak_ptr (queue)] {
+                                 if (auto queue = weak.lock ())
+                                     queue->execution_operation_changed ();
+                             })
+      .result ()
+      .value ();
+    scheduler.run_all ();
+    int calls = 0, terminals = 0;
+    task_completion_source_t<void> terminal;
+    const auto lease = lease_access::snapshot (runtime);
+    auto submission = queue->try_post_cancellable_async (
+      "deadline-pending",
+      [&] (auto complete) {
+          ++calls;
+          complete ([] {});
+      },
+      [&] {
+          ++terminals;
+          terminal.complete (result_t<void>::failure (framework_error_kind_t::deadline_exceeded,
+                                                      "operation deadline"));
+      });
+    ASSERT_TRUE (submission);
+    move_to (*lease->admission_deadline);
+    detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+    scheduler.run_all ();
+    auto deadline = std::make_shared<detail::deadline_state_t> ();
+    std::optional<task_t<serial_cancel_submission_outcome_t>> cancellation;
+    detail::deadline_scheduler_t::instance ().schedule (clock_now.load () + 1ms, deadline, [&] {
+        cancellation.emplace (queue->cancel_submission (submission.value ()));
+    });
+    advance (1ms);
+    detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+    scheduler.run_all ();
+    ASSERT_TRUE (cancellation);
+    EXPECT_EQ (serial_cancel_submission_outcome_t::queued_cancelled,
+               cancellation->result ().value ());
+    EXPECT_EQ (framework_error_kind_t::deadline_exceeded, terminal.task ().result ().error_kind ());
+    lease_access::accept (runtime, *lease->token, *lease->renewed_at + 30s, *lease->renewed_at,
+                          clock_now.load (), true);
+    scheduler.run_all ();
+    EXPECT_EQ (0, calls);
+    EXPECT_EQ (1, terminals);
+    queue->cancel_pending ();
+    scheduler.run_all ();
+}
+
+TEST_P (StoreOutageRetention, RetiredEpisodeFencesUntilCleanupAndNewDeadlineStillCloses)
+{
+    options.store_outage_retention = true;
+    location_runtime_t runtime (store (), options, "retired-fence");
+    int clock_reads = 0;
+    lease_access::clock (runtime, [&] {
+        ++clock_reads;
+        return clock_now.load ();
+    });
+    claim (runtime);
+    test::manual_internal_scheduler_t scheduler;
+    auto old = std::make_shared<serial_execution_queue_t> (scheduler);
+    old->set_execution_policy (runtime.execution_policy ());
+    old->confirm_execution_ready (clock_now.load ());
+    serial_execution_queue_t::execution_admission_t cleanup;
+    runtime.on_execution_discard ([&] (auto fence) { cleanup = std::move (fence); })
+      .result ()
+      .value ();
+    scheduler.run_all ();
+    advance (5s);
+    lease_access::communication_failure (runtime);
+    auto episode = lease_access::snapshot (runtime)->outage;
+    move_to (episode->cutoff);
+    detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+    ASSERT_TRUE (cleanup);
+    ASSERT_FALSE (old->closed ());
+    const auto token = *lease_access::snapshot (runtime)->token;
+    store ().release_owner_lease (token).result ().value ();
+    lease_access::heartbeat (runtime, clock_now.load ());
+    const auto recovered = lease_access::snapshot (runtime);
+    ASSERT_TRUE (recovered->token);
+    EXPECT_FALSE (recovered->outage);
+    EXPECT_EQ (serial_execution_queue_t::execution_status_t::ownership_lost,
+               old->execution_status ());
+    auto current = std::make_shared<serial_execution_queue_t> (scheduler);
+    current->set_execution_policy (runtime.execution_policy ());
+    current->confirm_execution_ready (clock_now.load ());
+    scheduler.run_all ();
+    EXPECT_EQ (serial_execution_queue_t::execution_status_t::allowed, current->execution_status ());
+    task_completion_source_t<serial_execution_queue_t::execution_operation_t> verification;
+    current->set_execution_operation (verification.task ());
+    EXPECT_EQ (serial_execution_queue_t::execution_status_t::stopped, current->execution_status ());
+    EXPECT_EQ (serial_execution_queue_t::execution_status_t::ownership_lost,
+               old->execution_status ());
+    verification.complete (result_t<serial_execution_queue_t::execution_operation_t>::success (
+      {serial_execution_queue_t::execution_status_t::allowed, clock_now.load ()}));
+    scheduler.run_all ();
+    EXPECT_EQ (serial_execution_queue_t::execution_status_t::allowed, current->execution_status ());
+    move_to (*recovered->admission_deadline);
+    detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
+    EXPECT_TRUE (current->execution_paused ());
+    EXPECT_EQ (serial_execution_queue_t::execution_status_t::ownership_lost,
+               old->execution_status ());
+    EXPECT_FALSE (current->try_post ("expired-new-lease", [] {}));
+    EXPECT_EQ (serial_execution_queue_t::execution_status_t::ownership_lost, cleanup (*old));
+    old->cancel_pending (serial_execution_queue_t::execution_status_t::ownership_lost);
+    scheduler.run_all ();
+    cleanup = {};
+    episode.reset ();
+    lease_access::accept (runtime, *recovered->token, *recovered->renewed_at + 30s,
+                          *recovered->renewed_at, clock_now.load (), true);
+    EXPECT_TRUE (lease_access::snapshot (runtime)->discarded_outages.empty ());
+    clock_reads = 0;
+    EXPECT_TRUE (current->execution_allowed ());
+    EXPECT_EQ (0, clock_reads);
+    EXPECT_EQ (serial_execution_queue_t::execution_status_t::ownership_lost,
+               old->execution_status ());
+    current->cancel_pending ();
+    scheduler.run_all ();
 }
 
 TEST_P (StoreOutageRetention, DelayedAdmissionCallbackDoesNotCloseRenewedLease)
@@ -5039,6 +5641,11 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
             memory.held_authority = actor_authority_key ("early").value;
             provider.held_authority = std::string ("authority\0actor\0early", 21);
         }
+        int calls = 0;
+        task_completion_source_t<void> terminal;
+        serial_work_options_t work;
+        work.completion = [&] (result_t<void> result) { terminal.complete (result); };
+        EXPECT_TRUE (gate->try_post ("stop-held-recovery", [&] { ++calls; }, work));
         auto renewal = lease_access::heartbeat_async (runtime, clock_now.load ());
         if (loss != -55)
             (GetParam () ? provider.authority_entered.task () : memory.authority_entered.task ())
@@ -5055,11 +5662,6 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
         if (loss == -55)
             EXPECT_GT (
               GetParam () ? provider.preserve_writes.load () : memory.preserve_writes.load (), 0u);
-        int calls = 0;
-        task_completion_source_t<void> terminal;
-        serial_work_options_t work;
-        work.completion = [&] (result_t<void> result) { terminal.complete (result); };
-        EXPECT_TRUE (gate->try_post ("stop-held-recovery", [&] { ++calls; }, work));
         scheduler->run_all ();
         if (loss == -57) {
             move_to (episode->cutoff);
@@ -5292,6 +5894,17 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
             provider.failed_authority = std::string ("authority\0actor\0late", 20);
         }
         provider.authority_reads = memory.authority_reads = 0;
+        int calls = 0;
+        task_completion_source_t<void> terminal;
+        serial_work_options_t work;
+        work.completion = [&] (result_t<void> result) { terminal.complete (result); };
+        EXPECT_TRUE (early->try_post (
+          "held-review",
+          [&] {
+              ++calls;
+              terminal.complete (result_t<void>::success ());
+          },
+          work));
         auto first = lease_access::heartbeat_async (runtime, clock_now.load ());
         (GetParam () ? provider.authority_entered.task () : memory.authority_entered.task ())
           .result ()
@@ -5322,17 +5935,6 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
           runtime, [&] { return !late->pending_execution_operation (); },
           std::chrono::steady_clock::now () + auto_connect_wait));
         const auto reads = GetParam () ? provider.authority_reads : memory.authority_reads;
-        int calls = 0;
-        task_completion_source_t<void> terminal;
-        serial_work_options_t work;
-        work.completion = [&] (result_t<void> result) { terminal.complete (result); };
-        EXPECT_TRUE (early->try_post (
-          "held-review",
-          [&] {
-              ++calls;
-              terminal.complete (result_t<void>::success ());
-          },
-          work));
         scheduler->run_all ();
         EXPECT_EQ (0, calls);
         bool cutoff_terminal = false, cutoff_released = false;
@@ -5502,8 +6104,6 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
             provider.hold_cas = memory.hold_cas = true;
         if (loss == -42)
             provider.fail_cas = memory.fail_cas = true;
-        if (loss == -38)
-            runtime.stop ();
         int handlers = 0, late_handlers = 0, spot_handlers = 0;
         task_completion_source_t<void> terminal, late_terminal, spot_terminal;
         const auto enqueue = [&] (auto queue, auto &signal, int &calls) {
@@ -5520,6 +6120,8 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
         enqueue (gate, terminal, handlers);
         enqueue (late, late_terminal, late_handlers);
         enqueue (spot, spot_terminal, spot_handlers);
+        if (loss == -38)
+            runtime.stop ();
         provider.preserve_writes = memory.preserve_writes = 0;
         lease_access::heartbeat (runtime, clock_now.load ());
         lease_access::lane (runtime).run_sync ([] {});
@@ -5802,23 +6404,6 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
                                   + (loss == -12 ? std::string ("spot\0registered-spot", 20)
                                                  : std::string ("actor\0early", 11));
         provider.authority_reads = memory.authority_reads = 0;
-        auto renewing = std::async (std::launch::async, [&] {
-            lease_access::heartbeat (runtime, clock_now.load ());
-            // Also release the observation boundary in the unfixed implementation.
-            provider.authority_entered.complete (result_t<void>::success ());
-            memory.authority_entered.complete (result_t<void>::success ());
-        });
-        (GetParam () ? provider.authority_entered.task () : memory.authority_entered.task ())
-          .result ()
-          .value ();
-        native->objects ()
-          .execution_gate (*native->objects ().find (stateful::object_kind_t::actor, "late"))
-          .result ()
-          .value ();
-        lease_access::lane (runtime).run_sync ([] {});
-        ASSERT_TRUE (lease_access::wait_on_lane (
-          runtime, [&] { return !late->pending_execution_operation (); },
-          std::chrono::steady_clock::now () + auto_connect_wait));
         int early_calls = 0, late_calls = 0, spot_calls = 0, fresh_calls = 0;
         task_completion_source_t<void> early_terminal, late_terminal, spot_terminal, fresh_terminal;
         serial_work_options_t early_work;
@@ -5856,6 +6441,23 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
               fresh_terminal.complete (result_t<void>::success ());
           },
           early_work));
+        auto renewing = std::async (std::launch::async, [&] {
+            lease_access::heartbeat (runtime, clock_now.load ());
+            // Also release the observation boundary in the unfixed implementation.
+            provider.authority_entered.complete (result_t<void>::success ());
+            memory.authority_entered.complete (result_t<void>::success ());
+        });
+        (GetParam () ? provider.authority_entered.task () : memory.authority_entered.task ())
+          .result ()
+          .value ();
+        native->objects ()
+          .execution_gate (*native->objects ().find (stateful::object_kind_t::actor, "late"))
+          .result ()
+          .value ();
+        lease_access::lane (runtime).run_sync ([] {});
+        ASSERT_TRUE (lease_access::wait_on_lane (
+          runtime, [&] { return !late->pending_execution_operation (); },
+          std::chrono::steady_clock::now () + auto_connect_wait));
         scheduler->run_all ();
         EXPECT_EQ (loss == -12 ? 0 : 1, fresh_calls);
         EXPECT_EQ (0, early_calls);
@@ -6677,11 +7279,16 @@ TEST_P (StoreOutageRetention, ReadyPolicyAndLateWriterRetainTheirOwnedPublicatio
     advance (5s);
     lease_access::communication_failure (*runtime);
     const auto cutoff = lease_access::snapshot (*runtime)->outage->cutoff;
+    int calls = 0;
+    ASSERT_TRUE (gate->try_post ("queued-before-location-owner-destruction", [&] { ++calls; }));
     runtime.reset ();
     move_to (cutoff);
     detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
-    int calls = 0;
-    ASSERT_TRUE (gate->try_post ("after-location-owner-destruction", [&] { ++calls; }));
+    EXPECT_FALSE (gate->try_post ("after-location-owner-destruction", [&] { ++calls; }));
+    const auto rejected = gate->try_post_cancellable_async (
+      "after-owner-cancellable", [] (auto complete) { complete ([] {}); }, [] {});
+    ASSERT_FALSE (rejected);
+    EXPECT_EQ (framework_error_kind_t::shutting_down, rejected.error_kind ());
     scheduler.run_all ();
     EXPECT_EQ (0, calls);
     gate->cancel_pending ();
@@ -6747,7 +7354,11 @@ TEST_P (StoreOutageRetention, NewClaimAndLateRenewCannotChangeOriginalEpisode)
     lease_access::accept (runtime, *original->token, store_now + 30s, store_now,
                           clock_now.load () - 1s, true, episode);
     EXPECT_TRUE (episode->discarded.load ());
-    EXPECT_EQ (episode, lease_access::snapshot (runtime)->outage);
+    const auto retired = lease_access::snapshot (runtime);
+    EXPECT_FALSE (retired->outage);
+    ASSERT_EQ (1u, retired->discarded_outages.size ());
+    EXPECT_EQ (episode, retired->discarded_outages.front ().lock ());
+    EXPECT_EQ (original->last_successful_lease->started_at + 40s, episode->cutoff);
     detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
     EXPECT_TRUE (episode->discarded.load ());
 }
@@ -7478,12 +8089,22 @@ TEST_P (StoreOutageRetention, StaleLeaseKeepsObjectsAndOriginalEpisodeUntilCutof
         ASSERT_TRUE (lease_access::snapshot (runtime)->token);
         EXPECT_NE (old_token.lease_generation,
                    lease_access::snapshot (runtime)->token->lease_generation);
-        EXPECT_EQ (episode, lease_access::snapshot (runtime)->outage);
+        if (episode->discarded.load ()) {
+            EXPECT_FALSE (lease_access::snapshot (runtime)->outage);
+            EXPECT_EQ (serial_execution_queue_t::execution_status_t::ownership_lost,
+                       gate->execution_status ());
+        } else
+            EXPECT_EQ (episode, lease_access::snapshot (runtime)->outage);
         EXPECT_EQ (retained ? 0 : 1, discarded);
         // A renew of the newly claimed token cannot extend the old episode.
         advance (1ms);
         lease_access::heartbeat (runtime, clock_now.load ());
-        EXPECT_EQ (episode, lease_access::snapshot (runtime)->outage);
+        if (episode->discarded.load ()) {
+            EXPECT_FALSE (lease_access::snapshot (runtime)->outage);
+            EXPECT_EQ (serial_execution_queue_t::execution_status_t::ownership_lost,
+                       gate->execution_status ());
+        } else
+            EXPECT_EQ (episode, lease_access::snapshot (runtime)->outage);
         if (clock_now.load () < episode->cutoff)
             move_to (episode->cutoff);
         detail::deadline_scheduler_test_access_t::advance_to (clock_now.load ());
@@ -7531,10 +8152,11 @@ TEST (ZLinkFrameworkLocationRuntime, ParentRecoveryNotifiesChildOnceForThousandE
         child->confirm_execution_ready (at);
         scheduler.run_all ();
         task_completion_source_t<serial_execution_queue_t::execution_operation_t> pending;
-        parent->set_execution_operation (pending.task ());
         unsigned calls = 0;
         for (unsigned i = 0; i != 1000; ++i)
             ASSERT_TRUE (child->try_post ("retained", [&] { ++calls; }));
+        parent->set_execution_operation (pending.task ());
+        EXPECT_FALSE (child->try_post ("new-while-paused", [] {}));
         scheduler.run_all ();
         EXPECT_EQ (0u, calls);
         pending.complete (result_t<serial_execution_queue_t::execution_operation_t>::success (
