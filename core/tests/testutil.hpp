@@ -41,65 +41,6 @@
 //  may be too short for ipc wildcard binds, e.g.
 #define MAX_SOCKET_STRING 256
 
-//  We need to test codepaths with non-random bind ports. Use a per-process
-//  offset so parallel test runs do not collide.
-static inline int test_port_offset ()
-{
-    static int offset = -1;
-    if (offset < 0) {
-        const char *env = getenv ("ZLINK_TEST_PORT_OFFSET");
-        if (env && *env) {
-            offset = atoi (env);
-        } else {
-#if defined ZLINK_HAVE_WINDOWS
-            offset = (_getpid () % 1000) * 10;
-#else
-            offset = (getpid () % 1000) * 10;
-#endif
-        }
-    }
-    return offset;
-}
-
-static inline int test_port (int base_)
-{
-    return base_ + test_port_offset ();
-}
-
-static inline const char *endpoint_0 ()
-{
-    static char buf[64];
-    snprintf (buf, sizeof (buf), "tcp://127.0.0.1:%d", test_port (5555));
-    return buf;
-}
-
-static inline const char *endpoint_1 ()
-{
-    static char buf[64];
-    snprintf (buf, sizeof (buf), "tcp://127.0.0.1:%d", test_port (5556));
-    return buf;
-}
-
-static inline const char *endpoint_2 ()
-{
-    static char buf[64];
-    snprintf (buf, sizeof (buf), "tcp://127.0.0.1:%d", test_port (5557));
-    return buf;
-}
-
-static inline const char *endpoint_3 ()
-{
-    static char buf[64];
-    snprintf (buf, sizeof (buf), "tcp://127.0.0.1:%d", test_port (5558));
-    return buf;
-}
-
-#define ENDPOINT_0 (endpoint_0 ())
-#define ENDPOINT_1 (endpoint_1 ())
-#define ENDPOINT_2 (endpoint_2 ())
-#define ENDPOINT_3 (endpoint_3 ())
-#define PORT_6 (test_port (5561))
-
 #undef NDEBUG
 
 #ifndef MSG_NOSIGNAL
