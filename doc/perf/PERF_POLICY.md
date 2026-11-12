@@ -86,6 +86,7 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
   `invalid:<reason>`으로 기록하고 throughput은 유효한 측정값을 유지한다.
 - PUBSUB multi latency가 invalid면 gate는 그 cell만 판정에서 제외하고 사유를 표시한다.
   같은 행의 throughput을 포함한 다른 cell은 계속 판정한다.
+- 반복 측정 중 한 회라도 invalid인 cell은 median을 내지 않고 invalid로 기록하며, 첫 invalid 사유를 쓴다.
 - **판정 외 참고값.** latency가 invalid이면 관측 latency 표본의
   `latency_ref_p50`, `latency_ref_p99`, progress tick에서 최소 subscriber
   in-flight의 최솟값 `inflight_floor`, 그리고 `inflight_floor_ms`(floor ÷ target rate, ms)를

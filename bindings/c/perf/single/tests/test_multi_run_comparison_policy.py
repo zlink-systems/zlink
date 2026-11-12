@@ -155,6 +155,18 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
         self.assertEqual(multi_warning, "invalid RESULT metric 'throughput': engine_reason")
         self.assertEqual(single_warning, None)
 
+    def test_one_invalid_run_makes_median_invalid_at_any_position(self):
+        for values in (
+            [RC.InvalidMetric("first"), 5.0, 6.0],
+            [5.0, RC.InvalidMetric("first"), 6.0],
+            [5.0, 6.0, RC.InvalidMetric("first")],
+            [5.0, RC.InvalidMetric("first"), RC.InvalidMetric("second")],
+        ):
+            median = RC._median_metric(values)
+            self.assertIsInstance(median, RC.InvalidMetric, values)
+            self.assertEqual(median.reason, "first")
+        self.assertEqual(RC._median_metric([5.0, 7.0, 6.0]), 6.0)
+
     def test_emit_result_lines_preserves_engine_invalid_reason(self):
         parsed, warning = RC.parse_result_line(
             "RESULT,current,PUBSUB,tcp,256,latency,invalid:engine_reason",

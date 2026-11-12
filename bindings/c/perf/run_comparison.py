@@ -865,15 +865,9 @@ class InvalidMetric(float):
 
 
 def _median_metric(values):
-    median = statistics.median(values)
-    if isinstance(median, float) and math.isnan(median):
-        reason = next(
-            (value.reason for value in values if isinstance(value, InvalidMetric)),
-            None,
-        )
-        if reason is not None:
-            return InvalidMetric(reason)
-    return median
+    # One invalid run makes the cell invalid; the first reason is kept.
+    invalid = next((value for value in values if isinstance(value, InvalidMetric)), None)
+    return invalid if invalid is not None else statistics.median(values)
 
 
 def parse_result_line(line, transport, expected_sizes):
