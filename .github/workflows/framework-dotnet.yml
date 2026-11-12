@@ -68,12 +68,11 @@ on:
         default: ""
   schedule:
     - cron: "0 18 * * *"
-  # Mergify merge-queue batches and backports run CI on their own branches only;
+  # Mergify queue batches and backports run CI on their own mergify/ branches only;
   # main dependency pushes use the companion cache workflow.
   push:
     branches:
-      - "mergify/merge-queue/**"
-      - "mergify/bp/**"
+      - "mergify/**"
 
 env:
   DOTNET_NOLOGO: true
