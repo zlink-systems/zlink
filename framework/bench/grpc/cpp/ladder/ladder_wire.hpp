@@ -84,6 +84,7 @@ inline fw::runtime::mesh::raw_mesh_node_options_t owner_options (
 {
     fw::runtime::mesh::raw_mesh_node_options_t options;
     options.descriptor = descriptor (rid, std::move (endpoint));
+    options.descriptor.state = fw::runtime::mesh::service_node_state_t::preparing;
     options.runtime_failures = std::make_shared<fw::runtime::runtime_failure_collector_t> ();
     return options;
 }
