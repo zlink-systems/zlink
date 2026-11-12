@@ -6,6 +6,13 @@ using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Contracts.Channels;
 using Zlink.Framework.Contracts.Dispatch;
 
+using var flowTrace = BenchDiagnostics.FlowTraceEnabled
+    ? new TestHostMessageFlowListener(
+        Environment.GetEnvironmentVariable("BENCH_FLOW_FILE")
+            ?? Path.Combine(AppContext.BaseDirectory, "bench.flow")
+    )
+    : null;
+
 var endpoint = ArgValue(args, "--endpoint") ?? "tcp://127.0.0.1:5214";
 var metricsUrl = ArgValue(args, "--metrics-url") ?? "http://127.0.0.1:5215";
 

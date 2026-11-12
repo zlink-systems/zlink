@@ -11,5 +11,6 @@
     <ItemGroup>
         <PackageReference Include="Microsoft.Extensions.Hosting"/>
         <ProjectReference Include="..\Shared\WithGrpcBench.Shared.csproj"/>
+        <Compile Include="../../../../languages/dotnet/cross-language/Zlink.Framework.TestHost/TestHostMessageFlowListener.cs" Link="TestHostMessageFlowListener.cs"/>
     </ItemGroup>
 </Project>
