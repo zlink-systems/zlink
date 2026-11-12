@@ -66,7 +66,7 @@ function dispatchOne() {
   }
 }
 
-function receive() {
+async function receive() {
   try {
     for (;;) {
       if (!router.recv(received, zlink.RecvFlags.None)) continue;
