@@ -11,7 +11,16 @@ import systems.zlink.bench.withgrpc.shared.BenchContract;
 import systems.zlink.bench.withgrpc.shared.BenchServerMetrics;
 import systems.zlink.bench.withgrpc.shared.BenchStatsServer;
 import systems.zlink.bench.withgrpc.shared.MeasurementTiming;
+import systems.zlink.bench.withgrpc.shared.RawWire;
+import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.core.Zlink;
+import systems.zlink.contracts.errors.ZlinkRecvException;
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.messaging.Received;
+import systems.zlink.contracts.sockets.RecvFlags;
+import systems.zlink.contracts.sockets.RecvResult;
+import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec;
 import systems.zlink.framework.configuration.ZLinkUnhandledDispatchAction;
 import systems.zlink.framework.spring.EnableZLinkFramework;
@@ -47,6 +56,11 @@ public class ZLinkFrameworkBenchServer {
         BenchServerMetrics metrics = METRICS;
         listenEndpoint = endpoint;
 
+        if (System.getenv("ZLINK_BENCH_LADDER_L0") != null) {
+            runLadderL0(endpoint, metricsUrl, metrics);
+            return;
+        }
+
         try (var context = new SpringApplicationBuilder(ZLinkFrameworkBenchServer.class)
             .web(WebApplicationType.NONE)
             .bannerMode(org.springframework.boot.Banner.Mode.OFF)
@@ -65,6 +79,85 @@ public class ZLinkFrameworkBenchServer {
                 }
             } finally {
                 stats.stop(0);
+            }
+        }
+    }
+
+    /** Ladder L0: binding-shaped owner loop and direct fixed handler. */
+    private static void runLadderL0(
+            String endpoint, String metricsUrl, BenchServerMetrics metrics) throws Exception {
+        try (Context context = Zlink.createContext();
+                RouterSocket router = context.createRouterSocket()) {
+            router.setRoutingId(RoutingId.from(BenchContract.SERVER_ROUTING_ID));
+            router.options().mandatory(true);
+            router.bind(endpoint);
+            var stats = BenchStatsServer.start(
+                    metricsUrl,
+                    metrics,
+                    "{\"implementation\":\"zlink-framework-java-l0\","
+                            + "\"shape\":\"binding receive and protobuf reply\","
+                            + "\"endpoint\":\"" + endpoint + "\"}");
+            Thread owner = new Thread(
+                    () -> pumpLadderL0(router, metrics), "bench-framework-l0-owner");
+            owner.setDaemon(true);
+            try {
+                owner.start();
+                System.err.println("[framework-l0] endpoint=" + endpoint
+                        + " stats=" + metricsUrl);
+                if (System.in.read() < 0) {
+                    Thread.currentThread().join();
+                }
+            } finally {
+                context.shutdown();
+                owner.join();
+                stats.stop(0);
+            }
+        }
+    }
+
+    private static void pumpLadderL0(RouterSocket router, BenchServerMetrics metrics) {
+        try (Received received = new Received()) {
+            while (true) {
+                try {
+                    if (!router.recv(received, RecvFlags.NONE)) {
+                        continue;
+                    }
+                    handleLadderL0(received, metrics);
+                    while (router.recv(received, RecvFlags.DONT_WAIT)) {
+                        handleLadderL0(received, metrics);
+                    }
+                } catch (ZlinkRecvException failure) {
+                    if (failure.getResult() == RecvResult.TERMINATED) {
+                        return;
+                    }
+                    if (failure.getResult() != RecvResult.NO_DATA) {
+                        metrics.recordError();
+                        System.err.println("L0 receive failed: " + failure);
+                    }
+                } catch (RuntimeException failure) {
+                    metrics.recordError();
+                    System.err.println("L0 owner failed: " + failure);
+                }
+            }
+        }
+    }
+
+    private static void handleLadderL0(Received received, BenchServerMetrics metrics) {
+        var parts = received.parts();
+        if (parts.isEmpty()) {
+            metrics.recordError();
+            return;
+        }
+        var body = RawWire.decodeBenchPayloadBody(parts.getLast().dataBuffer());
+        if (body == null) {
+            metrics.recordError();
+            return;
+        }
+        metrics.record(body);
+        if (received.replyToken().isPresent()) {
+            try (Message header = Message.from(RawWire.RESPONSE_ENVELOPE);
+                    Message replyBody = RawWire.encodeBenchPayloadMessage(body)) {
+                received.reply().message(header).message(replyBody).submit();
             }
         }
     }

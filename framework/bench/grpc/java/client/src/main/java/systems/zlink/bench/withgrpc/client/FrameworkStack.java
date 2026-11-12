@@ -33,21 +33,38 @@ public final class FrameworkStack implements AutoCloseable {
 
     private final ConfigurableApplicationContext context;
     private final ZLinkRouteClient route;
+    private final systems.zlink.contracts.core.Context ladderContext;
+    private final RawStack ladderBinding;
     private final int runId;
     private final Duration timeout;
 
     private FrameworkStack(
             ConfigurableApplicationContext context,
             ZLinkRouteClient route,
+            systems.zlink.contracts.core.Context ladderContext,
+            RawStack ladderBinding,
             int runId,
             Duration timeout) {
         this.context = context;
         this.route = route;
+        this.ladderContext = ladderContext;
+        this.ladderBinding = ladderBinding;
         this.runId = runId;
         this.timeout = timeout;
     }
 
     public static FrameworkStack create(BenchOptions options) {
+        if (System.getenv("ZLINK_BENCH_LADDER_L0") != null) {
+            var bindingContext = systems.zlink.contracts.core.Zlink.createContext();
+            var binding = RawStack.create(
+                    bindingContext,
+                    options,
+                    "bench-source-" + ProcessHandle.current().pid(),
+                    BenchContract.SERVER_ROUTING_ID,
+                    options.targetEndpoint);
+            return new FrameworkStack(null, null, bindingContext, binding,
+                    options.runId, Duration.ofMillis(options.requestTimeoutMs));
+        }
         ConfigurableApplicationContext context =
                 new SpringApplicationBuilder(BenchClientFrameworkApp.class)
                         .web(WebApplicationType.NONE)
@@ -62,7 +79,8 @@ public final class FrameworkStack implements AutoCloseable {
                         .run();
         ZLinkRouteClient route = context.getBean(ZLinkRouteClient.class);
         return new FrameworkStack(
-                context, route, options.runId, Duration.ofMillis(options.requestTimeoutMs));
+                context, route, null, null,
+                options.runId, Duration.ofMillis(options.requestTimeoutMs));
     }
 
     public BenchRequestOperation request() {
@@ -104,6 +122,14 @@ public final class FrameworkStack implements AutoCloseable {
         };
     }
 
+    /** Exposes the binding-shaped L0 operation to the existing raw benchmark driver. */
+    public BenchOperation ladderOperation(boolean send) {
+        if (ladderBinding == null) {
+            throw new IllegalStateException("L0 operation requested outside ladder mode");
+        }
+        return send ? ladderBinding.send() : ladderBinding.request();
+    }
+
     private BenchPayload payload(int payloadSize, byte phase, long sequence) {
         return BenchPayload.newBuilder()
                 .setBody(
@@ -115,7 +141,13 @@ public final class FrameworkStack implements AutoCloseable {
 
     @Override
     public void close() {
-        context.close();
+        if (context != null) {
+            context.close();
+        }
+        if (ladderBinding != null) {
+            ladderBinding.close();
+            ladderContext.close();
+        }
     }
 
     public record PeerEndpoint(String value) {}

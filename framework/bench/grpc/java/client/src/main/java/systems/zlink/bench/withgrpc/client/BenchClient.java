@@ -91,7 +91,12 @@ public final class BenchClient {
             case "zlink-java" -> {
                 Context context = Zlink.createContext();
                 String peer = send ? RawWire.RAW_COMMAND_SERVER_ID : RawWire.RAW_REQUEST_SERVER_ID;
-                String endpoint = send ? options.targetCommandEndpoint : options.targetEndpoint;
+                if (System.getenv("ZLINK_BENCH_CROSS_FRAMEWORK_SERVER") != null) {
+                    peer = systems.zlink.bench.withgrpc.shared.BenchContract.SERVER_ROUTING_ID;
+                }
+                String endpoint = send && !options.targetCommandEndpoint.isEmpty()
+                        ? options.targetCommandEndpoint
+                        : options.targetEndpoint;
                 RawStack stack = RawStack.create(context, options,
                     "bench-source-" + ProcessHandle.current().pid(), peer, endpoint);
                 yield new SourceTransport(send ? stack.send() : stack.request(), () -> {
@@ -101,7 +106,10 @@ public final class BenchClient {
             }
             case "zlink-framework-java" -> {
                 FrameworkStack stack = FrameworkStack.create(options);
-                yield new SourceTransport(send ? stack.send() : stack.request(), stack);
+                BenchOperation operation = System.getenv("ZLINK_BENCH_LADDER_L0") != null
+                        ? stack.ladderOperation(send)
+                        : send ? stack.send() : stack.request();
+                yield new SourceTransport(operation, stack);
             }
             default -> throw new IllegalArgumentException("unknown implementation");
         };
@@ -135,6 +143,9 @@ public final class BenchClient {
         values.put("grpcServerConfiguration",
             "io.grpc.ServerBuilder.forPort defaults, plaintext IPv4 loopback");
         values.put("logicalStreamRuntime", streamImplementation(options));
+        values.put("ladderProfile", System.getenv("ZLINK_BENCH_LADDER_L0") == null
+            ? "main benchmark path"
+            : "L0 binding-shaped RawStack path; Framework messaging path bypassed");
         return values;
     }
 
