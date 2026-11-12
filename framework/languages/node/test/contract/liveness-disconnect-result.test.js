@@ -129,42 +129,66 @@ for (const injectBindingFailure of [false, true]) {
     const context = zlink.createContext();
     const source = peer('source', context, clock);
     const expired = peer('expired', context, clock);
+    const expiredNext = peer('expired-next', context, clock);
     let healthy;
     const failures = [];
     try {
       source.raw.connectPeerByRoutingId(expired.router.localEndpoint(), 'expired');
+      source.raw.connectPeerByRoutingId(expiredNext.router.localEndpoint(), 'expired-next');
       await until(
-        [source, expired],
-        () => source.raw.isPeerRouteReady('expired') && expired.raw.isPeerRouteReady('source'),
-        'initial native handshake'
+        [source, expired, expiredNext],
+        () => source.raw.isPeerRouteReady('expired') && expired.raw.isPeerRouteReady('source') &&
+          source.raw.isPeerRouteReady('expired-next') && expiredNext.raw.isPeerRouteReady('source'),
+        'initial native handshakes'
       );
       if (injectBindingFailure) {
         // Physical disconnect failure must preserve the error after admission ends.
         const bindingFailure = new zlink.ConnectError(zlink.ConnectResult.InternalError, 156);
-        const disconnect = t.mock.method(source.router, 'disconnectRid', () => {
-          assert.equal(source.raw.isPeerRouteReady('expired'), false);
-          throw bindingFailure;
+        const disconnectNative = source.router.disconnectRid.bind(source.router);
+        const disconnect = t.mock.method(source.router, 'disconnectRid', (rid) => {
+          assert.equal(source.raw.isPeerRouteReady(String(rid)), false);
+          if (String(rid) === 'expired') throw bindingFailure;
+          return disconnectNative(rid);
         });
         assert.throws(
           () => source.raw.tickLiveness(DEFAULT_SERVICE_PEER_TIMEOUT_MS),
           (error) => error === bindingFailure && error.result === zlink.ConnectResult.InternalError
         );
-        assert.equal(disconnect.mock.calls.length, 1);
+        assert.deepEqual(disconnect.mock.calls.map((call) => call.arguments[0]), [
+          'expired', 'expired-next'
+        ]);
         assert.equal(source.raw.isPeerRouteReady('expired'), false);
+        assert.equal(source.raw.isPeerRouteReady('expired-next'), false);
       } else {
         // No receive rotation runs between the physical removal and expiry.
         // Core owns the result; the retained logical admission still expires.
+        const disconnectNative = source.router.disconnectRid.bind(source.router);
+        const disconnectCounts = new Map();
+        const disconnect = t.mock.method(source.router, 'disconnectRid', (rid) => {
+          const key = String(rid);
+          const count = (disconnectCounts.get(key) ?? 0) + 1;
+          disconnectCounts.set(key, count);
+          if (count === 1) return disconnectNative(rid);
+          throw new zlink.ConnectError(zlink.ConnectResult.NotFound, 2);
+        });
         source.router.disconnectRid('expired');
+        source.router.disconnectRid('expired-next');
         await until(
           [],
-          () => !source.router.routesSnapshot().some((route) => route.routingId === 'expired'),
-          'native route removed before liveness expiry'
+          () => !source.router.routesSnapshot().some((route) =>
+            route.routingId === 'expired' || route.routingId === 'expired-next'),
+          'native routes removed before liveness expiry'
         );
         assert.equal(source.raw.isPeerRouteReady('expired'), true);
+        assert.equal(source.raw.isPeerRouteReady('expired-next'), true);
         assert.deepEqual(source.raw.tickLiveness(DEFAULT_SERVICE_PEER_TIMEOUT_MS).timedOutNodes, [
-          'expired'
+          'expired', 'expired-next'
         ]);
         assert.equal(source.raw.isPeerRouteReady('expired'), false);
+        assert.equal(source.raw.isPeerRouteReady('expired-next'), false);
+        assert.deepEqual(disconnect.mock.calls.map((call) => call.arguments[0]), [
+          'expired', 'expired-next', 'expired', 'expired-next'
+        ]);
         clock.now = DEFAULT_SERVICE_PEER_TIMEOUT_MS;
         healthy = peer('healthy', context, clock);
         source.raw.connectPeerByRoutingId(healthy.router.localEndpoint(), 'healthy');
@@ -201,6 +225,7 @@ for (const injectBindingFailure of [false, true]) {
       closeResources(t, [
         () => healthy?.raw.close(),
         () => expired.raw.close(),
+        () => expiredNext.raw.close(),
         () => source.raw.close(),
         () => context.close()
       ], failures);

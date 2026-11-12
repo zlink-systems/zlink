@@ -24,6 +24,7 @@ import type {
 import { submitToRequestResult } from '../messaging/submission-result';
 import { copyPayloadBytes } from '../../contracts/Common/payload-slab';
 import { RequestResult, SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';
+import { disconnectSocketPeer } from '../backend/socket-peer-disconnect';
 import { enumWireRejectReason } from '../protocol/service_wire_codec.generated';
 import { SERVICE_WIRE_PREFIX_SIZE } from './service-wire-binary-primitives';
 import {
@@ -72,6 +73,16 @@ import {
   ServiceWireProtocolError,
   type ServiceApplicationPayload
 } from './service-wire-m6a-codec';
+
+type RawServiceMeshRouterPort = ZLinkRawRouterPort & {
+  disconnectRid(routingId: string): void;
+};
+
+function isRawServiceMeshRouterPort(
+  router: ZLinkRawRouterPort
+): router is RawServiceMeshRouterPort {
+  return typeof router.disconnectRid === 'function';
+}
 
 const nativeErrnoValues = osConstants.errno;
 
@@ -1601,7 +1612,7 @@ export class RawServiceMeshRuntime {
       try {
         this.removePeer(peer, () => {
           try {
-            this.requireStarted().disconnectRid!(nodeRoutingId);
+            disconnectSocketPeer(this.requireLivenessStarted(), nodeRoutingId);
           } catch (error) {
             failures.push(error);
           }
@@ -2023,6 +2034,14 @@ export class RawServiceMeshRuntime {
   private requireStarted(): ZLinkRawRouterPort {
     if (this.router === undefined) throw new Error('Raw service runtime is not started.');
     return this.router;
+  }
+
+  private requireLivenessStarted(): RawServiceMeshRouterPort {
+    const router = this.requireStarted();
+    if (!isRawServiceMeshRouterPort(router)) {
+      throw new TypeError('Raw service runtime requires router disconnectRid support.');
+    }
+    return router;
   }
 
   async sendControl(targetNodeRoutingId: string, parts: readonly Uint8Array[]): Promise<boolean> {

@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "runtime/streams/session_liveness.hpp"
+#include "runtime/disconnect_rid.hpp"
+#include <zlink/Contracts/Errors/errors.hpp>
 #include "runtime/dispatch/application_job_queue.hpp"
 #include <zlink/framework/contracts/streams/stream.hpp>
 #include <boost/asio.hpp>
@@ -9,6 +11,27 @@ using namespace std::chrono_literals;
 using zlink::framework::runtime::session_liveness_t;
 int main ()
 {
+    int disconnect_attempts = 0;
+    zlink::framework::runtime::disconnect_rid_if_present ([&] {
+        ++disconnect_attempts;
+        throw zlink::connect_error_t (zlink::connect_result_t::not_found);
+    });
+    zlink::framework::runtime::disconnect_rid_if_present ([&] { ++disconnect_attempts; });
+    if (disconnect_attempts != 2) {
+        std::cerr << "FAIL absent peer must not stop the next disconnect\n";
+        return 1;
+    }
+    auto other_failure = zlink::connect_error_t (zlink::connect_result_t::busy);
+    try {
+        zlink::framework::runtime::disconnect_rid_if_present ([&] { throw other_failure; });
+        std::cerr << "FAIL non-NOT_FOUND disconnect error must propagate\n";
+        return 1;
+    }
+    catch (const zlink::connect_error_t &error) {
+        if (error.result () != zlink::connect_result_t::busy)
+            return 1;
+    }
+
     using decision = session_liveness_t::decision_t;
     const auto established = session_liveness_t::clock_t::time_point{};
     session_liveness_t default_idle (established);

@@ -6,7 +6,7 @@ const { once } = require('node:events');
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
 const { ZLinkNodeRawMeshBackend } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
-const { wrapSocket } = require('../../packages/framework/dist/runtime/backend/node/node-socket-backend-adapter');
+const { wrapSocket, disconnectSocketPeer } = require('../../packages/framework/dist/runtime/backend/node/node-socket-backend-adapter');
 const { ServiceStatefulRuntime } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
 const { ZLinkMeshCompletionTable } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
@@ -142,6 +142,18 @@ function sessionFixture(disconnectFailure, nativeSocket, routingId = zlink.Routi
     }
   };
 }
+
+test('RouteMesh liveness disconnect helper treats absent peers as already closed and continues', () => {
+  const absent = new zlink.ConnectError(zlink.ConnectResult.NotFound, 2);
+  const calls = [];
+  const socket = { disconnectRid(rid) { calls.push(rid); if (String(rid) === 'absent') throw absent; } };
+  assert.doesNotThrow(() => disconnectSocketPeer(socket, 'absent'));
+  assert.doesNotThrow(() => disconnectSocketPeer(socket, 'next-peer'));
+  assert.deepEqual(calls, ['absent', 'next-peer']);
+
+  const failure = new zlink.ConnectError(zlink.ConnectResult.Busy, 16);
+  assert.throws(() => disconnectSocketPeer({ disconnectRid() { throw failure; } }, 'peer'), error => error === failure);
+});
 
 for (const absent of [false, true]) {
   test(`raw session delivery close completes through the session owner (RID absent=${absent})`, async () => {
