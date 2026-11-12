@@ -118,8 +118,8 @@ def parse_report(path: pathlib.Path) -> ParsedReport:
                     result.errors.append(f"line {line_number}: empty RESULT pattern")
                     continue
                 key = (pattern, transport, msg_size, metric)
-                if warning and warning.startswith("invalid RESULT metric"):
-                    result.invalid_cells[key] = warning.partition(": ")[2]
+                if isinstance(value, REPORT_PARSER.InvalidMetric):
+                    result.invalid_cells[key] = value.reason
                     continue
                 if key in result.cells:
                     result.duplicate_cells.append(key)

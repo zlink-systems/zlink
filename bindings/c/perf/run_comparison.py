@@ -578,9 +578,9 @@ def run_command_with_metrics(
 
             if stream_name == "stdout":
                 stdout_buffer.append(line)
-                if on_stdout_line is None or line.startswith("RESULT,"):
+                if on_stdout_line is None:
                     emit_benchmark_diag_line(line)
-                if on_stdout_line is not None:
+                else:
                     try:
                         on_stdout_line(line)
                     except Exception:
