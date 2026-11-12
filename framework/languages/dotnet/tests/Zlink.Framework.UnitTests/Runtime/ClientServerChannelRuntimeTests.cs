@@ -1579,18 +1579,26 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             var router = (IRouterSocket)bundle.Socket;
 
             await expiredRuntime.StopAsync(CancellationToken.None);
-            // Client stop does not wait for the server to observe the disconnect, so the
-            // route may still exist here. Remove it once; the expiry cleanup then sees NOT_FOUND.
-            try
-            {
-                router.DisconnectRid(expiredRid);
-            }
-            catch (ZlinkConnectException absent)
-                when (absent.Result == ZlinkConnectException.ErrorCode.NotFound) { }
-            var disconnect = Assert.Throws<ZlinkConnectException>(() =>
-                router.DisconnectRid(expiredRid)
+            // Client stop does not wait for the server to observe the disconnect, and a
+            // successful DisconnectRid only schedules the route removal on the socket's
+            // I/O thread. Wait until the route is gone, so the expiry cleanup sees NOT_FOUND.
+            await WaitUntilAsync(
+                () =>
+                {
+                    try
+                    {
+                        router.DisconnectRid(expiredRid);
+                        return Task.FromResult(false);
+                    }
+                    catch (ZlinkConnectException absent)
+                        when (absent.Result == ZlinkConnectException.ErrorCode.NotFound)
+                    {
+                        return Task.FromResult(true);
+                    }
+                },
+                TimeSpan.FromSeconds(5),
+                "The expired client's route was not removed."
             );
-            Assert.Equal(ZlinkConnectException.ErrorCode.NotFound, disconnect.Result);
             var ackCount = identity.LivenessAckCount;
             for (var interval = 0; interval < 3; interval++)
             {
