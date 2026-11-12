@@ -35,14 +35,13 @@ router.bind(workerData.endpoint);
 parentPort.postMessage({ ready: true });
 const received = new zlink.Received();
 
-function responseHeader(bytes) {
-  if (bytes.length > 0 && bytes[0] === 0xf2) {
+const responseHeader = workerData.frameworkWire
+  ? (bytes) => {
     const header = JSON.parse(bytes.subarray(1).toString('utf8'));
     header.kind = 2;
     return Buffer.concat([Buffer.from([0xf2]), Buffer.from(JSON.stringify(header), 'utf8')]);
   }
-  return RESPONSE_ENVELOPE;
-}
+  : () => RESPONSE_ENVELOPE;
 
 async function receive() {
   try {

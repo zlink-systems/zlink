@@ -65,7 +65,12 @@ if (process.env.ZLINK_LADDER_L0_SERVER === '1') {
     Atomics.store(latencyCount, 0, 0);
   };
   const worker = new Worker(require.resolve('./l0-worker'), {
-    workerData: { endpoint, shared }
+    workerData: {
+      endpoint,
+      shared,
+      frameworkWire: process.env.ZLINK_LADDER_L0_FRAMEWORK_CLIENT === '1'
+        || process.env.ZLINK_CROSS_FRAMEWORK_WIRE === '1'
+    }
   });
   let statsServerStarted = false;
   worker.on('message', (message) => {
