@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Reflection;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
@@ -8,6 +10,150 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ClientServerLivenessLaneTests
 {
+    [Fact]
+    public async Task Server_expired_peer_not_found_does_not_stop_other_peer_probe()
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var router = context.CreateRouterSocket();
+        using var expiredDealer = context.CreateDealerSocket();
+        using var liveDealer = context.CreateDealerSocket();
+        liveDealer.Options.ReceiveTimeout = TimeSpan.FromSeconds(5);
+        expiredDealer.SetRoutingId(RoutingId.From("expired-client"));
+        liveDealer.SetRoutingId(RoutingId.From("live-client"));
+        var endpoint = $"inproc://expired-server-peer-{Guid.NewGuid():N}";
+        router.Bind(endpoint);
+        expiredDealer.Connect(endpoint);
+        liveDealer.Connect(endpoint);
+        using (var ready = Message.From("ready"))
+            expiredDealer.Send().Message(ready).Submit();
+        using (var ready = Message.From("ready"))
+            liveDealer.Send().Message(ready).Submit();
+        using (var received = Received.Create())
+        {
+            Assert.True(router.Recv(received));
+            Assert.True(router.Recv(received));
+        }
+
+        var failures = new AuditRuntimeFailureReporter();
+        var time = new ControllableTimeProvider();
+        var identity = CreateIdentity(failures, endpoint, time);
+        var expiredRid = expiredDealer.GetRoutingId();
+        var liveRid = liveDealer.GetRoutingId();
+        await identity.AdmitPeerAsync(expiredRid, 4096, 1);
+        router.DisconnectRid(expiredRid);
+        time.AdvanceMonotonic(ZLinkServiceLiveness.PeerTimeout);
+        await identity.AdmitPeerAsync(liveRid, 4096, 2);
+
+        await identity.TickLivenessAsync(router, new CurrentReceiveTurn(), CancellationToken.None);
+        await WaitForLivenessProbeCountAsync(identity, 1);
+
+        using var probe = Received.Create();
+        Assert.True(liveDealer.Recv(probe));
+        Assert.True(ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(probe.Parts, out _));
+        Assert.Empty(failures.Failures);
+        Assert.Equal(1, await identity.GetAdmittedPeerCountAsync());
+    }
+
+    [Fact]
+    public async Task Server_expired_peer_disconnect_error_is_reported_and_other_peer_continues()
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var nativeRouter = context.CreateRouterSocket();
+        using var liveDealer = context.CreateDealerSocket();
+        liveDealer.Options.ReceiveTimeout = TimeSpan.FromSeconds(5);
+        liveDealer.SetRoutingId(RoutingId.From("live-client"));
+        var endpoint = $"inproc://failed-server-peer-{Guid.NewGuid():N}";
+        nativeRouter.Bind(endpoint);
+        liveDealer.Connect(endpoint);
+        using (var ready = Message.From("ready"))
+            liveDealer.Send().Message(ready).Submit();
+        using (var received = Received.Create())
+            Assert.True(nativeRouter.Recv(received));
+
+        var failure = new InvalidOperationException("disconnect failed");
+        var router = DispatchProxy.Create<IRouterSocket, DisconnectFailureRouter>();
+        ((DisconnectFailureRouter)(object)router).Initialize(nativeRouter, failure);
+        var failures = new AuditRuntimeFailureReporter();
+        var time = new ControllableTimeProvider();
+        var identity = CreateIdentity(failures, endpoint, time);
+        var expiredRid = RoutingId.From("expired-client");
+        var liveRid = liveDealer.GetRoutingId();
+        await identity.AdmitPeerAsync(expiredRid, 4096, 1);
+        // Liveness deadlines are created from the same clock that advances for the tick.
+        // Move it after admission so the expiry is reached without modifying private state.
+        time.AdvanceMonotonic(ZLinkServiceLiveness.PeerTimeout);
+        await identity.AdmitPeerAsync(liveRid, 4096, 2);
+
+        await identity.TickLivenessAsync(router, new CurrentReceiveTurn(), CancellationToken.None);
+        await WaitForLivenessProbeCountAsync(identity, 1);
+
+        using var probe = Received.Create();
+        Assert.True(liveDealer.Recv(probe));
+        Assert.True(ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(probe.Parts, out _));
+        Assert.Same(failure, Assert.Single(failures.Failures));
+        Assert.Equal(1, await identity.GetAdmittedPeerCountAsync());
+    }
+
+    private static ZLinkClientServerServerIdentity CreateIdentity(
+        AuditRuntimeFailureReporter failures,
+        string endpoint,
+        TimeProvider? time = null
+    ) =>
+        new(
+            "work",
+            RoutingId.From("server"),
+            1,
+            "plaintext",
+            1,
+            4096,
+            endpoint,
+            time ?? TimeProvider.System,
+            failures
+        );
+
+    private static async Task WaitForLivenessProbeCountAsync(
+        ZLinkClientServerServerIdentity identity,
+        long expected
+    )
+    {
+        var startedAt = Stopwatch.GetTimestamp();
+        while (identity.LivenessProbeCount < expected)
+        {
+            if (Stopwatch.GetElapsedTime(startedAt) >= TimeSpan.FromSeconds(5))
+                throw new TimeoutException("The server liveness probe was not sent.");
+            await Task.Delay(TimeSpan.FromMilliseconds(10));
+        }
+    }
+
+    public class DisconnectFailureRouter : DispatchProxy
+    {
+        private IRouterSocket _inner = null!;
+        private Exception _failure = null!;
+
+        internal void Initialize(IRouterSocket inner, Exception failure)
+        {
+            _inner = inner;
+            _failure = failure;
+        }
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            if (targetMethod!.Name == nameof(IRouterSocket.DisconnectRid))
+                throw _failure;
+            try
+            {
+                return targetMethod.Invoke(_inner, args);
+            }
+            catch (TargetInvocationException error) when (error.InnerException is not null)
+            {
+                System
+                    .Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error.InnerException)
+                    .Throw();
+                throw;
+            }
+        }
+    }
+
     [Fact]
     public async Task Fatal_pool_failure_ends_server_source_and_is_reported_once()
     {
@@ -51,6 +197,7 @@ public sealed class ClientServerLivenessLaneTests
             1,
             4096,
             "inproc://fatal-server",
+            TimeProvider.System,
             errors
         );
         var loop = new ZLinkChannelReceiveLoop(null!, null!);
@@ -139,6 +286,7 @@ public sealed class ClientServerLivenessLaneTests
             1,
             4096,
             endpoint,
+            TimeProvider.System,
             failures
         );
         await identity.AdmitPeerAsync(rid, 4096, 1);
@@ -193,6 +341,7 @@ public sealed class ClientServerLivenessLaneTests
             1,
             4096,
             endpoint,
+            TimeProvider.System,
             failures
         );
         await identity.AdmitPeerAsync(RoutingId.From("missing-probe-client"), 4096, 1);
@@ -236,6 +385,7 @@ public sealed class ClientServerLivenessLaneTests
             1,
             4096,
             endpoint,
+            TimeProvider.System,
             failures
         );
 
