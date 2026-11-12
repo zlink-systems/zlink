@@ -106,10 +106,10 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
 
     public async ValueTask Async()
     {
-        _submission.Claim();
         using var operation = (
             await runtime.AdmitOperationAsync(boundExecution: true).ConfigureAwait(false)
         ).Enter();
+        _submission.Claim();
         var cancellationToken = runtime.ShutdownToken;
         var submittedAt = runtime.Registration.TimeProvider.GetUtcNow();
         using var flowScope = ZLinkFlowContext.EnterCurrentOrCreate(
