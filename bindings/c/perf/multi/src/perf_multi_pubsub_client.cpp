@@ -139,28 +139,49 @@ bool run_recv_duration (const std::vector<void *> &sockets,
                         uint32_t run_id,
                         double *throughput_out,
                         bench_latency_stats_t *latency_out,
-                        perf_multi_handshake::start_signal_state_t *phase_gate)
+                        bench_latency_stats_t *latency_reference_out,
+                        uint64_t *inflight_floor_out,
+                        double *target_rate_out,
+                        perf_multi_handshake::start_signal_state_t *phase_gate,
+                        bool *latency_valid_out)
 {
-    if (!throughput_out || !latency_out || sockets.empty () || !poller)
+    if (!throughput_out || !latency_out || !latency_reference_out || !inflight_floor_out
+        || !target_rate_out || !latency_valid_out || sockets.empty () || !poller)
         return false;
 
     const double active_seconds = static_cast<double> (std::max (1, settings.duration_seconds));
     long recv_count = 0;
-    std::map<void *, uint64_t> phase_received;
+    std::map<void *, uint64_t> active_received;
+    std::map<void *, uint64_t> paced_received;
+    std::map<void *, uint64_t> latency_received;
     for (size_t i = 0; i < sockets.size (); ++i) {
-        phase_received[sockets[i]] = 0;
+        active_received[sockets[i]] = 0;
+        paced_received[sockets[i]] = 0;
+        latency_received[sockets[i]] = 0;
     }
     double lat_sum = 0.0;
     long lat_count = 0;
     bench_latency_sampler_t lat_samples;
+    bench_latency_sampler_t latency_reference_samples;
     std::vector<zlink_poller_event_t> events (sockets.size ());
+    perf_multi_measurement::catch_up_tracker_t *catch_up = NULL;
+    uint64_t paced_epoch_ns = 0;
+    uint64_t next_catch_up_progress_ns = 0;
+    double paced_target_rate = 0.0;
+    bool catch_up_reported = false;
+    uint64_t inflight_floor = std::numeric_limits<uint64_t>::max ();
+    const auto smallest_received = [&] (const std::map<void *, uint64_t> &counts) {
+        uint64_t count = std::numeric_limits<uint64_t>::max ();
+        for (const auto &entry : counts)
+            count = std::min (count, entry.second);
+        return count;
+    };
     // The publisher waits for PHASE_DRAINED before pacing. Drain every
     // subscriber, with a bounded quiet interval because PUB may drop markers.
     const auto receive_phase = [&] (perf_multi_metric::phase_t phase, double seconds) -> bool {
         const auto deadline = std::chrono::steady_clock::now ()
                               + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
                                 std::chrono::duration<double> (seconds));
-        const auto sample_start = deadline - std::chrono::duration<double> (seconds - 0.5);
         const auto drain_deadline = deadline + std::chrono::seconds (10);
         auto last_payload = std::chrono::steady_clock::now ();
         std::set<void *> stopped;
@@ -174,8 +195,9 @@ bool run_recv_duration (const std::vector<void *> &sockets,
                 && (stopped.size () == sockets.size ()
                     || (now >= deadline
                         && now - std::max (last_payload, done_receipt)
-                             >= std::chrono::milliseconds (50))))
+                             >= std::chrono::milliseconds (50)))) {
                 return perf_multi_handshake::wait_for_start (phase_gate, msg_size, 1, phase);
+            }
             const int poll_rc = zlink_poller_wait (poller, events.empty () ? NULL : &events[0],
                                                    static_cast<int> (events.size ()), 10, NULL);
             if (poll_rc < 0) {
@@ -187,10 +209,10 @@ bool run_recv_duration (const std::vector<void *> &sockets,
                 if ((events[i].events & ZLINK_POLLIN) == 0)
                     continue;
                 void *socket = events[i].socket;
-                uint64_t &socket_received = phase_received[socket];
                 // Bound each subscriber's turn before serving the next ready socket.
                 for (size_t received = 0; received < 64; ++received) {
                     perf_multi_metric::header_t header = {};
+                    header.phase = perf_multi_metric::phase_unknown;
                     double sample_ns = 0.0;
                     bool have_sample = false;
                     const pubsub_recv_result_t status = recv_one_pubsub_message (
@@ -204,12 +226,20 @@ bool run_recv_duration (const std::vector<void *> &sockets,
                         errno = ETIMEDOUT;
                         return false;
                     }
-                    // Settling messages can arrive after settling ends. Count
-                    // their arrivals, while keeping them out of latency samples.
                     if (phase == perf_multi_metric::phase_latency
-                        && header.phase == perf_multi_metric::phase_warmup
-                        && last_payload >= sample_start && last_payload < deadline)
-                        ++socket_received;
+                        && perf_multi_handshake::is_phase_end_marker (header, run_id, phase,
+                                                                      msg_size)) {
+                        stopped.insert (socket);
+                        continue;
+                    }
+                    if (phase == perf_multi_metric::phase_latency
+                        && perf_multi_measurement::is_paced_receive_phase (header.phase)) {
+                        ++paced_received[socket];
+                        if (paced_epoch_ns == 0 && header.sent_ts_ns > 0)
+                            paced_epoch_ns = static_cast<uint64_t> (header.sent_ts_ns);
+                        if (have_sample)
+                            latency_reference_samples.add (sample_ns);
+                    }
                     if (header.phase != static_cast<uint8_t> (phase))
                         continue;
                     if (perf_multi_handshake::is_phase_end_marker (header, run_id, phase,
@@ -220,15 +250,38 @@ bool run_recv_duration (const std::vector<void *> &sockets,
                     if (phase == perf_multi_metric::phase_active) {
                         if (std::chrono::steady_clock::now () < deadline) {
                             ++recv_count;
-                            ++socket_received;
+                            ++active_received[socket];
                         }
-                    } else if (have_sample) {
-                        if (last_payload >= sample_start && last_payload < deadline)
-                            ++socket_received;
-                        lat_sum += sample_ns;
-                        ++lat_count;
-                        lat_samples.add (sample_ns);
+                    } else {
+                        if (have_sample && catch_up && catch_up->caught_up ()) {
+                            ++latency_received[socket];
+                            lat_sum += sample_ns;
+                            ++lat_count;
+                            lat_samples.add (sample_ns);
+                        }
                     }
+                }
+            }
+            if (phase == perf_multi_metric::phase_latency && catch_up && paced_epoch_ns != 0) {
+                const uint64_t now_ns = perf_multi_metric::now_ns ();
+                const double elapsed = (now_ns - paced_epoch_ns) / 1e9;
+                const uint64_t scheduled = perf_multi_measurement::scheduled_count (
+                  paced_target_rate, paced_epoch_ns, now_ns);
+                const uint64_t received = smallest_received (paced_received);
+                if (!catch_up->caught_up () && now_ns >= next_catch_up_progress_ns) {
+                    const uint64_t in_flight = scheduled > received ? scheduled - received : 0;
+                    inflight_floor = std::min (inflight_floor, in_flight);
+                    std::cout << "PUBSUB_CATCHUP_PROGRESS," << msg_size << ',' << elapsed << ','
+                              << in_flight << ',' << received << ',' << scheduled << ','
+                              << paced_target_rate << std::endl;
+                    next_catch_up_progress_ns = now_ns + 1000000000ULL;
+                }
+                if (!catch_up->caught_up () && catch_up->observe (now_ns, received, scheduled)) {
+                    std::cout << "PHASE_CATCHUP," << msg_size << std::endl;
+                    std::cout << "PUBSUB_CATCHUP_DIAG," << msg_size << ','
+                              << (now_ns - paced_epoch_ns) / 1e9 << ','
+                              << catch_up->in_flight_at_catch_up () << std::endl;
+                    catch_up_reported = true;
                 }
             }
         }
@@ -237,25 +290,26 @@ bool run_recv_duration (const std::vector<void *> &sockets,
     };
     if (!receive_phase (perf_multi_metric::phase_active, active_seconds))
         return false;
-    const auto smallest_received = [&] () {
-        uint64_t count = std::numeric_limits<uint64_t>::max ();
-        for (const auto &entry : phase_received)
-            count = std::min (count, entry.second);
-        return count;
-    };
-    const uint64_t min_received = smallest_received ();
+    const uint64_t min_received = smallest_received (active_received);
     if (min_received == 0)
         return false;
     std::cout << "PHASE_DRAINED," << msg_size << ',' << min_received << std::endl;
-    for (auto &entry : phase_received)
-        entry.second = 0;
-    if (!receive_phase (perf_multi_metric::phase_latency, settings.latency_duration_seconds + 0.5))
+    paced_target_rate = perf_multi_measurement::target_rate (min_received, active_seconds);
+    perf_multi_measurement::catch_up_tracker_t tracker (paced_target_rate);
+    catch_up = &tracker;
+    if (!receive_phase (perf_multi_metric::phase_latency, 2.0 * settings.latency_duration_seconds))
         return false;
-    if (recv_count <= 0 || lat_count <= 0)
+    *latency_valid_out = catch_up_reported && lat_count > 0;
+    if (recv_count <= 0)
         return false;
-    std::cout << "PHASE_COMPLETE," << msg_size << ',' << smallest_received () << std::endl;
+    std::cout << "PHASE_COMPLETE," << msg_size << ',' << smallest_received (latency_received)
+              << std::endl;
     *throughput_out = throughput_per_second (static_cast<uint64_t> (recv_count), active_seconds);
     perf_multi_client::normalize_latency_stats (lat_sum, lat_count, &lat_samples, latency_out);
+    *latency_reference_out = latency_reference_samples.snapshot ();
+    *inflight_floor_out =
+      inflight_floor == std::numeric_limits<uint64_t>::max () ? 0 : inflight_floor;
+    *target_rate_out = paced_target_rate;
     return true;
 }
 
@@ -276,13 +330,24 @@ inline bool run_single_size_case (const std::vector<void *> &sockets,
 
     double throughput = 0.0;
     bench_latency_stats_t latency;
+    bench_latency_stats_t latency_reference;
+    uint64_t inflight_floor = 0;
+    double target_rate = 0.0;
+    bool latency_valid = false;
     const bool ok = run_recv_duration (sockets, poller, base_settings, msg_size, run_id,
-                                       &throughput, &latency, phase_gate);
+                                       &throughput, &latency, &latency_reference, &inflight_floor,
+                                       &target_rate, phase_gate, &latency_valid);
     if (!ok) {
         return false;
     }
 
-    print_client_result_lines (k_pattern, lib_name, transport, msg_size, throughput, latency);
+    if (latency_valid)
+        print_client_result_lines (k_pattern, lib_name, transport, msg_size, throughput, latency);
+    else {
+        print_invalid_latency_result (lib_name, k_pattern, transport, msg_size, throughput,
+                                      latency_reference, inflight_floor, target_rate,
+                                      "receiver_not_caught_up_by_deadline");
+    }
 
     return true;
 }
