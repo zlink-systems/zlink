@@ -3,24 +3,32 @@ package systems.zlink.framework.runtime.spots;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.*;
 import systems.zlink.framework.locations.*;
+import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.*;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
+import systems.zlink.framework.runtime.locations.ZLinkCandidateLeaseFixture;
+import systems.zlink.framework.runtime.locations.ZLinkCandidateLeaseFixture.Lease;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
+import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 
 import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkInstanceSpotActivationDeadlineTest {
     private static final String MESH = "activation-deadline";
@@ -95,6 +103,176 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
                 ZLinkFrameworkErrorKind.NOT_FOUND);
     }
 
+    @ParameterizedTest
+    @EnumSource(
+            value = Lease.class,
+            names = {"MISSING", "EXPIRED", "REPLACED", "WRONG_OWNER", "LIVE", "CORRUPT", "FAILED"})
+    void coldActivationUsesLiveCandidates(Lease lease) throws Exception {
+        coldActivationUsesLiveCandidates(lease, false);
+    }
+
+    @Test
+    void liveZeroWeightProviderMakesStaleOnlyPlacementUnavailable() throws Exception {
+        coldActivationUsesLiveCandidates(Lease.EXPIRED, true);
+    }
+
+    private void coldActivationUsesLiveCandidates(Lease lease, boolean zeroWeightProvider)
+            throws Exception {
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+        options.addRouteMesh(MESH).listen("inproc://lease-" + UUID.randomUUID()).objects().client();
+        if (zeroWeightProvider) {
+            assertEquals(1, descriptor().placementWeight());
+            assertEquals(
+                    0,
+                    descriptor(TYPE, ZLinkFrameworkRuntimeState.SERVING, 0, "live-zero")
+                            .placementWeight());
+        }
+        AtomicInteger sends = new AtomicInteger();
+        AtomicInteger reads = new AtomicInteger();
+        var repository =
+                (ZLinkLocationRepository)
+                        Proxy.newProxyInstance(
+                                ZLinkLocationRepository.class.getClassLoader(),
+                                new Class<?>[] {ZLinkLocationRepository.class},
+                                (proxy, method, arguments) ->
+                                        switch (method.getName()) {
+                                            case "read" ->
+                                                    CompletableFuture.completedFuture(
+                                                            new ZLinkAuthorityMissing(
+                                                                    Instant.now()));
+                                            case "listMeshNodes" ->
+                                                    CompletableFuture.completedFuture(
+                                                            new ZLinkLocationPage<>(
+                                                                    zeroWeightProvider
+                                                                            ? List.of(
+                                                                                    descriptor(),
+                                                                                    descriptor(
+                                                                                            TYPE,
+                                                                                            ZLinkFrameworkRuntimeState
+                                                                                                    .SERVING,
+                                                                                            0,
+                                                                                            "live-zero"))
+                                                                            : List.of(descriptor()),
+                                                                    null));
+                                            case "readOwnerLease" -> {
+                                                reads.incrementAndGet();
+                                                yield ZLinkCandidateLeaseFixture.read(
+                                                        "live-zero".equals(arguments[0])
+                                                                ? Lease.LIVE
+                                                                : lease,
+                                                        (String) arguments[0],
+                                                        descriptor().leaseGeneration());
+                                            }
+                                            default ->
+                                                    throw new AssertionError(
+                                                            "Unexpected source store call: "
+                                                                    + method.getName());
+                                        });
+        var resolvers =
+                new ZLinkStoreLocationResolvers(
+                        ZLinkRegisteredLocationStores.fromUnified(repository),
+                        new ZLinkLocationOptions());
+        var construction =
+                new ZLinkFrameworkRuntimeTestAccess.Construction()
+                        .spotLocationStore(repository)
+                        .spotLocationResolvers(resolvers)
+                        .channelSpotAddressResolver(
+                                spotId -> CompletableFuture.completedFuture(Optional.empty()));
+        var backend =
+                ZLinkFrameworkRuntimeTestAccess.withMeshNodeDecorator(
+                        new ZLinkJavaBackendAdapterFactory(),
+                        original ->
+                                (systems.zlink.framework.runtime.internal.backend
+                                                .ZLinkInternalMeshNode)
+                                        Proxy.newProxyInstance(
+                                                original.getClass().getClassLoader(),
+                                                new Class<?>[] {
+                                                    systems.zlink.framework.runtime.internal.backend
+                                                            .ZLinkInternalMeshNode.class
+                                                },
+                                                (proxy, method, arguments) -> {
+                                                    if (method.getName()
+                                                            .equals("submitInstanceSpotSend")) {
+                                                        sends.incrementAndGet();
+                                                        return CompletableFuture.completedFuture(
+                                                                null);
+                                                    }
+                                                    try {
+                                                        return method.invoke(original, arguments);
+                                                    } catch (
+                                                            java.lang.reflect
+                                                                            .InvocationTargetException
+                                                                    failure) {
+                                                        throw failure.getCause();
+                                                    }
+                                                }));
+        try (var runtime =
+                ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                        options, backend, ZLinkHandlerActivator.reflection(), null, construction)) {
+            var send =
+                    runtime.route()
+                            .sendToSpot("new-lease-spot", new InitialMessage())
+                            .instanceSpot(TYPE)
+                            .inMesh(MESH)
+                            .submit()
+                            .toCompletableFuture();
+            if (lease == Lease.LIVE) {
+                send.get(WAIT.toMillis(), TimeUnit.MILLISECONDS);
+                assertEquals(1, sends.get());
+                assertEquals(
+                        TYPE,
+                        ZLinkSpotRuntimeTestAccess.resolveInstanceType(
+                                        (ZLinkSpotRuntime) runtime.spotManager(), MESH, null)
+                                .toCompletableFuture()
+                                .join());
+            } else {
+                var failure =
+                        assertThrows(
+                                ExecutionException.class,
+                                () -> send.get(WAIT.toMillis(), TimeUnit.MILLISECONDS));
+                if (lease == Lease.FAILED)
+                    assertSame(ZLinkCandidateLeaseFixture.READ_FAILURE, failure.getCause());
+                else
+                    assertEquals(
+                            lease == Lease.CORRUPT
+                                    ? ZLinkFrameworkErrorKind.INTERNAL_FAILURE
+                                    : zeroWeightProvider
+                                            ? ZLinkFrameworkErrorKind.UNAVAILABLE
+                                            : ZLinkFrameworkErrorKind.NOT_FOUND,
+                            assertInstanceOf(ZLinkFrameworkException.class, failure.getCause())
+                                    .kind());
+                assertEquals(0, sends.get());
+                var inferred =
+                        ZLinkSpotRuntimeTestAccess.resolveInstanceType(
+                                        (ZLinkSpotRuntime) runtime.spotManager(), MESH, null)
+                                .toCompletableFuture();
+                if (zeroWeightProvider) assertEquals(TYPE, inferred.join());
+                else {
+                    var inferenceFailure =
+                            assertThrows(
+                                    ExecutionException.class,
+                                    () -> inferred.get(WAIT.toMillis(), TimeUnit.MILLISECONDS));
+                    if (lease == Lease.FAILED)
+                        assertSame(
+                                ZLinkCandidateLeaseFixture.READ_FAILURE,
+                                inferenceFailure.getCause());
+                    else
+                        assertEquals(
+                                lease == Lease.CORRUPT
+                                        ? ZLinkFrameworkErrorKind.INTERNAL_FAILURE
+                                        : ZLinkFrameworkErrorKind.NOT_FOUND,
+                                assertInstanceOf(
+                                                ZLinkFrameworkException.class,
+                                                inferenceFailure.getCause())
+                                        .kind());
+                }
+            }
+            assertTrue(reads.get() > 0, "candidate lease must be read before selection");
+        }
+    }
+
     private static void assertTypeSelection(
             List<ZLinkMeshNodeDescriptor> descriptors,
             String requestedType,
@@ -103,25 +281,40 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
         options.addRouteMesh(MESH).listen("inproc://type-" + UUID.randomUUID()).objects().server();
-        try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(options)) {
+        var repository =
+                (ZLinkLocationRepository)
+                        Proxy.newProxyInstance(
+                                ZLinkLocationRepository.class.getClassLoader(),
+                                new Class<?>[] {ZLinkLocationRepository.class},
+                                (proxy, method, arguments) -> {
+                                    if (method.getName().equals("readOwnerLease"))
+                                        return ZLinkCandidateLeaseFixture.read(
+                                                Lease.LIVE, (String) arguments[0], 1);
+                                    if (method.getName().equals("listMeshNodes"))
+                                        return CompletableFuture.completedFuture(
+                                                new ZLinkLocationPage<>(descriptors, null));
+                                    throw new UnsupportedOperationException(method.getName());
+                                });
+        var construction =
+                new ZLinkFrameworkRuntimeTestAccess.Construction()
+                        .spotLocationStore(repository)
+                        .spotLocationResolvers(
+                                new ZLinkStoreLocationResolvers(
+                                        ZLinkRegisteredLocationStores.fromUnified(repository),
+                                        new ZLinkLocationOptions()));
+        try (var runtime =
+                ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                        options,
+                        new ZLinkJavaBackendAdapterFactory(),
+                        ZLinkHandlerActivator.reflection(),
+                        null,
+                        construction)) {
             var host = (ZLinkSpotRuntime) runtime.spotManager();
-            var repository =
-                    (ZLinkLocationRepository)
-                            Proxy.newProxyInstance(
-                                    ZLinkLocationRepository.class.getClassLoader(),
-                                    new Class<?>[] {ZLinkLocationRepository.class},
-                                    (proxy, method, arguments) -> {
-                                        if (method.getName().equals("listMeshNodes"))
-                                            return CompletableFuture.completedFuture(
-                                                    new ZLinkLocationPage<>(descriptors, null));
-                                        throw new UnsupportedOperationException(method.getName());
-                                    });
             var result =
                     requestedType == null
-                            ? ZLinkSpotRuntimeTestAccess.resolveInstanceType(
-                                    host, repository, MESH, null)
+                            ? ZLinkSpotRuntimeTestAccess.resolveInstanceType(host, MESH, null)
                             : ZLinkSpotRuntimeTestAccess.selectInstanceSpotTarget(
-                                    host, repository, MESH, requestedType);
+                                    host, MESH, requestedType);
             var failure =
                     assertThrows(
                             ExecutionException.class,
@@ -161,6 +354,11 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
                                                     CompletableFuture.completedFuture(
                                                             new ZLinkLocationPage<>(
                                                                     List.of(descriptor()), null));
+                                            case "readOwnerLease" ->
+                                                    ZLinkCandidateLeaseFixture.read(
+                                                            Lease.LIVE,
+                                                            (String) arguments[0],
+                                                            descriptor().leaseGeneration());
                                             case "reserve" ->
                                                     throw new AssertionError(
                                                             "source must not create a reservation");
@@ -171,6 +369,10 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
         var construction =
                 new ZLinkFrameworkRuntimeTestAccess.Construction()
                         .spotLocationStore(repository)
+                        .spotLocationResolvers(
+                                new ZLinkStoreLocationResolvers(
+                                        ZLinkRegisteredLocationStores.fromUnified(repository),
+                                        new ZLinkLocationOptions()))
                         .channelSpotAddressResolver(spotId -> routeResolve);
         var backendProvider =
                 ZLinkFrameworkRuntimeTestAccess.withMeshNodeDecorator(
@@ -256,9 +458,14 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
 
     private static ZLinkMeshNodeDescriptor descriptor(
             String type, ZLinkFrameworkRuntimeState state) {
+        return descriptor(type, state, 1, "owner");
+    }
+
+    private static ZLinkMeshNodeDescriptor descriptor(
+            String type, ZLinkFrameworkRuntimeState state, int weight, String ownerId) {
         return new ZLinkMeshNodeDescriptor(
                 MESH,
-                RoutingId.from("deadline-target"),
+                RoutingId.from("owner".equals(ownerId) ? "deadline-target" : "zero-target"),
                 1,
                 1,
                 "tcp://127.0.0.1:1",
@@ -273,7 +480,7 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
                                 0)),
                 ZLinkMeshNodeObjectRole.SERVER,
                 Optional.empty(),
-                1,
+                weight,
                 new ZLinkPlacementCapacity(
                         new ZLinkCapacityUsage(0, 0, 0),
                         new ZLinkCapacityUsage(0, 0, 8),
@@ -286,7 +493,7 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
                 Optional.empty(),
                 state,
                 "security",
-                "owner",
+                ownerId,
                 1,
                 Instant.now());
     }

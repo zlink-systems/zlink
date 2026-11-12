@@ -167,19 +167,13 @@ public final class ZLinkSpotRuntimeTestAccess {
     }
 
     public static CompletionStage<?> resolveInstanceType(
-            ZLinkSpotRuntime runtime,
-            ZLinkLocationRepository store,
-            String meshName,
-            String requestedType) {
-        return runtime.resolveInstanceType(store, meshName, requestedType);
+            ZLinkSpotRuntime runtime, String meshName, String requestedType) {
+        return runtime.resolveInstanceType(meshName, requestedType);
     }
 
     public static CompletionStage<?> selectInstanceSpotTarget(
-            ZLinkSpotRuntime runtime,
-            ZLinkLocationRepository store,
-            String meshName,
-            String stableType) {
-        return runtime.selectInstanceSpotTarget(store, meshName, stableType);
+            ZLinkSpotRuntime runtime, String meshName, String stableType) {
+        return runtime.selectInstanceSpotTarget(meshName, stableType);
     }
 
     public static Map<String, ZLinkInternalMeshNode> routeMeshNodesByName(
