@@ -12,6 +12,7 @@ using Zlink.Framework.Runtime.Codecs;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -310,6 +311,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 100,
                 1024,
                 "tcp://127.0.0.1:1",
+                TimeProvider.System,
                 errorSink
             );
             await identity.AttachRouterAsync((IRouterSocket)bundle.Socket);
@@ -1537,6 +1539,107 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         {
             await clientRuntime.StopAsync(CancellationToken.None);
             await serverRuntime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task ExpiredPeerNotFound_DoesNotStopAnotherReadyClientRequest()
+    {
+        var time = new ControllableTimeProvider();
+        await using var server = CreateServer(0);
+        server.GetRequiredService<ZLinkFrameworkRegistration>().TimeProvider = time;
+        var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
+        await serverRuntime.StartAsync(CancellationToken.None);
+        var serverState = await serverRuntime.EnsureStartedStateAsync(CancellationToken.None);
+        var bundle = GetServerBundle(serverState, "work");
+        var identity = bundle.ClientServerServer!;
+        var endpoint = (await identity.ReadAsync()).AdvertisedEndpoint;
+        await using var expiredClient = CreateClient(endpoint);
+        await using var readyClient = CreateClient(endpoint);
+        var expiredRuntime = expiredClient.GetRequiredService<ZLinkFrameworkRuntime>();
+        var readyRuntime = readyClient.GetRequiredService<ZLinkFrameworkRuntime>();
+        await expiredRuntime.StartAsync(CancellationToken.None);
+        await readyRuntime.StartAsync(CancellationToken.None);
+        try
+        {
+            var expiredTransport = expiredRuntime.GetClientServerClientRuntime("work");
+            var readyTransport = readyRuntime.GetClientServerClientRuntime("work");
+            await WaitUntilAsync(
+                expiredTransport,
+                () => expiredTransport.ReadyCount == 1,
+                TimeSpan.FromSeconds(10)
+            );
+            await WaitUntilAsync(
+                readyTransport,
+                () => readyTransport.ReadyCount == 1,
+                TimeSpan.FromSeconds(10)
+            );
+            await WaitForAdmittedPeerCountAsync(identity, 2, TimeSpan.FromSeconds(5));
+            var expiredRid = expiredTransport._connections.Values.Single().Socket.GetRoutingId();
+            var router = (IRouterSocket)bundle.Socket;
+
+            await expiredRuntime.StopAsync(CancellationToken.None);
+            var disconnect = Assert.Throws<ZlinkConnectException>(() =>
+                router.DisconnectRid(expiredRid)
+            );
+            Assert.Equal(ZlinkConnectException.ErrorCode.NotFound, disconnect.Result);
+            var ackCount = identity.LivenessAckCount;
+            for (var interval = 0; interval < 3; interval++)
+            {
+                time.AdvanceMonotonic(ZLinkServiceLiveness.ProbeInterval);
+                var stepReply = await readyClient
+                    .GetRequiredService<IZLinkRouteClient>()
+                    .RequestToChannel("work", new EchoRequest($"liveness-step-{interval}"))
+                    .Timeout(TimeSpan.FromSeconds(5))
+                    .Async<EchoReply>();
+                Assert.Equal($"liveness-step-{interval}", stepReply.Value);
+                var expectedAckCount = ++ackCount;
+                await WaitUntilAsync(
+                    () => Task.FromResult(identity.LivenessAckCount >= expectedAckCount),
+                    TimeSpan.FromSeconds(5),
+                    "The ready client did not acknowledge the server liveness probe."
+                );
+            }
+            await WaitForAdmittedPeerCountAsync(identity, 1, TimeSpan.FromSeconds(5));
+
+            var reply = await readyClient
+                .GetRequiredService<IZLinkRouteClient>()
+                .RequestToChannel("work", new EchoRequest("after-expiry"))
+                .Timeout(TimeSpan.FromSeconds(5))
+                .Async<EchoReply>();
+            Assert.Equal("after-expiry", reply.Value);
+        }
+        finally
+        {
+            await expiredRuntime.StopAsync(CancellationToken.None);
+            await readyRuntime.StopAsync(CancellationToken.None);
+            await serverRuntime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private static async Task WaitForAdmittedPeerCountAsync(
+        ZLinkClientServerServerIdentity identity,
+        int expected,
+        TimeSpan timeout
+    ) =>
+        await WaitUntilAsync(
+            async () => await identity.GetAdmittedPeerCountAsync() == expected,
+            timeout,
+            $"Expected {expected} admitted ClientServer peers."
+        );
+
+    private static async Task WaitUntilAsync(
+        Func<Task<bool>> condition,
+        TimeSpan timeout,
+        string timeoutMessage
+    )
+    {
+        var startedAt = Stopwatch.GetTimestamp();
+        while (!await condition())
+        {
+            if (Stopwatch.GetElapsedTime(startedAt) >= timeout)
+                throw new TimeoutException(timeoutMessage);
+            await Task.Delay(TimeSpan.FromMilliseconds(10));
         }
     }
 
