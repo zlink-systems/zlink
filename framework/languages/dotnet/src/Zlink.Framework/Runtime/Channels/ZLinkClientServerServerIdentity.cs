@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Service;
@@ -14,9 +13,11 @@ internal sealed class ZLinkClientServerServerIdentity(
     int weight,
     uint normalizedEffectiveMaxMessageBytes,
     string advertisedEndpoint,
+    TimeProvider time,
     IZLinkRuntimeFailureReporter errorSink
 )
 {
+    private readonly TimeProvider _time = time;
     private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<RoutingId, Peer> _peers = [];
     private ulong _revision = 1;
@@ -100,14 +101,14 @@ internal sealed class ZLinkClientServerServerIdentity(
         ulong connectionId
     )
     {
-        var now = Stopwatch.GetTimestamp();
+        var now = _time.GetTimestamp();
         return _lane.RunAsync(() =>
         {
             var liveness =
                 _peers.TryGetValue(routingId, out var current)
                 && current.ConnectionId == connectionId
                     ? current.Liveness
-                    : new ZLinkServiceLiveness(now);
+                    : new ZLinkServiceLiveness(now, _time);
             liveness.RecordReceived(now);
             _peers[routingId] = new Peer(
                 routingId,
@@ -120,15 +121,14 @@ internal sealed class ZLinkClientServerServerIdentity(
 
     internal ValueTask<(bool Found, uint MaximumMessageBytes)> ObserveReceivedRecordAsync(
         RoutingId routingId,
-        ulong connectionId,
-        long receivedTimestamp
+        ulong connectionId
     ) =>
         _lane.RunAsync(() =>
         {
             if (!_peers.TryGetValue(routingId, out var peer))
                 return (false, 0u);
             if (peer.ConnectionId == connectionId)
-                peer.Liveness.RecordReceived(receivedTimestamp);
+                peer.Liveness.RecordReceived(_time.GetTimestamp());
             return (true, peer.NormalizedEffectiveMaxMessageBytes);
         });
 
@@ -142,7 +142,7 @@ internal sealed class ZLinkClientServerServerIdentity(
             if (
                 !_peers.TryGetValue(routingId, out var peer)
                 || peer.ConnectionId != connectionId
-                || !peer.Liveness.Acknowledge(probeId, Stopwatch.GetTimestamp())
+                || !peer.Liveness.Acknowledge(probeId, _time.GetTimestamp())
             )
                 return;
             Interlocked.Increment(ref _livenessAckCount);
@@ -160,21 +160,31 @@ internal sealed class ZLinkClientServerServerIdentity(
         CancellationToken cancellationToken
     )
     {
-        var now = Stopwatch.GetTimestamp();
+        var now = _time.GetTimestamp();
         var (probes, expired, nextWait) = await _lane
             .RunAsync(() => PrepareLivenessTick(now))
             .ConfigureAwait(false);
         await receiveOwner.ResumeAsync().ConfigureAwait(false);
-        var failures = new ZLinkFailureCollector();
         foreach (var routingId in expired)
-            failures.Capture(() => router.DisconnectRid(routingId));
+        {
+            try
+            {
+                ZLinkManagedMeshNode.DisconnectPhysicalPeer(router, routingId);
+            }
+            catch (Exception exception)
+            {
+                errorSink.ReportRuntimeTaskException(
+                    $"client-server-dispatch:{ChannelName}",
+                    exception
+                );
+            }
+        }
         foreach (var probe in probes)
             ZLinkUnawaitedSubmit.Observe(
                 SendLivenessProbeAsync(router, probe.RoutingId, probe.ProbeId, cancellationToken),
                 nameof(TickLivenessAsync),
                 errorSink
             );
-        failures.ThrowIfAny();
         return nextWait;
     }
 

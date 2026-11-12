@@ -2154,16 +2154,26 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
     {
     }
 
-    void run () override
+    bool run () override
     {
-        std::optional<zlink::poll_event_flag_t> readiness;
-        while (!host._stop.load (std::memory_order_acquire))
-            readiness = rotate (readiness);
-        supply.close ();
+        if (host._stop.load (std::memory_order_acquire)) {
+            supply.close ();
+            return false;
+        }
+        rotate ();
+        return true;
     }
 
-    std::optional<zlink::poll_event_flag_t>
-    rotate (std::optional<zlink::poll_event_flag_t> readiness)
+    bool publish () override
+    {
+        auto ready = std::move (ready_batch);
+        ready_batch.reset ();
+        const bool published = ready && !ready->first.empty ();
+        mesh::service_mailbox_t::notify_application_ready (ready);
+        return published;
+    }
+
+    void rotate ()
     {
         auto &application_permit = *receive_permit;
         auto &mailbox = node->native_node ().transport ().mailbox ();
@@ -2349,7 +2359,7 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
               accept_application_receive, next_application_receive, readiness))
             .result ()
             .value ();
-        auto ready = mailbox.take_application_receive_turn ();
+        ready_batch = mailbox.take_application_receive_turn ();
         receive_turn.dismiss ();
         application_permit.reset ();
         application_permit_budget.release_without_handler ();
@@ -2389,13 +2399,11 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
         readiness.reset ();
         // A pump may consume the wake for supply delivered after this turn's
         // take. Recheck its owner state before waiting for the next rotation.
-        if (!local_pending && !ready && !host._stop.load (std::memory_order_acquire)
+        if (!local_pending && !ready_batch && !host._stop.load (std::memory_order_acquire)
             && !supply.has_supply ()) {
             readiness = node->native_node ().wait_for_hosted_dispatch_activity (
               std::chrono::milliseconds (-1), accept_application_receive, next_activity);
         }
-        mesh::service_mailbox_t::notify_application_ready (ready);
-        return readiness;
     }
 
     struct pending_management_t
@@ -2408,6 +2416,8 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
     const std::shared_ptr<detail::mesh_node_runtime_t> node;
     const std::shared_ptr<detail::mesh_node_builder_state_t> registration;
     const std::shared_ptr<std::optional<application_job_queue_t::permit_t>> receive_permit;
+    std::optional<zlink::poll_event_flag_t> readiness;
+    mesh::service_mailbox_t::application_ready_batch_t ready_batch;
     application_supply_slot_t supply;
     std::optional<pending_management_t> pending_management;
 };
