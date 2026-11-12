@@ -4973,6 +4973,7 @@ export class ServiceStatefulRuntime {
       );
       return;
     }
+    const targetNodeGeneration = this.tryPeerGeneration(targetNodeRid);
     if (receiver !== undefined) {
       const completion = {
         operationCompleted: (_id: bigint, reply: readonly Buffer[]) =>
@@ -4980,7 +4981,7 @@ export class ServiceStatefulRuntime {
         operationFailed: (_id: bigint, error: unknown) =>
           receiver.operationFailed(pending.id, error, undefined)
       };
-      if (this.raw.isPeerRouteReady(targetNodeRid) === true) {
+      if (this.raw.isPeerRouteReady(targetNodeRid, targetNodeGeneration) === true) {
         this.raw.requestService(targetNodeRid, parts, timeoutMs, onAdmitted, pending, completion);
         return;
       }
@@ -5001,12 +5002,13 @@ export class ServiceStatefulRuntime {
           });
         },
         (error) => completion.operationFailed(pending.id, error),
-        operationKind
+        operationKind,
+        targetNodeGeneration
       );
       return;
     }
     const reply =
-      this.raw.isPeerRouteReady(targetNodeRid) === true
+      this.raw.isPeerRouteReady(targetNodeRid, targetNodeGeneration) === true
         ? this.raw.requestService(targetNodeRid, parts, timeoutMs, onAdmitted, pending)
         : requestDurableService(
             this.raw,
@@ -5016,7 +5018,8 @@ export class ServiceStatefulRuntime {
             operationKind,
             undefined,
             undefined,
-            onAdmitted
+            onAdmitted,
+            targetNodeGeneration
           );
     void reply.then(
       (reply) => this.completeRemoteReply(pending, targetNodeRid, operationKind, actor, reply),
@@ -5905,7 +5908,7 @@ export class ServiceStatefulRuntime {
 
   private tryPeerGeneration(nodeRid: string): bigint | undefined {
     if (nodeRid === this.nodeRid) return this.nodeGeneration;
-    return this.raw.topology.peer(nodeRid)?.descriptor.lifecycleGeneration;
+    return this.raw.peerLifecycleGeneration(nodeRid);
   }
 
   private commitJoinedActor(

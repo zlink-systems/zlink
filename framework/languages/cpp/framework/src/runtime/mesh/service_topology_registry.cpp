@@ -270,16 +270,52 @@ service_topology_registry_t::observe_peer (std::vector<std::uint8_t> node_routin
         const auto snapshot =
           std::atomic_load_explicit (publication.get (), std::memory_order_acquire);
         const auto found = snapshot->peers.find (node_routing_id);
-        const auto &target_endpoint = endpoint.empty () && found != snapshot->peers.end ()
+        const auto expected = snapshot->expected_peers.find (node_routing_id);
+        const auto &target_endpoint = expected != snapshot->expected_peers.end ()
+                                        ? expected->second.advertised_endpoint
+                                      : endpoint.empty () && found != snapshot->peers.end ()
                                         ? found->second.descriptor.advertised_endpoint
                                         : endpoint;
-        return peer_observation_t{found == snapshot->peers.end ()
-                                    ? std::nullopt
-                                    : std::optional<admitted_peer_t>{found->second},
-                                  snapshot->changed->task (),
-                                  {snapshot, &snapshot->attempts},
-                                  target_endpoint};
+        return peer_observation_t{
+          found == snapshot->peers.end () ? std::nullopt
+                                          : std::optional<admitted_peer_t>{found->second},
+          snapshot->changed->task (),
+          {snapshot, &snapshot->attempts},
+          target_endpoint,
+          expected == snapshot->expected_peers.end ()
+            ? nullptr
+            : std::shared_ptr<const service_node_descriptor_t>{snapshot, &expected->second}};
     };
+}
+
+std::shared_ptr<const service_topology_registry_t::expected_peers_t>
+service_topology_registry_t::expected_peers () const
+{
+    auto snapshot = std::atomic_load_explicit (_topology.get (), std::memory_order_acquire);
+    const auto *expected = &snapshot->expected_peers;
+    return {std::move (snapshot), expected};
+}
+
+std::function<void ()>
+service_topology_registry_t::expect_peer_on_lane (const service_node_descriptor_t &descriptor)
+{
+    auto next = std::make_shared<topology_state_t> (
+      *std::atomic_load_explicit (_topology.get (), std::memory_order_acquire));
+    next->expected_peers.insert_or_assign (descriptor.node_routing_id, descriptor);
+    return publish_topology (std::move (next), {});
+}
+
+std::function<void ()>
+service_topology_registry_t::forget_peer_on_lane (const std::vector<std::uint8_t> &node_routing_id,
+                                                  const std::string &endpoint)
+{
+    const auto current = std::atomic_load_explicit (_topology.get (), std::memory_order_acquire);
+    const auto found = current->expected_peers.find (node_routing_id);
+    if (found == current->expected_peers.end () || found->second.advertised_endpoint != endpoint)
+        return {};
+    auto next = std::make_shared<topology_state_t> (*current);
+    next->expected_peers.erase (node_routing_id);
+    return publish_topology (std::move (next), {});
 }
 
 std::optional<zlink::connection_attempt_t>

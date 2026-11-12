@@ -538,17 +538,18 @@ class raw_mesh_node_owner_t
                                     std::optional<zlink::routing_id_t> expected,
                                     std::uint64_t expected_lifecycle_generation,
                                     std::string security_identity,
-                                    bool automatic);
+                                    bool automatic,
+                                    std::vector<std::function<void ()>> &notifications);
     void disconnect_peer_intent_owned (const zlink::routing_id_t &expected_routing_id,
                                        const std::string &endpoint,
                                        bool automatic,
                                        std::vector<std::function<void ()>> &notifications);
     static bool valid_expected_peer (const service_node_descriptor_t &descriptor);
-    void expect_peer_owned (const service_node_descriptor_t &expected_descriptor);
-    void forget_peer_owned (const std::vector<std::uint8_t> &node_routing_id,
-                            const std::string &endpoint);
+    std::function<void ()> forget_peer_owned (const std::vector<std::uint8_t> &node_routing_id,
+                                              const std::string &endpoint);
     bool connect_peer_owned (const std::string &endpoint,
-                             std::optional<service_node_descriptor_t> expected_descriptor);
+                             std::optional<service_node_descriptor_t> expected_descriptor,
+                             std::vector<std::function<void ()>> &notifications);
     bool disconnect_peer_owned (const std::vector<std::uint8_t> &expected_routing_id,
                                 const std::string &endpoint,
                                 std::vector<std::function<void ()>> &notifications);
@@ -559,7 +560,8 @@ class raw_mesh_node_owner_t
                                       std::optional<zlink::routing_id_t> expected,
                                       std::uint64_t expected_lifecycle_generation,
                                       std::string security_identity,
-                                      bool automatic);
+                                      bool automatic,
+                                      std::vector<std::function<void ()>> &notifications);
     void disconnect_peer_endpoint_owned (const std::string &endpoint,
                                          std::vector<std::function<void ()>> &notifications);
     bool disconnect_peer_endpoint_owned (const std::vector<std::uint8_t> &expected_routing_id,
@@ -716,8 +718,6 @@ class raw_mesh_node_owner_t
     static void publish_peer_metrics (opentelemetry::metrics::ObserverResult result, void *state);
     std::atomic_size_t _last_pump_bytes{0};
     std::shared_ptr<foundation::operation_registry_t> _operations;
-    std::map<std::vector<std::uint8_t>, service_node_descriptor_t, raw_mesh_byte_vector_less_t>
-      _expected_peers;
     peer_reconcile_t _peer_reconcile;
     live_location_reader_t *_request_sources = nullptr;
     std::function<std::shared_ptr<const location_owner_token_t> ()> _local_request_lease;

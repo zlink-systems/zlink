@@ -461,18 +461,34 @@ export class RawServiceMeshRuntime {
   }
 
   observePeerRoute(
-    nodeRoutingId: string
+    nodeRoutingId: string,
+    lifecycleGeneration?: bigint
   ): import('./durable-service-request').PeerRouteObservation {
     const selected = this.selectedRoutes.get(nodeRoutingId);
     const peer = this.topology.admittedPeer(nodeRoutingId);
-    const expected = this.expectedPeers.get(nodeRoutingId);
+    const candidate = this.expectedPeers.get(nodeRoutingId);
+    const expected =
+      lifecycleGeneration === undefined ||
+      candidate?.lifecycleGeneration === undefined ||
+      candidate.lifecycleGeneration === 0n ||
+      candidate.lifecycleGeneration === lifecycleGeneration
+        ? candidate
+        : undefined;
     const admitted = peer?.liveness?.connectionId;
     return {
       generation: selected ?? (typeof admitted === 'bigint' ? admitted : undefined),
-      ready: peer?.remoteAdmitReceived === true,
+      ready:
+        peer?.remoteAdmitReceived === true &&
+        (lifecycleGeneration === undefined ||
+          peer.descriptor.lifecycleGeneration === lifecycleGeneration),
       selected: selected !== undefined,
-      lifecycleGeneration: expected?.lifecycleGeneration ?? peer?.descriptor.lifecycleGeneration,
-      endpoint: expected?.endpoint ?? peer?.descriptor.advertisedEndpoint,
+      lifecycleGeneration:
+        expected?.lifecycleGeneration ??
+        (lifecycleGeneration === undefined ? peer?.descriptor.lifecycleGeneration : undefined),
+      endpoint:
+        expected?.endpoint ??
+        (lifecycleGeneration === undefined ? peer?.descriptor.advertisedEndpoint : undefined),
+      ...(expected !== undefined ? { expectation: { ...expected } } : {}),
       // The immutable socket snapshot is borrowed; only waiting admission filters it.
       connectionAttempts: this.connectionAttempts
     };

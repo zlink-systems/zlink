@@ -211,6 +211,7 @@ test('Instance activation public request observes existing remote submission adm
     {
       setServiceIngress() {},
       isPeerRouteReady: () => true,
+      peerLifecycleGeneration: (rid) => (rid === 'target' ? 1n : undefined),
       observePeerRoute: () => ({ ready: true }),
       observePeerRouteChanged: () => () => {},
       requestService(_target, _parts, _timeout, onAdmitted) {

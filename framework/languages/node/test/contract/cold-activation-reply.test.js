@@ -1,4 +1,6 @@
-const { OperationCancelledError } = require('../../packages/framework/dist/runtime/foundation/operation-registry');
+const {
+  OperationCancelledError
+} = require('../../packages/framework/dist/runtime/foundation/operation-registry');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { RequestResult } = require('@zlink-systems/zlink');
@@ -61,6 +63,7 @@ function pair() {
     let connected = true;
     const disconnect = new Set();
     const raw = {
+      peerLifecycleGeneration: (peer) => (connected ? nodes.get(peer)?.generation : undefined),
       topology: {
         peer: (peer) =>
           connected && nodes.has(peer)
@@ -188,7 +191,8 @@ function pair() {
       async occupyAllApplicationPermits() {
         const permits = [];
         const limit = applicationJobQueue.snapshot().effectiveMaxQueuedApplicationJobs;
-        while (BigInt(permits.length) < limit) permits.push(await applicationJobQueue.acquire(undefined, 'remote'));
+        while (BigInt(permits.length) < limit)
+          permits.push(await applicationJobQueue.acquire(undefined, 'remote'));
         let released = false;
         return () => {
           if (released) return;
@@ -403,7 +407,8 @@ for (const winner of ['timeout', 'cancellation', 'disconnect', 'close']) {
     await new Promise((resolve) => setImmediate(resolve));
     if (winner === 'timeout')
       p.source.runtime.expireOperations(performance.now() + 20000, performance.now() + 1000);
-    if (winner === 'cancellation') p.source.runtime.cancelPendingOperations(new OperationCancelledError(pending.id));
+    if (winner === 'cancellation')
+      p.source.runtime.cancelPendingOperations(new OperationCancelledError(pending.id));
     if (winner === 'disconnect') p.source.disconnect('target');
     if (winner === 'close') p.source.runtime.close();
     await rejected;

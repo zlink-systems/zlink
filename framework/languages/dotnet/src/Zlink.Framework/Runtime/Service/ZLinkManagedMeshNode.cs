@@ -596,12 +596,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedSecurityIdentity);
         RunState(() =>
+        {
             _peerExpectations[peerRid] = new ZLinkMeshPeerExpectation(
                 endpoint,
                 expectedSecurityIdentity,
                 expectedLifecycleGeneration
-            )
-        );
+            );
+            SignalChannelSelectionChangedUnderLock();
+        });
     }
 
     public void RemovePeerExpectation(RoutingId peerRid, string endpoint)
@@ -617,7 +619,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 )
                     return;
                 if (_peerExpectations.Remove(peerRid))
+                {
+                    SignalChannelSelectionChangedUnderLock();
                     RetirePeerConnectionIntent(peerRid, ref notify);
+                }
             });
         }
         finally
@@ -1062,7 +1067,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ),
                 _deadlineTimeProvider.GetTimestamp(),
                 timeout,
-                cancellationToken
+                cancellationToken,
+                static reply => reply,
+                static failure =>
+                    failure is null
+                        ? null
+                        : ZLinkRequestFailureMapper.CreateSubmitException(
+                            failure,
+                            "Bound-session bind"
+                        )
             )
             .ConfigureAwait(false);
         try
@@ -10463,6 +10476,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     )
     {
         var generation = _selectedRoutes.GenerationOf(target);
+        ZLinkMeshPeerExpectation? targetExpectation =
+            _peerExpectations.TryGetValue(target, out var expected)
+            && (
+                lifecycleGeneration == 0
+                || expected.LifecycleGeneration == 0
+                || expected.LifecycleGeneration == lifecycleGeneration
+            )
+                ? expected
+                : null;
         var ready =
             generation != 0
             && _peersByRid.TryGetValue(target, out var peer)
@@ -10496,7 +10518,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             _channelSelectionChanged.Task,
             attempt,
             endpoint,
-            _connectionAttempts
+            _connectionAttempts,
+            targetExpectation
         );
     }
 
@@ -12201,17 +12224,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             )
         )
             throw new ArgumentOutOfRangeException(nameof(kind));
-
-        var peer = RunState(() =>
-        {
-            _peersByRid.TryGetValue(targetRid, out var current);
-            return current;
-        });
-        if ((peer is { Admitted: true } && peer.LifecycleGeneration != targetNodeGeneration))
-        {
-            operationId = default;
-            return SubmitResult.NotConnected;
-        }
 
         var effectiveTimeout = timeout <= TimeSpan.Zero ? DefaultServiceRequestTimeout : timeout;
         ulong correlation;
