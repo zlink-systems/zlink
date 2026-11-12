@@ -3,7 +3,7 @@
 
 const { parentPort, workerData } = require('node:worker_threads');
 const zlink = require('@zlink-systems/zlink');
-const { RESPONSE_ENVELOPE } = require('../shared/raw-wire');
+const { RESPONSE_ENVELOPE, decodeBenchPayloadBody } = require('../shared/raw-wire');
 const { PHASE_ACTIVE, decode, nowNs } = require('../shared/bench-metric-header');
 const { EchoHandler, CommandHandler } = require('./bench-handlers');
 
@@ -43,31 +43,36 @@ const responseHeader = workerData.frameworkWire
   }
   : () => RESPONSE_ENVELOPE;
 
-async function receive() {
+function dispatchOne() {
+  const parts = received.parts;
+  try {
+    const header = parts[0].data();
+    const payload = decodeBenchPayloadBody(parts[parts.length - 1].data());
+    if (payload === null) throw new Error('invalid benchmark payload');
+    if (received.replyToken !== null) {
+      echoHandler.handleL0({ body: payload });
+      received.reply()
+        .message(responseHeader(header))
+        .message(parts[parts.length - 1])
+        .submit();
+    } else {
+      commandHandler.handleL0({ body: payload });
+    }
+  } catch (error) {
+    metrics.recordError();
+    parentPort.postMessage({ error: error.message, counted: true });
+  } finally {
+    received.close();
+  }
+}
+
+function receive() {
   try {
     for (;;) {
       if (!router.recv(received, zlink.RecvFlags.None)) continue;
-      const parts = received.parts;
-      try {
-        const header = parts[0].data();
-        const body = parts[parts.length - 1].data();
-        const payload = require('../shared/raw-wire').decodeBenchPayloadBody(body);
-        if (payload === null) throw new Error('invalid benchmark payload');
-        if (received.replyToken !== null) {
-          echoHandler.handleL0({ body: payload });
-          received.reply()
-            .message(responseHeader(header))
-            .message(parts[parts.length - 1])
-            .submit();
-        } else {
-          commandHandler.handleL0({ body: payload });
-        }
-      } catch (error) {
-        metrics.recordError();
-        parentPort.postMessage({ error: error.message, counted: true });
-      } finally {
-        received.close();
-      }
+      do {
+        dispatchOne();
+      } while (router.recv(received, zlink.RecvFlags.DontWait));
     }
   } finally {
     router.close();
