@@ -30,6 +30,18 @@ public final class ZLinkServiceSendHeaderAllocationTest {
     }
 
     public static void runInAllocationJvm(Class<?> fixture) throws Exception {
+        runInJvm(
+                fixture,
+                List.of(
+                        "-Djava.io.tmpdir=" + System.getProperty("java.io.tmpdir"),
+                        "-XX:-UseTLAB",
+                        "-XX:-DoEscapeAnalysis",
+                        "-XX:ActiveProcessorCount=2",
+                        "-XX:FlightRecorderOptions=stackdepth=128"));
+    }
+
+    public static String runInJvm(Class<?> fixture, List<String> jvmOptions, String... args)
+            throws Exception {
         var classpath = new LinkedHashSet<String>();
         for (ClassLoader loader = fixture.getClassLoader();
                 loader != null;
@@ -40,28 +52,37 @@ public final class ZLinkServiceSendHeaderAllocationTest {
         }
         classpath.addAll(
                 List.of(System.getProperty("java.class.path").split(java.io.File.pathSeparator)));
-        Path output = Files.createTempFile("zlink-send-header-", ".log");
+        var command = new ArrayList<String>();
+        command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
+        command.addAll(
+                List.of(
+                        "--enable-native-access=ALL-UNNAMED",
+                        "-Dfile.encoding=UTF-8",
+                        "-Dstdout.encoding=UTF-8",
+                        "-Dstderr.encoding=UTF-8",
+                        "-Dsun.stdout.encoding=UTF-8",
+                        "-Dsun.stderr.encoding=UTF-8",
+                        "-Duser.language=en",
+                        "-Duser.country=US"));
+        command.addAll(jvmOptions);
+        command.addAll(
+                List.of(
+                        "-cp",
+                        String.join(java.io.File.pathSeparator, classpath),
+                        fixture.getName()));
+        command.addAll(List.of(args));
+        Path output = Files.createTempFile("zlink-child-jvm-", ".log");
         try {
             var process =
-                    new ProcessBuilder(
-                                    Path.of(System.getProperty("java.home"), "bin", "java")
-                                            .toString(),
-                                    "--enable-native-access=ALL-UNNAMED",
-                                    "-Djava.io.tmpdir=" + System.getProperty("java.io.tmpdir"),
-                                    "-XX:-UseTLAB",
-                                    "-XX:-DoEscapeAnalysis",
-                                    "-XX:ActiveProcessorCount=2",
-                                    "-XX:FlightRecorderOptions=stackdepth=128",
-                                    "-cp",
-                                    String.join(java.io.File.pathSeparator, classpath),
-                                    fixture.getName())
+                    new ProcessBuilder(command)
                             .redirectErrorStream(true)
                             .redirectOutput(output.toFile())
                             .start();
             int exit = process.waitFor();
-            String log = Files.readString(output);
+            String log = Files.readString(output, java.nio.charset.StandardCharsets.UTF_8);
             System.out.print(log);
             assertEquals(0, exit, log);
+            return log;
         } finally {
             Files.deleteIfExists(output);
         }
