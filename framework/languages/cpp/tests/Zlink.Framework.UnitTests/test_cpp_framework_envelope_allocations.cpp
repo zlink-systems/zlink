@@ -468,20 +468,22 @@ TEST (EnvelopeAllocations, MalformedCanonicalPrefixKeepsJsonParserError)
 TEST (EnvelopeAllocations, MailboxRecordDoesNotConstructAnUnusedContentType)
 {
     using record_t = fw::runtime::mesh::service_mailbox_record_t;
-    alignas (record_t) std::byte baseline_storage[sizeof (record_t)];
+    using header_t = fw::runtime::messaging::envelope_header_t;
+    alignas (header_t) std::byte header_storage[sizeof (header_t)];
     alignas (record_t) std::byte actual_storage[sizeof (record_t)];
-    record_t *baseline = nullptr;
+    header_t *header = nullptr;
     record_t *actual = nullptr;
-    const auto container_allocations = count_allocations ([&] {
-        baseline = ::new (static_cast<void *> (baseline_storage)) record_t{};
-        baseline->envelope_header = {.content_type = {}};
-    });
+    // The baseline is the record's header member constructed the same way, alone. An empty
+    // std::map allocates its head node on MSVC and not on libstdc++, so the count is the
+    // platform's container cost; a default content type string would add to the record only.
+    const auto container_allocations = count_allocations (
+      [&] { header = ::new (static_cast<void *> (header_storage)) header_t{.content_type = {}}; });
     const auto allocations =
       count_allocations ([&] { actual = ::new (static_cast<void *> (actual_storage)) record_t{}; });
     EXPECT_EQ (allocations, container_allocations);
-    EXPECT_TRUE (baseline->parts ().empty ());
+    EXPECT_TRUE (actual->envelope_header.content_type.empty ());
     EXPECT_TRUE (actual->parts ().empty ());
-    std::destroy_at (baseline);
+    std::destroy_at (header);
     std::destroy_at (actual);
 }
 
