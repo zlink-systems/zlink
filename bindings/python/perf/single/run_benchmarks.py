@@ -520,7 +520,7 @@ def main(argv=None):
         line
         for chunk in emitted_chunks
         for line in chunk.splitlines()
-        if line.startswith("RESULT,")
+        if line.startswith("RESULT,") and len(line.split(",")) == 7
     ]
     skipped_cases = 0
     unsupported_cases = 0

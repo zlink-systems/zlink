@@ -29,7 +29,6 @@ struct request_state_t
     request_state_t () :
         run_id (0),
         msg_size (0),
-        latency_sample_cap (0),
         active_deadline (std::chrono::steady_clock::time_point::min ()),
         completed (0),
         in_flight (0),
@@ -46,7 +45,6 @@ struct request_state_t
 
     uint32_t run_id;
     size_t msg_size;
-    size_t latency_sample_cap;
     std::chrono::steady_clock::time_point active_deadline;
     std::atomic<unsigned long long> completed;
     std::atomic<int> in_flight;
@@ -111,21 +109,6 @@ inline int resolve_completion_drain_timeout_ms ()
     return parse_positive_env ("PERF_SINGLE_REQREP_DRAIN_TIMEOUT_MS", 10000);
 }
 
-inline size_t resolve_latency_sample_cap ()
-{
-    const size_t fallback = 1000000;
-    const char *value = std::getenv ("PERF_SINGLE_LATENCY_SAMPLE_CAP");
-    if (!value || !*value || *value == '-')
-        return fallback;
-
-    char *end = NULL;
-    errno = 0;
-    const unsigned long long parsed = std::strtoull (value, &end, 10);
-    if (errno != 0 || end == value || !end || *end != '\0'
-        || parsed > static_cast<unsigned long long> (std::numeric_limits<size_t>::max ()))
-        return fallback;
-    return static_cast<size_t> (parsed);
-}
 
 inline void print_reqrep_result (const std::string &lib_type,
                                  const std::string &pattern,
@@ -427,7 +410,7 @@ inline bool run_request_phase (void *requester_,
     state_->fatal.store (false, std::memory_order_release);
     {
         std::lock_guard<std::mutex> guard (state_->latency_mutex);
-        state_->latency = latency_stats_builder_t (state_->latency_sample_cap);
+        state_->latency.reset ();
     }
 
     const uint32_t timeout_ms = resolve_request_timeout_ms ();
