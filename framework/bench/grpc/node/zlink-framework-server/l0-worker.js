@@ -3,7 +3,11 @@
 
 const { parentPort, workerData } = require('node:worker_threads');
 const zlink = require('@zlink-systems/zlink');
-const { RESPONSE_ENVELOPE, decodeBenchPayloadBody } = require('../shared/raw-wire');
+const {
+  RESPONSE_ENVELOPE,
+  encodeBenchPayloadMessage,
+  decodeBenchPayloadBody
+} = require('../shared/raw-wire');
 const { PHASE_ACTIVE, decode, nowNs } = require('../shared/bench-metric-header');
 const { EchoHandler, CommandHandler } = require('./bench-handlers');
 
@@ -53,7 +57,7 @@ function dispatchOne() {
       echoHandler.handleL0({ body: payload });
       received.reply()
         .message(responseHeader(header))
-        .message(parts[parts.length - 1])
+        .message(encodeBenchPayloadMessage(payload))
         .submit();
     } else {
       commandHandler.handleL0({ body: payload });
