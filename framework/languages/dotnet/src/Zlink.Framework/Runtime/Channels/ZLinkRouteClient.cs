@@ -124,8 +124,8 @@ internal sealed class ZLinkChannelSendCall<TMessage>(
 
     public async ValueTask Async()
     {
-        _submission.Claim();
         var cancellationToken = runtime.GetSendCancellationToken();
+        _submission.Claim();
         var parts = EncodePayloadParts(out var metadata);
         var result = await runtime
             .SendToChannelAsync(channelName, parts, cancellationToken, metadata)
@@ -292,8 +292,8 @@ internal sealed class ZLinkRouteSendCall<TMessage>(
 
     public async ValueTask Async()
     {
-        _submission.Claim();
         var cancellationToken = runtime.GetSendCancellationToken();
+        _submission.Claim();
         var nodeRuntime = runtime.GetMeshNodeRuntime(meshName);
         var parts = EncodePayloadParts();
         var handedOff = false;
@@ -523,8 +523,8 @@ internal sealed class ZLinkRouteSpotSendCall<TMessage>(
 
     public async ValueTask Async()
     {
-        _submission.Claim();
         var cancellationToken = runtime.GetSendCancellationToken();
+        _submission.Claim();
         var snapshot = target.Snapshot;
         var header = ZLinkClientCallCodec.CreateEnvelope(
             ZLinkMessageKind.Command,
