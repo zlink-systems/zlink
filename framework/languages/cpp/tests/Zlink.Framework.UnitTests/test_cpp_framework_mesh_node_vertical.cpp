@@ -39,7 +39,6 @@ extern "C" zlink_connect_result_t __wrap_zlink_disconnect (void *socket, const c
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/execution/infrastructure_wait_guard.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"
-#include "runtime/mesh/mesh_record_dispatcher.hpp"
 #include "runtime/mesh/mesh_metadata_codec.hpp"
 #include <service_wire_codec.hpp>
 #include "runtime/mesh/route_mesh_runtime_options_service.hpp"
@@ -1348,7 +1347,9 @@ struct suspended_node_send_state_t
     std::shared_ptr<zlink::framework::task_completion_source_t<void>> resume =
       std::make_shared<zlink::framework::task_completion_source_t<void>> ();
     std::promise<void> entered;
+    std::promise<void> next_entered;
     std::promise<void> resumed;
+    std::atomic_int calls = 0;
 };
 
 class suspended_node_send_handler_t
@@ -1356,12 +1357,16 @@ class suspended_node_send_handler_t
   public:
     explicit suspended_node_send_handler_t (suspended_node_send_state_t &state) : _state (state) {}
 
-    zlink::framework::task_t<void> handle (const local_route_probe_message_t &,
+    zlink::framework::task_t<void> handle (const local_route_probe_message_t &message,
                                            const zlink::framework::route_message_context_t &)
     {
-        _state.entered.set_value ();
-        co_await _state.resume->task ();
-        _state.resumed.set_value ();
+        if (_state.calls.fetch_add (1, std::memory_order_acq_rel) == 0) {
+            _state.entered.set_value ();
+            co_await _state.resume->task ();
+            _state.resumed.set_value ();
+        } else if (message.value == "next") {
+            _state.next_entered.set_value ();
+        }
     }
 
   private:
@@ -1597,31 +1602,44 @@ void verify_node_send_releases_terminal_while_handler_suspended ()
       std::make_shared<runtime::runtime_failure_collector_t> (), {registration}, serializers);
     service.start (provider).result ().value ();
     runtime::messaging::client_call_codec_t codec;
-    const auto header = codec.create_envelope (runtime::messaging::message_kind_t::command,
-                                               "vertical-mesh", "SuspendedNodeSend");
-    const auto parts =
-      codec.encode_envelope_parts (header, local_route_probe_message_t{"hold"}, serializers);
     auto entered = suspended->entered.get_future ();
+    auto next_entered = suspended->next_entered.get_future ();
     auto resumed = suspended->resumed.get_future ();
-    std::atomic_bool terminal_released{false};
-    runtime::dispatch_with_stack_terminal_owner (
-      runtime::application_dispatch_terminal_owner_t (
-        {}, {}, [&] { terminal_released.store (true, std::memory_order_release); }),
-      [&] {
-          assert (service.submit_local_node_send (service.nodes ().front (), parts.items ())
-                    .result ()
-                    .value ()
-                  == zlink::submit_result_t::ok);
-          assert (entered.wait_for (1s) == std::future_status::ready);
-          assert (resumed.wait_for (0ms) == std::future_status::timeout);
-      });
-    assert (terminal_released.load (std::memory_order_acquire));
-    assert (resumed.wait_for (0ms) == std::future_status::timeout);
+    const auto node = service.nodes ().front ();
+    auto source_registration = make_node ("tcp://127.0.0.1:0", "suspended-node-send-source");
+    source_registration->peer_connections.push_back (mesh_peer_connection_t{
+      1, {}, node->native_node ().status ().local_endpoint ()});
+    detail::mesh_node_runtime_t source (source_registration);
+    configure_vertical_route_fences (source);
+    source.start ().result ().value ();
+    assert (wait_until_admitted (source));
+    const auto target = node->native_node ().status ().routing_id ();
+    const auto send = [&] (std::string value) {
+        const auto header = codec.create_envelope (runtime::messaging::message_kind_t::command,
+                                                   "vertical-mesh", "SuspendedNodeSend");
+        auto message = codec.encode_envelope_parts (
+          header, local_route_probe_message_t{std::move (value)}, serializers);
+        return std::move (source.send_to_node (target, message.items (), std::vector<std::uint8_t>{}))
+          .result ()
+          .value ();
+    };
+    assert (send ("hold") == zlink::submit_result_t::ok);
+    const bool handler_entered = entered.wait_for (1s) == std::future_status::ready;
+    const auto next_result = handler_entered ? send ("next") : zlink::submit_result_t::internal_error;
+    const bool next_dispatched_while_suspended =
+      next_entered.wait_for (1s) == std::future_status::ready;
+    const bool handler_still_suspended = resumed.wait_for (0ms) == std::future_status::timeout;
     suspended->resume->complete (result_t<void>::success ());
-    assert (resumed.wait_for (1s) == std::future_status::ready);
+    const bool handler_resumed = resumed.wait_for (1s) == std::future_status::ready;
     assert (service.wait_for_accepted_callbacks_until (std::chrono::steady_clock::now () + 1s));
+    source.stop ();
     service.stop ();
     locations.stop ();
+    assert (handler_entered);
+    assert (next_result == zlink::submit_result_t::ok);
+    assert (next_dispatched_while_suspended);
+    assert (handler_still_suspended);
+    assert (handler_resumed);
 }
 
 // Regression pin for mesh_node_runtime_t::classify_node_direct_target's

@@ -2345,8 +2345,10 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
                             host._application_dispatch.get ());
                       };
                       if (direct_terminal) {
-                          dispatch_with_stack_terminal_owner (std::move (*direct_terminal),
-                                                              dispatch_route);
+                          {
+                              [[maybe_unused]] auto terminal = std::move (*direct_terminal);
+                              dispatch_route ();
+                          }
                       } else {
                           dispatch_route ();
                       }

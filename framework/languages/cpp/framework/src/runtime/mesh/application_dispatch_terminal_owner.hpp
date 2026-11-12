@@ -7,7 +7,6 @@
 #include <atomic>
 #include <functional>
 #include <memory>
-#include <utility>
 
 namespace zlink::framework::detail
 {
@@ -51,12 +50,5 @@ class application_dispatch_terminal_owner_t final
     std::function<void ()> _complete_stateful_dispatch;
     host::mailbox_callback_t _release_mailbox_reservation;
 };
-
-template <typename Dispatch>
-void dispatch_with_stack_terminal_owner (application_dispatch_terminal_owner_t terminal,
-                                         Dispatch &&dispatch)
-{
-    dispatch ();
-}
 
 }
