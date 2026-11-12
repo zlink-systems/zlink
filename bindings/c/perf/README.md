@@ -113,8 +113,8 @@ growing without `EAGAIN`, or phase/process teardown does not release queued
 messages, treat that behavior as a Core bug and rerun the same workload after
 the fix.
 
-The bounded reservoirs used for p95 and p99 protect measurement metadata only.
-They do not change queue HWM, send timing, receive count, or mean-latency
+The fixed-size latency histogram used for p50, p95 and p99 protects measurement metadata only.
+It does not change queue HWM, send timing, receive count, or mean-latency
 aggregation.
 
 ## Core 10.x archive

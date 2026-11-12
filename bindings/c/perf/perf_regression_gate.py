@@ -47,6 +47,7 @@ REPORT_PARSER = _load_report_parser()
 class ParsedReport:
     path: pathlib.Path
     cells: Dict[CellKey, float] = field(default_factory=dict)
+    invalid_cells: Dict[CellKey, str] = field(default_factory=dict)
     duplicate_cells: List[CellKey] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
     skip_count: int = 0
@@ -94,11 +95,12 @@ def parse_report(path: pathlib.Path) -> ParsedReport:
     for line_number, raw_line in enumerate(lines, start=1):
         line = raw_line.strip()
         if line.startswith("RESULT,"):
-            result.result_line_count += 1
             parts = line.split(",")
             if len(parts) != 7:
+                result.result_line_count += 1
                 result.errors.append(f"line {line_number}: malformed RESULT line")
                 continue
+            result.result_line_count += 1
             try:
                 transport = parts[3].strip().lower()
                 msg_size = int(parts[4].strip())
@@ -109,23 +111,25 @@ def parse_report(path: pathlib.Path) -> ParsedReport:
             parsed, warning = REPORT_PARSER.parse_result_line(
                 line, transport, {msg_size}
             )
+            if parsed is not None:
+                _parsed_transport, _parsed_size, metric, value = parsed
+                pattern = parts[2].strip().upper()
+                if not pattern:
+                    result.errors.append(f"line {line_number}: empty RESULT pattern")
+                    continue
+                key = (pattern, transport, msg_size, metric)
+                if isinstance(value, REPORT_PARSER.InvalidMetric):
+                    result.invalid_cells[key] = value.reason
+                    continue
+                if key in result.cells:
+                    result.duplicate_cells.append(key)
+                else:
+                    result.cells[key] = value
+                continue
             if warning:
                 result.errors.append(f"line {line_number}: {warning}")
                 continue
-            if parsed is None:
-                result.errors.append(f"line {line_number}: RESULT line was rejected")
-                continue
-
-            _parsed_transport, _parsed_size, metric, value = parsed
-            pattern = parts[2].strip().upper()
-            if not pattern:
-                result.errors.append(f"line {line_number}: empty RESULT pattern")
-                continue
-            key = (pattern, transport, msg_size, metric)
-            if key in result.cells:
-                result.duplicate_cells.append(key)
-            else:
-                result.cells[key] = value
+            result.errors.append(f"line {line_number}: RESULT line was rejected")
             continue
 
         if line.startswith("- skip:"):
@@ -192,7 +196,8 @@ def compare_reports(
     suite: str, baseline: ParsedReport, candidate: ParsedReport
 ) -> List[CellVerdict]:
     verdicts: List[CellVerdict] = []
-    for key in sorted(set(baseline.cells) | set(candidate.cells)):
+    invalid_keys = set(baseline.invalid_cells) | set(candidate.invalid_cells)
+    for key in sorted((set(baseline.cells) | set(candidate.cells)) - invalid_keys):
         baseline_value = baseline.cells.get(key)
         candidate_value = candidate.cells.get(key)
         rule = metric_rule(key[3])
@@ -407,6 +412,7 @@ def load_reports(
                 continue
             combined.cells[key] = value
             sources[key] = path
+        combined.invalid_cells.update(report.invalid_cells)
     return combined, errors
 
 
@@ -428,6 +434,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         errors.extend(baseline_errors)
         errors.extend(candidate_errors)
+        for report in (baseline, candidate):
+            for key, reason in sorted(report.invalid_cells.items()):
+                print(
+                    f"invalid: {key[0]} {key[1]} {key[2]} {key[3]} — {reason}"
+                )
         all_verdicts.extend(compare_reports(suite, baseline, candidate))
 
     aggregate_verdicts = compare_aggregates(all_verdicts)

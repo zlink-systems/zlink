@@ -19,7 +19,7 @@ namespace
 
 struct router_router_recv_state_t
 {
-    router_router_recv_state_t () : run_id (0), msg_size (0), payload_size (0), active_received (0)
+    router_router_recv_state_t () : run_id (0), msg_size (0), payload_size (0)
     {
         std::memset (&target_rid, 0, sizeof (target_rid));
     }
@@ -28,7 +28,6 @@ struct router_router_recv_state_t
     size_t msg_size;
     size_t payload_size;
     zlink_routing_id_t target_rid;
-    std::atomic<unsigned long long> active_received;
     latency_stats_builder_t latency;
 };
 
