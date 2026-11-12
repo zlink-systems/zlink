@@ -177,20 +177,17 @@ final class ZLinkJavaOwnerDescriptorWaitTest {
                         .forgetPeerAdmissionExpectation(fixture.target.routingId())
                         .toCompletableFuture()
                         .get(3, TimeUnit.SECONDS);
-                // Keep the operation clock frozen while observing authority invalidation.
-                join.handle((reply, failure) -> null)
-                        .completeOnTimeout(null, 1, TimeUnit.SECONDS)
+            } else {
+                // Drain the existing target observation before expiring the request budget.
+                fixture.source
+                        .sourceTransportLane()
+                        .runNowOrQueue(() -> null)
+                        .toCompletableFuture()
                         .join();
+                clock.addAndGet(Duration.ofSeconds(1).toNanos());
             }
-            // Drain the existing target observation before expiring the request budget.
-            fixture.source
-                    .sourceTransportLane()
-                    .runNowOrQueue(() -> null)
-                    .toCompletableFuture()
-                    .join();
-            clock.addAndGet(Duration.ofSeconds(1).toNanos());
             var failure =
-                    assertThrows(ExecutionException.class, () -> join.get(3, TimeUnit.SECONDS));
+                    assertThrows(ExecutionException.class, () -> join.get(5, TimeUnit.SECONDS));
             assertEquals(old, fixture.admittedDescriptor());
             assertEquals(0, fixture.bindingRequests.get());
             assertEquals(0, fixture.received.get());

@@ -477,9 +477,7 @@ export class RawServiceMeshRuntime {
       endpoint:
         expected?.endpoint ??
         (lifecycleGeneration === undefined ? peer?.descriptor.advertisedEndpoint : undefined),
-      ...(lifecycleGeneration !== undefined && expected !== undefined
-        ? { expectation: { ...expected } }
-        : {}),
+      ...(expected !== undefined ? { expectation: { ...expected } } : {}),
       // The immutable socket snapshot is borrowed; only waiting admission filters it.
       connectionAttempts: this.connectionAttempts
     };

@@ -113,14 +113,11 @@ export function admitServiceRequest(
           : undefined;
       if (
         baseline !== undefined &&
-        (baseline.expectation !== undefined
-          ? baseline.expectation.lifecycleGeneration !==
-              observation.expectation?.lifecycleGeneration ||
-            baseline.expectation.endpoint !== observation.expectation?.endpoint ||
-            baseline.expectation.securityIdentity !== observation.expectation?.securityIdentity
-          : (baseline.lifecycleGeneration !== undefined &&
-              baseline.lifecycleGeneration !== observation.lifecycleGeneration) ||
-            (baseline.endpoint !== undefined && baseline.endpoint !== observation.endpoint))
+        baseline.expectation !== undefined &&
+        (baseline.expectation.lifecycleGeneration !==
+          observation.expectation?.lifecycleGeneration ||
+          baseline.expectation.endpoint !== observation.expectation?.endpoint ||
+          baseline.expectation.securityIdentity !== observation.expectation?.securityIdentity)
       ) {
         unavailable('Request target descriptor changed.');
         return true;

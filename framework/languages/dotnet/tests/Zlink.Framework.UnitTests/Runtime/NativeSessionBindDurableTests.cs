@@ -269,10 +269,11 @@ public sealed partial class StatefulServiceRuntimeTests
                     && peer.LifecycleGeneration == olderGeneration
                 )
             );
-            // Keep the operation clock frozen while observing authority invalidation.
-            await Task.WhenAny(request, Task.Delay(TimeSpan.FromSeconds(1)));
         }
-        time.AdvanceMonotonic(timeout);
+        else
+        {
+            time.AdvanceMonotonic(timeout);
+        }
         var failure = await Record.ExceptionAsync(() => request.WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.Equal(0, context.NativeRequests);
         Assert.Empty(context.Submissions);
