@@ -1083,8 +1083,8 @@ int main (int argc, char **argv)
 #if defined(ZLINK_CPP_ABLATION_LADDER)
         options.ladder_target_rid = arg_value (argc, argv, "--ladder-target-rid", "bench-server");
         options.ladder_raw_mesh = arg_value (argc, argv, "--ladder-raw-mesh", "0") == "1";
-        options.raw_request_rid = arg_value (argc, argv, "--ladder-request-rid", options.raw_request_rid);
-        options.raw_command_rid = arg_value (argc, argv, "--ladder-command-rid", options.raw_command_rid);
+        options.raw_request_rid = arg_value (argc, argv, "--ladder-request-rid", options.raw_request_rid.c_str ());
+        options.raw_command_rid = arg_value (argc, argv, "--ladder-command-rid", options.raw_command_rid.c_str ());
 #endif
         options.pattern = arg_value (argc, argv, "--pattern", "request-serial");
         options.payload_size = std::stoul (arg_value (argc, argv, "--payload-size", "1024"));
