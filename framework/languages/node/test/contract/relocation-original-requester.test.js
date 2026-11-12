@@ -5,9 +5,7 @@ const test = require('node:test');
 const {
   ServiceStatefulRuntime
 } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
-const {
-  ZLinkHostServiceRelocationRuntime
-} = require('../../packages/framework/dist/internal');
+const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
 const multipart = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 const protocol = require('../../packages/framework/dist/runtime/streams/protocol');
@@ -23,7 +21,8 @@ function deliver(runtime, sourceNodeRid, frames) {
   return runtime.tryHandleControl('mesh', {
     sourceNodeRid,
     parts: (Array.isArray(frames) ? frames : [frames]).map((frame) => ({
-      data: () => Buffer.from(frame), close() {}
+      data: () => Buffer.from(frame),
+      close() {}
     }))
   });
 }
@@ -34,6 +33,7 @@ function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEnabled 
     {
       setServiceIngress() {},
       isPeerRouteReady: () => true,
+      peerLifecycleGeneration: (rid) => (rid === 'B' ? 8n : undefined),
       requestService(_rid, parts) {
         submitted = parts;
         return new Promise(() => {});
@@ -129,7 +129,9 @@ function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEnabled 
   const relays = [];
   const acks = [];
   const targetNode = {
-    sendInfrastructureControl() { throw new Error('terminal relay requires multipart frames'); },
+    sendInfrastructureControl() {
+      throw new Error('terminal relay requires multipart frames');
+    },
     sendInfrastructureControlFrames: (rid, parts) => sendRelay(rid, parts)
   };
   const sendRelay = async (rid, parts) => {
@@ -390,8 +392,11 @@ for (const local of [false, true]) {
     const owner = { takeInitial: () => job, close() {} };
     let ingressHandler;
     const raw = {
-      setServiceIngress(handler) { ingressHandler = handler; },
+      setServiceIngress(handler) {
+        ingressHandler = handler;
+      },
       topology: { peer: () => ({ descriptor: { lifecycleGeneration: 7n } }) },
+      peerLifecycleGeneration: () => 7n,
       mailbox: {
         tryEnqueue(record) {
           queued = record;
@@ -442,7 +447,12 @@ for (const local of [false, true]) {
           parts: [
             wire.encodeActorHeader(
               'actorRequest',
-              { actor, targetNodeGeneration: 8n, authorityOwnerGeneration: 1n, ownerLeaseGeneration: 1n },
+              {
+                actor,
+                targetNodeGeneration: 8n,
+                authorityOwnerGeneration: 1n,
+                ownerLeaseGeneration: 1n
+              },
               91n,
               undefined,
               undefined,

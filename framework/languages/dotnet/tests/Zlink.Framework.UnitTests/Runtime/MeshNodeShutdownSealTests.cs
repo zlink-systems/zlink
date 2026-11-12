@@ -1428,7 +1428,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         }
     }
 
-    private sealed class ChunkReturnGate : IDisposable
+    internal sealed class ChunkReturnGate : IDisposable
     {
         private readonly ManualResetEventSlim _return = new(false);
         internal readonly TaskCompletionSource Held = new(
@@ -1641,7 +1641,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         }
     }
 
-    private sealed class CanonicalRequestContext(IContext inner) : IContext
+    internal sealed class CanonicalRequestContext(IContext inner) : IContext
     {
         internal int NativeRequests;
         internal ChunkReturnGate? ChunkGate;

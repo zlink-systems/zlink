@@ -3526,9 +3526,20 @@ public sealed partial class StatefulServiceRuntimeTests
     [Fact]
     public async Task RemoteUserSpotCreateAndCloseUseGenerationFencedTerminalOperations()
     {
-        await using var context = Systems.Zlink.Zlink.CreateContext();
-        await using var source = NewNode(context, "user-spot-source");
-        await using var target = NewNode(context, "user-spot-target");
+        await using var native = Systems.Zlink.Zlink.CreateContext();
+        var context = new MeshNodeShutdownSealTests.CanonicalRequestContext(native);
+        var time = new ControllableTimeProvider();
+        await using var source = new ZLinkManagedMeshNode(
+            context,
+            "mesh",
+            deadlineTimeProvider: time,
+            receivePollerFactory: () =>
+                new MeshNodeShutdownSealTests.CanonicalRequestPoller(
+                    Systems.Zlink.Zlink.CreatePoller()
+                )
+        );
+        source.SetRoutingId(RoutingId.From("user-spot-source"));
+        await using var target = NewNode(native, "user-spot-target");
         var suffix = Guid.NewGuid().ToString("N");
         var sourceEndpoint = $"inproc://user-spot-source-{suffix}";
         var targetEndpoint = $"inproc://user-spot-target-{suffix}";
@@ -3658,20 +3669,39 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.Null(movingCompletion.UserSpotCloseCompletion);
         Assert.Equal(2, operationTarget.CloseCount);
 
+        var submittedBeforeStale = context.NativeRequests;
+        var staleCompleted = new TaskCompletionSource<MeshReceiveRecord>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        source.SetCompletionHandlerCore(
+            (record, parts) =>
+            {
+                Assert.Empty(parts);
+                staleCompleted.TrySetResult(record);
+                return true;
+            }
+        );
         Assert.Equal(
-            SubmitResult.NotConnected,
+            SubmitResult.Ok,
             source.CloseUserSpot(
                 target.RoutingId,
                 closeFence with
                 {
-                    TargetNodeGeneration = targetGeneration + 1,
+                    TargetNodeGeneration = targetGeneration == 1UL ? 2UL : 1UL,
                 },
                 deadline,
                 out var staleOperation,
                 TimeSpan.FromSeconds(1)
             )
         );
-        Assert.Equal(default, staleOperation);
+        Assert.NotEqual(default, staleOperation);
+        Assert.False(staleCompleted.Task.IsCompleted);
+        Assert.Equal(submittedBeforeStale, context.NativeRequests);
+        time.AdvanceMonotonic(TimeSpan.FromSeconds(1));
+        var staleCompletion = await staleCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(staleOperation, staleCompletion.OperationId);
+        Assert.Equal((int)RequestResult.TimedOut, staleCompletion.TerminalResult);
+        Assert.Equal(submittedBeforeStale, context.NativeRequests);
         Assert.Equal(2, operationTarget.CloseCount);
     }
 
