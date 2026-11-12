@@ -9,6 +9,7 @@
 #include "runtime/messaging/submit_result_mapper.hpp"
 
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include "runtime/disconnect_rid.hpp"
 #include "runtime/mesh/receive_path_probe.hpp"
 #include <zlink/framework/contracts/configuration/mesh_node.hpp>
 #include "runtime/locations/live_location_reader.hpp"
@@ -4577,12 +4578,9 @@ raw_mesh_node_owner_t::tick_due_liveness (service_liveness_registry_t::clock_t::
                         {
                             std::lock_guard socket_lock (*_socket_mutex);
                             try {
-                                _router->disconnect_rid (zlink::routing_id_t::from (timed_out));
-                            }
-                            catch (const zlink::connect_error_t &error) {
-                                // Core may already have removed the selected route.
-                                if (error.result () != zlink::connect_result_t::not_found)
-                                    failures.push_back (std::current_exception ());
+                                disconnect_rid_if_present ([this, &timed_out] {
+                                    _router->disconnect_rid (zlink::routing_id_t::from (timed_out));
+                                });
                             }
                             catch (...) {
                                 failures.push_back (std::current_exception ());

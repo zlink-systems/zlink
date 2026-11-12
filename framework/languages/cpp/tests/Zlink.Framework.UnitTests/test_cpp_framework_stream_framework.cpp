@@ -355,8 +355,11 @@ class shutdown_session_control_t final
     void record_destroyed () { record (_destroyed, "destroyed"); }
 
     bool wait_connected () { return wait_for (_connected, 1); }
+    bool wait_connected (std::size_t count) { return wait_for (_connected, count); }
     bool wait_destroyed () { return wait_for (_destroyed, 1); }
+    bool wait_destroyed (std::size_t count) { return wait_for (_destroyed, count); }
     bool wait_disconnected () { return wait_for (_disconnected, 1); }
+    bool wait_disconnected (std::size_t count) { return wait_for (_disconnected, count); }
     bool wait_packet_entered () { return wait_for (_packet_entered, 1); }
 
     std::size_t connected () const noexcept { return _connected.load (std::memory_order_acquire); }
@@ -1011,6 +1014,104 @@ const char *expected_close_reason (connection_close_case_t close_case)
             return "heartbeat_timeout";
     }
     throw std::logic_error ("unknown close case");
+}
+
+int expired_core_disconnect_not_found_does_not_report_or_stop_next_session ()
+{
+    using namespace zlink::framework;
+    detail::configure_stream_dispatch_executor ();
+    struct dispatch_executor_guard_t
+    {
+        ~dispatch_executor_guard_t () { detail::shutdown_stream_dispatch_executor (); }
+    } dispatch_executor_guard;
+    service_collection_t services;
+    handler_registry_t handlers;
+    serializer_registry_t serializers;
+    auto builder = test::runtime_failure_builder ();
+    detail::zlink_builder_access_t::bind_shared_core_context (
+      builder, std::make_shared<zlink::context_t> ());
+    services.add_singleton<detail::actor_gateway_runtime_t> ();
+    services.add_factory<session_actor_manager_t> (
+      [] (service_provider_t &provider) {
+          return std::make_unique<session_actor_manager_t> (
+            provider.get_required<detail::actor_gateway_runtime_t> ().manager ());
+      },
+      service_lifetime_t::scoped);
+    auto control = std::make_shared<shutdown_session_control_t> ();
+    services.add_factory<shutdown_failure_session_t> (
+      [control] (service_provider_t &) {
+          return std::make_unique<shutdown_failure_session_t> (control);
+      },
+      service_lifetime_t::scoped);
+    zlink_framework_options_t options (services, handlers, serializers, builder);
+    options.add_route_mesh ("expired-core-mesh")
+      .set_routing_id (zlink::routing_id_t::from ("expired-core-node"))
+      .listen (loopback_tcp_any_port);
+    options.add_stream_node ("expired-core-stream")
+      .bind (loopback_tcp_any_port)
+      .register_session ("expired-core-session");
+    options.apply ();
+    for (const auto &registration : detail::mesh_node_runtime_t::registrations (builder))
+        registration->core_context = detail::zlink_builder_access_t::shared_core_context (builder);
+
+    std::atomic_size_t dispatch_errors{0};
+    dispatch_options_t dispatch;
+    detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+      dispatch, [&dispatch_errors] (const message_dispatch_error_event_t &event) {
+          if (event.surface == dispatch_error_surface_t::stream_session
+              && event.message_kind == dispatch_message_kind_t::control)
+              dispatch_errors.fetch_add (1, std::memory_order_relaxed);
+      });
+    detail::apply_dispatch_options (builder, dispatch);
+
+    auto provider = services.build_provider ();
+    auto mesh = detail::mesh_node_runtime_t::from (builder, "expired-core-mesh");
+    if (!mesh)
+        return 351;
+    mesh->bind_serializers (serializers);
+    mesh->start ().result ().value ();
+    auto stream_runtime = detail::stream_runtime_t::from (builder);
+    auto listeners = std::make_shared<runtime::listener_status_registry_t> ();
+    runtime::stream_host_service_t host (
+      std::make_shared<runtime::runtime_failure_collector_t> (), stream_runtime,
+      stream_runtime.snapshots (),
+      {{"expired-core-session",
+        [] (service_provider_t &scope) -> packet_stream_session_t & {
+            return scope.get_required<shutdown_failure_session_t> ();
+        }}},
+      std::chrono::milliseconds{30'000}, mesh, {}, listeners);
+    struct cleanup_t
+    {
+        runtime::stream_host_service_t &host;
+        detail::mesh_node_runtime_t &mesh;
+        service_provider_t &provider;
+        ~cleanup_t ()
+        {
+            host.stop ();
+            mesh.stop ();
+            provider.close ();
+        }
+    } cleanup{host, *mesh, provider};
+    host.start (provider);
+    const std::vector<zlink::routing_id_t> expired_rids{
+      zlink::routing_id_t::from (std::uint32_t{1}), zlink::routing_id_t::from (std::uint32_t{2})};
+    runtime::stream_host_service_test_access_t::create_core_sessions (host, expired_rids);
+    if (!control->wait_connected (2)) {
+        std::cerr << "FAIL test access did not create both Core STREAM sessions" << '\n';
+        return 352;
+    }
+    runtime::stream_host_service_test_access_t::expire_core_sessions (host, expired_rids);
+    const bool all_sessions_processed =
+      control->wait_disconnected (2) && control->wait_destroyed (2);
+    host.stop ();
+    const auto reported = dispatch_errors.load (std::memory_order_relaxed);
+    if (!all_sessions_processed || reported != 0) {
+        std::cerr << "FAIL expired Core session cleanup completed=" << all_sessions_processed
+                  << " dispatch_errors=" << reported << '\n';
+        return 353;
+    }
+    std::cout << "PASS expired Core session NOT_FOUND is ignored and next session is processed\n";
+    return 0;
 }
 
 int core_connected_rejection_cleanup (
@@ -1828,6 +1929,8 @@ int main (int argc, char **argv)
         return reply_submission_after_unbound (false) ? 5 : reply_submission_after_unbound ();
     if (argc == 2 && std::string_view (argv[1]) == "--binding-submission-order")
         return binding_submission_order ();
+    if (argc == 2 && std::string_view (argv[1]) == "--expired-core-disconnect-not-found")
+        return expired_core_disconnect_not_found_does_not_report_or_stop_next_session ();
     if (argc == 2 && std::string_view (argv[1]) == "--reader-retirement-tracked")
         return reader_retirement_is_tracked_until_complete ();
     if (argc == 2 && std::string_view (argv[1]) == "--connection-registry-lifetime") {
@@ -3839,5 +3942,9 @@ int main (int argc, char **argv)
         std::cerr << error.what () << '\n';
         return 321;
     }
+    if (const auto result =
+          expired_core_disconnect_not_found_does_not_report_or_stop_next_session ();
+        result != 0)
+        return result;
     return 0;
 }
