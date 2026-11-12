@@ -50,7 +50,7 @@ const responseHeader = workerData.frameworkWire
 function dispatchOne() {
   const parts = received.parts;
   try {
-    const header = parts[0].data();
+    const header = workerData.frameworkWire ? parts[0].data() : null;
     const payload = decodeBenchPayloadBody(parts[parts.length - 1].data());
     if (payload === null) throw new Error('invalid benchmark payload');
     if (received.replyToken !== null) {
