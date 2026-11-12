@@ -201,35 +201,46 @@ TEST (RequestCallAllocations, LocalActorRequestCompletionRegistrationDoesNotExce
     auto host = std::make_shared<host_t> (std::move (options));
     host->start ();
 
-    const auto prepared = host->transport ().prepare_local_operation_async ().result ();
-    ASSERT_TRUE (prepared);
-    ASSERT_TRUE (prepared.value ());
-    operation_t operation;
-    std::optional<fw::request_task_t<parts_reply_t>> pending;
-    const auto sample = sample_allocations ([&] {
-        pending.emplace (fw::detail::request_task_access_t::receive_public<parts_reply_t> (
-          [&operation] (auto receiver) {
-              operation.receiver = [receiver] (const auto &) mutable {
-                  receiver.complete (fw::result_t<parts_reply_t>::success (parts_reply_t::failure (
-                    fw::framework_error_kind_t::unavailable, "allocation probe terminal")));
-              };
-          }));
-        fw::runtime::host::public_host_runtime_test_access_t::register_local_actor_request (
-          *host, operation, *prepared.value ());
-    });
-    print_allocation_sizes ("local Actor request completion registration", sample);
-    // 5ecae5de8b used eight heap calls for this measured local Actor path.
-    EXPECT_LE (sample.total, 8u) << sample.diagnostics;
-    EXPECT_FALSE (operation.receiver);
+    // One registration on a fresh host also pays one-time container growth (MSVC deque
+    // map and block on the first enqueue of each lane, which libstdc++ allocates in the
+    // constructor). Settle one request first so the sample measures the per-request cost.
+    const auto register_and_fail = [&host] (bool measure) {
+        const auto prepared = host->transport ().prepare_local_operation_async ().result ();
+        ASSERT_TRUE (prepared);
+        ASSERT_TRUE (prepared.value ());
+        operation_t operation;
+        std::optional<fw::request_task_t<parts_reply_t>> pending;
+        const auto sample = sample_allocations ([&] {
+            pending.emplace (fw::detail::request_task_access_t::receive_public<parts_reply_t> (
+              [&operation] (auto receiver) {
+                  operation.receiver = [receiver] (const auto &) mutable {
+                      receiver.complete (
+                        fw::result_t<parts_reply_t>::success (parts_reply_t::failure (
+                          fw::framework_error_kind_t::unavailable, "allocation probe terminal")));
+                  };
+              }));
+            fw::runtime::host::public_host_runtime_test_access_t::register_local_actor_request (
+              *host, operation, *prepared.value ());
+        });
+        if (measure) {
+            print_allocation_sizes ("local Actor request completion registration", sample);
+            // 5ecae5de8b used eight heap calls for this measured local Actor path.
+            EXPECT_LE (sample.total, 8u) << sample.diagnostics;
+        }
+        EXPECT_FALSE (operation.receiver);
 
-    EXPECT_TRUE (host->transport ().fail_local_operation (
-      prepared.value ()->first, fw::runtime::foundation::operation_terminal_t::transport_failed));
-    const auto terminal_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
-    while (!pending->await_ready () && std::chrono::steady_clock::now () < terminal_deadline)
-        std::this_thread::yield ();
-    ASSERT_TRUE (pending->await_ready ());
-    ASSERT_TRUE (pending->result ());
-    EXPECT_FALSE (pending->result ().value ());
+        EXPECT_TRUE (host->transport ().fail_local_operation (
+          prepared.value ()->first,
+          fw::runtime::foundation::operation_terminal_t::transport_failed));
+        const auto terminal_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+        while (!pending->await_ready () && std::chrono::steady_clock::now () < terminal_deadline)
+            std::this_thread::yield ();
+        ASSERT_TRUE (pending->await_ready ());
+        ASSERT_TRUE (pending->result ());
+        EXPECT_FALSE (pending->result ().value ());
+    };
+    register_and_fail (false);
+    register_and_fail (true);
     host->close ();
 }
 
