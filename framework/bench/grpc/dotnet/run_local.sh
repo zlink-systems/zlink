@@ -69,6 +69,9 @@ for run in $(seq 1 "${RUNS}"); do
         target_args=(--endpoint "${target_endpoint}" --metrics-url "${target_stats_url}")
         ;;
     esac
+    if [[ "${impl}" == zlink-dotnet && "${target_impl}" == zlink-framework-dotnet ]]; then
+      target_command_endpoint="${target_endpoint}"
+    fi
 
     for pattern in "${patterns[@]}"; do
       bench_skip_cell "${impl}" "${pattern}" && continue
