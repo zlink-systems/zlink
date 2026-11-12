@@ -157,6 +157,7 @@ class service_topology_registry_t
         task_t<void> changed;
         std::shared_ptr<const std::vector<zlink::connection_attempt_t>> attempts;
         std::string endpoint;
+        std::shared_ptr<const service_node_descriptor_t> expectation;
         std::optional<zlink::connection_attempt_t> connection_attempt () const;
     };
     using peer_observer_t = std::function<peer_observation_t ()>;
@@ -190,6 +191,12 @@ class service_topology_registry_t
 
   private:
     friend class raw_mesh_node_owner_t;
+    using expected_peers_t =
+      std::map<std::vector<std::uint8_t>, service_node_descriptor_t, raw_mesh_byte_vector_less_t>;
+    std::shared_ptr<const expected_peers_t> expected_peers () const;
+    std::function<void ()> expect_peer_on_lane (const service_node_descriptor_t &descriptor);
+    std::function<void ()> forget_peer_on_lane (const std::vector<std::uint8_t> &node_routing_id,
+                                                const std::string &endpoint);
     std::tuple<service_node_descriptor_t, std::vector<admitted_peer_t>, std::function<void ()>>
     publish_draining_on_lane ();
     std::pair<peer_admission_result_t, std::function<void ()>>
@@ -225,6 +232,7 @@ class service_topology_registry_t
         std::shared_ptr<task_completion_source_t<void>> changed =
           std::make_shared<task_completion_source_t<void>> ();
         std::map<std::vector<std::uint8_t>, admitted_peer_t, raw_mesh_byte_vector_less_t> peers;
+        expected_peers_t expected_peers;
     };
 
     // The registry publishes its sole descriptor/peer state at mutation turns.

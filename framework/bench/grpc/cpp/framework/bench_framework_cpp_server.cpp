@@ -6,6 +6,9 @@
 #include <zlink/framework.hpp>
 #include <zlink/codecs/protobuf.hpp>
 #include <csignal>
+#if defined(ZLINK_CPP_ABLATION_LADDER)
+#include "../ladder/ladder_wire.hpp"
+#endif
 
 std::atomic<bool> stop_target{false};
 void target_signal (int)
@@ -43,6 +46,23 @@ int main (int argc, char **argv)
     const auto endpoint = arg_value (argc, argv, "--endpoint", "tcp://127.0.0.1:5294");
     const int port = std::stoi (arg_value (argc, argv, "--stats-port", "5295"));
     try {
+#if defined(ZLINK_CPP_ABLATION_LADDER)
+        if (arg_value (argc, argv, "--ladder-wire-check", "0") == "1") {
+            ladder::verify_wire ();
+            return 0;
+        }
+        const auto level = fw::detail::ablation::level ();
+        const bool raw_mesh = arg_value (argc, argv, "--ladder-raw-mesh", "0") == "1";
+        if (level <= 4 || raw_mesh) {
+            server_metrics_t metrics;
+            stats_http_server_t stats (metrics, port);
+            if (!stats.start ())
+                return 2;
+            std::signal (SIGINT, target_signal);
+            std::signal (SIGTERM, target_signal);
+            return ladder::direct_server (endpoint, metrics, stop_target, level, raw_mesh);
+        }
+#endif
         bench_metric_reader_t metric_reader;
         server_metrics_t metrics (std::nullopt);
         stats_http_server_t server (metrics, port, [&] {

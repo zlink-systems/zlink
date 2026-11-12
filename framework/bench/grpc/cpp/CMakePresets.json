@@ -1,0 +1,22 @@
+{
+  "version": 4,
+  "configurePresets": [
+    {
+      "name": "ladder-release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../../../../build-l3868",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_MANIFEST_DIR": "${sourceDir}/../../../languages/cpp",
+        "VCPKG_MANIFEST_FEATURES": "bench",
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/../../../../vcpkg/ports",
+        "VCPKG_INSTALLED_DIR": "/root/worktree/zlink-ratio040/framework/bench/grpc/cpp/build/vcpkg_installed",
+        "ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE": "ON",
+        "ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX": "/root/.cache/zlink/core-release/1.25.0/linux-x64",
+        "ZLINK_CPP_ABLATION_LADDER": "ON"
+      }
+    }
+  ]
+}

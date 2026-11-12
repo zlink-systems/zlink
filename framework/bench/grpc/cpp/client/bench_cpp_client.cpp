@@ -19,6 +19,9 @@
 #include <grpcpp/grpcpp.h>
 
 #include <zlink.hpp>
+#if defined(ZLINK_CPP_ABLATION_LADDER)
+#include "../ladder/ladder_wire.hpp"
+#endif
 
 #include <atomic>
 #include <cassert>
@@ -66,6 +69,10 @@ struct options_t
     double target_rate = 0;
     int submit_concurrency = 8;
     std::string output_file;
+#if defined(ZLINK_CPP_ABLATION_LADDER)
+    bool ladder_raw_mesh = false;
+    std::string ladder_target_rid = "bench-server";
+#endif
 };
 
 class submission_pacer_t
@@ -223,16 +230,23 @@ struct stream_t
     void finish (uint64_t sent, const payload_t *reply, uint64_t seq,
                  const std::exception *error = nullptr)
     {
+        finish_bytes (sent, reply ? reply->body ().data () : nullptr,
+                      reply ? reply->body ().size () : 0, seq, error);
+    }
+
+    void finish_bytes (uint64_t sent, const void *body, size_t body_size, uint64_t seq,
+                       const std::exception *error = nullptr)
+    {
         std::lock_guard lock (mutex);
         if (closed)
             return;
         const auto now = clock_t_::now ();
         bool valid = !error;
-        if (reply && valid) {
+        if (body && valid) {
             decoded_header_t header{};
-            valid = decode_payload (reply->body ().data (), reply->body ().size (), &header)
+            valid = decode_payload (body, body_size, &header)
                     && header.run_id == run_id && header.phase == phase
-                    && header.payload_size == size && reply->body ().size () == size
+                    && header.payload_size == size && body_size == size
                     && header.seq == seq;
             if (!valid)
                 ++counters.header_failures;
@@ -640,6 +654,10 @@ class zlink_raw_driver_t final : public driver_t
     std::thread _completion_thread;
 };
 
+#if defined(ZLINK_CPP_ABLATION_LADDER)
+#include "../ladder/ladder_driver.inc"
+#endif
+
 class framework_driver_t final : public driver_t
 {
   public:
@@ -760,6 +778,14 @@ class source_t
             try {
                 const auto window = pattern_window (_options.pattern);
                 const bool command = _options.pattern == "send-saturation";
+#if defined(ZLINK_CPP_ABLATION_LADDER)
+                if (((_options.implementation == "zlink-framework-cpp"
+                                  && fw::detail::ablation::level () <= 4)
+                                 || _options.ladder_raw_mesh))
+                    _driver = std::make_unique<ladder_driver_t> (_options, window, command,
+                      _options.ladder_raw_mesh ? -1 : fw::detail::ablation::level ());
+                else
+#endif
                 if (_options.implementation == "grpc-cpp")
                     _driver = std::make_unique<grpc_driver_t> (_options, window, command);
                 else if (_options.implementation == "zlink-cpp")
@@ -1001,6 +1027,10 @@ class source_t
         auto record = json::parse (input);
         input.close ();
         record["metadata"]["submitConcurrency"] = _options.submit_concurrency;
+#if defined(ZLINK_CPP_ABLATION_LADDER)
+        record["metadata"]["ablationLadderLevel"] = fw::detail::ablation::level ();
+        record["metadata"]["rawMeshAdapter"] = _options.ladder_raw_mesh;
+#endif
         auto &value = record["cells"][0];
         value["role"] = "source";
         value["trigger"] = trigger;
@@ -1050,6 +1080,12 @@ int main (int argc, char **argv)
     try {
         options_t options;
         options.implementation = arg_value (argc, argv, "--implementation", "grpc-cpp");
+#if defined(ZLINK_CPP_ABLATION_LADDER)
+        options.ladder_target_rid = arg_value (argc, argv, "--ladder-target-rid", "bench-server");
+        options.ladder_raw_mesh = arg_value (argc, argv, "--ladder-raw-mesh", "0") == "1";
+        options.raw_request_rid = arg_value (argc, argv, "--ladder-request-rid", options.raw_request_rid);
+        options.raw_command_rid = arg_value (argc, argv, "--ladder-command-rid", options.raw_command_rid);
+#endif
         options.pattern = arg_value (argc, argv, "--pattern", "request-serial");
         options.payload_size = std::stoul (arg_value (argc, argv, "--payload-size", "1024"));
         if (options.payload_size != 1024 && options.payload_size != 4096)
