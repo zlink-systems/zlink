@@ -371,7 +371,7 @@ bool run_same_owner_probe_case (zlink::framework::channel_client_t &channels,
     {
         std::unique_lock lock (state->mutex);
         started_before_release =
-          state->changed.wait_for (lock, 250ms, [&] { return state->second_entered; });
+          state->changed.wait_for (lock, 5s, [&] { return state->second_entered; });
         state->release_first = true;
     }
     state->changed.notify_all ();

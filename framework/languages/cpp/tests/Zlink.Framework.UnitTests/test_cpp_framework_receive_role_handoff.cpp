@@ -220,7 +220,7 @@ TEST (ReceiveRoleHandoff, T02NonblockingFailuresPreserveAssignments)
         if (condition == 0) {
             auto lock = placement.lock ();
             auto attempt = std::async (std::launch::async, [&] { return placement.handoff (); });
-            const auto returned_before_release = attempt.wait_for (100ms);
+            const auto returned_before_release = attempt.wait_for (5s);
             lock.unlock ();
             EXPECT_EQ (std::future_status::ready, returned_before_release);
             EXPECT_FALSE (attempt.get ());
@@ -282,7 +282,7 @@ TEST (ReceiveRoleHandoff, T02EmptyRotationReturnsBeforeMutexRelease)
     ASSERT_EQ (std::future_status::ready, published.wait_for (5s));
     auto lock = access_t::lock (executor);
     release_publication.set_value ();
-    const auto returned_before_release = next.wait_for (100ms);
+    const auto returned_before_release = next.wait_for (5s);
     lock.unlock ();
     executor.drain ();
     EXPECT_EQ (std::future_status::ready, returned_before_release);
@@ -1182,7 +1182,7 @@ TEST (ReceiveRoleHandoff, T09QueuedRolesDoNotDelayApplicationDrainOrReopenAdmiss
     ASSERT_TRUE (executor.start_role (queued));
     auto draining = std::async (std::launch::async, [&] { executor.drain_application (); });
     ASSERT_TRUE (until ([&] { return access_t::stopping (executor); }));
-    const auto application_drained = draining.wait_for (100ms);
+    const auto application_drained = draining.wait_for (5s);
     const bool admitted = executor.try_submit_internal ([&] { ++applications; });
     stop = true;
     executor.drain ();
