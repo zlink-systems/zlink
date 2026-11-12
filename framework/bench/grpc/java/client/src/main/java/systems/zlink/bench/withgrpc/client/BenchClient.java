@@ -106,7 +106,7 @@ public final class BenchClient {
             }
             case "zlink-framework-java" -> {
                 FrameworkStack stack = FrameworkStack.create(options);
-                BenchOperation operation = System.getenv("ZLINK_BENCH_LADDER_L0") != null
+                BenchOperation operation = ladderMode()
                         ? stack.ladderOperation(send)
                         : send ? stack.send() : stack.request();
                 yield new SourceTransport(operation, stack);
@@ -143,10 +143,17 @@ public final class BenchClient {
         values.put("grpcServerConfiguration",
             "io.grpc.ServerBuilder.forPort defaults, plaintext IPv4 loopback");
         values.put("logicalStreamRuntime", streamImplementation(options));
-        values.put("ladderProfile", System.getenv("ZLINK_BENCH_LADDER_L0") == null
+        values.put("ladderProfile", !ladderMode()
             ? "main benchmark path"
-            : "L0 binding-shaped RawStack path; Framework messaging path bypassed");
+            : System.getenv("ZLINK_BENCH_LADDER_L1") != null
+                ? "L1 binding-shaped RawStack path with Framework ingress permit"
+                : "L0 binding-shaped RawStack path; Framework messaging path bypassed");
         return values;
+    }
+
+    private static boolean ladderMode() {
+        return System.getenv("ZLINK_BENCH_LADDER_L0") != null
+                || System.getenv("ZLINK_BENCH_LADDER_L1") != null;
     }
 
     private record SourceTransport(BenchOperation operation, AutoCloseable resource)

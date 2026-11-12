@@ -54,7 +54,7 @@ public final class FrameworkStack implements AutoCloseable {
     }
 
     public static FrameworkStack create(BenchOptions options) {
-        if (System.getenv("ZLINK_BENCH_LADDER_L0") != null) {
+        if (ladderMode()) {
             var bindingContext = systems.zlink.contracts.core.Zlink.createContext();
             var binding = RawStack.create(
                     bindingContext,
@@ -151,6 +151,11 @@ public final class FrameworkStack implements AutoCloseable {
     }
 
     public record PeerEndpoint(String value) {}
+
+    private static boolean ladderMode() {
+        return System.getenv("ZLINK_BENCH_LADDER_L0") != null
+                || System.getenv("ZLINK_BENCH_LADDER_L1") != null;
+    }
 
     @EnableZLinkFramework
     @SpringBootApplication(proxyBeanMethods = false)

@@ -21,6 +21,10 @@ import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.sockets.RouterSocket;
+import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+
+import java.util.OptionalLong;
 import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec;
 import systems.zlink.framework.configuration.ZLinkUnhandledDispatchAction;
 import systems.zlink.framework.spring.EnableZLinkFramework;
@@ -56,7 +60,7 @@ public class ZLinkFrameworkBenchServer {
         BenchServerMetrics metrics = METRICS;
         listenEndpoint = endpoint;
 
-        if (System.getenv("ZLINK_BENCH_LADDER_L0") != null) {
+        if (ladderMode()) {
             runLadderL0(endpoint, metricsUrl, metrics);
             return;
         }
@@ -83,7 +87,7 @@ public class ZLinkFrameworkBenchServer {
         }
     }
 
-    /** Ladder L0: binding-shaped owner loop and direct fixed handler. */
+    /** Ladder L0/L1: binding-shaped owner loop and direct fixed handler. */
     private static void runLadderL0(
             String endpoint, String metricsUrl, BenchServerMetrics metrics) throws Exception {
         try (Context context = Zlink.createContext();
@@ -94,11 +98,11 @@ public class ZLinkFrameworkBenchServer {
             var stats = BenchStatsServer.start(
                     metricsUrl,
                     metrics,
-                    "{\"implementation\":\"zlink-framework-java-l0\","
+                    "{\"implementation\":\"zlink-framework-java-ladder\","
                             + "\"shape\":\"binding receive and protobuf reply\","
                             + "\"endpoint\":\"" + endpoint + "\"}");
             Thread owner = new Thread(
-                    () -> pumpLadderL0(router, metrics), "bench-framework-l0-owner");
+                    () -> pumpLadderL0(router, metrics), "bench-framework-ladder-owner");
             owner.setDaemon(true);
             try {
                 owner.start();
@@ -116,30 +120,71 @@ public class ZLinkFrameworkBenchServer {
     }
 
     private static void pumpLadderL0(RouterSocket router, BenchServerMetrics metrics) {
+        boolean permitsEnabled = System.getenv("ZLINK_BENCH_LADDER_L1") != null;
+        ZLinkApplicationJobQueue permits = permitsEnabled
+                ? new ZLinkApplicationJobQueue(
+                        ZLinkApplicationJobQueueProfile.BALANCED,
+                        OptionalLong.empty(),
+                        ZLinkApplicationJobQueue.productionProcessorCandidates(null))
+                : null;
         try (Received received = new Received()) {
             while (true) {
-                try {
-                    if (!router.recv(received, RecvFlags.NONE)) {
-                        continue;
-                    }
-                    handleLadderL0(received, metrics);
-                    while (router.recv(received, RecvFlags.DONT_WAIT)) {
+                boolean first = true;
+                while (true) {
+                    ZLinkApplicationJobQueue.Permit permit = null;
+                    try {
+                        if (permitsEnabled) {
+                            permit = permits.acquireBlocking(
+                                    ZLinkApplicationJobQueue.Origin.REMOTE);
+                        }
+                        boolean receivedMessage = router.recv(
+                                received, first ? RecvFlags.NONE : RecvFlags.DONT_WAIT);
+                        if (!receivedMessage) {
+                            if (permit != null) {
+                                permit.close();
+                            }
+                            break;
+                        }
+                        first = false;
+                        if (permit != null) {
+                            permit.handlerStarted();
+                        }
                         handleLadderL0(received, metrics);
-                    }
-                } catch (ZlinkRecvException failure) {
-                    if (failure.getResult() == RecvResult.TERMINATED) {
+                    } catch (ZlinkRecvException failure) {
+                        if (failure.getResult() == RecvResult.TERMINATED) {
+                            return;
+                        }
+                        if (failure.getResult() != RecvResult.NO_DATA) {
+                            metrics.recordError();
+                            System.err.println("L0 receive failed: " + failure);
+                        }
+                        if (failure.getResult() == RecvResult.NO_DATA || first) {
+                            break;
+                        }
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
                         return;
-                    }
-                    if (failure.getResult() != RecvResult.NO_DATA) {
+                    } catch (RuntimeException failure) {
                         metrics.recordError();
-                        System.err.println("L0 receive failed: " + failure);
+                        System.err.println("L0 owner failed: " + failure);
+                        break;
+                    } finally {
+                        if (permit != null) {
+                            permit.close();
+                        }
                     }
-                } catch (RuntimeException failure) {
-                    metrics.recordError();
-                    System.err.println("L0 owner failed: " + failure);
                 }
             }
+        } finally {
+            if (permits != null) {
+                permits.close();
+            }
         }
+    }
+
+    private static boolean ladderMode() {
+        return System.getenv("ZLINK_BENCH_LADDER_L0") != null
+                || System.getenv("ZLINK_BENCH_LADDER_L1") != null;
     }
 
     private static void handleLadderL0(Received received, BenchServerMetrics metrics) {
