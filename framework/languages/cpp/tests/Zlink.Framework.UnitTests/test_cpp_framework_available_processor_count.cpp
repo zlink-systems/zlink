@@ -30,7 +30,7 @@ int main ()
         assert (available_processor_count () == selected);
         zlink::framework::completion_owner_t owner;
         const auto workers = zlink::framework::detail::completion_dispatcher_worker_count ();
-        assert (workers == std::max (2u, selected));
+        assert (workers == 2);
         std::cout << "affinity=" << selected << " completion_workers=" << workers << '\n';
         owner.close ();
         assert (sched_setaffinity (0, sizeof (original), &original) == 0);

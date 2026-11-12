@@ -24,6 +24,11 @@ namespace zlink::framework::runtime
 struct serial_application_record_t;
 }
 
+namespace zlink::framework::runtime::host
+{
+struct public_host_runtime_test_access_t;
+}
+
 namespace zlink::framework::runtime::mesh
 {
 struct service_mailbox_record_t;
@@ -43,6 +48,7 @@ class service_mailbox_settlement_t
 
   private:
     friend class service_mailbox_t;
+    friend struct host::public_host_runtime_test_access_t;
     service_mailbox_settlement_t (std::shared_ptr<service_mailbox_claim_t> claim,
                                   std::size_t index) noexcept :
         _claim (std::move (claim)), _index (index)
@@ -198,6 +204,7 @@ class mailbox_callback_t
     }
 
   private:
+    friend struct public_host_runtime_test_access_t;
     std::variant<std::function<void ()>,
                  mesh::service_mailbox_settlement_t,
                  std::shared_ptr<std::atomic_bool>>

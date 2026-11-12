@@ -3,6 +3,8 @@ package systems.zlink.framework.runtime.locations;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.RepeatedTest;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
@@ -147,8 +149,132 @@ final class ZLinkOwnerLeaseOutageRecoveryTest {
         }
     }
 
+    @ParameterizedTest
+    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void discardedEpisodeDoesNotBlockSecondOutage(boolean provider, boolean retention) {
+        try (var f = new Fixture(provider, retention)) {
+            f.outage();
+            long firstCutoff = f.cutoff();
+            f.at(firstCutoff);
+            for (var task : java.util.List.copyOf(f.scheduler.tasks))
+                if (!task.isCancelled()
+                        && task.getDelay(TimeUnit.NANOSECONDS) > Duration.ofSeconds(5).toNanos())
+                    task.run();
+            assertTrue(f.runtime.ownerLeaseSnapshot().outageDiscarded());
+            assertEquals(1, f.disposed.get());
+            assertStale(CompletableFuture.runAsync(() -> f.execution.check(true), Runnable::run));
+
+            f.at(Math.max(firstCutoff, RECLAIM_AFTER) + 1);
+            assertTrue(
+                    await(f.runtime.renewOwnerLeaseOnce()),
+                    "provider="
+                            + provider
+                            + ", retention="
+                            + retention
+                            + ", snapshot="
+                            + f.runtime.ownerLeaseSnapshot());
+            assertNotEquals(f.original, f.runtime.currentOwnerToken());
+            var disposed = new AtomicInteger();
+            var second = f.runtime.execution(() -> true, disposed::incrementAndGet);
+            await(second.ready());
+            second.check(true);
+            long basis = f.runtime.ownerLeaseSnapshot().lastSuccessfulRequestStartedNanos();
+            f.at(f.now.get() + 1);
+            f.outage();
+            long secondCutoff = basis + Duration.ofSeconds(retention ? 40 : 25).toNanos();
+            assertEquals(f.now.get(), f.runtime.ownerLeaseSnapshot().outageObservedAtNanos());
+            assertEquals(secondCutoff, f.cutoff());
+            assertFalse(f.runtime.ownerLeaseSnapshot().outageDiscarded());
+            f.at(secondCutoff - 1);
+            second.check(true);
+            assertEquals(0, disposed.get());
+            assertStale(CompletableFuture.runAsync(() -> f.execution.check(true), Runnable::run));
+            f.at(secondCutoff);
+            for (var task : java.util.List.copyOf(f.scheduler.tasks))
+                if (!task.isCancelled()
+                        && task.getDelay(TimeUnit.NANOSECONDS) > Duration.ofSeconds(5).toNanos())
+                    task.run();
+            assertTrue(f.runtime.ownerLeaseSnapshot().outageDiscarded());
+            assertEquals(1, disposed.get());
+            assertStale(CompletableFuture.runAsync(() -> second.check(true), Runnable::run));
+            assertStale(CompletableFuture.runAsync(() -> f.execution.check(true), Runnable::run));
+        }
+    }
+
     private static <T> T await(CompletionStage<T> stage) {
         return stage.toCompletableFuture().join();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void deadlineLatchHoldsAcceptedWorkUntilRenewal(boolean provider, boolean actor)
+            throws Exception {
+        try (var f = new Fixture(provider, true)) {
+            var scheduled = new LinkedBlockingQueue<Runnable>();
+            var queue =
+                    new ZLinkSerialExecutionQueue(
+                            scheduled::add,
+                            actor
+                                    ? ZLinkExecutionLanePolicy.actorDelivery()
+                                    : ZLinkExecutionLanePolicy.spot());
+            queue.executionPolicy(f.execution);
+            var timer = ZLinkSerialExecutionQueue.spotTimer(scheduled::add, queue);
+            f.execution.onResume(
+                    () -> {
+                        queue.resumePending();
+                        timer.resumePending();
+                    });
+            var timerCalls = new AtomicInteger();
+            var queuedTick =
+                    timer.enqueue(
+                                    () -> {
+                                        timerCalls.incrementAndGet();
+                                        return CompletableFuture.completedFuture(null);
+                                    },
+                                    null)
+                            .toCompletableFuture();
+            var calls = new AtomicInteger();
+            var accepted =
+                    queue.enqueue(
+                                    () -> {
+                                        calls.incrementAndGet();
+                                        return CompletableFuture.completedFuture(null);
+                                    },
+                                    null)
+                            .toCompletableFuture();
+            f.at(Duration.ofSeconds(25).toNanos());
+            for (var task : java.util.List.copyOf(f.scheduler.tasks))
+                if (!task.isCancelled()
+                        && task.getDelay(TimeUnit.NANOSECONDS) == Duration.ofSeconds(25).toNanos())
+                    task.run();
+            assertTrue(f.execution.paused(), "the deadline latch temporarily closes execution");
+            while (!scheduled.isEmpty()) scheduled.remove().run();
+            assertFalse(
+                    accepted.isDone(), "accepted work waits while the deadline latch is closed");
+            assertEquals(0, calls.get());
+            assertFalse(queuedTick.isDone());
+            assertEquals(0, timerCalls.get());
+            var rejected =
+                    assertThrows(
+                            ZLinkFrameworkException.class, f.runtime::ensureOwnerAdmissionOpen);
+            assertEquals(ZLinkFrameworkErrorKind.SHUTTING_DOWN, rejected.kind());
+            assertTrue(await(f.runtime.renewOwnerLeaseOnce()));
+            assertFalse(f.execution.paused(), "renewal reopens the execution gate");
+            var completed = CompletableFuture.allOf(accepted, queuedTick);
+            while (!completed.isDone()) {
+                var task = scheduled.poll(2, TimeUnit.SECONDS);
+                if (task == null) assertTrue(completed.isDone(), "renewal wakes accepted work");
+                else task.run();
+            }
+            completed.get(2, TimeUnit.SECONDS);
+            await(accepted);
+            assertEquals(1, calls.get());
+            assertTrue(queuedTick.isDone());
+            await(queuedTick);
+            assertEquals(1, timerCalls.get());
+            timer.close();
+            queue.close();
+        }
     }
 
     @RepeatedTest(100)

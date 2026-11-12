@@ -127,8 +127,9 @@ public sealed class test_writable_token_delivery
         Assert.True(CoreTestSupport.IsNativeAvailable());
         Type ownerType = CompletionOwnerTestAccess.RuntimeType(
             "Systems.Zlink.CompletionOwner");
-        object owner = CompletionOwnerTestAccess.Create(ownerType,
-            IntPtr.Zero, SocketType.Router);
+        using var context = Zlink.CreateContext();
+        using var socket = context.CreateRouterSocket();
+        object owner = CompletionOwnerTestAccess.Owner(socket);
         CompletionOwnerTestAccess.Invoke(owner, "TransferToPublic", new object());
         RoutingId target = CoreTestSupport.RoutingIdUtf8("original-target");
         Type entryType = ownerType.GetNestedType(request

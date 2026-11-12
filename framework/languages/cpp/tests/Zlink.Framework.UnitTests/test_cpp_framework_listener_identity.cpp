@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "mailbox_claim_fixture.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/diagnostics/dispatch_options_access.hpp"
@@ -269,8 +270,8 @@ TEST (ListenerIdentity, WildcardMeshAdvertisesLoopbackAndSupportsExpectedRidRout
     // channel message belong to different owners, so claim until both arrived.
     std::size_t claimed_records = 0;
     for (int attempt = 0; attempt != 8 && claimed_records < 2; ++attempt) {
-        const auto claimed =
-          target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 2, 4096);
+        const auto claimed = zlink::framework::test::claim_mailbox (
+          target.mailbox (), mesh::service_mailbox_domain_t::application, 2, 4096);
         if (!claimed)
             break;
         claimed_records += claimed->records.size ();

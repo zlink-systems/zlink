@@ -395,6 +395,7 @@ public sealed class AutoConnectLoopTests
         await using var fixture = await PublicationFixture.CreateAsync(
             TimeSpan.FromMilliseconds(100)
         );
+        var activeTimers = fixture.Time.ActiveTimerCount;
         fixture.Store.HoldWrites = true;
         var write = fixture
             .Runtime.WriteDescriptorAsync(
@@ -405,11 +406,11 @@ public sealed class AutoConnectLoopTests
         var pending = await fixture.Store.NextWriteAsync();
 
         Assert.False(write.IsCompleted);
-        Assert.Equal(1, fixture.Time.ActiveTimerCount);
+        Assert.Equal(activeTimers + 1, fixture.Time.ActiveTimerCount);
         fixture.Time.Advance(fixture.Options.OwnerLeaseRenewTimeout);
         Assert.True(pending.Token.IsCancellationRequested);
         await Assert.ThrowsAsync<ZLinkDescriptorPublicationUnconfirmedException>(() => write);
-        Assert.Equal(0, fixture.Time.ActiveTimerCount);
+        Assert.Equal(activeTimers, fixture.Time.ActiveTimerCount);
         Assert.False(pending.Result.Task.IsCompleted);
     }
 

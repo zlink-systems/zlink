@@ -17,7 +17,7 @@ public sealed record BenchTriggerRequest
     public required string phase { get; init; }
     public required int durationMs { get; init; }
     public required int requestWindow { get; init; }
-    public required int sendConcurrency { get; init; }
+    public required int submitConcurrency { get; init; }
 }
 
 public sealed record BenchTriggerObservation(
@@ -28,7 +28,7 @@ public sealed record BenchTriggerObservation(
     string phase,
     int durationMs,
     int requestWindow,
-    int sendConcurrency,
+    int submitConcurrency,
     long receivedAtUnixMs);
 
 public sealed record BenchTriggerReply(
@@ -112,7 +112,7 @@ public sealed class BenchPhaseController(
                 request.phase,
                 request.durationMs,
                 request.requestWindow,
-                request.sendConcurrency,
+                request.submitConcurrency,
                 DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             var reply = new BenchTriggerReply(
                 true,
@@ -172,8 +172,8 @@ public sealed class BenchPhaseController(
             throw new JsonException("Unknown benchmark pattern.");
         if (request.phase is not ("warmup" or "active"))
             throw new JsonException("phase must be warmup or active.");
-        if (request.payloadBytes < 29 || request.durationMs <= 0 || request.requestWindow <= 0 || request.sendConcurrency <= 0)
-            throw new JsonException("payloadBytes, durationMs, requestWindow, and sendConcurrency must be positive.");
+        if (request.payloadBytes < 29 || request.durationMs <= 0 || request.requestWindow <= 0 || request.submitConcurrency <= 0)
+            throw new JsonException("payloadBytes, durationMs, requestWindow, and submitConcurrency must be positive.");
     }
 
     private static long NowNs() =>

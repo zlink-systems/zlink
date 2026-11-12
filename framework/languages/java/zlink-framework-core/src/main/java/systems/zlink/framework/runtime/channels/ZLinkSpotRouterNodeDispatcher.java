@@ -73,8 +73,8 @@ final class ZLinkSpotRouterNodeDispatcher {
                 targetSpotGeneration,
                 authorityOwnerGeneration,
                 ownerLeaseGeneration);
-        entrySpot
-                .requestToSpot(
+        var submitted =
+                entrySpot.requestToSpot(
                         targetNodeRid,
                         targetSpotId,
                         targetSpotGeneration,
@@ -83,15 +83,17 @@ final class ZLinkSpotRouterNodeDispatcher {
                         timeout,
                         operations,
                         operationId,
-                        requestAdmission)
-                .whenComplete(
-                        (reply, failure) -> {
-                            if (failure == null) {
-                                completeReply(reply, result);
-                            } else {
-                                result.completeExceptionally(classifyTransportFailure(failure));
-                            }
-                        });
+                        requestAdmission);
+        systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
+                result, submitted);
+        submitted.whenComplete(
+                (reply, failure) -> {
+                    if (failure == null) {
+                        completeReply(reply, result);
+                    } else {
+                        result.completeExceptionally(classifyTransportFailure(failure));
+                    }
+                });
         return result;
     }
 

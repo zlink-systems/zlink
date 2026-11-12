@@ -128,6 +128,92 @@ void verify_independent_completion_turns (std::size_t producer_count)
         assert (calls.load (std::memory_order_acquire) == 1);
 }
 
+void verify_completion_dispatcher_resource_boundary ()
+{
+    using namespace std::chrono_literals;
+    using registry_t = foundation::operation_registry_t;
+    using terminal_t = foundation::operation_terminal_t;
+    assert (zlink::framework::detail::completion_dispatcher_worker_count () == 2);
+
+    // S01 §11 condition (4): an unrelated completion finishes while the first callback blocks.
+    {
+        registry_t registry;
+        std::promise<void> first_entered;
+        auto first_result = first_entered.get_future ();
+        std::latch release_first (1);
+        std::promise<void> first_returned;
+        auto first_return_result = first_returned.get_future ();
+        std::promise<void> second_finished;
+        auto second_result = second_finished.get_future ();
+        std::atomic_bool second_completed{false};
+        assert (registry.register_operation (id (81), registry_t::clock_t::time_point::max (),
+                                             [&] (terminal_t, auto) {
+                                                 first_entered.set_value ();
+                                                 release_first.wait ();
+                                                 first_returned.set_value ();
+                                             }));
+        assert (registry.register_operation (
+          id (82), registry_t::clock_t::time_point::max (), [&] (terminal_t, auto) {
+              second_completed.store (true, std::memory_order_release);
+              second_finished.set_value ();
+          }));
+        assert (registry.complete (id (81), {}));
+        assert (first_result.wait_for (5s) == std::future_status::ready);
+        assert (registry.complete (id (82), {}));
+        assert (second_result.wait_for (5s) == std::future_status::ready);
+        assert (second_completed.load (std::memory_order_acquire));
+        release_first.count_down ();
+        assert (first_return_result.wait_for (5s) == std::future_status::ready);
+    }
+
+    // S08 §4.4: independence does not promise new application callbacks while all execution
+    // resources are tied up in synchronous waits.
+    {
+        registry_t registry;
+        auto dispatcher = zlink::framework::detail::borrow_completion_dispatcher ();
+        std::promise<void> first_entered, second_entered;
+        auto first_result = first_entered.get_future ();
+        auto second_result = second_entered.get_future ();
+        std::promise<void> first_returned, second_returned;
+        auto first_return_result = first_returned.get_future ();
+        auto second_return_result = second_returned.get_future ();
+        std::latch release_first (1), release_second (1);
+        std::promise<void> third_finished;
+        auto third_result = third_finished.get_future ();
+        zlink::framework::detail::dispatch_completion (
+          [&] {
+              first_entered.set_value ();
+              release_first.wait ();
+              first_returned.set_value ();
+          },
+          false, nullptr, dispatcher);
+        zlink::framework::detail::dispatch_completion (
+          [&] {
+              second_entered.set_value ();
+              release_second.wait ();
+              second_returned.set_value ();
+          },
+          false, nullptr, dispatcher);
+        assert (first_result.wait_for (5s) == std::future_status::ready);
+        assert (second_result.wait_for (5s) == std::future_status::ready);
+
+        std::atomic_bool third_callback_ran{false};
+        assert (registry.register_operation (
+          id (83), registry_t::clock_t::time_point::max (), [&] (terminal_t, auto) {
+              third_callback_ran.store (true, std::memory_order_release);
+              third_finished.set_value ();
+          }));
+        assert (registry.complete (id (83), {}));
+        assert (registry.size () == 0);
+        release_first.count_down ();
+        assert (third_result.wait_for (5s) == std::future_status::ready);
+        assert (third_callback_ran.load (std::memory_order_acquire));
+        assert (first_return_result.wait_for (5s) == std::future_status::ready);
+        release_second.count_down ();
+        assert (second_return_result.wait_for (5s) == std::future_status::ready);
+    }
+}
+
 void verify_shutdown_during_completion_publication ()
 {
     foundation::operation_registry_t registry;
@@ -929,6 +1015,7 @@ int main (int argc, char **argv)
     verify_shutdown_waits_for_callback_capture_destruction ();
     verify_independent_completion_turns (1);
     verify_independent_completion_turns (4);
+    verify_completion_dispatcher_resource_boundary ();
     verify_shutdown_during_completion_publication ();
     verify_completion_payload_storage ();
     const auto &fixture = completion_terminal_fixture ();

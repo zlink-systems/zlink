@@ -239,7 +239,7 @@ completion after an HWM wait; the Framework does not reselect for capacity or re
 There is no automatic resubmission after completion. Termination of a send wait follows [§7](#7-one-way-send-wait-termination-and-classic-fanout-send-timeout). A new select-one operation may choose members eligible when it starts.
 
 **Requests before the connection is ready.** After a remote request fixes a valid target and owner
-descriptor under the existing rules, it checks the connection to that owner and
+under the existing rules, it checks, under the rules below, that owner's descriptor, the connection to that owner and
 [service admission](../02-channel-transport/05-transport-liveness.en.md#5-ready-and-failure-determination) before
 starting a binding operation. Lifecycle requests that the Framework starts (Actor create and Join, session bind,
 relocation PREPARE) do the same. Each language decides this in one logical request admission point.
@@ -264,6 +264,11 @@ relocation PREPARE) do the same. Each language decides this in one logical reque
   readiness check only reads the state the observer has already applied; the connection state snapshot is read
   only when `ZLINK_POLLCONNECT` is ready. The wait and baseline handling below applies only to requests that
   aren't ready.
+- If the owner is settled from authority but no descriptor matching that owner's lifecycle generation is in the
+  topology yet, the request waits for the existing discovery refresh to bring that descriptor, within the same
+  remaining request timeout as below. It doesn't re-read the Store per request. When the descriptor appears, the
+  connection readiness check of this section continues; when the timeout expires, the result is `DeadlineExceeded`.
+  If the authority changes while it waits, the existing fence rule ends it with `Unavailable`.
 - If there's no selected route and the target endpoint's [connection state](../../../../../../../core/doc/spec/core/socket/README.en.md#zlink_socket_connection_attempts_snapshot) is
   `ATTEMPT_FAILED`, the request ends at once with `Unavailable`. It doesn't wait even while Core is reconnecting.
 - If the connection state is `CONNECTING`, or a valid descriptor exists but there's no Core connection row yet, or a

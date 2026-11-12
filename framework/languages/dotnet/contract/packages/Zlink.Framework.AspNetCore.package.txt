@@ -7,7 +7,7 @@ entry _rels/.rels
 entry lib/net8.0/Zlink.Framework.AspNetCore.dll
 entry lib/net8.0/Zlink.Framework.AspNetCore.xml
 entry package/services/metadata/core-properties/{CORE_PROPERTIES}.psmdcp
-content-sha256 lib/net8.0/Zlink.Framework.AspNetCore.xml=fe83b2a45161057af74af93324dc4869c86aef5469f60ebd476ccb0c3c84bae5
+xml-doc lib/net8.0/Zlink.Framework.AspNetCore.xml
 metadata authors=zlink
 metadata description=ASP.NET Core integration layer for ZLink framework.
 metadata id=Zlink.Framework.AspNetCore
@@ -25,6 +25,6 @@ dependency targetFramework=net8.0 exclude=Build,Analyzers id=Microsoft.Extension
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=Microsoft.Extensions.Hosting.Abstractions version=8.0.0
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=Microsoft.Extensions.Logging version=8.0.0
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=Microsoft.Extensions.Logging.Abstractions version=8.0.0
-dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink version=1.23.0
+dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink version=1.25.0
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.Framework version={VERSION}
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.HttpClient version={VERSION}

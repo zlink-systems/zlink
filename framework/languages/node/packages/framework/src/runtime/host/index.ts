@@ -7,6 +7,7 @@ import { ZLinkProviderRelocationRepository } from '../locations/relocation-blob'
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import { currentApplicationJobOrigin } from '../application-jobs/application-job-queue-scope';
 import { listAllMeshNodeDescriptors } from '../locations/location-store-pages';
+import { ZLinkLiveRowFilter } from '../locations/lease-tracker';
 import { ZLinkDescriptorPublicationUnconfirmedError } from '../locations/descriptor-publication';
 import { ZLinkOwnerLeaseReleaseDelayPendingError } from '../locations/owner-lease-release-delay';
 import { ZLinkMeshNodeDescriptorConflictException } from '../spots/spot-node-runtime-manager';
@@ -399,6 +400,15 @@ export class ZLinkFrameworkRuntimeHost
     this.admission = (
       factories?.createAdmissionGate ?? ((ownerOpen) => new ZLinkRuntimeAdmissionGate(ownerOpen))
     )(() => this.ownerAdmissionOpen());
+    // Spec 06 §7 and §13: a runtime that has not started rejects public calls with
+    // InvalidOperation; one that stopped rejects them as shutting down.
+    this.admission.setRuntimeRefusal(() =>
+      this.executionState !== undefined
+        ? undefined
+        : this.runtimeState === ZLinkFrameworkRuntimeState.Preparing
+          ? ZLinkFrameworkInternalErrorKind.InvalidOperation
+          : ZLinkFrameworkInternalErrorKind.RuntimeShutdown
+    );
     this.admission.setExecutionRuntime(() => this.locationOwner.currentRuntime);
     this.backendAdapterFactory = resolveBackendAdapterFactory(internalOptions);
     this.lifecycleSink = options.lifecycleSink;
@@ -733,6 +743,7 @@ export class ZLinkFrameworkRuntimeHost
       factories?.createBoundSessionRelay ??
       ((relayOptions: ZLinkBoundSessionRelayOptions) => new ZLinkBoundSessionRelay(relayOptions));
     this.boundSessionRelay = createBoundSessionRelay({
+      admission: this.admission,
       requestTimeoutMs: options.registration.requestTimeoutMs,
       sessionRelocationSealTimeoutMs:
         options.registration.locations.options.sessionRelocationSealTimeoutMs ??
@@ -894,8 +905,6 @@ export class ZLinkFrameworkRuntimeHost
       trackInstanceSpot: (input) => this.locationOwner.currentLifecycle?.trackInstanceSpot(input),
       observeActorAuthorityVersion: (actorId, storeVersion) =>
         this.actorClientLocationResolver?.observeActorAuthorityVersion(actorId, storeVersion),
-      reconcileStatefulAuthorityRoutes: (signal) =>
-        this.statefulAuthorityRoutes?.reconcile(signal) ?? Promise.resolve(),
       runtimeEventPublisher: this.runtimeEventPublisher,
       metrics: this.metrics,
       activationAdmission: this.activationAdmission
@@ -1654,7 +1663,6 @@ export class ZLinkFrameworkRuntimeHost
       this.lifecycleSink?.push('framework:started');
     } catch (error) {
       if (this.shutdownDeadline !== undefined && isAbortError(error)) throw error;
-      await this.statefulAuthorityRoutes?.stop();
       try {
         await this.runWithShutdownDeadline(DEFAULT_HOST_CONTROL_TIMEOUT_MS, async () =>
           rollbackRuntimeStart({
@@ -1769,12 +1777,10 @@ export class ZLinkFrameworkRuntimeHost
     const channelRuntime = this.channelRuntime;
     const spotNodeRuntime = this.spotNodeRuntime;
     const streamRuntime = this.streamRuntime;
-    const statefulAuthorityRoutes = this.statefulAuthorityRoutes;
     this.stopTopologyObservers();
     this.removeOwnerLeaseRecoveryPublication();
     const locationSnapshot = this.locationOwner.clearForStop();
     this.lifecycleSink?.push('framework:stop');
-    await statefulAuthorityRoutes?.stop();
     await stopRuntimeParts({
       state,
       locationSnapshot,
@@ -1927,16 +1933,12 @@ export class ZLinkFrameworkRuntimeHost
       creationStore: locationStore,
       relocationStore: this.relocationStore,
       meshNodes: spotNodeRuntime.meshNodesByName,
-      pollingIntervalMs:
-        this.options.registration.locations.options.pollingIntervalMs ??
-        zlinkDefaultLocationOptions.pollingIntervalMs,
       pageSize: ZLINK_PROVIDER_MAX_PAGE_SIZE,
       reportError: (error) =>
         this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
-          'stateful authority route reconciliation',
+          'stateful authority startup recovery',
           error
-        ),
-      onSpotRouteChanged: (spotId) => this.cachedLocationSpotRouteResolver?.invalidate?.(spotId)
+        )
     });
   }
 
@@ -2089,12 +2091,6 @@ export class ZLinkFrameworkRuntimeHost
       meshName,
       signal
     );
-    // A failed relocation rolls the local object barriers back before the
-    // descriptor is published as Serving. Reconcile the durable authority
-    // routes before returning so the next local request cannot observe the
-    // brief window where the Location row is ready but the route cache still
-    // reflects the failed capture.
-    await this.statefulAuthorityRoutes?.reconcile(signal);
   }
 
   private async publishMeshDraining(meshName: string, signal?: AbortSignal): Promise<void> {
@@ -2418,6 +2414,8 @@ export class ZLinkFrameworkRuntimeHost
     if (locationStore === undefined) {
       throw new ZLinkConfigurationException('User Spot creation requires a Location Store.');
     }
+    const liveRows = new ZLinkLiveRowFilter();
+    const leaseTracker = this.locationOwner.currentLeaseTracker!;
     this.actorPlacement ??= new ZLinkActorPlacementCoordinator({
       store: locationStore,
       actorRelocationPolicy: (meshName, stableType) =>
@@ -2469,7 +2467,11 @@ export class ZLinkFrameworkRuntimeHost
           );
         }
         const meshNode = this.spotNodeRuntime?.meshNode(meshName);
-        const descriptors = await listAllMeshNodeDescriptors(locationStore, meshName, signal);
+        const descriptors = await liveRows.filter(
+          await listAllMeshNodeDescriptors(locationStore, meshName, signal),
+          (descriptor, signal) => leaseTracker.isOwnerTokenLive(descriptor, signal),
+          signal
+        );
         const selected = await selectReadyLocationPlacementDescriptor(
           descriptors,
           meshNode,
@@ -2547,7 +2549,7 @@ export class ZLinkFrameworkRuntimeHost
     };
     const coordinator = (this.userSpotCoordinator = new ZLinkUserSpotCreationCoordinator({
       store: locationStore,
-      leaseTracker: this.locationOwner.currentLeaseTracker!,
+      leaseTracker,
       relocationPolicy: (meshName, stableType) => {
         const node = this.options.registration.spotNodes.get(selectUserSpotMesh(meshName));
         return node?.spotFactoryRegistrations?.[stableType]?.relocation.kind;
@@ -2590,7 +2592,11 @@ export class ZLinkFrameworkRuntimeHost
       target: async (request, signal, excludedNodeRids) => {
         const meshName = selectUserSpotMesh(request.meshName);
         const meshNode = this.spotNodeRuntime?.meshNode(meshName);
-        const descriptors = await listAllMeshNodeDescriptors(locationStore, meshName, signal);
+        const descriptors = await liveRows.filter(
+          await listAllMeshNodeDescriptors(locationStore, meshName, signal),
+          (descriptor, signal) => leaseTracker.isOwnerTokenLive(descriptor, signal),
+          signal
+        );
         const selected = await selectReadyLocationPlacementDescriptor(
           descriptors,
           meshNode,

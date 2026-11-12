@@ -206,7 +206,9 @@ final class ZLinkSpotCloseConformanceTest {
                         new ZLinkFrameworkRuntimeTestAccess.Construction()
                                 .spotOperationAuthorityStore(proxy))) {
             create(runtime, spotId);
-            var host = (ZLinkSpotRuntime) runtime.spotManager();
+            var host =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            runtime);
             var context = host.spotLifecycle().spotActivationFor(spotId).context;
             var closing = context.close().toCompletableFuture();
             var observed =

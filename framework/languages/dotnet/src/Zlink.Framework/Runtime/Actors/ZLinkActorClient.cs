@@ -231,11 +231,16 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         );
     }
 
-    private static TimeSpan? RemainingTimeout(TimeSpan? timeout, long started)
+    internal static TimeSpan? RemainingTimeout(
+        TimeSpan? timeout,
+        long started,
+        TimeProvider? timeProvider = null
+    )
     {
         if (timeout is null)
             return null;
-        var remaining = timeout.Value - Stopwatch.GetElapsedTime(started);
+        var remaining =
+            timeout.Value - (timeProvider ?? TimeProvider.System).GetElapsedTime(started);
         if (remaining <= TimeSpan.Zero)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.DeadlineExceeded,

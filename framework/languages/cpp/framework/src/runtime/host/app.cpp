@@ -519,7 +519,7 @@ class app_state_t
     std::condition_variable termination_teardown_changed;
     std::size_t active_relocation_preflights = 0;
     bool run_active = false;
-    bool run_started = false;
+    std::shared_ptr<std::atomic_bool> run_started = std::make_shared<std::atomic_bool> (false);
     bool teardown_complete = false;
 
     class relocation_preflight_guard_t
@@ -1519,6 +1519,12 @@ zlink_framework_options_t &app_t::add_zlink_framework ()
     if (_state->framework_options) {
         return *_state->framework_options;
     }
+    auto bus = _state->zlink.message_bus ();
+    auto channel = detail::channel_runtime_t::from (bus);
+    channel.bind_runtime_admission ([started = _state->run_started, draining = _state->draining] {
+        return std::pair{draining->load (std::memory_order_acquire),
+                         started->load (std::memory_order_acquire)};
+    });
     _state->framework_hosted_service_position = _state->hosted_services.size ();
     detail::channel_runtime_t::from (_state->zlink.message_bus ())
       .bind_serializers (_state->serializers);
@@ -3220,11 +3226,13 @@ void app_t::_apply_zlink_framework ()
     if (!_state->services.contains (std::type_index (typeid (actor_client_t)))) {
         _state->services.add_factory<actor_client_t> (
           [mesh_nodes, actor_location_observer, delays = &_state->delays,
+           admission = detail::channel_runtime_t::from (_state->zlink.message_bus ()),
            location_options = options.location_options ()] (service_provider_t &provider) mutable {
               return runtime::make_actor_client (
                 provider.get_required<runtime::live_location_reader_t> (),
                 provider.get_required<serializer_registry_t> (), mesh_nodes,
-                actor_location_observer, location_options, *delays);
+                actor_location_observer, location_options, *delays,
+                [admission] { admission.admit_outbound (); });
           },
           service_lifetime_t::singleton);
     }
@@ -3389,7 +3397,7 @@ app_t &app_t::add_hosted_service (std::unique_ptr<hosted_service_t> service)
 app_t &app_t::use_metric_provider (runtime::metric_provider_t provider)
 {
     std::lock_guard lock (_state->termination_teardown_mutex);
-    if (_state->run_started)
+    if (_state->run_started->load (std::memory_order_acquire))
         throw std::logic_error ("Metric provider must be configured before run");
     _state->monitoring->use_metric_provider (std::move (provider));
     _state->runtime_state.connect (_state->monitoring->metric_provider);
@@ -3400,7 +3408,7 @@ int app_t::run (int argc, char **argv)
 try {
     {
         std::lock_guard lock (_state->termination_teardown_mutex);
-        _state->run_started = true;
+        _state->run_started->store (true, std::memory_order_release);
     }
     const completion_owner_t completion_owner;
     const auto completion_dispatcher = detail::borrow_completion_dispatcher ();

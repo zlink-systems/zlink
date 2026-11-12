@@ -375,11 +375,17 @@ bool zlink::mailbox_t::reschedule_if_needed ()
     return true;
 }
 
-void zlink::mailbox_t::detach_io_context ()
+bool zlink::mailbox_t::detach_io_context (bool only_if_empty_)
 {
     _sync.lock ();
+    const bool has_data = _cpipe.check_read ();
+    if (only_if_empty_ && has_data) {
+        _scheduled.store (true, std::memory_order_release);
+        _sync.unlock ();
+        return false;
+    }
     _scheduled.store (false, std::memory_order_release);
-    if (_cpipe.check_read ())
+    if (has_data)
         _command_pending_hint.store (true, std::memory_order_release);
     _io_context = NULL;
     _handler = NULL;
@@ -389,6 +395,7 @@ void zlink::mailbox_t::detach_io_context ()
     // Enqueues under the former executor could omit the primary wake. Publish
     // the transfer even when that executor consumed the preceding edge.
     signal ();
+    return true;
 }
 
 int zlink::mailbox_t::add_signaler (signaler_t *signaler_)

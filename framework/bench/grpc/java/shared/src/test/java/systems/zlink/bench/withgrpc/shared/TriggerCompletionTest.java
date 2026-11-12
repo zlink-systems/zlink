@@ -77,7 +77,7 @@ public final class TriggerCompletionTest {
     private static CompletableFuture<HttpResponse<String>> postAsync(HttpClient client, String url, String cell) {
         String body = "{\"runId\":\"completion\",\"cellId\":\"" + cell
             + "\",\"pattern\":\"request-serial\",\"payloadBytes\":1024,\"phase\":\"active\","
-            + "\"durationMs\":1,\"requestWindow\":100,\"sendConcurrency\":8}";
+            + "\"durationMs\":1,\"requestWindow\":100,\"submitConcurrency\":8}";
         return client.sendAsync(HttpRequest.newBuilder(URI.create(url + "/bench/start"))
             .POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
     }

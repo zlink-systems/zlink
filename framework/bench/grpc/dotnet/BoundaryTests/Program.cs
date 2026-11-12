@@ -165,10 +165,10 @@ stats.MapGet(
 await stats.StartAsync();
 
 const int requestWindow = 100;
-const int sendConcurrency = 8;
+const int submitConcurrency = 8;
 const int payloadBytes = 1024;
 const int latencySampleLimit = 200_000;
-BenchMeasurement.ConfigureThreadPool(sendConcurrency);
+BenchMeasurement.ConfigureThreadPool(submitConcurrency);
 foreach (
     var pattern in args.Length == 0
         ? ["request-serial", "request-window", "request-backpressure", "send-saturation"]
@@ -194,7 +194,7 @@ foreach (
     ];
     var options = BenchOptions.Parse(optionsArgs);
     var metrics = new SourceMetrics(latencySampleLimit);
-    await using var transport = new GrpcBenchTransport(grpc.Urls.Single(), sendConcurrency);
+    await using var transport = new GrpcBenchTransport(grpc.Urls.Single(), submitConcurrency);
     var warmupTrigger = new BenchTriggerRequest
     {
         runId = "boundary",
@@ -204,7 +204,7 @@ foreach (
         phase = "warmup",
         durationMs = DelayedEcho.WarmupWindowMilliseconds,
         requestWindow = requestWindow,
-        sendConcurrency = sendConcurrency,
+        submitConcurrency = submitConcurrency,
     };
     var warmupResult = await BenchMeasurement.RunActiveAsync(
         transport,
@@ -231,7 +231,7 @@ foreach (
         phase = "active",
         durationMs = 200,
         requestWindow = requestWindow,
-        sendConcurrency = sendConcurrency,
+        submitConcurrency = submitConcurrency,
     };
     var result = await BenchMeasurement.RunActiveAsync(
         transport,
@@ -246,7 +246,7 @@ foreach (
     var latency = result.MeanMicros;
     if (pattern == "send-saturation")
     {
-        if (completed != submitted || submitted != trigger.sendConcurrency || throughput != 5)
+        if (completed != submitted || submitted != trigger.submitConcurrency || throughput != 5)
             throw new InvalidOperationException(
                 "Source completion replaced by target snapshot: " + result
             );
@@ -254,7 +254,7 @@ foreach (
     else
     {
         var requestLimit = StreamDescription
-            .For(pattern, trigger.requestWindow, trigger.sendConcurrency)
+            .For(pattern, trigger.requestWindow, trigger.submitConcurrency)
             .inFlightPerStream;
         var submissionCountMatches = requestLimit is int limit
             ? submitted == limit

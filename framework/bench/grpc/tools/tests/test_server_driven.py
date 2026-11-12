@@ -11,7 +11,7 @@ _TOOLS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _TOOLS)
 
 from benchagg.analysis import build_rows, judge_pair  # noqa: E402
-from benchagg.model import PATTERNS, CellKey  # noqa: E402
+from benchagg.model import FRAMEWORK_JUDGEMENT, PATTERNS, CellKey  # noqa: E402
 from benchagg.readers import ReportError, cells_from_cell_json, read_run, read_runs  # noqa: E402
 from benchagg.render import (  # noqa: E402
     render_excluded,
@@ -102,6 +102,7 @@ class ServerDrivenCellTest(unittest.TestCase):
             "grpc-dotnet",
             1024,
             "request-serial",
+            FRAMEWORK_JUDGEMENT[0],
         )
         self.assertEqual(judgement.status, "unsupported")
         self.assertIn("incomplete", judgement.reason)
@@ -136,6 +137,18 @@ class ServerDrivenCellTest(unittest.TestCase):
             del payload["cells"][0]["trigger"][name]
         with self.assertRaisesRegex(ReportError, "warmup, endpoint"):
             cells_from_cell_json(payload, "run1", "results.json")
+
+    def test_warmup_is_normalized_from_trigger_units_or_results_seconds(self):
+        payload = self._source()
+        cell = payload["cells"][0]
+        cell["implementation"] = "zlink-cpp"
+        cell["trigger"]["warmup"] = 30000
+        payload["metadata"] = {"warmupUnit": "milliseconds"}
+        self.assertEqual(cells_from_cell_json(payload, "run1")[0].warmup_seconds, 30.0)
+        payload["metadata"]["warmupSeconds"] = "30"
+        self.assertEqual(cells_from_cell_json(payload, "run1")[0].warmup_seconds, 30.0)
+        payload["metadata"] = {"warmupUnit": "fortnights"}
+        self.assertIsNone(cells_from_cell_json(payload, "run1")[0].warmup_seconds)
 
     def test_a_separate_target_record_is_not_input(self):
         payload = self._source()

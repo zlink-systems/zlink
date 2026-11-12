@@ -6,6 +6,7 @@ import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.*;
@@ -297,14 +298,13 @@ public final class ZLinkLocationStoreOutageTest {
                             .toCompletableFuture()
                             .join();
                     f.now.set(100L + Duration.ofSeconds(25).toNanos());
-                    assertThrows(
-                            CompletionException.class,
-                            () ->
-                                    creating.enqueue(
-                                                    () -> CompletableFuture.completedFuture(null),
-                                                    null)
-                                            .toCompletableFuture()
-                                            .join());
+                    var pending =
+                            creating.enqueue(() -> CompletableFuture.completedFuture(null), null)
+                                    .toCompletableFuture();
+                    assertFalse(pending.isDone());
+                    f.store.response = null;
+                    assertTrue(f.runtime.renewOwnerLeaseOnce().toCompletableFuture().join());
+                    pending.join();
                 }
             }
         }
@@ -364,7 +364,7 @@ public final class ZLinkLocationStoreOutageTest {
                     .join();
             assertEquals(2, calls.get());
             if (retention)
-                assertThrows(IllegalStateException.class, f.runtime::ensureOwnerAdmissionOpen);
+                assertThrows(ZLinkFrameworkException.class, f.runtime::ensureOwnerAdmissionOpen);
             var hold = new CompletableFuture<Void>();
             var started = new CompletableFuture<Void>();
             var active =
@@ -494,14 +494,25 @@ public final class ZLinkLocationStoreOutageTest {
             f.failRenewal();
             bind(f.runtime, creating, () -> true, () -> discard(creating));
             f.now.set(100L + Duration.ofSeconds(25).toNanos());
+            var calls = new java.util.concurrent.atomic.AtomicInteger();
+            var pending = new java.util.ArrayList<CompletableFuture<Void>>();
             for (var queue : java.util.List.of(creating, relocating)) {
-                assertThrows(
-                        CompletionException.class,
-                        () ->
-                                queue.enqueue(() -> CompletableFuture.completedFuture(null), null)
-                                        .toCompletableFuture()
-                                        .join());
+                var accepted =
+                        queue.enqueue(
+                                        () -> {
+                                            calls.incrementAndGet();
+                                            return CompletableFuture.completedFuture(null);
+                                        },
+                                        null)
+                                .toCompletableFuture();
+                assertFalse(accepted.isDone());
+                pending.add(accepted);
             }
+            assertEquals(0, calls.get());
+            f.store.response = null;
+            assertTrue(f.runtime.renewOwnerLeaseOnce().toCompletableFuture().join());
+            pending.forEach(CompletableFuture::join);
+            assertEquals(2, calls.get());
         }
     }
 
@@ -601,6 +612,26 @@ public final class ZLinkLocationStoreOutageTest {
 
     private static void discard(systems.zlink.framework.execution.ZLinkSerialExecutionQueue queue) {
         queue.discardApplications().toCompletableFuture().join();
+    }
+
+    /**
+     * Location runtime §5: after the admission deadline no new application turn starts, even when
+     * no Store failure has been observed yet (the renewal did not run, for example after a pause).
+     */
+    @Test
+    void admissionDeadlineWithoutObservedOutageClosesNewApplicationTurns() {
+        try (var f = new Fixture(false, true)) {
+            var execution = f.runtime.execution(() -> true, () -> {});
+            execution.ready().toCompletableFuture().join();
+            long admission = TTL.minus(MARGIN).toNanos();
+            f.now.set(100L + admission - 1L);
+            execution.check(true);
+            f.now.set(100L + admission);
+            f.fireCutoff();
+            assertNull(f.runtime.ownerLeaseSnapshot().outageCutoffNanos());
+            var closed = assertThrows(RuntimeException.class, () -> execution.check(true));
+            assertEquals("The owner lease admission deadline has expired.", closed.getMessage());
+        }
     }
 
     public static final class Fixture implements AutoCloseable {

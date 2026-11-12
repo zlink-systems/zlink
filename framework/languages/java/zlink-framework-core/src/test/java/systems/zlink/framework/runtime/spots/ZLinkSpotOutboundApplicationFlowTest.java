@@ -42,14 +42,16 @@ final class ZLinkSpotOutboundApplicationFlowTest {
         var outbound = outbound(ZLinkMessageFlowLogMode.NORMAL);
 
         try (Message payload = message("payload")) {
-            outbound.send(
+            outbound.submitSend(
                             spot,
                             RoutingId.from("target"),
                             "spot-1",
                             1L,
                             ZLinkFrameworkMultipartView.owned(payload),
-                            Optional.of("Move"))
-                    .submit()
+                            Optional.of("Move"),
+                            null,
+                            systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata
+                                    .empty())
                     .toCompletableFuture()
                     .join();
         }
@@ -69,14 +71,16 @@ final class ZLinkSpotOutboundApplicationFlowTest {
 
         try (Message payload = message("payload");
                 ZLinkFlowContext.Scope ignored = ZLinkFlowContext.enter(ambient)) {
-            outbound.send(
+            outbound.submitSend(
                             spot,
                             RoutingId.from("target"),
                             "spot-1",
                             1L,
                             ZLinkFrameworkMultipartView.owned(payload),
-                            Optional.of("Move"))
-                    .submit()
+                            Optional.of("Move"),
+                            null,
+                            systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata
+                                    .empty())
                     .toCompletableFuture()
                     .join();
         }
@@ -94,14 +98,16 @@ final class ZLinkSpotOutboundApplicationFlowTest {
         var outbound = outbound(ZLinkMessageFlowLogMode.OFF);
 
         try (Message payload = message("payload")) {
-            outbound.send(
+            outbound.submitSend(
                             spot,
                             RoutingId.from("target"),
                             "spot-1",
                             1L,
                             ZLinkFrameworkMultipartView.owned(payload),
-                            Optional.of("Move"))
-                    .submit()
+                            Optional.of("Move"),
+                            null,
+                            systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata
+                                    .empty())
                     .toCompletableFuture()
                     .join();
         }

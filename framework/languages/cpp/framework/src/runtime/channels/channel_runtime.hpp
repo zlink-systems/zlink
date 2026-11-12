@@ -102,6 +102,7 @@ class route_client_state_t
     route_client_state_t (std::shared_ptr<channel_runtime_state_t> runtime,
                           serializer_registry_t &serializers);
 
+    static void admit_outbound (const std::shared_ptr<route_client_state_t> &state);
     std::shared_ptr<channel_runtime_state_t> runtime;
     serializer_registry_t *serializers;
 };
@@ -197,7 +198,7 @@ class channel_runtime_state_t
         {
             using request_encoder_t =
               runtime::messaging::message_parts_t (runtime::messaging::client_call_codec_t::*) (
-                runtime::messaging::envelope_header_t,
+                runtime::messaging::envelope_header_t &&,
                 encoded_payload_t,
                 std::shared_ptr<const request_type_plan_t>,
                 std::shared_ptr<const prepared_header_fragment_t>) const;
@@ -247,6 +248,12 @@ class channel_runtime_state_t
     std::shared_ptr<runtime::listener_status_registry_t> listener_statuses;
     std::shared_ptr<zlink::context_t> core_context;
     std::map<std::string, std::string> fanout_publisher_advertise_hosts;
+    // The host owns the start transition; standalone builders have no host boundary.
+    // Set once on the lane during configuration (add_zlink_framework, before run) and
+    // immutable afterwards, so callers read it without a lock.
+    std::function<std::pair<bool, bool> ()> runtime_admission;
+    void admit_outbound () const;
+    void ensure_transport_open () const;
     bool auto_connect_active = false;
     bool shutdown = false;
     bool closed = false;
@@ -270,6 +277,12 @@ class channel_runtime_t
 {
   public:
     explicit channel_runtime_t (std::shared_ptr<channel_runtime_state_t> state);
+
+    void bind_runtime_admission (std::function<std::pair<bool, bool> ()> admission)
+    {
+        _state->lane.run_sync ([&] { _state->runtime_admission = std::move (admission); });
+    }
+    void admit_outbound () const { _state->admit_outbound (); }
 
     std::vector<channel_snapshot_t> channel_snapshots () const;
 

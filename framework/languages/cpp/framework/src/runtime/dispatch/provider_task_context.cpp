@@ -1,7 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
-#include "../utils/available_processor_count.hpp"
-
 #include <zlink/framework/contracts/dispatch/task.hpp>
 
 #include "completion_turn.hpp"
@@ -10,7 +8,6 @@
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/post.hpp>
 
-#include <algorithm>
 #include <atomic>
 #include <optional>
 #include <thread>
@@ -55,10 +52,11 @@ class completion_dispatcher_t : public std::enable_shared_from_this<completion_d
   public:
     completion_dispatcher_t ()
     {
-        // A blocked callback must leave another worker available for independent turns.
-        constexpr unsigned minimum_worker_count = 2;
-        const auto count = std::max (minimum_worker_count,
-                                     ::zlink::framework::runtime::available_processor_count ());
+        // A blocked callback must leave another worker available for independent turns
+        // (S01 §11). The count does not follow the CPU count: S08 §4.4 does not promise new
+        // callbacks while every execution resource waits synchronously, and more workers
+        // only add wake-ups on the completing thread (#1639).
+        constexpr unsigned count = 2;
         _workers.reserve (count);
         for (unsigned index = 0; index < count; ++index)
             _workers.emplace_back ([this] { _context.run (); });

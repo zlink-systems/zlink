@@ -79,7 +79,7 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
-    public async Task UnstartedRouteChannel_StateAccessPreservesInvalidOperation()
+    public async Task UnstartedRouteChannel_TerminalReportsInvalidOperation()
     {
         var registration = new ZLinkFrameworkRegistration();
         await using var services = new ServiceCollection().BuildServiceProvider();
@@ -93,7 +93,12 @@ public sealed partial class EntrySpotActorDispatchTests
                 registration
             )
         );
-        Assert.Throws<InvalidOperationException>(() => runtime.GetMeshNodeRuntime("entry"));
+        var call = new ZLinkRouteClient(runtime).RequestToChannel("entry", new object());
+        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await call.Async<object>()
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, error.Kind);
+        Assert.False(runtime.IsStarted);
     }
 
     public static IEnumerable<object[]> RequestSubmissionFailures()

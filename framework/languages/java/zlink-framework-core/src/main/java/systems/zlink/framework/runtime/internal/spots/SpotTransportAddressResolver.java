@@ -61,12 +61,13 @@ public interface SpotTransportAddressResolver {
 
     /** Removes a stale positive route for the next call while retaining this call's terminal. */
     default <T> CompletionStage<T> observeTerminal(String spotId, CompletionStage<T> stage) {
-        return stage.whenComplete(
+        stage.whenComplete(
                 (ignored, failure) -> {
                     if (isStaleRoute(failure)) {
                         invalidate(spotId);
                     }
                 });
+        return stage;
     }
 
     static boolean isStaleRoute(Throwable failure) {

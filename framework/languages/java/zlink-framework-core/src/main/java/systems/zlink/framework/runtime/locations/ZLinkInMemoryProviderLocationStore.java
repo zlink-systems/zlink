@@ -140,7 +140,8 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
                                                                 entry.getValue().value(now)))
                                         .toList();
                         snapshots.put(
-                                snapshotId, new ScanSnapshot(items, now.plus(SCAN_RETENTION)));
+                                snapshotId,
+                                new ScanSnapshot(prefix, items, now.plus(SCAN_RETENTION)));
                     } else {
                         String[] cursor = request.cursor().value().split(":", 2);
                         snapshotId = cursor[0];
@@ -153,7 +154,10 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
                             }
                         }
                         ScanSnapshot snapshot = snapshots.get(snapshotId);
-                        items = snapshot == null ? null : snapshot.items();
+                        items =
+                                snapshot == null || !snapshot.prefix().equals(prefix)
+                                        ? null
+                                        : snapshot.items();
                     }
                     if (items == null || offset < 0 || offset > items.size()) {
                         snapshots.remove(snapshotId);
@@ -305,5 +309,5 @@ public final class ZLinkInMemoryProviderLocationStore implements ZLinkLocationSt
         }
     }
 
-    private record ScanSnapshot(List<ZLinkStoreScanItem> items, Instant expiresAt) {}
+    private record ScanSnapshot(String prefix, List<ZLinkStoreScanItem> items, Instant expiresAt) {}
 }

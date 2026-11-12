@@ -68,17 +68,21 @@ class play_route_readiness_service_t final : public hosted_service_t
         auto state = std::make_shared<state_t> ();
         _state = state;
         auto &runtime = services.get_required<route_mesh_runtime_t> ();
+        /* Room creation places User Spots from this host's published descriptor, which
+         * the host has once it is Serving; a ready peer alone does not mean that. */
+        auto *host = &services.get_required<framework_runtime_t> ();
         _observation = runtime.observe (
           _mesh_name,
           64,
-          [state, node_name = _node_name, expected_peer = _expected_peer] (
+          [state, host, node_name = _node_name, expected_peer = _expected_peer] (
             const observed_status_t<mesh_node_snapshot_t> &observed) {
-              report_if_ready (state, node_name, expected_peer, observed.status);
+              report_if_ready (state, *host, node_name, expected_peer, observed.status);
           });
         /* The peer can become ready while the observation registration is being
          * installed. Poll the same public snapshot until the marker is reported,
          * so startup readiness does not depend on an event edge being retained. */
         _worker = std::thread ([state,
+                                host,
                                 runtime = &runtime,
                                 mesh_name = _mesh_name,
                                 node_name = _node_name,
@@ -86,7 +90,7 @@ class play_route_readiness_service_t final : public hosted_service_t
             while (!state->stopping.load (std::memory_order_acquire)) {
                 try {
                     report_if_ready (
-                      state, node_name, expected_peer, runtime->snapshot (mesh_name));
+                      state, *host, node_name, expected_peer, runtime->snapshot (mesh_name));
                 }
                 catch (...) {
                 }
@@ -117,6 +121,7 @@ class play_route_readiness_service_t final : public hosted_service_t
 
   private:
     static void report_if_ready (const std::shared_ptr<state_t> &state,
+                                 const framework_runtime_t &host,
                                  const std::string &node_name,
                                  const std::string &expected_peer,
                                  const mesh_node_snapshot_t &snapshot)
@@ -127,7 +132,8 @@ class play_route_readiness_service_t final : public hosted_service_t
                                                  return peer.node_rid.to_string () == expected_peer
                                                         && peer.state == peer_state_t::ready;
                                              });
-        if (!peer_ready || state->reported.exchange (true, std::memory_order_acq_rel))
+        if (!peer_ready || !host.status ().is_ready
+            || state->reported.exchange (true, std::memory_order_acq_rel))
             return;
         constexpr std::string_view routing_prefix{"tictactoe-"};
         const auto peer_name = expected_peer.starts_with (routing_prefix)

@@ -258,7 +258,8 @@ final class SocketCore {
                 throw new ZlinkCloseException(CloseResult.BUSY,
                     NativeErrno.EBUSY);
             int rc = Native.close(socket.handle());
-            if (rc == CloseResult.OK.value())
+            // SHUTDOWN means Core already accepted a close of this handle.
+            if (rc == CloseResult.OK.value() || rc == CloseResult.SHUTDOWN.value())
                 closed = true;
             return rc;
         }

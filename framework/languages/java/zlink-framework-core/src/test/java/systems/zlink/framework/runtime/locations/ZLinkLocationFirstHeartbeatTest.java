@@ -116,16 +116,27 @@ final class ZLinkLocationFirstHeartbeatTest {
                                 clock::get,
                                 scheduler)) {
             runtime.start(RoutingId.from("node-a")).toCompletableFuture().join();
-            var heartbeat = scheduler.tasks.stream().filter(task -> !task.isCancelled()).toList();
+            // The owner deadline task (admission lifetime ~10 s) is not a heartbeat.
+            var heartbeat =
+                    scheduler.tasks.stream()
+                            .filter(task -> !task.isCancelled())
+                            .filter(task -> task.getDelay(TimeUnit.MILLISECONDS) < 1000)
+                            .toList();
             assertEquals(1, heartbeat.size());
             assertEquals(50, heartbeat.getFirst().getDelay(TimeUnit.MILLISECONDS));
             assertEquals(!failClaim, runtime.admittedOwnerToken().isPresent());
             if (delayMetrics) {
                 clock.addAndGet(Duration.ofMillis(50).toNanos());
-                var scheduled = scheduler.nextTask();
+                var scheduled =
+                        scheduler.nextTask(task -> task.getDelay(TimeUnit.MILLISECONDS) < 1000);
                 heartbeat.getFirst().run();
                 var next = scheduled.join();
-                assertEquals(1, scheduler.tasks.stream().filter(task -> !task.isDone()).count());
+                assertEquals(
+                        1,
+                        scheduler.tasks.stream()
+                                .filter(task -> !task.isDone())
+                                .filter(task -> task.getDelay(TimeUnit.MILLISECONDS) < 1000)
+                                .count());
                 assertEquals(100, next.getDelay(TimeUnit.MILLISECONDS));
                 clock.addAndGet(Duration.ofSeconds(10).toNanos());
             } else {
@@ -138,9 +149,17 @@ final class ZLinkLocationFirstHeartbeatTest {
     static final class RecordingScheduler extends ScheduledThreadPoolExecutor {
         final List<ScheduledTask<?>> tasks = new ArrayList<>();
         private volatile CompletableFuture<ScheduledTask<?>> nextScheduled;
+        private volatile java.util.function.Predicate<ScheduledTask<?>> nextFilter = task -> true;
 
         CompletableFuture<ScheduledTask<?>> nextTask() {
+            return nextTask(task -> true);
+        }
+
+        /** The next scheduled task that matches, such as a heartbeat beside the deadline task. */
+        CompletableFuture<ScheduledTask<?>> nextTask(
+                java.util.function.Predicate<ScheduledTask<?>> filter) {
             var next = new CompletableFuture<ScheduledTask<?>>();
+            nextFilter = filter;
             nextScheduled = next;
             return next;
         }
@@ -148,7 +167,7 @@ final class ZLinkLocationFirstHeartbeatTest {
         private <V> ScheduledFuture<V> record(ScheduledTask<V> task) {
             tasks.add(task);
             var next = nextScheduled;
-            if (next != null) next.complete(task);
+            if (next != null && nextFilter.test(task)) next.complete(task);
             return task;
         }
 

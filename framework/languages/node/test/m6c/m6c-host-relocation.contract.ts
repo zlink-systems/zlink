@@ -2526,13 +2526,13 @@ test('ActorJoin source profile reaches the existing Message Follow terminal afte
   }
 });
 
-test('post-commit route cleanup failure preserves Accepted and is diagnosed once', async (t) => {
-  const failure = new Error('route cleanup failed after target commit');
+test('post-commit local cleanup failure preserves Accepted and is diagnosed once', async (t) => {
+  const failure = new Error('local cleanup failed after target commit');
   const diagnostics: unknown[][] = [];
   t.mock.method(console, 'error', (...args: unknown[]) => diagnostics.push(args));
   let attempts = 0;
   const harness = createActorJoinHostHarness({
-    reconcileStatefulAuthorityRoutes: async () => {
+    commitSource: async () => {
       attempts++;
       throw failure;
     }
@@ -2589,23 +2589,18 @@ test('post-commit source cleanup failure preserves Accepted and reports all fail
   const diagnostics: unknown[][] = [];
   t.mock.method(console, 'error', (...args: unknown[]) => diagnostics.push(args));
   let attempts = 0;
-  let routeAttempts = 0;
   const harness = createActorJoinHostHarness({
     sourceLeaveFailure: leaveFailure,
     sourceRetirementFailure: retirementFailure,
     commitSource: async () => {
       attempts++;
       throw failure;
-    },
-    reconcileStatefulAuthorityRoutes: async () => {
-      routeAttempts++;
     }
   });
   try {
     const result = await harness.relocate();
     assert.equal(String(result.actorRef.nodeRid), 'target');
     assert.equal(attempts, 1);
-    assert.equal(routeAttempts, 0);
     await harness.sourceLeaveIdle();
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(harness.events.filter((event) => event === 'source:removed').length, 1);
@@ -2648,7 +2643,6 @@ interface ActorJoinHarnessOptions {
   readonly sourceLeaveFailure?: Error;
   readonly sourceRetirementFailure?: Error;
   readonly commitSource?: () => Promise<void>;
-  readonly reconcileStatefulAuthorityRoutes?: () => Promise<void>;
   readonly holdAccepted?: boolean;
   readonly holdSourceLeave?: boolean;
   readonly readyResult?: number;
@@ -3609,7 +3603,6 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
               return location.readAuthority();
             }
           },
-    reconcileStatefulAuthorityRoutes: options.reconcileStatefulAuthorityRoutes,
     currentOwner: () => ({ ownerId: 'source-owner', leaseGeneration: 3n }),
     localDescriptor: () => ({ rid: 'source', lifecycleGeneration: 2n }),
     meshNode: () => sourceNode,
@@ -4624,7 +4617,7 @@ for (const mode of ['explicit-failed', 'never-started', 'preserve', 'target'] as
         ...(cleanupFails
           ? mode === 'target'
             ? {
-                reconcileStatefulAuthorityRoutes: async () => {
+                commitSource: async () => {
                   throw cleanup;
                 }
               }

@@ -9,7 +9,6 @@ import systems.zlink.contracts.core.Zlink;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.handlers.ZLinkSpotActorSend;
 import systems.zlink.framework.messaging.ZLinkMessage;
-import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
@@ -32,7 +31,8 @@ final class JsonSessionActorsRuntimeIntegrationTest {
                 Socket client =
                         SessionActorsRuntimeIntegrationTest.connectStream(runtime, "local-json")) {
             ZLinkActor actor =
-                    ((ZLinkActorRuntime) runtime.actorManager())
+                    (systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.actors(
+                                    runtime))
                             .getOrCreateManagedActor(actorId, "player")
                             .toCompletableFuture()
                             .join();

@@ -944,7 +944,9 @@ final class ZLinkRelocatedTimerLifecycleTest {
                                     .reflection(),
                             null,
                             construction);
-            host = (ZLinkSpotRuntime) framework.spotManager();
+            host =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            framework);
             lifecycle = host.spotLifecycle();
         }
 
@@ -1192,7 +1194,9 @@ final class ZLinkRelocatedTimerLifecycleTest {
                 InitializeMismatchSpot.class,
                 factory -> factory.disableRelocation());
         try (var framework = ZLinkFrameworkRuntimeTestAccess.start(options)) {
-            var host = (ZLinkSpotRuntime) framework.spotManager();
+            var host =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            framework);
             scenario.run(
                     host.spotLifecycle(),
                     ZLinkSpotTimerRelocationEnvelope.encode(

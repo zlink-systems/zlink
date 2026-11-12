@@ -129,7 +129,9 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                         new InMemoryRelocationStore(),
                         Duration.ofSeconds(1));
         try (var host = ZLinkFrameworkRuntimeTestAccess.start(options)) {
-            var spots = (ZLinkSpotRuntime) host.spotManager();
+            var spots =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            host);
             byte[] rid = TARGET_RID.toString().getBytes(StandardCharsets.UTF_8);
             var fence = new ServiceWirePilotCodec.Fence("actor", 1L, rid, 1L, 1L, 1L);
             var target = new ServiceWirePilotCodec.Fence("absent-spot", 1L, rid, 1L, 1L, 1L);
@@ -222,10 +224,18 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                         }) {
             awaitInitialFixedRidRetry(targetHost);
             awaitInitialFixedRidRetry(sourceHost);
-            ZLinkSpotRuntime targetSpots = (ZLinkSpotRuntime) targetHost.spotManager();
-            ZLinkSpotRuntime sourceSpots = (ZLinkSpotRuntime) sourceHost.spotManager();
-            ZLinkActorRuntime targetActors = (ZLinkActorRuntime) targetHost.actorManager();
-            ZLinkActorRuntime sourceActors = (ZLinkActorRuntime) sourceHost.actorManager();
+            ZLinkSpotRuntime targetSpots =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            targetHost);
+            ZLinkSpotRuntime sourceSpots =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
+                            sourceHost);
+            ZLinkActorRuntime targetActors =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.actors(
+                            targetHost);
+            ZLinkActorRuntime sourceActors =
+                    systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.actors(
+                            sourceHost);
             targetHost
                     .spotManager()
                     .getOrCreate(TARGET_SPOT_ID, SPOT_TYPE)

@@ -1407,20 +1407,29 @@ export class ServiceStatefulRuntime {
   ): Promise<boolean> {
     const state = this.exactSpotMessageFollow(seal);
     if (state === undefined || state.target !== undefined) return false;
-    if (target === null) {
-      this.failExpiredSpotMessageFollow(state);
-      return true;
-    }
-    if (!Number.isSafeInteger(durationMs) || durationMs < 0) {
+    if (target !== null && (!Number.isSafeInteger(durationMs) || durationMs < 0)) {
       throw new RangeError('Message Follow duration must be a non-negative safe integer.');
     }
     if (
-      target.spot.spotId !== state.source.spot.spotId ||
-      target.spot.generation !== state.source.spot.generation ||
-      target.authorityOwnerGeneration <= state.source.authorityOwnerGeneration ||
-      target.targetNodeRid === this.nodeRid
+      target !== null &&
+      (target.spot.spotId !== state.source.spot.spotId ||
+        target.spot.generation !== state.source.spot.generation ||
+        target.authorityOwnerGeneration <= state.source.authorityOwnerGeneration ||
+        target.targetNodeRid === this.nodeRid)
     ) {
       throw new ServiceStaleGenerationError('spot', state.source.spot.spotId);
+    }
+    this.forgetSpotRoute(state.source.spot, state.source.authorityOwnerGeneration);
+    if (state.objectKind === 'instanceSpot') {
+      this.forgetInstanceIntent(
+        state.source.spot.spotId,
+        state.source.spot.generation,
+        state.source.authorityOwnerGeneration
+      );
+    }
+    if (target === null) {
+      this.failExpiredSpotMessageFollow(state);
+      return true;
     }
     state.target = freezeDirectSpotRoute(target);
     state.suppressionFence = spotMessageFollowSuppressionFence(

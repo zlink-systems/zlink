@@ -12,6 +12,7 @@ import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.calls.ZLinkRequestCalls;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
@@ -91,6 +92,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     // Binding generations are unique across every Session of this Session owner
     // node lifecycle (Session-Actor binding §4). The node owns the counter.
     private final LongSupplier bindingGenerations;
+    private final LongSupplier nanoTime;
     final java.util.HashMap<String, IngressGate> ingressGates = new java.util.HashMap<>();
     private long nextFallbackIngressSequence = 1;
     int nextActorSlot = 1;
@@ -272,6 +274,35 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             ZLinkMessageFlowTracer flow,
             Duration sessionRelocationSealTimeout,
             LongSupplier bindingGenerations) {
+        this(
+                spotNode,
+                stream,
+                sessionRid,
+                actors,
+                serializer,
+                localActorDispatcher,
+                nativeSessionRelayAttached,
+                defaultCodec,
+                flow,
+                sessionRelocationSealTimeout,
+                bindingGenerations,
+                System::nanoTime);
+    }
+
+    ZLinkSessionActorsRuntime(
+            ZLinkInternalSpotNode spotNode,
+            ZLinkBackendStreamSocket stream,
+            RoutingId sessionRid,
+            ZLinkActorRuntime actors,
+            ZLinkMessageSerializer serializer,
+            LocalActorDispatcher localActorDispatcher,
+            boolean nativeSessionRelayAttached,
+            ZLinkStreamCodec defaultCodec,
+            ZLinkMessageFlowTracer flow,
+            Duration sessionRelocationSealTimeout,
+            LongSupplier bindingGenerations,
+            LongSupplier nanoTime) {
+        this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
         this.bindingGenerations = Objects.requireNonNull(bindingGenerations, "bindingGenerations");
         this.spotNode = spotNode;
         this.stream = stream;
@@ -303,11 +334,12 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
 
     @Override
     public CompletionStage<ZLinkSessionActor> bind(ZLinkActor actor) {
-        return bindManagedAsyncCore(actor);
+        return bindManagedAsyncCore(actor, nanoTime.getAsLong());
     }
 
     @Override
     public CompletionStage<ZLinkSessionActor> bind(ActorRef actor) {
+        long started = nanoTime.getAsLong();
         Optional<ZLinkSessionActor> existing =
                 bound.stream().filter(boundActor -> sameRef(boundActor.ref(), actor)).findFirst();
         if (existing.isPresent()) {
@@ -316,18 +348,19 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         ZLinkBackendActorRef ref =
                 new ZLinkBackendActorRef(
                         actor.nodeRid(), actor.actorId(), actor.objectGeneration());
-        return bindBackendRef(ref, actor.meshName());
+        return bindBackendRef(ref, actor.meshName(), started);
     }
 
     @Override
     public CompletionStage<ZLinkSessionActor> bindOrGet(ActorRef actor) {
+        long started = nanoTime.getAsLong();
         ZLinkBackendActorRef ref =
                 new ZLinkBackendActorRef(
                         actor.nodeRid(), actor.actorId(), actor.objectGeneration());
         Optional<ZLinkSessionActor> existing =
                 bound.stream().filter(boundActor -> sameRef(boundActor.ref(), actor)).findFirst();
         return existing.<CompletionStage<ZLinkSessionActor>>map(CompletableFuture::completedFuture)
-                .orElseGet(() -> bindBackendRef(ref, actor.meshName()));
+                .orElseGet(() -> bindBackendRef(ref, actor.meshName(), started));
     }
 
     @Override
@@ -431,7 +464,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     }
 
     private CompletionStage<ZLinkSessionActor> bindBackendRef(
-            ZLinkBackendActorRef ref, String meshName) {
+            ZLinkBackendActorRef ref, String meshName, long started) {
         if (actors != null) {
             Optional<ZLinkActor> localActor = actors.localActor(ref.actorId());
             if (localActor.isPresent()) {
@@ -439,7 +472,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 if (localRef.nodeRid().equals(ref.nodeRid())
                         && localRef.actorId().equals(ref.actorId())
                         && localRef.generation() == ref.generation()) {
-                    return bindManagedAsyncCore(localActor.get());
+                    return bindManagedAsyncCore(localActor.get(), started);
                 }
             }
         }
@@ -459,7 +492,10 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                             sessionRid,
                                                             ref,
                                                             allocatedActorSlot,
-                                                            RELAY_SUBMIT_TIMEOUT)
+                                                            ZLinkRequestCalls.remainingTimeout(
+                                                                    RELAY_SUBMIT_TIMEOUT,
+                                                                    started,
+                                                                    nanoTime))
                                                     .thenApply(
                                                             bindIgnored -> {
                                                                 AtomicReference<ZLinkBoundActor>
@@ -520,7 +556,8 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 && left.meshName().equals(right.meshName());
     }
 
-    private CompletionStage<ZLinkSessionActor> bindManagedAsyncCore(ZLinkActor actor) {
+    private CompletionStage<ZLinkSessionActor> bindManagedAsyncCore(
+            ZLinkActor actor, long started) {
         if (actors == null) {
             return CompletableFuture.failedFuture(
                     new ZLinkConfigurationException(
@@ -550,7 +587,10 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                     sessionRid,
                                                     ref,
                                                     actorSlot,
-                                                    RELAY_SUBMIT_TIMEOUT)
+                                                    ZLinkRequestCalls.remainingTimeout(
+                                                            RELAY_SUBMIT_TIMEOUT,
+                                                            started,
+                                                            nanoTime))
                                             : CompletableFuture.completedFuture(null);
                             return nativeBinding.thenCompose(
                                     ignored -> {

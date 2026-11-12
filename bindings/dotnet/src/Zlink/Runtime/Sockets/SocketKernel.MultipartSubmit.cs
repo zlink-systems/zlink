@@ -68,6 +68,7 @@ internal sealed partial class SocketKernel
                 flags,
                 mapNoWaitResult);
 
+        using var call = _handle.ReserveSubmit();
         ZlinkMsg[]? rented = null;
         var nativeParts = parts.Length <= NativeMessageParts.StackPartLimit
             ? stackalloc ZlinkMsg[NativeMessageParts.StackPartLimit]
@@ -87,16 +88,16 @@ internal sealed partial class SocketKernel
             if (kind == MultipartSubmitKind.Publish)
                 fixed (byte* topicPtr = publishTopicUtf8)
                 {
-                    rc = NativeMethods.zlink_publish_utf8(Handle,
+                    rc = NativeMethods.zlink_publish_utf8(call.Handle,
                         topicPtr, ref nativeParts[0], (nuint)built, flags);
                 }
             else
                 rc = kind switch
                 {
                     MultipartSubmitKind.Send => NativeMethods.zlink_send(
-                        Handle, ref nativeParts[0], (nuint)built, flags),
+                        call.Handle, ref nativeParts[0], (nuint)built, flags),
                     MultipartSubmitKind.TargetedSend => NativeMethods.zlink_send_rid(
-                        Handle, ref routingId, ref nativeParts[0], (nuint)built, flags),
+                        call.Handle, ref routingId, ref nativeParts[0], (nuint)built, flags),
                     _ => throw new InvalidOperationException()
                 };
 

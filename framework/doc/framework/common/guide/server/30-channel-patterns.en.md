@@ -118,8 +118,8 @@ ChannelName.
 
 - Only a node that registered `Server()` receives calls on that channel.
 - A node that registered only `Client()` can start a call but does not receive one.
-- **The `Server()` role includes the ability to send.** Do not register `Client()` again for the
-  same ChannelName.
+- **On a RouteMesh, the `Server()` role includes the ability to send.** Do not register `Client()`
+  again for the same ChannelName. ClientServer differs ([3.2](#32-clientserver--the-direction-is-fixed)).
 
 You can register several channels on one MeshNode, and each channel may carry a different role.
 
@@ -176,7 +176,9 @@ not receive a message the server sent first, without a client request.
 When a call in the reverse direction is needed, the node on the other side has to become a server
 that publishes its own endpoint, and that is a separate channel with a separate ChannelName.
 
-One process may register a Client and a Server once each for the same ChannelName. The
+One process may register a Client and a Server once each for the same ChannelName. To start a
+send or request on that channel from the same process, register `Client()` as well. With only
+`Server()`, the call does not invoke the local handler and ends with `NotConfigured`. The
 `client_and_server` value in a monitoring snapshot expresses that both registrations are present;
 it is not a role of its own.
 
@@ -546,7 +548,7 @@ The Store holds more than addresses.
 on right now" by reading the Store. If you use only channel messaging and write addresses
 directly, it works without one.
 
-The registration code is in [Spot](21-spot.en.md#2-the-location-store--a-prerequisite-for-registering-a-spot),
+The registration code is in [Location](25-location.en.md#store-setup),
 and the operational queries are in
 [Operations and Lifecycle](12-operations.en.md#6-location-readiness-and-operational-queries).
 
@@ -566,8 +568,7 @@ call, and missing a required one or registering more than one is a configuration
 socket opens. The framework does not build a substitute store inside the process when one is absent
 — **it fails rather than quietly running as a single node.**
 
-The two stores may share one Redis deployment. Keep their key prefixes distinct. The framework does
-not rely on transactions spanning the stores, so the physical Redis may be separated as well. After
+Choose Redis or Redis with etcd in [Store plugin setup](25-location.en.md#store-setup). The Redis choice places both Stores on one server with distinct key prefixes. After
 registering a store, the application neither calls the provider's operations directly nor disposes
 of it — the framework manages the store's lifetime and call order.
 

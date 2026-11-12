@@ -219,8 +219,8 @@ Binding operation이 시작되면 선택한 target이 확정된다. HWM 대기 �
 완료는 binding이 소유하며 Framework는 용량을 이유로 target을 다시 선택하거나 binding operation을
 다시 제출하지 않는다. 완료 뒤에는 자동 재제출하지 않는다. Send 대기의 종료는 [§7](#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)을 따른다. 새 select-one operation은 시작할 때 그 시점의 eligible member를 선택할 수 있다.
 
-**연결 준비 전 request.** Remote request는 기존 규칙으로 유효한 target과 owner descriptor를 확정한 뒤, binding
-operation을 시작하기 전에 그 owner로 가는 연결과
+**연결 준비 전 request.** Remote request는 기존 규칙으로 유효한 target과 owner를 확정한 뒤, binding
+operation을 시작하기 전에 아래 규칙으로 그 owner의 descriptor, 그 owner로 가는 연결과
 [service admission](../02-channel-transport/05-transport-liveness.ko.md#5-ready와-장애-판정)을 확인한다. Framework가 시작하는
 lifecycle request(Actor create·Join, session bind, relocation PREPARE)도 같다. 판정은 언어마다 logical request
 admission 한 곳에서 한다.
@@ -241,6 +241,10 @@ admission 한 곳에서 한다.
   route를 쓰는 새 request를 과거 실패만으로 거부하지 않는다. 이 준비 판정은 관찰자가 이미 반영한 상태를 읽는 것으로
   끝나며, 연결 상태 snapshot은 `ZLINK_POLLCONNECT`가 준비됐을 때만 읽는다. 아래 대기·기준값 처리는 준비되지 않은
   request에만 적용한다.
+- Owner는 authority로 확정했으나 그 owner의 lifecycle generation과 맞는 descriptor가 아직 topology에 없으면,
+  기존 discovery 갱신으로 그 descriptor가 나타나기를 아래와 같은 남은 request timeout 안에서 기다린다. 요청마다
+  Store를 다시 읽는 대기를 두지 않는다. Descriptor가 나타나면 이 절의 연결 준비 판정을 이어서 하고, timeout이
+  끝나면 `DeadlineExceeded`다. 기다리는 동안 authority가 바뀌면 기존 fence 규칙대로 `Unavailable`이다.
 - 선택 route가 없고 대상 endpoint의 [연결 상태](../../../../../../../core/doc/spec/core/socket/README.ko.md#zlink_socket_connection_attempts_snapshot)가 `ATTEMPT_FAILED`이면
   즉시 `Unavailable`로 끝낸다. Core가 재연결하는 중이어도 기다리지 않는다.
 - 연결 상태가 `CONNECTING`이거나, 유효 descriptor는 있으나 Core 연결 행이 아직 없거나, Core 연결은 있으나 선택

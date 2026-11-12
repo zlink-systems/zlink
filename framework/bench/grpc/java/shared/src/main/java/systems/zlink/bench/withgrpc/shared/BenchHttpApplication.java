@@ -23,7 +23,7 @@ import java.util.regex.Pattern;
 public final class BenchHttpApplication implements AutoCloseable {
     private static final Set<String> FIELDS = Set.of(
         "runId", "cellId", "pattern", "payloadBytes", "phase", "durationMs",
-        "requestWindow", "sendConcurrency");
+        "requestWindow", "submitConcurrency");
     private static final Set<String> PATTERNS = Set.of(
         "request-serial", "request-window", "request-backpressure", "send-saturation");
     private static final Pattern KEY = Pattern.compile("\"([^\"]+)\"\\s*:");
@@ -180,7 +180,7 @@ public final class BenchHttpApplication implements AutoCloseable {
             stringField(json, "runId"), stringField(json, "cellId"),
             stringField(json, "pattern"), intField(json, "payloadBytes"),
             stringField(json, "phase"), intField(json, "durationMs"),
-            intField(json, "requestWindow"), intField(json, "sendConcurrency"));
+            intField(json, "requestWindow"), intField(json, "submitConcurrency"));
         if (value.runId().isBlank() || value.cellId().isBlank()) {
             throw new IllegalArgumentException("runId and cellId must be non-empty");
         }
@@ -191,7 +191,7 @@ public final class BenchHttpApplication implements AutoCloseable {
             throw new IllegalArgumentException("phase must be warmup or active");
         }
         if (value.payloadBytes() < BenchMetricHeader.HEADER_SIZE || value.durationMs() <= 0
-            || value.requestWindow() <= 0 || value.sendConcurrency() <= 0) {
+            || value.requestWindow() <= 0 || value.submitConcurrency() <= 0) {
             throw new IllegalArgumentException("numeric trigger fields are invalid");
         }
         return value;
@@ -250,7 +250,7 @@ public final class BenchHttpApplication implements AutoCloseable {
 
     public record Trigger(
         String runId, String cellId, String pattern, int payloadBytes, String phase,
-        int durationMs, int requestWindow, int sendConcurrency) {
+        int durationMs, int requestWindow, int submitConcurrency) {
     }
 
     public record ObservedTrigger(Trigger trigger, long receivedAtUnixMs) {

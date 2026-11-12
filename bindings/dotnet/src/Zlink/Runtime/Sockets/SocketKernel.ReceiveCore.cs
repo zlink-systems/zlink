@@ -32,6 +32,7 @@ internal sealed partial class SocketKernel
         out Message? singlePart, out MultipartMessageCollection? parts,
         bool allowNoData)
     {
+        using var call = _handle.ReserveReceive();
         var nativeParts = ArrayPool<ZlinkMsg>.Shared.Rent(
             NativeMessageParts.StackPartLimit);
         var receivedParts = Array.Empty<Message>();
@@ -57,25 +58,25 @@ internal sealed partial class SocketKernel
                     if ((flags & DontWaitFlag) != 0)
                     {
                         fixed (byte* topicId = topicBuffer)
-                            rc = NativeMethods.zlink_subscribe_dont_wait(Handle,
+                            rc = NativeMethods.zlink_subscribe_dont_wait(call.Handle,
                                 out sourceRoutingId, topicId,
                                 (nuint)topicBuffer!.Length, out nativeTopicLength,
                                 ref nativeParts[0], (nuint)nativeParts.Length,
                                 out count, flags);
                     }
                     else
-                        rc = NativeMethods.zlink_subscribe(Handle,
+                        rc = NativeMethods.zlink_subscribe(call.Handle,
                             out sourceRoutingId, topicBuffer!,
                             (nuint)topicBuffer!.Length, out nativeTopicLength,
                             ref nativeParts[0], (nuint)nativeParts.Length,
                             out count, flags);
                 }
                 else if (captureRoutingId && _policy.UsesRouterRoutedReceiveEnvelope)
-                    rc = NativeMethods.zlink_router_recv(Handle,
+                    rc = NativeMethods.zlink_router_recv(call.Handle,
                         out sourceRoutingId, out replyToken, ref nativeParts[0],
                         (nuint)nativeParts.Length, out count, flags);
                 else
-                    rc = NativeMethods.zlink_recv(Handle, out sourceRoutingId,
+                    rc = NativeMethods.zlink_recv(call.Handle, out sourceRoutingId,
                         ref nativeParts[0], (nuint)nativeParts.Length, out count,
                         flags);
 
@@ -116,7 +117,7 @@ internal sealed partial class SocketKernel
                 if (subscription == null && captureRoutingId
                     && _policy.UsesRouterRoutedReceiveEnvelope)
                     routeGeneration =
-                        NativeMethods.zlink_router_recv_route_generation(Handle);
+                        NativeMethods.zlink_router_recv_route_generation(call.Handle);
                 // Basic receive deliberately avoids allocating or copying RID metadata.
                 if (captureRoutingId || subscription != null)
                     routingId = RoutingIdSnapshot.FromPointer(sourceRoutingId);

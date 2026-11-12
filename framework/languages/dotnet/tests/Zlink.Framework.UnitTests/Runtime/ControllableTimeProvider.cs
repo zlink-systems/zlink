@@ -63,6 +63,34 @@ internal sealed class ControllableTimeProvider : TimeProvider
 
     internal void AdvanceMonotonic(TimeSpan delta) => Advance(delta, advanceUtc: false);
 
+    internal void AdvanceMonotonicWithoutTimers(TimeSpan delta)
+    {
+        if (delta < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(delta));
+        lock (_gate)
+            _timestamp = checked(_timestamp + delta.Ticks);
+    }
+
+    internal async Task AdvanceMonotonicAndFireTimerAsync(TimeSpan delta, TimeSpan dueTime)
+    {
+        ControlledTimer? timer;
+        Task updated;
+        lock (_gate)
+        {
+            timer = _timers.SingleOrDefault(item => item.IsDueAt(_timestamp + dueTime.Ticks));
+            updated = timer?.WaitForUpdateAsync() ?? Task.CompletedTask;
+        }
+        AdvanceMonotonicWithoutTimers(delta);
+        if (timer is not null)
+        {
+            (TimerCallback Callback, object? State) callback;
+            lock (_gate)
+                Assert.True(timer.TryTakeDue(_timestamp, out callback));
+            callback.Callback(callback.State);
+        }
+        await updated;
+    }
+
     private void Advance(TimeSpan delta, bool advanceUtc)
     {
         if (delta < TimeSpan.Zero)
@@ -90,6 +118,18 @@ internal sealed class ControllableTimeProvider : TimeProvider
         private long? _dueAt;
         private TimeSpan _period;
         private bool _disposed;
+        private TaskCompletionSource? _updated;
+
+        internal bool IsDueAt(long timestamp) => !_disposed && _dueAt == timestamp;
+
+        internal Task WaitForUpdateAsync() =>
+            (_updated ??= new(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
+
+        private void CompleteUpdate()
+        {
+            _updated?.TrySetResult();
+            _updated = null;
+        }
 
         public bool Change(TimeSpan dueTime, TimeSpan period)
         {
@@ -98,6 +138,7 @@ internal sealed class ControllableTimeProvider : TimeProvider
                 if (_disposed)
                     return false;
                 ChangeCore(owner._timestamp, dueTime, period);
+                CompleteUpdate();
                 return true;
             }
         }
@@ -132,6 +173,7 @@ internal sealed class ControllableTimeProvider : TimeProvider
                 _disposed = true;
                 _dueAt = null;
                 owner._timers.Remove(this);
+                CompleteUpdate();
             }
         }
 

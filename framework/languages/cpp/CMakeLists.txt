@@ -66,9 +66,9 @@ option(ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST
   "Use packaged Boost instead of the repository's vendored Boost" ${_zlink_use_system_boost})
 set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT "$ENV{ZLINK_LOCAL_PACKAGE_ROOT}" CACHE PATH
   "Root directory containing local package outputs")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.23.0" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.25.0" CACHE STRING
   "Exact local zlink_cpp package version consumed by the C++ framework")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "1.23.0" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "1.25.0" CACHE STRING
   "Exact local zlink Core package version embedded by zlink_cpp")
 # The binding and Core package prefixes have three sources, in this order: the
 # two ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_*_PREFIX options, the repository's local
@@ -2062,7 +2062,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       absl_DIR
       utf8_range_DIR
       ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX
-      ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX)
+      ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX
+      ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE)
     if(DEFINED ${tooling_dependency} AND NOT "${${tooling_dependency}}" STREQUAL "")
       list(APPEND ZLINK_FRAMEWORK_CPP_TOOLING_CONTRACT_ARGS
         -D ZLINK_FRAMEWORK_CPP_TOOLING_${tooling_dependency}=${${tooling_dependency}})
@@ -2134,6 +2135,16 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_client_server_runtime
     tests/Zlink.Framework.UnitTests/test_cpp_framework_client_server_runtime.cpp
     "framework-unit;framework-regression;framework-client-server;framework-monitoring")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_same_owner_channel
+    COMMAND test_cpp_framework_client_server_runtime --same-owner-regression
+    LABELS "framework-contract;execution"
+    TIMEOUT 60)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_same_owner_actor_control
+    COMMAND test_cpp_framework_client_server_runtime --same-owner-gated-control
+    LABELS "framework-contract;execution"
+    TIMEOUT 60)
   target_include_directories(test_cpp_framework_client_server_runtime PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_compile_definitions(test_cpp_framework_client_server_runtime PRIVATE
@@ -2316,6 +2327,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_di.cpp
     "framework-unit;framework-regression;DI;scope")
   add_zlink_framework_test(
+    test_cpp_framework_prestart_call
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_prestart_call.cpp
+    "framework-unit;framework-host;messaging"
+    unit)
+  target_use_zlink_gtest_main(test_cpp_framework_prestart_call)
+  add_zlink_framework_test(
     test_cpp_framework_startup_dependencies
     tests/Zlink.Framework.UnitTests/test_cpp_framework_startup_dependencies.cpp
     "framework-unit;DI;framework-host")
@@ -2358,6 +2375,20 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_actor_join_handoff_id PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
+    test_cpp_framework_receive_role_handoff
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_role_handoff.cpp
+    "framework-unit;framework-contract;execution;resource" unit)
+  target_use_zlink_gtest_main(test_cpp_framework_receive_role_handoff)
+  target_include_directories(test_cpp_framework_receive_role_handoff PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_definitions(test_cpp_framework_receive_role_handoff PRIVATE
+      ZLINK_TEST_HANDOFF_ALLOC_FAIL)
+    target_link_options(test_cpp_framework_receive_role_handoff PRIVATE
+      "LINKER:--wrap=_Znwm" "LINKER:--wrap=pthread_mutex_trylock")
+  endif()
+
+  add_zlink_framework_test(
     test_cpp_framework_receive_role_completion
     tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_role_completion.cpp
     "framework-unit;execution;operation;resource"
@@ -2379,7 +2410,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     zlink_framework_cpp_add_boost_headers(test_cpp_framework_mailbox_owner_dispatch)
     target_link_options(test_cpp_framework_mailbox_owner_dispatch PRIVATE
       "LINKER:--wrap=_ZN5zlink9framework7runtime18offload_executor_t10start_roleESt10shared_ptrINS2_6role_tEE"
-      "LINKER:--wrap=_ZNSt18condition_variable10notify_oneEv"
       "LINKER:--wrap=zlink_router_recv")
     set(ZLINK_TEST_RECEIVE_WAIT_SYMBOL
       "_ZN5zlink9framework7runtime4host21public_host_runtime_t33wait_for_hosted_dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE")

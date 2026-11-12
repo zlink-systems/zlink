@@ -82,12 +82,23 @@ public sealed class test_message_gc_lifetime
         byte[] payload = Payload(size);
         long mismatches = 0;
         int running = WorkerCount;
+        int completedRounds = 0;
+        var progress = new object();
         var collector = new Thread(() =>
         {
-            // Bounded by the workers' fixed iteration count, not by time.
             while (Volatile.Read(ref running) > 0)
+            {
                 GC.Collect(0, GCCollectionMode.Forced, blocking: true,
                     compacting: true);
+                // Require worker progress after each collection before the
+                // next collection can suspend the workers again.
+                lock (progress)
+                {
+                    int observed = completedRounds;
+                    while (completedRounds == observed && running > 0)
+                        Monitor.Wait(progress);
+                }
+            }
         });
         Thread[] workers = Enumerable.Range(0, WorkerCount).Select(_ =>
             new Thread(() =>
@@ -109,9 +120,18 @@ public sealed class test_message_gc_lifetime
                     }
 
                     garbage.Clear();
+                    lock (progress)
+                    {
+                        completedRounds++;
+                        Monitor.Pulse(progress);
+                    }
                 }
 
-                Interlocked.Decrement(ref running);
+                lock (progress)
+                {
+                    Interlocked.Decrement(ref running);
+                    Monitor.Pulse(progress);
+                }
             })).ToArray();
         collector.Start();
         foreach (Thread worker in workers)

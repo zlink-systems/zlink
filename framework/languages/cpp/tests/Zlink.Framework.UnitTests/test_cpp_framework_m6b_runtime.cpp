@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "mailbox_claim_fixture.hpp"
 #include "../support/stateful_object_sync.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "../support/runtime_failure_fixture.hpp"
@@ -4109,7 +4110,7 @@ void verify_public_host_dispatches_one_application_record_per_turn ()
     }
 }
 
-void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
+void verify_public_host_dispatches_one_node_record_per_claim ()
 {
     auto target = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{mesh::raw_mesh_node_options_t{
@@ -4140,20 +4141,25 @@ void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
     std::vector<std::string> dispatched;
     std::size_t started = 0;
     std::size_t rejected = 0;
-    assert (zlink::framework::test::application_owner_result (
-              target->dispatch_application_owner (
-                owner,
-                [&] (const host::ready_record_t &, const host::receive_record_t &record,
-                     std::vector<zlink::message_t> parts, auto) {
-                    assert (record.retain_mailbox_reservation);
-                    assert (record.release_mailbox_reservation);
-                    record.retain_mailbox_reservation ();
-                    assert (parts.size () == 1);
-                    dispatched.push_back (parts.front ().to_string ());
-                    record.release_mailbox_reservation ();
-                },
-                [&] { ++started; }, [&] { ++rejected; }))
-              .value ());
+    for (std::size_t index = 0; index != 3; ++index) {
+        assert (zlink::framework::test::application_owner_result (
+                  target->dispatch_application_owner (
+                    owner,
+                    [&] (const host::ready_record_t &, const host::receive_record_t &record,
+                         std::vector<zlink::message_t> parts, auto) {
+                        assert (record.retain_mailbox_reservation);
+                        assert (record.release_mailbox_reservation);
+                        record.retain_mailbox_reservation ();
+                        assert (parts.size () == 1);
+                        dispatched.push_back (parts.front ().to_string ());
+                        record.release_mailbox_reservation ();
+                    },
+                    [&] { ++started; }, [&] { ++rejected; }))
+                  .value ());
+        assert (dispatched.size () == index + 1);
+        assert (mailbox.pending_messages (mesh::service_mailbox_domain_t::application)
+                == 2 - index);
+    }
     mailbox.end_application_drain (owner);
 
     assert ((dispatched == std::vector<std::string>{"first", "second", "third"}));
@@ -4407,8 +4413,8 @@ void verify_public_host_fifo_drains_before_liveness_probe ()
             wait_for_input (source->transport (), io_deadline);
     }
     assert (ack_barrier == mesh::raw_mesh_pump_result_t::application);
-    auto marker = source->transport ().mailbox ().try_claim (
-      mesh::service_mailbox_domain_t::application, 1, 1024);
+    auto marker = zlink::framework::test::claim_mailbox (
+      source->transport ().mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (marker && marker->records.size () == 1);
     const auto &record = (*marker->records.front ());
     assert (record.source_routing_id == target_status.routing_id ().to_bytes ());
@@ -4561,8 +4567,8 @@ void verify_logical_multicast_continues_after_one_target_failure ()
       target->transport ().mailbox ().pending_messages (mesh::service_mailbox_domain_t::application)
       == 1);
 
-    auto claim = target->transport ().mailbox ().try_claim (
-      mesh::service_mailbox_domain_t::application, 1, 4096);
+    auto claim = zlink::framework::test::claim_mailbox (
+      target->transport ().mailbox (), mesh::service_mailbox_domain_t::application, 1, 4096);
     assert (claim && claim->records.size () == 1);
     const auto &received = (*claim->records.front ());
     assert (received.parts ().size () == 3);
@@ -6708,7 +6714,7 @@ void verify_node_request_requires_remote_admission ()
 
     assert (submitted.result ().value ());
 
-    std::shared_ptr<mesh::service_mailbox_claim_t> claim;
+    zlink::framework::test::mailbox_claim_t claim;
     while (!claim && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
         (void) source.observe_routes ();
@@ -6717,7 +6723,8 @@ void verify_node_request_requires_remote_admission ()
         const auto target_pump = target.pump_one (now).result ().value ();
         assert (source_pump != mesh::raw_mesh_pump_result_t::protocol_error);
         assert (target_pump != mesh::raw_mesh_pump_result_t::protocol_error);
-        claim = target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
+        claim = zlink::framework::test::claim_mailbox (
+          target.mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024);
         if (!claim)
             std::this_thread::sleep_for (1ms);
     }
@@ -6861,16 +6868,21 @@ void verify_queued_owner_accepts_request_without_blocking_other_owner ()
         assert (queued != mesh::raw_mesh_pump_result_t::protocol_error);
     }
     assert (queued == mesh::raw_mesh_pump_result_t::application);
-    auto queued_claim =
-      target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 2, 4096);
-    assert (queued_claim && queued_claim->records.size () == 2);
-    const auto request_record =
-      std::find_if (queued_claim->records.begin (), queued_claim->records.end (),
-                    [] (const auto &record) { return record->reply_token ().has_value (); });
-    assert (request_record != queued_claim->records.end ());
-    assert (
-      target.reply (**request_record, {"OwnerCapacityReply", "application/json", bytes ("reply")}));
-    assert (target.mailbox ().release (*queued_claim));
+    std::size_t queued_records = 0, queued_requests = 0;
+    for (unsigned i = 0; i != 2; ++i) {
+        auto queued_claim = zlink::framework::test::claim_mailbox (
+          target.mailbox (), mesh::service_mailbox_domain_t::application, 1, 4096);
+        assert (queued_claim && queued_claim->records.size () == 1);
+        ++queued_records;
+        auto &record = *queued_claim->records.front ();
+        if (record.reply_token ()) {
+            ++queued_requests;
+            assert (
+              target.reply (record, {"OwnerCapacityReply", "application/json", bytes ("reply")}));
+        }
+        assert (target.mailbox ().release (*queued_claim));
+    }
+    assert (queued_records == 2 && queued_requests == 1);
     while (accepted.wait_for (0ms) != std::future_status::ready
            && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
         assert (
@@ -6910,8 +6922,9 @@ void verify_queued_owner_accepts_request_without_blocking_other_owner ()
         assert (independent_pump != mesh::raw_mesh_pump_result_t::protocol_error);
     }
     assert (independent_pump == mesh::raw_mesh_pump_result_t::application);
-    auto claim = target.mailbox ().try_claim_owner (mesh::service_mailbox_domain_t::application,
-                                                    "channel:independent-channel", 1, 1024);
+    auto claim = zlink::framework::test::claim_mailbox_owner (
+      target.mailbox (), mesh::service_mailbox_domain_t::application, "channel:independent-channel",
+      1, 1024);
     assert (claim && claim->records.size () == 1);
     assert (target.reply ((*claim->records.front ()),
                           {"OwnerCapacityReply", "application/json", bytes ("reply")}));
@@ -9880,7 +9893,7 @@ int main (int argc, char **argv)
     verify_terminal_journal_preserves_outstanding_entries ();
     verify_unbounded_actor_handoff_backlog ();
     verify_public_host_dispatches_one_application_record_per_turn ();
-    verify_public_host_dispatches_one_owner_claim_as_a_batch ();
+    verify_public_host_dispatches_one_node_record_per_claim ();
     verify_public_host_batches_with_finite_permits ();
     verify_public_host_fifo_drains_before_liveness_probe ();
     verify_logical_multicast_continues_after_one_target_failure ();

@@ -96,7 +96,9 @@ token, or an expired record with `ExpiresAt ≤ StoreNow`). The wait follows
 `3·margin` (default example: 15 seconds). The host start call finishes as in Location runtime §5's
 startup without a lease, while the host remains `Preparing`. Reclaim the same RID at the first
 claim opportunity on the renew-interval schedule after `t0 + 3·margin`; submit no claim before
-then. Restart after normal shutdown uses the same wait. If the lease is still valid, apply the
+then. Restart after normal shutdown uses the same wait. A first start with no previous lifecycle
+uses it too: the Store can't tell a first start from a restart after the Store was cleared, so the
+moment `Missing` is first observed becomes `t0`. If the lease is still valid, apply the
 existing `Conflict` rule. A restart that loses the observation time observes again and restarts
 the entire wait. No mesh query or existing connection is required, and no new RID is issued.
 After reclaim, follow §6's descriptor publication, bind, and admission sequence.
@@ -250,6 +252,13 @@ The framework selects the target using the following conditions.
 3. Confirms the requested object kind and stable type are registered.
 4. Confirms active/pending capacity remains.
 5. Applies node-wide placement weight across the remaining candidates.
+
+Each judgment selects among nodes that meet all of conditions 1-5 (condition 2 is the owner lease
+validation of [Location runtime §4.1](../05-location-relocation/01-location-runtime.en.md#41-validating-a-target-descriptors-owner-lease)).
+If there is none, but some node with positive placement weight meets conditions 2-4, the create
+operation waits for the existing discovery refresh within its remaining deadline and judges again.
+It doesn't re-read the Store per request. If there is neither, it ends with the `Unavailable` of
+§5.1. When the deadline expires the result is `DeadlineExceeded`.
 
 The framework reserves a slot to place the object on the selected node so it
 doesn't double-use capacity with another creation operation. It doesn't

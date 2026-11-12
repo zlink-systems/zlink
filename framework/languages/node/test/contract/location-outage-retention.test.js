@@ -2,6 +2,23 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const internal = require('../../packages/framework/dist/internal');
+
+function executionPolicy(runtime, owner) {
+  return {
+    executionDecision: (_owner, wake) => runtime.executionDecision(owner, wake),
+    executionFailure: () => runtime.executionFailure()
+  };
+}
+function fixedPolicy(
+  allowed,
+  failureKind = internal.ZLinkFrameworkInternalErrorKind.RequestRejected
+) {
+  return {
+    executionDecision: () => (allowed() ? 'allowed' : 'lost'),
+    executionFailure: () =>
+      internal.createInternalFrameworkException(failureKind, 'Execution policy closed.')
+  };
+}
 const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const {
   zlinkDefaultLocationOptions
@@ -298,7 +315,7 @@ for (const provider of [false, true]) {
         }
       );
       const gate = new internal.ZLinkExecutionBarrier();
-      gate.setExecutionPolicy(() => () => s.runtime.executionAllowed(owner));
+      gate.setExecutionPolicy(() => executionPolicy(s.runtime, owner));
       const serial = new internal.ZLinkSpotSerialTurnExecutor();
       serial.setExecutionBarrier(gate);
       let calls = 0;
@@ -974,7 +991,7 @@ for (const missingError of [false, true]) {
       entered,
       finish;
     const gate = new internal.ZLinkExecutionBarrier();
-    gate.setExecutionPolicy(() => () => allowed);
+    gate.setExecutionPolicy(() => fixedPolicy(() => allowed));
     const serial = new internal.ZLinkSpotSerialTurnExecutor();
     serial.setExecutionBarrier(gate);
     const started = new Promise((resolve) => {
@@ -1207,7 +1224,7 @@ test('application records keep the original operation without a policy wrapper',
     ZLinkSerialExecutionQueue
   } = require('../../packages/framework/dist/runtime/execution/serial-execution-queue');
   let captures = 0;
-  const allowed = () => true;
+  const allowed = fixedPolicy(() => true);
   const queue = new ZLinkSerialExecutionQueue(async (record) => {
     assert.equal(record.operation, operation);
     record.resolve(record.operation());
@@ -1223,43 +1240,40 @@ test('application records keep the original operation without a policy wrapper',
   assert.equal(captures - before, 0, 'records must not capture policies');
 });
 
-test('time alone closes admission for an unretained object during an outage', async (t) => {
+test('admission rejects unretained work after the owner deadline', async (t) => {
   const s = await scenario(t, false, true);
-  const owner = {};
+  const admission = new internal.ZLinkRuntimeAdmissionGate(() => s.runtime.ownerLeaseUsable);
+  admission.setExecutionRuntime(() => s.runtime);
+  admission.register('mesh');
   s.fail();
   s.setNow(200);
   await s.runtime.renewOwnerLeaseOnce();
-  const gate = new internal.ZLinkExecutionBarrier();
-  const allowed = () => s.runtime.executionAllowed(owner);
-  gate.setExecutionPolicy(() => allowed);
-  const serial = new internal.ZLinkSpotSerialTurnExecutor();
-  serial.setExecutionBarrier(gate);
-  let turns = 0;
-  await serial.execute(() => {
-    turns++;
-  });
-  s.setNow(1000); // Do not fire any timer or execute another renewal.
+  s.setNow(1000);
   await assert.rejects(
-    serial.execute(() => {
-      turns++;
-    })
+    admission.run(
+      'mesh',
+      'Actor request',
+      () => assert.fail('must not be admitted'),
+      internal.ReceiveKind.ActorRequest
+    ),
+    {
+      kind: internal.ZLinkFrameworkErrorKind.ShuttingDown
+    }
   );
-  assert.equal(turns, 1);
   assert.equal(s.snapshot().storeOutage.discarded, false);
 });
 
-test('barrier claims share their execution predicate entry point', () => {
+test('barrier claims share their execution policy', () => {
   const gate = new internal.ZLinkExecutionBarrier();
-  const allowed = () => true;
+  const allowed = fixedPolicy(() => true);
   gate.setExecutionPolicy(() => allowed);
   const starts = new Set();
   for (let n = 0; n < 20; n++) {
     const claim = gate.enter();
-    starts.add(claim.start);
-    claim.start();
+    starts.add(claim.executionPolicy);
     claim.release();
   }
-  assert.equal(starts.size, 1, 'claim creation must not allocate a predicate closure');
+  assert.equal(starts.size, 1, 'claim creation must not allocate a policy');
 });
 
 test('Actor execution identity lookup reuses its active context', async () => {
@@ -1536,8 +1550,9 @@ for (const provider of [false, true]) {
   });
 }
 
-test('nonterminal execution pause preserves the existing yielded-turn result', async () => {
+test('a yielded turn waits for the same gate to reopen', async () => {
   let allowed = true,
+    wake,
     complete,
     signalYielded;
   const source = new Promise((resolve) => {
@@ -1547,18 +1562,174 @@ test('nonterminal execution pause preserves the existing yielded-turn result', a
     signalYielded = resolve;
   });
   const barrier = new internal.ZLinkExecutionBarrier();
-  barrier.setExecutionPolicy(() => () => allowed);
+  barrier.setExecutionPolicy(() => ({
+    executionDecision: (_owner, onWake) => {
+      if (allowed) return 'allowed';
+      wake = onWake;
+      return 'paused';
+    },
+    executionFailure: () => assert.fail('a pause is not a loss')
+  }));
   const serial = new internal.ZLinkSpotSerialTurnExecutor();
   serial.setExecutionBarrier(barrier);
+  let calls = 0;
   const pending = serial.execute(async () => {
     signalYielded();
     await serial.yieldPromise(source);
-    assert.fail('paused continuation must not run');
+    calls++;
   });
-  const rejected = assert.rejects(pending, { kind: internal.ZLinkFrameworkErrorKind.Unavailable });
   await yielded;
   allowed = false;
   complete();
-  await rejected;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 0);
+  assert.equal(typeof wake, 'function');
+  allowed = true;
+  wake();
+  await pending;
+  assert.equal(calls, 1);
   await serial.whenIdle();
 });
+
+for (const mode of [
+  internal.ZLinkUserSpotExecutionMode.PerActor,
+  internal.ZLinkUserSpotExecutionMode.SpotWide
+]) {
+  test(`scheduled admission deadline closes Actor Spot and timer turns until renewal (mode=${mode})`, async (t) => {
+    const s = await objectScenario(t, false, mode);
+    let calls = 0;
+    const submitters = [
+      (operation) => s.activation.executeActor('a', (serial) => serial.execute(operation)),
+      (operation) => s.activation.serialExecutor.executeSpot(operation),
+      (operation) => s.activation.serialExecutor.executeTimer('deadline', operation)
+    ];
+    const turns = submitters.map(
+      (submit) => () =>
+        submit(() => {
+          calls++;
+        })
+    );
+    s.advance(999);
+    for (const turn of turns) await turn();
+    assert.equal(calls, 3, 'turns start immediately before the admission deadline');
+    const submit = (turn) =>
+      s.admission.run('mesh', 'bound request', turn, internal.ReceiveKind.SpotRequest);
+    const finishes = [],
+      holding = [];
+    const holders =
+      mode === internal.ZLinkUserSpotExecutionMode.PerActor ? submitters : [submitters[1]];
+    for (const hold of holders) {
+      let started;
+      const ready = new Promise((resolve) => {
+        started = resolve;
+      });
+      holding.push(
+        hold(() => {
+          started();
+          return new Promise((resolve) => {
+            finishes.push(resolve);
+          });
+        })
+      );
+      await ready;
+    }
+    let acceptedSettled = 0;
+    const accepted = turns.map((turn) =>
+      turn().finally(() => {
+        acceptedSettled++;
+      })
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    s.advance(1001);
+    assert.equal(s.runtime.ownerLeaseHealthy, true, 'heartbeat has not observed expiry');
+    assert.equal(s.snapshot().storeOutage, undefined);
+    const reads = s.clockReads();
+    for (const turn of turns)
+      await assert.rejects(submit(turn), { kind: internal.ZLinkFrameworkErrorKind.ShuttingDown });
+    for (const finish of finishes) finish();
+    await Promise.all(holding);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(acceptedSettled, 0, 'accepted turns wait behind the deadline latch');
+    assert.equal(calls, 3);
+    assert.equal(s.clockReads(), reads, 'closed admission uses its latch without reading time');
+    s.setNow(999);
+    for (const turn of turns)
+      await assert.rejects(submit(turn), { kind: internal.ZLinkFrameworkErrorKind.ShuttingDown });
+    assert.equal(await s.runtime.renewOwnerLeaseOnce(), true);
+    await Promise.all(accepted);
+    assert.equal(calls, 6, 'renewal resumes every accepted turn once');
+    for (const turn of turns) await submit(turn);
+    assert.equal(calls, 9);
+    s.advance(1899);
+    for (const turn of turns)
+      await assert.rejects(submit(turn), { kind: internal.ZLinkFrameworkErrorKind.ShuttingDown });
+    assert.equal(calls, 9);
+  });
+}
+
+for (const mode of [
+  internal.ZLinkUserSpotExecutionMode.PerActor,
+  internal.ZLinkUserSpotExecutionMode.SpotWide
+]) {
+  test(`deadline latch preserves a managed tick before queue submission (mode=${mode})`, async (t) => {
+    const s = await objectScenario(t, false, mode);
+    const ticks = [];
+    class Tick {
+      handle(_spot, tick) {
+        ticks.push(tick);
+      }
+    }
+    let submitted = 0,
+      complete;
+    const delivered = new Promise((resolve) => {
+      complete = resolve;
+    });
+    const execute = s.activation.serialExecutor.executeTimer.bind(s.activation.serialExecutor);
+    t.mock.method(s.activation.serialExecutor, 'executeTimer', (name, operation, options) => {
+      if (name === 'unqueued') submitted++;
+      const result = execute(name, operation, options);
+      if (name === 'unqueued') void result.then(complete);
+      return result;
+    });
+    const timer = await s.activation.spot.context.addTimer('unqueued', 100, Tick);
+    t.after(() => timer.cancel());
+    s.advance(1001);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(submitted, 0, 'closed gate keeps the tick outside the serial queue');
+    assert.equal(ticks.length, 0);
+    s.setNow(999);
+    assert.equal(await s.runtime.renewOwnerLeaseOnce(), true);
+    await delivered;
+    assert.equal(submitted, 1);
+    assert.equal(ticks.length, 1);
+    assert.equal(ticks[0].deliveryIndex, 1n);
+    await timer.cancel();
+  });
+}
+
+for (const mode of [
+  internal.ZLinkUserSpotExecutionMode.PerActor,
+  internal.ZLinkUserSpotExecutionMode.SpotWide
+]) {
+  test(`an unsubmitted Spot tick does not inherit its creator member authority (mode=${mode})`, async (t) => {
+    const {
+      runZLinkActorExecution
+    } = require('../../packages/framework/dist/runtime/actors/actor-execution-context');
+    const s = await objectScenario(t, false, mode);
+    let ticks = 0;
+    class Tick {
+      handle() {
+        ticks++;
+      }
+    }
+    const timer = await s.activation.spot.context.addTimer('member-context', 100, Tick);
+    t.after(() => timer.cancel());
+    s.runtime.discardExecution(s.a);
+    await runZLinkActorExecution('a', s.activation.spotId, async () => {
+      s.advance(200);
+      await new Promise((resolve) => setImmediate(resolve));
+    });
+    assert.equal(ticks, 1, 'a Spot-owned tick ignores the discarded creator member context');
+    await timer.cancel();
+  });
+}

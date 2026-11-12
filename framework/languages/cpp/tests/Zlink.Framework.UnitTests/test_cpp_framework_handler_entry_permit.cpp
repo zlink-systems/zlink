@@ -14,12 +14,11 @@ namespace zlink::framework::runtime::host
 {
 struct public_host_runtime_test_access_t
 {
-    static task_t<std::size_t>
-    dispatch_claim (public_host_runtime_t &host,
-                    std::shared_ptr<mesh::service_mailbox_claim_t> claim,
-                    mesh::service_mailbox_t::application_dispatch_t dispatch)
+    static std::weak_ptr<mesh::service_mailbox_claim_t>
+    claim_of (const mailbox_callback_t &callback)
     {
-        return host.dispatch_application_claim (std::move (claim), std::move (dispatch));
+        const auto *settlement = std::get_if<mesh::service_mailbox_settlement_t> (&callback._value);
+        return settlement ? settlement->_claim : std::weak_ptr<mesh::service_mailbox_claim_t>{};
     }
 };
 }
@@ -42,6 +41,8 @@ struct permit_handler_state_t
     bool call_next = true;
     int handler_calls = 0;
     int permit_returns = 0;
+    bool throw_filter = false;
+    bool throw_handler = false;
 
     void handle (const int &value, const route_message_context_t &)
     {
@@ -49,6 +50,8 @@ struct permit_handler_state_t
         EXPECT_EQ (0u, jobs->snapshot ().permits_in_use);
         EXPECT_EQ (1, permit_returns);
         ++handler_calls;
+        if (throw_handler)
+            throw std::runtime_error ("handler failure after permit entry");
     }
 };
 
@@ -98,6 +101,8 @@ class HandlerEntryPermit : public ::testing::Test
                                     handler_next_t next) -> task_t<void> {
             invocation->filter_entered = true;
             co_await invocation->resume.task ();
+            if (invocation->throw_filter)
+                throw std::runtime_error ("filter failure before handler entry");
             if (invocation->call_next)
                 co_await next ();
         });
@@ -166,14 +171,16 @@ class HandlerEntryPermit : public ::testing::Test
               ++invocation->permit_returns;
           },
           queue_t::origin_t::remote);
-        auto claim =
-          mailbox.try_claim_owner (domain, owner, 1, runtime::dispatch_limits::receive_batch_bytes);
-        ASSERT_TRUE (claim);
-        std::weak_ptr<mesh::service_mailbox_claim_t> claim_lifetime = claim;
+        std::weak_ptr<mesh::service_mailbox_claim_t> claim_lifetime;
+        std::size_t dispatched_records = 0;
         std::optional<task_t<std::optional<detail::route_dispatch_reply_t>>> pending;
-        auto dispatched = host::public_host_runtime_test_access_t::dispatch_claim (
-          target, std::move (claim),
+        auto dispatched = target.dispatch_application_owner (
+          owner,
           [&] (const auto &, const auto &received, auto payload, auto permit) {
+              ++dispatched_records;
+              claim_lifetime = host::public_host_runtime_test_access_t::claim_of (
+                received.release_mailbox_reservation);
+              EXPECT_FALSE (claim_lifetime.expired ());
               EXPECT_EQ (host::record_kind_t::node_send, received.kind);
               EXPECT_EQ ("peer", received.source_node_rid.to_string ());
               // This is the hosted Node pipeline handoff. Its ordinary prefix
@@ -184,9 +191,11 @@ class HandlerEntryPermit : public ::testing::Test
                                                                        std::move (permit));
               pending.emplace (
                 dispatcher.dispatch (received, std::move (payload), header, std::move (terminal)));
-          });
-        ASSERT_TRUE (dispatched.await_ready ());
-        ASSERT_EQ (1u, dispatched.result ().value ());
+          },
+          [] {}, [] {});
+        ASSERT_TRUE (test::application_owner_ready (dispatched));
+        ASSERT_TRUE (test::application_owner_result (dispatched).value ());
+        ASSERT_EQ (1u, dispatched_records);
         EXPECT_TRUE (claim_lifetime.expired ());
         RecordProperty ("claim_destroyed_before_resume", claim_lifetime.expired ());
         EXPECT_EQ (0u, mailbox.pending_messages (domain));
@@ -197,13 +206,17 @@ class HandlerEntryPermit : public ::testing::Test
           << "claim credit settlement returned the pre-handler permit";
         EXPECT_EQ (0, invocation->permit_returns);
         invocation->resume.complete (result_t<void>::success ());
-        ASSERT_TRUE (pending->result ());
+        if (invocation->throw_filter || invocation->throw_handler)
+            EXPECT_FALSE (pending->result ());
+        else
+            ASSERT_TRUE (pending->result ());
         pending.reset ();
-        EXPECT_EQ (call_next ? 1 : 0, invocation->handler_calls);
+        const bool handler_entered = call_next && !invocation->throw_filter;
+        EXPECT_EQ (handler_entered ? 1 : 0, invocation->handler_calls);
         EXPECT_EQ (0u, jobs->snapshot ().permits_in_use);
         EXPECT_EQ (1, invocation->permit_returns);
         RecordProperty ("permit_returns", invocation->permit_returns);
-        EXPECT_EQ (call_next ? 1 : 0, duplicate_entries);
+        EXPECT_EQ (handler_entered ? 1 : 0, duplicate_entries);
     }
 
     std::shared_ptr<queue_t> jobs;
@@ -225,6 +238,18 @@ TEST_F (HandlerEntryPermit, RemoteNodeAsyncFilterOutlivesClaim)
 TEST_F (HandlerEntryPermit, RemoteNodeFilterTerminalWithoutHandlerReturnsPermit)
 {
     node_case (false);
+}
+
+TEST_F (HandlerEntryPermit, RemoteNodeFilterExceptionReturnsPermit)
+{
+    invocation->throw_filter = true;
+    node_case (true);
+}
+
+TEST_F (HandlerEntryPermit, RemoteNodeHandlerExceptionReturnsPermit)
+{
+    invocation->throw_handler = true;
+    node_case (true);
 }
 
 TEST_F (HandlerEntryPermit, StatefulAcceptedRecordAsyncFilterOutlivesClaim)

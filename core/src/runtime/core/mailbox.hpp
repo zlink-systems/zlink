@@ -70,7 +70,9 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
     bool reschedule_if_needed ();
     // Called by the current executor under its command turn. Pending work
     // and its notification transfer to the next command owner.
-    void detach_io_context ();
+    // With only_if_empty_, pending commands retain the current executor and
+    // its scheduling reservation. Returns true when detached.
+    bool detach_io_context (bool only_if_empty_ = false);
 
     // Signaler support for ZLINK_INTERNAL_OPT_FD
     int add_signaler (signaler_t *signaler_);

@@ -37,12 +37,12 @@ import java.util.function.Function;
 final class ZLinkFrameworkActorSubsystem {
     private final ZLinkActorRuntime actors;
     private final ZLinkActorDirectory actorDirectory;
-    private final ZLinkActorClient actorClient;
+    private final ZLinkActorClientRuntime actorClient;
 
     private ZLinkFrameworkActorSubsystem(
             ZLinkActorRuntime actors,
             ZLinkActorDirectory actorDirectory,
-            ZLinkActorClient actorClient) {
+            ZLinkActorClientRuntime actorClient) {
         this.actors = actors;
         this.actorDirectory = actorDirectory;
         this.actorClient = actorClient;
@@ -157,6 +157,7 @@ final class ZLinkFrameworkActorSubsystem {
                                     meshActorNode.meshName(),
                                     meshNode,
                                     locationStore,
+                                    storeLocationResolvers,
                                     actors,
                                     serializer,
                                     spots.activationAdmission(meshActorNode.meshName()),
@@ -174,7 +175,7 @@ final class ZLinkFrameworkActorSubsystem {
                         handlerFactory,
                         registration.handlerExecutor(),
                         eventDispatcher);
-        ZLinkActorClient actorClient =
+        ZLinkActorClientRuntime actorClient =
                 spots != null && storeLocationResolvers != null
                         ? new ZLinkActorClientRuntime(
                                 spots::primaryNode,
@@ -209,7 +210,7 @@ final class ZLinkFrameworkActorSubsystem {
         return actorDirectory;
     }
 
-    ZLinkActorClient actorClient() {
+    ZLinkActorClientRuntime actorClient() {
         return actorClient;
     }
 

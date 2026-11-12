@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import http.server
+import threading
 import json
 from pathlib import Path
 import shutil
@@ -25,6 +27,61 @@ def runner_python(function: str, *args: object) -> subprocess.CompletedProcess:
         [sys.executable, "-", *(str(arg) for arg in args)],
         input=body, text=True, capture_output=True, check=False,
     )
+
+
+class CppControlMetadataTest(unittest.TestCase):
+    def run_controls(self, source, cell):
+        document = {"schema": "with-grpc-cell-v1", "metadata": {}, "cells": [cell]}
+        body = (TOOLS.parent / "cpp/run_local.sh").read_text().split(
+            "record_cell_controls() {", 1)[1].split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(json.dumps(source).encode())
+            def log_message(self, *args):
+                pass
+        with tempfile.TemporaryDirectory() as directory, http.server.HTTPServer(("127.0.0.1", 0), Handler) as server:
+            worker = threading.Thread(target=lambda: server.serve_forever(poll_interval=.01))
+            worker.start()
+            try:
+                path = Path(directory) / "results.json"
+                path.write_text(json.dumps(document))
+                result = subprocess.run([sys.executable, "-", str(path),
+                    f"http://127.0.0.1:{server.server_port}", "0", "", ""],
+                    input=body, text=True, capture_output=True)
+                return result, json.loads(path.read_text()), document
+            finally:
+                server.shutdown()
+                worker.join()
+
+    def test_contaminated_cell_keeps_source_configuration_and_errors(self):
+        source = {"submitConcurrency": 3, "streams": {"count": 3, "inFlightPerStream": None},
+                  "submitted": 10, "completed": 4, "currentInFlight": 1,
+                  "errors": 5, "client_error_summary": [{"type": "grpc::Status", "message": "deadline", "count": 5}],
+                  "client_error_other_count": 0}
+        result, document, _ = self.run_controls(source, {"contaminated": True, "errors": 0})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(document["metadata"]["submitConcurrency"], 3)
+        cell = document["cells"][0]
+        self.assertEqual(cell["streams"], source["streams"])
+        self.assertTrue(cell["contaminated"])
+        self.assertEqual(cell["errors"], 5)
+        self.assertEqual((cell["submitted"], cell["completed"], cell["abandoned"]), (10, 4, 1))
+        self.assertEqual(cell["client_error_summary"], source["client_error_summary"])
+
+    def test_serial_cell_keeps_one_stream_with_the_configured_submit_concurrency(self):
+        streams = {"count": 1, "inFlightPerStream": 1}
+        source = {"submitConcurrency": 3, "streams": streams, "errors": 0}
+        result, document, _ = self.run_controls(source, {"streams": streams, "errors": 0})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(document["metadata"]["submitConcurrency"], 3)
+        self.assertEqual(document["cells"][0]["streams"], streams)
+
+    def test_missing_source_configuration_is_rejected_without_rewriting_the_result(self):
+        result, document, original = self.run_controls({"submitConcurrency": 3}, {"contaminated": True})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(document, original)
 
 
 class CppRejectionTest(unittest.TestCase):
