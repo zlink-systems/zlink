@@ -1052,7 +1052,11 @@ int main (int argc, char **argv)
     foundation::operation_registry_t registry;
     const auto now = foundation::operation_registry_t::clock_t::now ();
     {
-        foundation::operation_registry_t ordered;
+        // The scan budget reads the registry clock. A fixed injected clock keeps one expire
+        // within budget on a slow or loaded build, as the deadline test above does (#4096).
+        injected_now = now;
+        injected_step = {};
+        foundation::operation_registry_t ordered (&read_injected_clock);
         std::array<bool, 128> active{};
         for (std::size_t index = 0; index < active.size (); ++index)
             assert (ordered.register_operation (id (static_cast<std::uint8_t> (index + 1)),
