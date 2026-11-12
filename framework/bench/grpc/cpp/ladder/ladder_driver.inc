@@ -134,8 +134,10 @@ class ladder_driver_t final : public driver_t
                       if (level >= 0 && level < 3) {
                           if (reply.size () != 2)
                               throw std::runtime_error ("invalid raw reply part count");
-                          const auto body = ladder::fixed_body (reply[1].bytes ());
-                          stream->finish_bytes (0, body.data (), body.size (), seq);
+                          payload_t payload;
+                          if (!payload.ParseFromArray (reply[1].data (), static_cast<int> (reply[1].size ())))
+                              throw std::runtime_error ("invalid raw reply protobuf");
+                          stream->finish (0, &payload, seq);
                           return;
                       }
                       const auto wire = ladder::protocol::decode_reply_header (

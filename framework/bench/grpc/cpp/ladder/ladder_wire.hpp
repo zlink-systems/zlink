@@ -107,23 +107,14 @@ class encoder_t
                                        uint64_t seq, bool command = true)
     {
         zlink::message_t body;
-        if (_level >= 4 || _level < 0) {
-            payload_t value;
-            value.mutable_body ()->assign (size, '\xab');
-            stamp_payload (value.mutable_body ()->data (), size, run, phase, seq);
-            body = _level < 0 ? message (encode_bench_payload (value))
-              : fw::detail::encoded_payload_to_raw (_serializer.serialize (value));
-        } else {
-            if (_template.size () != size + 3) {
-                payload_t value;
-                value.mutable_body ()->assign (size, '\xab');
-                _template = encode_bench_payload (value);
-                if (_template.size () != size + 3)
-                    throw std::runtime_error ("fixed BenchPayload protobuf shape changed");
-            }
-            body = message (_template);
-            stamp_payload (reinterpret_cast<char *> (body.data ()) + 3, size, run, phase, seq);
-        }
+        // L4 restores the Framework typed codec. L0 still performs all of
+        // the raw binding benchmark's payload allocation and protobuf encode.
+        payload_t value;
+        value.mutable_body ()->assign (size, '\xab');
+        stamp_payload (value.mutable_body ()->data (), size, run, phase, seq);
+        body = _level >= 4
+          ? fw::detail::encoded_payload_to_raw (_serializer.serialize (value))
+          : message (encode_bench_payload (value));
         if (_level >= 0 && _level < 2)
             return {message (request_envelope ()), std::move (body)};
         messaging::message_parts_t envelope;
@@ -150,7 +141,6 @@ class encoder_t
   private:
     int _level;
     decltype (serializer ()) _serializer;
-    std::string _template;
 };
 
 inline std::vector<std::span<const std::byte>> application_views (
@@ -216,7 +206,7 @@ template <typename Metrics> struct fixed_handler_t
     Metrics &metrics;
     int level;
     decltype (serializer ()) codec = serializer ();
-    void handle (zlink::received_t &received)
+    payload_t handle (zlink::received_t &received)
     {
         const auto &parts = received.parts ();
         if (parts.size () != 2 || parts[0].size () == 0)
@@ -232,33 +222,44 @@ template <typename Metrics> struct fixed_handler_t
             throw std::runtime_error ("ladder application must have two parts");
         if (level >= 2)
             messaging::envelope_codec_t{}.decode_header (views[0], false).value ();
-        if (level >= 4 || level < 0) {
-            auto payload = codec.deserialize (fw::detail::encoded_payload_from_raw (views[1]));
-            metrics.record (payload.body ().data (), payload.body ().size ());
-        } else {
-            const auto body = fixed_body (views[1]);
-            metrics.record (body.data (), body.size ());
+        payload_t payload;
+        if (level >= 4) {
+            payload = codec.deserialize (fw::detail::encoded_payload_from_raw (views[1]));
+        } else if (!payload.ParseFromArray (views[1].data (), static_cast<int> (views[1].size ()))) {
+            throw std::runtime_error ("invalid raw protobuf payload");
         }
+        metrics.record (payload.body ().data (), payload.body ().size ());
+        return payload;
     }
 };
 
 // Raw cross peer: only its admission/liveness and canonical wire adaptation are
 // imitated. It deliberately constructs no Framework owner or handler runtime.
-inline void raw_reply (zlink::received_t &received)
+inline void raw_reply (zlink::received_t &received, const payload_t &payload)
 {
-    auto &parts = received.parts ();
-    if (*reinterpret_cast<const char *> (parts[0].data ()) == '{') {
-        received.reply ().message (parts[0]).message (parts[1]).submit ();
+    // #4350 correction 2026-11-12 09:00 UTC: same fresh response work as
+    // zlink/bench_zlink_cpp_server.cpp request_loop; never echo request parts.
+    const char *envelope = response_envelope ();
+    zlink::message_t header = zlink::message_t::from (std::as_bytes (
+      std::span<const char> (envelope, std::strlen (envelope))));
+    payload_t reply;
+    reply.set_body (payload.body ());
+    const std::string encoded = encode_bench_payload (reply);
+    zlink::message_t echo = zlink::message_t::from (
+      std::as_bytes (std::span<const char> (encoded.data (), encoded.size ())));
+    if (*reinterpret_cast<const char *> (received.parts ()[0].data ()) == '{') {
+        received.reply ().message (header).message (echo).submit ();
         return;
     }
-    const auto correlation = protocol::decode_node_request_header (protocol::message_bytes (parts[0]));
-    auto views = application_views (parts);
-    messaging::message_parts_t response (
-      message (response_envelope ()), zlink::message_t::from (views[1]));
-    auto header = protocol::encode_reply_header_message (correlation, 0, 0);
-    auto payload = protocol::encode_application_payload_message (
+    // Canonical peers retain their existing wire contract. This compatibility
+    // adapter is outside the primary L0 raw wire.
+    const auto correlation = protocol::decode_node_request_header (
+      protocol::message_bytes (received.parts ()[0]));
+    messaging::message_parts_t response (std::move (header), std::move (echo));
+    auto service_header = protocol::encode_reply_header_message (correlation, 0, 0);
+    auto service_body = protocol::encode_application_payload_message (
       std::move (response).take_application_payload ());
-    received.reply ().message (header).message (payload).submit ();
+    received.reply ().message (service_header).message (service_body).submit ();
 }
 
 template <typename Metrics>
@@ -283,9 +284,9 @@ int direct_server (const std::string &endpoint, Metrics &metrics, std::atomic<bo
             while (socket.recv (received, zlink::recv_flags_t::dontwait) == 0) {
                 if (handle_control (socket, received, local))
                     continue;
-                handler.handle (received);
+                auto payload = handler.handle (received);
                 if (received.reply_token ())
-                    raw_reply (received);
+                    raw_reply (received, payload);
             }
         }
         return 0;
@@ -303,18 +304,9 @@ int direct_server (const std::string &endpoint, Metrics &metrics, std::atomic<bo
         if (handle_control (state.owner.ablation_socket (), received, state.owner.startup_descriptor ()))
             return;
         // L6: one handler, constructed outside the receive loop, called directly.
-        state.handler.handle (received);
-        if (received.reply_token ()) {
-            if (*reinterpret_cast<const char *> (received.parts ()[0].data ()) != '{') {
-                // Canonical peers retain their existing wire contract. This
-                // compatibility adapter is outside the primary L0 raw wire.
-                raw_reply (received);
-            } else {
-                // L0..L2: received native parts, no reply codec/copy/registry.
-                auto &parts = received.parts ();
-                received.reply ().message (parts[0]).message (parts[1]).submit ();
-            }
-        }
+        auto payload = state.handler.handle (received);
+        if (received.reply_token ())
+            raw_reply (received, payload);
     }, &state);
     return 0;
 }

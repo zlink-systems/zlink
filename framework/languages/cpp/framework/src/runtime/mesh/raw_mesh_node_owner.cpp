@@ -526,9 +526,9 @@ zlink::router_socket_t &raw_mesh_node_owner_t::ablation_socket () { return *_rou
 zlink::send_submission_t raw_mesh_node_owner_t::ablation_send (
   const zlink::routing_id_t &target, std::span<zlink::message_t> parts)
 {
-    auto operation = _router->send (target).message (std::move (parts[0]));
+    auto operation = _router->send (target).message (parts[0]);
     for (std::size_t i = 1; i < parts.size (); ++i)
-        std::move (operation).message (std::move (parts[i]));
+        std::move (operation).message (parts[i]);
     return std::move (operation).async ();
 }
 
@@ -536,9 +536,9 @@ zlink::request_submission_t raw_mesh_node_owner_t::ablation_request (
   const zlink::routing_id_t &target, std::span<zlink::message_t> parts,
   std::chrono::milliseconds timeout)
 {
-    auto operation = _router->request (target).message (std::move (parts[0]));
+    auto operation = _router->request (target).message (parts[0]);
     for (std::size_t i = 1; i < parts.size (); ++i)
-        std::move (operation).message (std::move (parts[i]));
+        std::move (operation).message (parts[i]);
     return std::move (operation).timeout (timeout).async ();
 }
 
