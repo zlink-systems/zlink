@@ -4,6 +4,7 @@
 #include <zlink/codecs/protobuf.hpp>
 #include <zlink/framework/detail/ablation_ladder.hpp>
 #include "runtime/dispatch/application_job_queue.hpp"
+#include "runtime/channels/channel_reply_writer.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
@@ -87,16 +88,6 @@ inline fw::runtime::mesh::raw_mesh_node_options_t owner_options (
     return options;
 }
 
-inline const std::string &raw_command_envelope ()
-{
-    static const std::string bytes = [] {
-        std::string value = request_envelope ();
-        value.replace (value.find ("\"kind\":1"), 8, "\"kind\":3");
-        return value;
-    } ();
-    return bytes;
-}
-
 // L0 uses the existing raw bench's protobuf bytes and envelope. Only the
 // measurement stamp changes. L2/L3/L4 have independent real-code entry points.
 class encoder_t
@@ -117,18 +108,11 @@ class encoder_t
           : message (encode_bench_payload (value));
         if (_level >= 0 && _level < 2)
             return {message (request_envelope ()), std::move (body)};
-        messaging::message_parts_t envelope;
-        if (_level < 0) {
-            envelope = messaging::message_parts_t (
-              message (command ? std::string_view (raw_command_envelope ())
-                               : std::string_view (request_envelope ())), std::move (body));
-        } else {
-            auto header = messaging::client_call_codec_t{}.create_envelope (
-              command ? messaging::message_kind_t::command : messaging::message_kind_t::request,
-              "bench", "BenchPayload", std::chrono::milliseconds (0), {}, {},
-              "application/x-protobuf");
-            envelope = messaging::envelope_codec_t{}.encode_raw_body_parts (header, std::move (body));
-        }
+        auto header = messaging::client_call_codec_t{}.create_envelope (
+          command ? messaging::message_kind_t::command : messaging::message_kind_t::request,
+          "bench", "BenchPayload", std::chrono::milliseconds (0), {}, {},
+          "application/x-protobuf");
+        auto envelope = messaging::envelope_codec_t{}.encode_raw_body_parts (header, std::move (body));
         if (_level >= 3 || _level < 0) {
             auto application = std::move (envelope).take_application_payload ();
             return {command ? protocol::encode_node_send_header_message ()
@@ -164,13 +148,23 @@ inline std::span<const std::byte> fixed_body (std::span<const std::byte> bytes)
 
 inline void verify_wire ()
 {
+    const auto validate_envelope = [] (int level, std::span<const std::byte> bytes) {
+        if (level == 0 || level == 1) {
+            // L0/L1 deliberately retain the binding benchmark's legacy header.
+            const std::string_view actual (reinterpret_cast<const char *> (bytes.data ()), bytes.size ());
+            if (actual != request_envelope ())
+                throw std::runtime_error ("raw bench request envelope differs from binding");
+        } else {
+            messaging::envelope_codec_t{}.decode_header (bytes, false).value ();
+        }
+    };
     for (int level : {-1, 0, 1, 2, 3, 4}) {
         for (size_t size : {1024, 4096}) {
             for (bool command : {true, false}) {
                 encoder_t encoder (level);
                 auto parts = encoder.encode (size, 123, phase_active, 456, command);
                 auto views = application_views (parts);
-                messaging::envelope_codec_t{}.decode_header (views[0], false).value ();
+                validate_envelope (level, views[0]);
                 auto payload = serializer ().deserialize (fw::detail::encoded_payload_from_raw (views[1]));
                 decoded_header_t header;
                 if (payload.body ().size () != size
@@ -191,8 +185,13 @@ inline void verify_wire ()
         std::printf ("wire L%d: 1K/4K send/request roundtrip valid\n", level);
     }
     const auto invalid = message ("{broken");
-    if (messaging::envelope_codec_t{}.decode_header (invalid, false))
-        throw std::runtime_error ("malformed envelope was accepted");
+    for (int level : {0, 2}) {
+        bool rejected = false;
+        try { validate_envelope (level, invalid.bytes ()); }
+        catch (const std::exception &) { rejected = true; }
+        if (!rejected)
+            throw std::runtime_error ("malformed raw/framework envelope was accepted");
+    }
     bool rejected = false;
     try { (void) fixed_body (invalid.bytes ()); }
     catch (const std::runtime_error &) { rejected = true; }
@@ -255,7 +254,12 @@ inline void raw_reply (zlink::received_t &received, const payload_t &payload)
     // adapter is outside the primary L0 raw wire.
     const auto correlation = protocol::decode_node_request_header (
       protocol::message_bytes (received.parts ()[0]));
-    messaging::message_parts_t response (std::move (header), std::move (echo));
+    const auto views = application_views (received.parts ());
+    const auto request = messaging::envelope_codec_t{}.decode_header (views[0], false).value ();
+    fw::detail::channel_reply_writer_t writer;
+    auto response = writer.reply_raw_envelope (
+      writer.create_reply_header (messaging::message_kind_t::response, "bench", request),
+      std::move (echo));
     auto service_header = protocol::encode_reply_header_message (correlation, 0, 0);
     auto service_body = protocol::encode_application_payload_message (
       std::move (response).take_application_payload ());
