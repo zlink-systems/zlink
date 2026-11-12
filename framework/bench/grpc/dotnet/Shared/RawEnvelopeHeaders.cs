@@ -15,4 +15,12 @@ public static class RawEnvelopeHeaders
     public static readonly byte[] Command = Encoding.UTF8.GetBytes(
         "{\"kind\":3,\"channelName\":\"bench\",\"messageName\":\"BenchPayload\",\"contentType\":\"application/x-protobuf\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null}"
     );
+
+    public static readonly byte[] FrameworkRequest = Encoding.UTF8.GetBytes(
+        "{\"kind\":1,\"channelName\":null,\"messageName\":\"BenchPayload\",\"contentType\":\"application/x-protobuf\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null}"
+    );
+
+    public static readonly byte[] FrameworkCommand = Encoding.UTF8.GetBytes(
+        "{\"kind\":3,\"channelName\":null,\"messageName\":\"BenchPayload\",\"contentType\":\"application/x-protobuf\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null}"
+    );
 }

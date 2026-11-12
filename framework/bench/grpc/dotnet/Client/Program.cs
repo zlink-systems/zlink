@@ -378,13 +378,17 @@ internal sealed class RawBenchTransport : IBenchTransport
     private readonly RawBenchSocket? request;
     private readonly RawBenchSocket[] commands;
     private readonly byte[] sendHeader;
+    private readonly bool frameworkTarget;
     private readonly CancellationTokenSource completionStopping = new();
     private Thread? completionThread;
 
     public RawBenchTransport(BenchOptions options, bool frameworkTarget = false)
     {
         context = Systems.Zlink.Zlink.CreateContext();
-        sendHeader = frameworkTarget ? RawEnvelopeHeaders.Command : RawEnvelopeHeaders.Request;
+        this.frameworkTarget = frameworkTarget;
+        sendHeader = frameworkTarget
+            ? RawEnvelopeHeaders.FrameworkCommand
+            : RawEnvelopeHeaders.Command;
         if (options.Scenario == "send-saturation")
         {
             // 서버 간 연결은 하나다. `SubmitConcurrency`는 stream 수이지 연결 수가 아니다.
@@ -472,7 +476,11 @@ internal sealed class RawBenchTransport : IBenchTransport
         Message? body = null;
         try
         {
-            header = Message.From(RawEnvelopeHeaders.Request);
+            header = Message.From(
+                frameworkTarget
+                    ? RawEnvelopeHeaders.FrameworkRequest
+                    : RawEnvelopeHeaders.Request
+            );
             body = EncodeRawPayload(payload);
             RequestSubmission submission = request!.SubmitRequest(header, body, cancellationToken);
             return new RawRequestSubmission(
