@@ -29,6 +29,24 @@ const RESPONSE_ENVELOPE = Buffer.from(
   'utf8'
 );
 
+function frameworkEnvelope(kind) {
+  const correlationId = kind === 1
+    ? require('node:crypto').randomUUID().replaceAll('-', '')
+    : null;
+  const header = Buffer.from(JSON.stringify({
+    formatMarker: 242,
+    kind,
+    channelName: 'bench',
+    messageName: 'BenchPayload',
+    contentType: 'application/x-protobuf',
+    correlationId,
+    deadline: null,
+    topic: null,
+    metadata: {}
+  }), 'utf8');
+  return Buffer.concat([Buffer.from([0xf2]), header]);
+}
+
 // Reuse the same protobuf serializer as the gRPC row; schema loading is setup work.
 const payloadMethod = protoLoader.loadSync(path.join(__dirname, '../../proto/bench.proto'), {
   keepCase: true, longs: String, enums: String, defaults: true, oneofs: true, bytes: Buffer
@@ -52,6 +70,7 @@ const ROUTING_IDS = {
 module.exports = {
   REQUEST_ENVELOPE,
   RESPONSE_ENVELOPE,
+  frameworkEnvelope,
   ROUTING_IDS,
   encodeBenchPayloadMessage,
   decodeBenchPayloadBody

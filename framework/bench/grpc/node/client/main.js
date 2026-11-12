@@ -169,13 +169,19 @@ class RawBenchSocket {
 
 function createRawTransport(options) {
   const context = zlink.createContext();
+  const ladderL0 = process.env.ZLINK_LADDER_L0_CLIENT === '1'
+    && options.implementation === 'zlink-framework-node';
+  const frameworkWire = process.env.ZLINK_CROSS_FRAMEWORK_WIRE === '1';
+  const peerId = ladderL0 || frameworkWire ? 'bench-server' : rawWire.ROUTING_IDS.rawRequestServer;
+  const commandPeerId = ladderL0 || frameworkWire ? 'bench-server' : rawWire.ROUTING_IDS.rawCommandServer;
+  const commandEnvelope = frameworkWire ? rawWire.frameworkEnvelope(3) : rawWire.REQUEST_ENVELOPE;
   const requestSocket =
     options.scenario === 'send-saturation'
       ? null
       : RawBenchSocket.create(
           context,
           `bench-source-request-${process.pid}`,
-          rawWire.ROUTING_IDS.rawRequestServer,
+          peerId,
           options.targetEndpoint
         );
   // 서버 간 연결은 하나다. `submitConcurrency`는 stream 수이지 연결 수가 아니다.
@@ -188,8 +194,8 @@ function createRawTransport(options) {
           RawBenchSocket.create(
             context,
             `bench-source-send-${process.pid}`,
-            rawWire.ROUTING_IDS.rawCommandServer,
-            options.targetCommandEndpoint
+            commandPeerId,
+            ladderL0 ? options.targetEndpoint : options.targetCommandEndpoint
           )
         ]
       : [];
@@ -237,7 +243,7 @@ function createRawTransport(options) {
   const submitRequest = (payload) => {
     const submission = requestSocket.socket
       .request(requestSocket.peer)
-      .message(rawWire.REQUEST_ENVELOPE)
+      .message(frameworkWire ? rawWire.frameworkEnvelope(1) : rawWire.REQUEST_ENVELOPE)
       .message(rawWire.encodeBenchPayloadMessage(payload))
       .timeout(options.requestTimeoutMs)
       .submit();
@@ -258,7 +264,7 @@ function createRawTransport(options) {
     const socket = sendSockets[stream % sendSockets.length];
     return socket.socket
       .send(socket.peer)
-      .message(rawWire.REQUEST_ENVELOPE)
+      .message(commandEnvelope)
       .message(rawWire.encodeBenchPayloadMessage(payload))
       .submit();
   };
@@ -293,7 +299,9 @@ async function createTransport(options) {
     options.implementation === 'grpc-node'
       ? createGrpcTransport(options)
       : options.implementation === 'zlink-framework-node'
-        ? await createFrameworkTransport(options)
+        ? process.env.ZLINK_LADDER_L0_CLIENT === '1'
+          ? createRawTransport(options)
+          : await createFrameworkTransport(options)
         : createRawTransport(options);
   const probeBody = header.createPayloadBytes(1024, 1, header.PHASE_WARMUP, 0);
   await core.waitForRouteReady(async () => {
