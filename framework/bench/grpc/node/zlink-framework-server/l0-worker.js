@@ -71,9 +71,7 @@ async function receive() {
   try {
     for (;;) {
       poller.wait(events, -1);
-      do {
-        dispatchOne();
-      } while (tryRecv());
+      while (tryRecv()) dispatchOne();
     }
   } finally {
     events.close();
