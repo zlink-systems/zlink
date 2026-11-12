@@ -531,7 +531,7 @@ connection도 자동으로 새로 연결되거나 정리된다 — 설정 파일
     - **actor client** — id로 Actor를 호출한다.
 - **세션 서버** - client의 실시간 연결을 받는다. STREAM node가 받은 메시지를 session relay가
   **RouteMesh channel**로 넘기면, entry spot이 배정한 user spot의 actor가 처리한다.
-- **도메인 서버** - node handler와 spot이 상태를 쥐고 요청을 직렬로 처리한다.
+- **도메인 서버** - spot과 actor가 상태를 쥐고 요청을 순서대로 처리한다. node handler는 상태를 갖지 않는다.
 - **Location store** - 서버 주소 정보를 관리한다. 점선은 store 조회로 endpoint를 찾는 연결이며
   데이터 경로가 아니다.
 
