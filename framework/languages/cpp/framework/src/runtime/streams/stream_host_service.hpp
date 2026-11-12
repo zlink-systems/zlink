@@ -141,6 +141,10 @@ struct stream_host_service_test_access_t
     static std::shared_ptr<void> retain_connection (service_provider_t &services,
                                                     stream_t stream,
                                                     host::public_host_runtime_t &node);
+    static void create_core_sessions (stream_host_service_t &service,
+                                      const std::vector<zlink::routing_id_t> &rids);
+    static void expire_core_sessions (stream_host_service_t &service,
+                                      const std::vector<zlink::routing_id_t> &rids);
 };
 
 } // namespace zlink::framework::runtime

@@ -167,7 +167,7 @@ final class ZLinkJavaRouterSocket implements ZLinkBackendRouterSocket, ZLinkJava
 
     @Override
     public synchronized void disconnectPeer(RoutingId routingId) {
-        socket.disconnectRid(routingId);
+        ZLinkJavaSocketSupport.disconnectRidIfPresent(socket, routingId);
     }
 
     @Override
