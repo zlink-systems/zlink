@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/streams/stream_host_service.hpp"
+#include "runtime/disconnect_rid.hpp"
 #include "runtime/diagnostics/session_binding_diagnostics.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/streams/session_liveness.hpp"
@@ -777,6 +778,8 @@ void validate_stream_frame_size (std::size_t header_size,
 
 class stream_host_service_t::listener_t : public std::enable_shared_from_this<listener_t>
 {
+    friend struct stream_host_service_test_access_t;
+
   public:
     listener_t (detail::stream_runtime_t runtime,
                 stream_snapshot_t stream,
@@ -2414,7 +2417,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                 begin_core_session_close (current->stream.session_id (), current, close_reason);
             }
             if (_core_socket) {
-                _core_socket->disconnect_rid (rid);
+                disconnect_rid_if_present ([this, &rid] { _core_socket->disconnect_rid (rid); });
             }
         }
         catch (...) {
@@ -3725,6 +3728,46 @@ std::shared_ptr<void> stream_host_service_test_access_t::retain_connection (
     // can still hold the state when MeshNode releases its host.
     (void) node.sessions ().close (connection);
     return state;
+}
+
+void stream_host_service_test_access_t::create_core_sessions (
+  stream_host_service_t &service, const std::vector<zlink::routing_id_t> &rids)
+{
+    for (const auto &listener : service._listeners) {
+        if (!listener->_core_socket)
+            continue;
+        for (const auto &rid : rids)
+            (void) listener->get_or_create_core_session (rid);
+        return;
+    }
+    throw std::logic_error ("test access could not find the Core STREAM listener");
+}
+
+void stream_host_service_test_access_t::expire_core_sessions (
+  stream_host_service_t &service, const std::vector<zlink::routing_id_t> &rids)
+{
+    for (const auto &listener : service._listeners) {
+        if (!listener->_core_socket)
+            continue;
+        for (const auto &rid : rids) {
+            // These test-created sessions have no live Core route. Exercise
+            // Core's typed NOT_FOUND result before normal queued expiration cleanup.
+            try {
+                listener->_core_socket->disconnect_rid (rid);
+            }
+            catch (const zlink::connect_error_t &error) {
+                if (error.result () != zlink::connect_result_t::not_found)
+                    throw;
+            }
+            {
+                const std::lock_guard lock (listener->_core_pending_disconnects_mutex);
+                listener->_core_pending_disconnects.push_back ({rid, "server_shutdown", {}, {}});
+            }
+        }
+        listener->drain_pending_core_disconnects ();
+        return;
+    }
+    throw std::logic_error ("test access could not find the Core STREAM listener");
 }
 
 stream_host_service_t::stream_host_service_t (

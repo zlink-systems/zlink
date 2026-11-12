@@ -6,7 +6,6 @@ import type { Socket } from '@zlink-systems/zlink';
 import type { ZLinkBackendObject } from '../contracts';
 import {
   closeBindingHandle,
-  isBindingNotFound,
   isContextTerminatedError,
   isRouteRecvRetryable,
   submitBindingRequest,
@@ -23,6 +22,8 @@ import {
   type ZLinkBindingAsyncSendOperation
 } from './node-backend-adapter-support';
 import { ZLinkNodeEventLoopPoller } from './node-event-loop-poller';
+import { disconnectSocketPeer } from '../socket-peer-disconnect';
+export { disconnectSocketPeer } from '../socket-peer-disconnect';
 
 const eventLoopPollers = new WeakMap<object, ZLinkNodeEventLoopPoller>();
 
@@ -421,18 +422,6 @@ export function nodeEventLoopPollerOf(socket: object): ZLinkNodeEventLoopPoller 
   return poller;
 }
 
-export function disconnectSocketPeer(
-  socket: { disconnectRid(routingId: unknown): void },
-  routingId: unknown
-): void {
-  try {
-    socket.disconnectRid(routingId);
-  } catch (error) {
-    // An absent RID has already completed the physical close. The existing
-    // logical lifecycle still owns local cleanup and unbind.
-    if (!isBindingNotFound(error)) throw error;
-  }
-}
 
 function requireSocketOptions<TOptions>(socket: { readonly options?: TOptions }): TOptions {
   if (socket.options === undefined) {

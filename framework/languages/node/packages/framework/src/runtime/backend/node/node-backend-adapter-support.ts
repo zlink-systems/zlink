@@ -53,9 +53,7 @@ interface ZLinkBindingRequestSubmitOperation {
   submit(): import('@zlink-systems/zlink').RequestSubmission;
 }
 
-export function isBindingNotFound(error: unknown): boolean {
-  return error instanceof zlink.ConnectError && error.result === zlink.ConnectResult.NotFound;
-}
+export { isBindingNotFound } from '../binding-error-results';
 
 function isNonBlockingRecvEmpty(error: unknown): boolean {
   return error instanceof zlink.RecvError && error.result === zlink.RecvResult.NoData;
