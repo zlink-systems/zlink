@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "mailbox_claim_fixture.hpp"
 #include "../support/telemetry_observation.hpp"
 
 #include "../support/runtime_failure_fixture.hpp"
@@ -1937,8 +1938,8 @@ void verify_completion_receipt_without_application_receive ()
     while (terminal.wait_for (0ms) != std::future_status::ready
            && std::chrono::steady_clock::now () < reply_deadline) {
         (void) await_task (replier.pump_one (std::chrono::steady_clock::now ()));
-        auto claim =
-          replier.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 4096);
+        auto claim = zlink::framework::test::claim_mailbox (
+          replier.mailbox (), mesh::service_mailbox_domain_t::application, 1, 4096);
         if (claim) {
             assert (replier.reply ((*claim->records.front ()),
                                    {"Answer", "application/json", bytes ("reply")}));
@@ -2435,8 +2436,8 @@ void verify_client_server_independent_raw_path ()
         send_pump = server.pump_one (std::chrono::steady_clock::now ()).result ().value ();
     }
     assert (send_pump == client_server::client_server_pump_result_t::application);
-    auto send_claim =
-      server.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
+    auto send_claim = zlink::framework::test::claim_mailbox (
+      server.mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (send_claim && send_claim->records.size () == 1);
     {
         const auto send_header = runtime::messaging::envelope_codec_t{}.decode_header (
@@ -2460,8 +2461,8 @@ void verify_client_server_independent_raw_path ()
         request_pump = server.pump_one (std::chrono::steady_clock::now ()).result ().value ();
     }
     assert (request_pump == client_server::client_server_pump_result_t::application);
-    auto request_claim =
-      server.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
+    auto request_claim = zlink::framework::test::claim_mailbox (
+      server.mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (request_claim && request_claim->records.size () == 1);
     assert (request_claim->records.front ()->reply_token ());
     assert (server
@@ -2494,8 +2495,8 @@ void verify_client_server_independent_raw_path ()
         request_pump = server.pump_one (std::chrono::steady_clock::now ()).result ().value ();
     }
     assert (request_pump == client_server::client_server_pump_result_t::application);
-    request_claim =
-      server.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
+    request_claim = zlink::framework::test::claim_mailbox (
+      server.mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (request_claim && request_claim->records.size () == 1);
     assert (server
               .reply ((*request_claim->records.front ()),
@@ -2523,13 +2524,13 @@ void verify_client_server_independent_raw_path ()
                                                         large_payload};
     auto large_task = client.request (large_request, 3s);
     const auto large_deadline = std::chrono::steady_clock::now () + 5s;
-    auto large_claim = server.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1,
-                                                    2u * 1024u * 1024u);
+    auto large_claim = zlink::framework::test::claim_mailbox (
+      server.mailbox (), mesh::service_mailbox_domain_t::application, 1, 2u * 1024u * 1024u);
     while (!large_claim && std::chrono::steady_clock::now () < large_deadline) {
         const auto pump = server.pump_one (std::chrono::steady_clock::now ()).result ().value ();
         assert (pump != client_server::client_server_pump_result_t::protocol_error);
-        large_claim = server.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1,
-                                                   2u * 1024u * 1024u);
+        large_claim = zlink::framework::test::claim_mailbox (
+          server.mailbox (), mesh::service_mailbox_domain_t::application, 1, 2u * 1024u * 1024u);
         if (!large_claim)
             std::this_thread::sleep_for (1ms);
     }
@@ -3012,7 +3013,8 @@ void verify_raw_owner_node_send_and_liveness (
     }
     assert (paused_ack_pump == mesh::raw_mesh_pump_result_t::infrastructure);
 
-    auto claim = second.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
+    auto claim = zlink::framework::test::claim_mailbox (
+      second.mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (claim && claim->records.size () == 1);
     assert (
       protocol::decode_header (protocol::message_bytes (claim->records.front ()->parts ().front ()))
@@ -3034,11 +3036,12 @@ void verify_raw_owner_node_send_and_liveness (
             break;
     }
     // The second payload was retained, not dropped, so it is still claimable.
-    auto retained_claim =
-      second.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
+    auto retained_claim = zlink::framework::test::claim_mailbox (
+      second.mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (retained_claim && retained_claim->records.size () == 1);
     assert (second.mailbox ().release (*retained_claim));
-    assert (!second.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024));
+    assert (!zlink::framework::test::claim_mailbox (
+      second.mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024));
 
     bool channel_submitted = false;
     while (!channel_submitted && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
@@ -3058,8 +3061,8 @@ void verify_raw_owner_node_send_and_liveness (
         assert (channel_pump != mesh::raw_mesh_pump_result_t::protocol_error);
     }
     assert (channel_pump == mesh::raw_mesh_pump_result_t::application);
-    auto channel_claim =
-      second.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
+    auto channel_claim = zlink::framework::test::claim_mailbox (
+      second.mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (channel_claim && channel_claim->owner == "channel:alpha");
     assert (protocol::decode_channel_send_header (
               protocol::message_bytes (channel_claim->records.front ()->parts ().front ()))
@@ -3087,8 +3090,8 @@ void verify_raw_owner_node_send_and_liveness (
         assert (request_pump != mesh::raw_mesh_pump_result_t::protocol_error);
     }
     assert (request_pump == mesh::raw_mesh_pump_result_t::application);
-    auto request_claim =
-      second.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 1024);
+    auto request_claim = zlink::framework::test::claim_mailbox (
+      second.mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024);
     assert (request_claim && request_claim->records.size () == 1);
     const auto &request_record = (*request_claim->records.front ());
     assert (request_record.reply_token ());
@@ -3288,17 +3291,18 @@ void verify_raw_owner_node_send_and_liveness (
                                        std::move (saturated_payload))));
     }
     assert (first.pending_operation_count () != 0);
-    const auto verify_retained_payloads = [] (const mesh::service_mailbox_claim_t &claim) {
-        for (const auto &record : claim.records) {
-            const auto payload = protocol::decode_application_payload (
-              protocol::message_bytes (record->parts ().back ()), false);
-            assert (payload.packet_name () == "SaturatedControl");
-            const auto &body = payload.payload_bytes ();
-            assert (body.size () == 512u * 1024u);
-            assert (
-              std::all_of (body.begin (), body.end (), [] (auto byte) { return byte == 0x5a; }));
-        }
-    };
+    const auto verify_retained_payloads =
+      [] (const zlink::framework::test::mailbox_claim_t &claim) {
+          for (const auto &record : claim.records) {
+              const auto payload = protocol::decode_application_payload (
+                protocol::message_bytes (record->parts ().back ()), false);
+              assert (payload.packet_name () == "SaturatedControl");
+              const auto &body = payload.payload_bytes ();
+              assert (body.size () == 512u * 1024u);
+              assert (
+                std::all_of (body.begin (), body.end (), [] (auto byte) { return byte == 0x5a; }));
+          }
+      };
 
     // The reverse-direction probe itself is not behind the saturated route.
     // Claiming it starts one ACK binding operation, then I3 must return so the
@@ -3334,10 +3338,10 @@ void verify_raw_owner_node_send_and_liveness (
         assert (target_pump.await_ready ());
         const auto target_result = target_pump.result ().value ();
         assert (target_result != mesh::raw_mesh_pump_result_t::protocol_error);
-        auto claim = second.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1,
-                                                  1024u * 1024u);
+        auto claim = zlink::framework::test::claim_mailbox (
+          second.mailbox (), mesh::service_mailbox_domain_t::application, 1, 1024u * 1024u);
         if (claim) {
-            verify_retained_payloads (*claim);
+            verify_retained_payloads (claim);
             saturated_received += claim->records.size ();
             assert (saturated_received <= saturated_sends.size ());
             assert (second.mailbox ().release (*claim));
@@ -3363,9 +3367,10 @@ void verify_raw_owner_node_send_and_liveness (
         const auto pumped_quiesce =
           await_task (second.pump_one (mesh::service_liveness_registry_t::clock_t::now ()));
         assert (pumped_quiesce != mesh::raw_mesh_pump_result_t::protocol_error);
-        while (auto quiesce_claim = second.mailbox ().try_claim (
-                 mesh::service_mailbox_domain_t::application, 256, 16u * 1024u * 1024u)) {
-            verify_retained_payloads (*quiesce_claim);
+        while (auto quiesce_claim = zlink::framework::test::claim_mailbox (
+                 second.mailbox (), mesh::service_mailbox_domain_t::application, 256,
+                 16u * 1024u * 1024u)) {
+            verify_retained_payloads (quiesce_claim);
             saturated_received += quiesce_claim->records.size ();
             assert (saturated_received <= saturated_sends.size ());
             assert (second.mailbox ().release (*quiesce_claim));
@@ -3410,8 +3415,8 @@ void verify_raw_owner_node_send_and_liveness (
         const auto target_pump =
           await_task (second.pump_one (mesh::service_liveness_registry_t::clock_t::now ()));
         assert (target_pump != mesh::raw_mesh_pump_result_t::protocol_error);
-        auto claim = second.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 256,
-                                                  16u * 1024u * 1024u);
+        auto claim = zlink::framework::test::claim_mailbox (
+          second.mailbox (), mesh::service_mailbox_domain_t::application, 256, 16u * 1024u * 1024u);
         if (claim) {
             for (const auto &slot : claim->records) {
                 const auto &record = *slot;
@@ -4364,11 +4369,11 @@ void verify_liveness_without_selected_route ()
     assert (await_task (source.send_to_node (live.node_routing_id, payload)));
     assert (await_task (survivor.send_to_node (local.node_routing_id, payload)));
     for (auto *receiver : {&source, &survivor}) {
-        std::shared_ptr<mesh::service_mailbox_claim_t> claim;
+        zlink::framework::test::mailbox_claim_t claim;
         while (!claim && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
             (void) await_task (receiver->pump_one (now));
-            claim =
-              receiver->mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 4096);
+            claim = zlink::framework::test::claim_mailbox (
+              receiver->mailbox (), mesh::service_mailbox_domain_t::application, 1, 4096);
         }
         assert (claim && claim->records.size () == 1);
         assert (protocol::decode_application_payload (
@@ -4744,8 +4749,8 @@ void verify_unadmitted_route (bool repeat_hello)
         }
         assert (pending.await_ready ());
         assert (await_task (std::move (pending)).terminal == zlink::request_result_t::timed_out);
-        assert (
-          !target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 4096));
+        assert (!zlink::framework::test::claim_mailbox (
+          target.mailbox (), mesh::service_mailbox_domain_t::application, 1, 4096));
     }
     port.close ();
     target.close ();
