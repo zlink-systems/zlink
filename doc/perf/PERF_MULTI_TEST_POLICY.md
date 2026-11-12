@@ -28,7 +28,7 @@
 |------|------|
 | 측정 모델 | time-based, 패턴별 phase: ready → active. active에서 throughput과 latency를 함께 측정한다 |
 | throughput | `recv_count / duration_seconds` — echo 패턴: `ops/s`, one-way 패턴: `msg/s` |
-| latency | active phase에서 수신된 메시지의 내장 timestamp(header) 기반 집계다 |
+| latency | paced latency phase(§5.1)에서 수신된 메시지의 내장 timestamp(header) 기반 집계다 |
 | 대표값 | median (runs > 1) |
 | 기본 runs | 1 |
 
@@ -416,7 +416,7 @@ Multi 벤치마크는 **server/client 별도 프로세스**로 동작한다.
 | 2. server READY | server가 bind 완료 후 stdout에 `READY,<endpoint>` 출력 |
 | 3. client 시작 | 스크립트가 READY를 읽은 후 client 바이너리를 spawn (`--endpoint <endpoint>`) |
 | 4. ready/start gate | runner와 바이너리가 [§ 2.1.1](#211-runner--바이너리-orchestration-메시지-규격)의 패턴별 계약을 완료한다. `STREAM`은 `SERVER_START_READY`까지 확인한다. |
-| 5. 측정 수행 | 패턴별 측정 주체인 server 또는 client가 active phase에서 throughput/latency를 측정하고 패턴의 완료 지점에서 `RESULT`를 출력한다. |
+| 5. 측정 수행 | 패턴별 측정 주체인 server 또는 client가 active phase에서 throughput을, paced latency phase에서 latency를 측정하고 패턴의 완료 지점에서 `RESULT`를 출력한다. |
 | 6. client 완료 | client는 패턴 계약에 따라 `CLIENT_DONE` 또는 process exit로 완료를 알린다. request/reply 패턴은 `CLIENT_DONE` 뒤에도 completion 대상 socket을 유지하며 runner의 `STOP`을 기다린다. |
 | 7. server 종료 | 스크립트가 server stdin에 `STOP` 메시지 송신 → graceful shutdown 대기 → timeout 시 SIGTERM (Linux) / TerminateProcess (Windows) → 재 timeout 시 SIGKILL (Linux). server/client가 출력한 RESULT line을 합산 |
 | 8. request/reply client 종료 | server 종료를 확인한 뒤 스크립트가 client stdin에 `STOP`을 보낸다. client는 socket을 닫고 exit code 0으로 종료한다. |
@@ -427,7 +427,7 @@ Multi 벤치마크는 **server/client 별도 프로세스**로 동작한다.
 - `DEALER_ROUTER_REQREP`와 `ROUTER_ROUTER_REQREP`에서는 client가
   먼저 `CLIENT_DONE`을 출력하되 socket은 닫지 않는다. runner는 server 종료를
   확인한 뒤 client에 `STOP`을 보내 queued reply가 completion 대상을 잃지 않게 한다.
-- phase 전환은 패턴별로 제어한다: echo는 client가 phase를 제어하고 server는 relay/echo 대기, one-way는 sender/receiver가 동일 순서의 phase를 수행한다. throughput/latency는 모두 active phase 한 구간에서 계산한다.
+- phase 전환은 패턴별로 제어한다: echo는 client가 phase를 제어하고 server는 relay/echo 대기, one-way는 sender/receiver가 동일 순서의 phase를 수행한다. throughput은 active phase에서, latency는 paced latency phase에서 계산한다(§5.1).
 - multi active 유효 메시지 규칙은 패턴별 정책 문서에 정의된 단일 기준으로
   고정한다. C 기준과 모든 bindings는 같은 pattern에서 동일한 active 유효 메시지
   의미를 사용해야 한다.
@@ -709,9 +709,14 @@ latency는 패턴 유형에 따라 측정 방식을 분리한다.
 
 각 size는 아래 순서로 측정한다.
 
-1. echo 패턴: ready → active phase
-2. one-way 패턴: ready → active phase
-- 기본 echo/one-way 패턴은 active phase 단일 실행에서 throughput/latency를 동시에 산출한다.
+1. ready → active phase(포화 송신) → bounded drain → paced latency phase → drain
+- throughput은 active phase에서만 산출한다.
+- latency는 paced latency phase에서만 산출한다. 목표 송신률은 active phase 수신률 × 0.8이며,
+  sender마다 active phase 송신 수락 비율로 나눈다. 각 sender는 `epoch + k / rate` 일정으로 보낸다.
+- PUBSUB 외 패턴은 송신 시각이 `[epoch + 0.5 s, epoch + 0.5 s + latency duration)`인 메시지를 표본으로 쓴다.
+- PUBSUB는 catch-up 판정 뒤 표본을 모은다. 규칙은
+  [PERF_POLICY.md "PUBSUB multi latency"](PERF_POLICY.md#pubsub-multi-latency)를 따른다.
+- latency duration은 `PERF_MULTI_LATENCY_DURATION_SECONDS`이며 기본값은 throughput 측정 시간과 같다.
 
 ### 5.2 패턴별 divisor 규칙
 
@@ -722,17 +727,17 @@ latency는 패턴 유형에 따라 측정 방식을 분리한다.
 
 ### 5.3 계산식
 
-- mean: active phase에서 수집한 샘플의 산술 평균
+- mean: paced latency phase에서 수집한 샘플의 산술 평균
 - p95: 샘플의 95th percentile
 - p99: 샘플의 99th percentile
-- mean은 active 유효 record 전체의 count와 합으로 정확히 계산한다.
+- mean은 latency phase 유효 record 전체의 count와 합으로 정확히 계산한다.
 - C perf 엔진 외 구현의 p95/p99는 메모리가 처리량에 비례해 증가하지 않도록 bounded reservoir sample로
   계산한다. C 기준은 전체 메시지를 histogram에 기록한다.
 - non-C 구현의 percentile 보간식과 reservoir 병합 규칙은
   [PERF_POLICY.md § 1.1](PERF_POLICY.md)의 공통 규칙을 따른다. C 기준은 histogram bucket 대표값을 보고한다.
 - RTT 샘플(echo): `sample_ns = (recv_ts_ns - sent_ts_ns) / 2`
 - 단방향 샘플(one-way): 수신 메시지에 포함된 송신 타임스탬프 기준 `now_ns - sent_ts_ns`
-- active 구간 밖의 데이터는 계산에서 제외한다.
+- latency 표본 구간 밖의 데이터는 latency 계산에서 제외한다.
 - sample은 내부적으로 nanosecond 단위로 누적하고, RESULT line과 사람이 읽는
   report/table에는 millisecond 단위로 표시한다.
 
@@ -742,8 +747,8 @@ one-way 패턴 latency는 패턴의 실제 receiver 측에서 측정한다.
 
 - `DEALER_DEALER`: server(receiver) 기준으로 latency 측정
 - `PUBSUB`: client(receiver) 기준으로 latency 측정
-- active phase 구간에서 수신한 메시지는 throughput count와 mean 집계에 모두 포함한다.
-- mean은 `lat_sum / lat_count`로 계산하고, p95/p99만 bounded reservoir를 사용한다.
+- active phase에서 수신한 메시지는 throughput count에만, latency 표본 구간의 메시지는 latency 집계에만 포함한다.
+- mean은 `lat_sum / lat_count`로 계산한다. p95/p99는 C 기준이 histogram, 그 외 구현이 bounded reservoir를 사용한다(§5.3).
 
 ### 5.5 Header 기반 필터 규칙
 
@@ -753,7 +758,7 @@ one-way 패턴 latency는 패턴의 실제 receiver 측에서 측정한다.
 - `--part-count 1`은 direct-send 비교를 위한 명시적 진단 실행이며, 공식 2-part
   baseline과 섞어 비교하지 않는다.
 - 측정 메시지 payload 선두에는 공통 metric header를 포함한다: `magic`, `run_id`, `phase`, `msg_size`, `seq`, `sent_ts_ns`.
-- receiver는 header를 decode하여 `phase == active`, `msg_size == expected_size`,
+- receiver는 header를 decode하여 `phase` 가 active 또는 latency, `msg_size == expected_size`,
   `run_id == current_case_run_id` 조건을 만족하는 샘플만 집계한다.
 - ROUTER 계열 multipart 수신은 routing frame이 앞에 올 수 있으므로 capture buffer에서 header magic을 스캔해 payload header를 탐지한다.
 - header 불일치(다른 size/phase, stale 메시지)는 수신 드레인만 수행하고 메트릭 집계에서 제외한다.
@@ -1273,6 +1278,7 @@ bindings/c/perf/run_benchmarks_multi.sh --pattern STREAM --transports tcp --msg-
 | 변수 | 설명 | 기본값 |
 |------|------|--------|
 | `PERF_MULTI_DURATION_SECONDS` | 측정 시간(초) | 5 |
+| `PERF_MULTI_LATENCY_DURATION_SECONDS` | paced latency 표본 구간(초). PUBSUB는 catch-up 허용 시간도 같은 값이다 | `PERF_MULTI_DURATION_SECONDS` |
 | `PERF_MULTI_SETTLE_MS` | 삭제됨. C multi perf는 이 값을 읽지 않으며 benchmark phase를 만들지 않는다 | — |
 | `PERF_MULTI_TRANSPORT_TRANSITION_MS` | transport 전환 cooldown(ms) | 3000 |
 | `PERF_MULTI_PATTERN_TRANSITION_MS` | pattern 전환 cooldown(ms) | 3000 |
