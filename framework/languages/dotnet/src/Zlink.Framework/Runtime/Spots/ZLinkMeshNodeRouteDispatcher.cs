@@ -1,7 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
-using Zlink.Framework.Contracts.Channels;
-using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Channels;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
@@ -48,12 +46,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
     private readonly ZLinkDispatchErrorReporter _dispatchErrors;
     private readonly ZLinkFrameworkRuntime _runtime;
     private readonly ZLinkRuntimeTaskRunner _taskRunner;
-#if ZLINK_DOTNET_LADDER_L0
-    private readonly ZLinkRouteHandlerDescriptor? _ladderRequestDescriptor;
-    private readonly object? _ladderRequestHandler;
-    private readonly ZLinkRouteHandlerDescriptor? _ladderCommandDescriptor;
-    private readonly object? _ladderCommandHandler;
-#endif
     private readonly ZLinkStateLane _orderedActorRelayLane = new();
     private readonly Dictionary<ZLinkActorId, TaskCompletionSource> _orderedActorRelayTails = [];
 
@@ -67,9 +59,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         ZLinkDispatchErrorReporter dispatchErrors,
         ZLinkFrameworkRuntime runtime,
         ZLinkRuntimeTaskRunner taskRunner
-#if ZLINK_DOTNET_LADDER_L0
-        , IReadOnlyDictionary<ZLinkRouteHandlerDescriptor, object> ladderHandlers
-#endif
     )
     {
         _meshName = meshName;
@@ -81,18 +70,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         _dispatchErrors = dispatchErrors;
         _runtime = runtime;
         _taskRunner = taskRunner;
-#if ZLINK_DOTNET_LADDER_L0
-        var request = ladderHandlers.FirstOrDefault(static entry =>
-            entry.Key.Kind == ZLinkMessageKind.Request
-        );
-        var command = ladderHandlers.FirstOrDefault(static entry =>
-            entry.Key.Kind == ZLinkMessageKind.Command
-        );
-        _ladderRequestDescriptor = request.Key;
-        _ladderRequestHandler = request.Value;
-        _ladderCommandDescriptor = command.Key;
-        _ladderCommandHandler = command.Value;
-#endif
     }
 
     // Builds a dispatcher from the SpotNode's registered node-route and
@@ -177,14 +154,12 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                 registration.Codecs
             );
 
-#if !ZLINK_DOTNET_LADDER_L0
         ZLinkScopedHandlerInstanceOwner.Prepare(
             services,
             routeDescriptors
                 .Select(static descriptor => descriptor.HandlerType)
                 .Concat(channelEndpoints.Select(static endpoint => endpoint.DeclaringType))
         );
-#endif
 
         var dispatchErrors = new ZLinkDispatchErrorReporter(
             registration.DispatchOptions,
@@ -193,16 +168,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         );
 
         var routeHandlers = new ZLinkRouteHandlerRegistry(routeDescriptors);
-#if ZLINK_DOTNET_LADDER_L0
-        var ladderHandlers = routeDescriptors
-            .Where(static descriptor => descriptor.MessageType == typeof(Message))
-            .ToDictionary(
-                static descriptor => descriptor,
-                descriptor =>
-                    services.GetService(descriptor.HandlerType)
-                    ?? ActivatorUtilities.CreateInstance(services, descriptor.HandlerType)
-            );
-#endif
 
         // The channel pipelines are always built (registry may be empty) so a
         // channel record addressed to a channel with no matching handler yields a
@@ -241,9 +206,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
             dispatchErrors,
             runtime,
             taskRunner
-#if ZLINK_DOTNET_LADDER_L0
-            , ladderHandlers
-#endif
         );
     }
 
@@ -264,10 +226,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         for (var index = 0; index < batch.Count; index++)
         {
             var received = batch[index];
-#if ZLINK_DOTNET_LADDER_L0
-            if (await TryDispatchLadderRecordAsync(received, cancellationToken).ConfigureAwait(false))
-                continue;
-#endif
             ZLinkEnvelopeHeader? header = null;
             if (received.PartCount > 0)
             {
@@ -299,99 +257,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         if (pending is not null)
             await Task.WhenAll(pending).ConfigureAwait(false);
     }
-
-#if ZLINK_DOTNET_LADDER_L0
-    private async ValueTask<bool> TryDispatchLadderRecordAsync(
-        ZLinkBackendRouteReceived received,
-        CancellationToken cancellationToken
-    )
-    {
-        if (received.ChannelName is not null || received.PartCount < 2)
-            return false;
-
-        var kind = received.CanReply ? ZLinkMessageKind.Request : ZLinkMessageKind.Command;
-        var descriptor = kind == ZLinkMessageKind.Request
-            ? _ladderRequestDescriptor
-            : _ladderCommandDescriptor;
-        var handler = kind == ZLinkMessageKind.Request
-            ? _ladderRequestHandler
-            : _ladderCommandHandler;
-        if (
-            descriptor is null
-            || handler is null
-            || descriptor.PacketName != "BenchPayload"
-            || descriptor.MessageType != typeof(Message)
-        )
-            return false;
-
-        var body = received.ApplicationPayloadView is { } payloadView
-            ? Message.From(payloadView.GetSpan(payloadView.Count - 1))
-            : received.Parts[^1];
-        var ownsBody = received.ApplicationPayloadView is not null;
-        if (body is null)
-            return false;
-        var context = new ZLinkRouteMessageContext(
-            _meshName.Value,
-            null,
-            received.SourceNodeRid ?? default,
-            descriptor.PacketName,
-            "application/x-protobuf",
-            received.Metadata,
-            null,
-            received.ReceivedAt
-        );
-
-        try
-        {
-            if (kind == ZLinkMessageKind.Request)
-            {
-                var reply = await ((IZLinkRouteRequestHandler<Message, Message>)handler)
-                    .HandleAsync(body, context, cancellationToken)
-                    .ConfigureAwait(false);
-                var requestHeader = new ZLinkEnvelopeHeader(
-                    ZLinkMessageKind.Request,
-                    _meshName.Value,
-                    descriptor.PacketName,
-                    "application/x-protobuf",
-                    "l0",
-                    null,
-                    null,
-                    null,
-                    null
-                );
-                var replyHeader = ZLinkChannelReplyWriter.CreateReplyHeader(
-                    ZLinkMessageKind.Response,
-                    _meshName.Value,
-                    requestHeader,
-                    descriptor.ReplyHeader
-                );
-                var replyParts = ZLinkEnvelopeCodec.EncodeParts(
-                    replyHeader,
-                    reply,
-                    descriptor.ReplyType,
-                    _codecs
-                );
-                await ZLinkSpotReplySubmitter
-                    .SubmitDirectAsync(received, replyParts, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            else
-            {
-                await ((IZLinkRouteSendHandler<Message>)handler)
-                    .HandleAsync(body, context, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-        }
-        finally
-        {
-            if (ownsBody)
-                body.Dispose();
-            received.Dispose();
-        }
-
-        return true;
-    }
-#endif
 
     internal bool TryDispatch(ZLinkBackendRouteReceived received) =>
         _taskRunner.TryRunDetached(

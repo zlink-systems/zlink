@@ -3,6 +3,7 @@
 
     <PropertyGroup>
         <_ZLinkGrpcBenchFrameworkProjects>;WithGrpcBench.Client;WithGrpcBench.ZLinkServer;</_ZLinkGrpcBenchFrameworkProjects>
+        <DefineConstants Condition="'$(ZLinkDotnetLadderLevel)' == 'L0'">$(DefineConstants);ZLINK_DOTNET_LADDER_L0</DefineConstants>
     </PropertyGroup>
 
     <ItemGroup>

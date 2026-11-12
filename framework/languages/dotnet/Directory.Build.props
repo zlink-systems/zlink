@@ -14,7 +14,6 @@
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
         <LangVersion>12.0</LangVersion>
-        <DefineConstants Condition="'$(ZLinkDotnetLadderLevel)' == 'L0'">$(DefineConstants);ZLINK_DOTNET_LADDER_L0</DefineConstants>
         <Deterministic>true</Deterministic>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <NoWarn>$(NoWarn);CS1591</NoWarn>

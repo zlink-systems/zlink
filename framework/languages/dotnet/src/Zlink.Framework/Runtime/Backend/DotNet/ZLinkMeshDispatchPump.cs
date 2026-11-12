@@ -499,20 +499,13 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         try
         {
             receiveBatch.Reset();
-            // L0 drains this owner until empty. Normal builds bound each turn.
-#if ZLINK_DOTNET_LADDER_L0
-            receiveBatch.MaximumRecords = int.MaxValue;
-            receiveBatch.MaximumBytes = long.MaxValue;
-#else
+            // Release every claim after one bounded turn. Each application
+            // record already carries the permit its source obtained before
+            // posting it to the owner mailbox.
             receiveBatch.MaximumRecords = ZLinkReceiveBatchBudget.MaximumRecords;
             receiveBatch.MaximumBytes = ZLinkReceiveBatchBudget.MaximumBytes;
-#endif
             receiveBatch.StartedAt = Stopwatch.GetTimestamp();
-#if ZLINK_DOTNET_LADDER_L0
-            if (!await claim.ReceiveAsync(receiveBatch, RecvFlags.None).ConfigureAwait(false))
-#else
             if (!await claim.ReceiveAsync(receiveBatch, RecvFlags.DontWait).ConfigureAwait(false))
-#endif
                 return;
 
             try

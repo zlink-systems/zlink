@@ -6,13 +6,6 @@ using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Contracts.Channels;
 using Zlink.Framework.Contracts.Dispatch;
 
-using var flowTrace = BenchDiagnostics.FlowTraceEnabled
-    ? new TestHostMessageFlowListener(
-        Environment.GetEnvironmentVariable("BENCH_FLOW_FILE")
-            ?? Path.Combine(AppContext.BaseDirectory, "bench.flow")
-    )
-    : null;
-
 var endpoint = ArgValue(args, "--endpoint") ?? "tcp://127.0.0.1:5214";
 var metricsUrl = ArgValue(args, "--metrics-url") ?? "http://127.0.0.1:5215";
 
@@ -20,6 +13,7 @@ var builder = WebApplication.CreateBuilder(args);
 ConfigureQuietLogging(builder);
 builder.WebHost.UseUrls(metricsUrl);
 builder.Services.AddSingleton<BenchServerMetrics>();
+#if !ZLINK_DOTNET_LADDER_L0
 builder.Services.AddZLinkFramework(framework =>
 {
     framework.Codecs.Use(ZLinkProtobufCodec.Default);
@@ -29,14 +23,10 @@ builder.Services.AddZLinkFramework(framework =>
         .AddRouteMesh("bench")
         .Listen(endpoint)
         .SetRoutingId(RoutingId.From("bench-server"));
-#if ZLINK_DOTNET_LADDER_L0
-    mesh.AddRouteRequestHandler<L0EchoHandler, Message, Message>("BenchPayload")
-        .AddRouteSendHandler<L0CommandHandler, Message>("BenchPayload");
-#else
     mesh.AddRouteRequestHandler<EchoHandler, BenchPayload, BenchPayload>("BenchPayload")
         .AddRouteSendHandler<CommandHandler, BenchPayload>("BenchPayload");
-#endif
 });
+#endif
 
 var app = builder.Build();
 var metrics = app.Services.GetRequiredService<BenchServerMetrics>();
@@ -50,7 +40,25 @@ app.MapPost(
     }
 );
 app.MapGet("/bench/stats", () => Results.Ok(metrics.Snapshot()));
+#if ZLINK_DOTNET_LADDER_L0
+using var context = Systems.Zlink.Zlink.CreateContext();
+using var router = context.CreateRouterSocket();
+router.SetRoutingId(RoutingId.From("bench-server"));
+router.Bind(endpoint);
+var handler = new L0BenchHandler(metrics);
+var receiver = Task.Run(() => RunL0Owner(router, handler, metrics, app.Lifetime.ApplicationStopping));
+try
+{
+    await app.RunAsync();
+}
+finally
+{
+    context.Shutdown();
+    await receiver;
+}
+#else
 await app.RunAsync();
+#endif
 
 static void ConfigureQuietLogging(WebApplicationBuilder builder)
 {
@@ -101,35 +109,89 @@ internal sealed class CommandHandler(BenchServerMetrics metrics)
 }
 
 #if ZLINK_DOTNET_LADDER_L0
-internal sealed class L0EchoHandler(BenchServerMetrics metrics)
-    : IZLinkRouteRequestHandler<Message, Message>
+internal sealed class L0BenchHandler(BenchServerMetrics metrics)
+    : IZLinkRouteRequestHandler<Message, Message>, IZLinkRouteSendHandler<Message>
 {
     public ValueTask<Message> HandleAsync(
         Message request,
         ZLinkRouteMessageContext context,
         CancellationToken cancellationToken
-    )
-    {
-        var payload = BenchPayload.Parser.ParseFrom(request.AsReadOnlySpan());
-        metrics.RecordReceived(payload);
-        var reply = new BenchPayload { Body = payload.Body };
-        var encoded = Message.Allocate(reply.CalculateSize());
-        reply.WriteTo(encoded.AsSpan());
-        return ValueTask.FromResult(encoded);
-    }
-}
+    ) => ValueTask.FromResult(HandleRequest(request));
 
-internal sealed class L0CommandHandler(BenchServerMetrics metrics)
-    : IZLinkRouteSendHandler<Message>
-{
     public ValueTask HandleAsync(
         Message message,
         ZLinkRouteMessageContext context,
         CancellationToken cancellationToken
     )
     {
-        metrics.Record(BenchPayload.Parser.ParseFrom(message.AsReadOnlySpan()));
+        HandleSend(message);
         return ValueTask.CompletedTask;
     }
+
+    public Message HandleRequest(Message request)
+    {
+        var payload = BenchPayload.Parser.ParseFrom(request.AsReadOnlySpan());
+        metrics.RecordReceived(payload);
+        var reply = new BenchPayload { Body = payload.Body };
+        var encoded = Message.Allocate(reply.CalculateSize());
+        reply.WriteTo(encoded.AsSpan());
+        return encoded;
+    }
+
+    public void HandleSend(Message message)
+    {
+        metrics.Record(BenchPayload.Parser.ParseFrom(message.AsReadOnlySpan()));
+    }
 }
+
+static void RunL0Owner(
+    IRouterSocket router,
+    L0BenchHandler handler,
+    BenchServerMetrics metrics,
+    CancellationToken stopping
+)
+{
+    using var received = Received.Create();
+    while (!stopping.IsCancellationRequested)
+    {
+        try
+        {
+            if (!router.Recv(received, RecvFlags.None))
+                continue;
+
+            do
+            {
+                using var replyBody = received.ReplyToken is null
+                    ? null
+                    : handler.HandleRequest(PayloadPart(received));
+                if (replyBody is not null)
+                {
+                    using var header = Message.From(RawEnvelopeHeaders.Response);
+                    received.Reply().Message(header).Message(replyBody).Submit();
+                }
+                else
+                {
+                    handler.HandleSend(PayloadPart(received));
+                }
+            } while (router.Recv(received, RecvFlags.DontWait));
+        }
+        catch (ZlinkRecvException ex)
+            when (stopping.IsCancellationRequested || ex.Result == ZlinkRecvException.ErrorCode.Terminated)
+        {
+            return;
+        }
+        catch (ZlinkRecvException ex) when (ex.Result == ZlinkRecvException.ErrorCode.NoData)
+        {
+            continue;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"L0 zlink owner failed: {ex.Message}");
+            metrics.RecordError();
+        }
+    }
+}
+
+static Message PayloadPart(Received received) =>
+    received.IsSinglePart ? received.FirstPart() : received.Parts[^1];
 #endif
