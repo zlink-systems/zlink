@@ -87,6 +87,7 @@ internal sealed class ZLinkChannelBundleFactory(ZLinkFrameworkRegistration regis
                     channel.Server.BindHost,
                     registration.NetworkOptions
                 ),
+                registration.TimeProvider,
                 state.ErrorSink
             );
             bundle = new ZLinkChannelRuntimeBundle(
