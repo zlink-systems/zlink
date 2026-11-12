@@ -109,31 +109,38 @@ TEST (MaintenanceFailure, ApplicationClaimAllocationFailureReturnsWorkAccounting
     auto &failure_size = zlink::framework::tests::process_allocation_failure_size;
     auto &failure_count = zlink::framework::tests::process_allocation_failure_count;
     failure_count.store (0, std::memory_order_relaxed);
-    // The batch's record storage is larger than its pointer/byte claim vectors.
-    std::promise<void> begin_dispatch;
-    auto begin = begin_dispatch.get_future ().share ();
-    auto cold = std::async (std::launch::async, [&] {
-        begin.wait ();
-        failure_size.store (count * sizeof (mesh::service_mailbox_record_t),
-                            std::memory_order_relaxed);
-        try {
-            auto result = owner->dispatch_application_owner (
-              "node", [&] (const auto &, const auto &, auto, auto) { ++dispatched; },
-              [&] { ++started; }, [&] { ++rejected; });
-            failure_size.store (0, std::memory_order_relaxed);
-            return result;
-        }
-        catch (...) {
-            failure_size.store (0, std::memory_order_relaxed);
-            throw;
-        }
-    });
-    begin_dispatch.set_value ();
-    auto pending = cold.get ();
-    const auto &result = zlink::framework::test::application_owner_result (pending);
-    ASSERT_EQ (failure_count.load (std::memory_order_relaxed), 1);
-    ASSERT_FALSE (result);
-    EXPECT_THROW (result.value (), std::bad_alloc);
+    // Dispatcher storage has fixed batch capacity, but a Node claim owns one
+    // record. Fail that allocation once for each of the queued originals.
+    for (std::size_t index = 0; index != count; ++index) {
+        std::promise<void> begin_dispatch;
+        auto begin = begin_dispatch.get_future ().share ();
+        auto cold = std::async (std::launch::async, [&] {
+            begin.wait ();
+            failure_size.store (count * sizeof (mesh::service_mailbox_record_t),
+                                std::memory_order_relaxed);
+            try {
+                auto result = owner->dispatch_application_owner (
+                  "node", [&] (const auto &, const auto &, auto, auto) { ++dispatched; },
+                  [&] { ++started; }, [&] { ++rejected; });
+                failure_size.store (0, std::memory_order_relaxed);
+                return result;
+            }
+            catch (...) {
+                failure_size.store (0, std::memory_order_relaxed);
+                throw;
+            }
+        });
+        begin_dispatch.set_value ();
+        auto pending = cold.get ();
+        const auto &result = zlink::framework::test::application_owner_result (pending);
+        ASSERT_EQ (failure_count.load (std::memory_order_relaxed), index + 1);
+        ASSERT_FALSE (result);
+        EXPECT_THROW (result.value (), std::bad_alloc);
+        EXPECT_EQ (started, index + 1);
+        EXPECT_EQ (rejected, index + 1);
+        EXPECT_EQ (mailbox.pending_messages (mesh::service_mailbox_domain_t::application),
+                   count - index - 1);
+    }
     EXPECT_EQ (started, count);
     EXPECT_EQ (rejected, count);
     EXPECT_EQ (dispatched, 0u);
