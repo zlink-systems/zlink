@@ -206,8 +206,8 @@ TEST (RequestCallAllocations, LocalActorRequestCompletionRegistrationDoesNotExce
     // constructor). Settle one request first so the sample measures the per-request cost.
     const auto register_and_fail = [&host] (bool measure) {
         const auto prepared = host->transport ().prepare_local_operation_async ().result ();
-        EXPECT_TRUE (prepared);
-        EXPECT_TRUE (prepared.value ());
+        ASSERT_TRUE (prepared);
+        ASSERT_TRUE (prepared.value ());
         operation_t operation;
         std::optional<fw::request_task_t<parts_reply_t>> pending;
         const auto sample = sample_allocations ([&] {
