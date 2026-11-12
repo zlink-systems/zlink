@@ -4,7 +4,6 @@ bindings/c/perf - zlink benchmark runner
 """
 import datetime
 import collections
-import math
 import os
 import platform
 import queue
