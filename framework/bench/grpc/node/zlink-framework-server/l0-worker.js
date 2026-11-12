@@ -12,15 +12,13 @@ const { PHASE_ACTIVE, decode, nowNs } = require('../shared/bench-metric-header')
 const { EchoHandler, CommandHandler } = require('./bench-handlers');
 
 const counters = new Int32Array(workerData.shared, 0, 3);
-const latencyCount = new Int32Array(workerData.shared, 12, 1);
 const latencies = new Float64Array(workerData.shared, 16, 500000);
 const metrics = {
   record(payload) {
     Atomics.add(counters, 1, 1);
     const decoded = decode(payload);
     if (decoded === null || decoded.phase !== PHASE_ACTIVE) return;
-    Atomics.add(counters, 0, 1);
-    const index = Atomics.add(latencyCount, 0, 1);
+    const index = Atomics.add(counters, 0, 1);
     if (index < latencies.length) {
       const elapsed = nowNs() - decoded.sentTimestampNs;
       latencies[index] = elapsed > 0n ? Number(elapsed) : 0;

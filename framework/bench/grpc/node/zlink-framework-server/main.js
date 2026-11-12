@@ -36,13 +36,12 @@ Injectable()(CommandHandler);
 if (process.env.ZLINK_LADDER_L0_SERVER === '1') {
   const shared = new SharedArrayBuffer(16 + 500000 * Float64Array.BYTES_PER_ELEMENT);
   const counters = new Int32Array(shared, 0, 3);
-  const latencyCount = new Int32Array(shared, 12, 1);
   const latencies = new Float64Array(shared, 16, 500000);
   const snapshot = metrics.snapshot.bind(metrics);
   const reset = metrics.reset.bind(metrics);
   metrics.snapshot = () => {
     const current = snapshot();
-    const count = Math.min(Atomics.load(latencyCount, 0), latencies.length);
+    const count = Math.min(Atomics.load(counters, 0), latencies.length);
     const samples = Array.from(latencies.subarray(0, count)).sort((a, b) => a - b);
     return {
       ...current,
@@ -62,7 +61,6 @@ if (process.env.ZLINK_LADDER_L0_SERVER === '1') {
     Atomics.store(counters, 0, 0);
     Atomics.store(counters, 1, 0);
     Atomics.store(counters, 2, 0);
-    Atomics.store(latencyCount, 0, 0);
   };
   const worker = new Worker(require.resolve('./l0-worker'), {
     workerData: {
