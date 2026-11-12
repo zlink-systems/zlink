@@ -39,13 +39,11 @@ router.bind(workerData.endpoint);
 parentPort.postMessage({ ready: true });
 const received = new zlink.Received();
 
-const responseHeader = workerData.frameworkWire
-  ? (bytes) => {
-    const header = JSON.parse(bytes.subarray(1).toString('utf8'));
-    header.kind = 2;
-    return Buffer.concat([Buffer.from([0xf2]), Buffer.from(JSON.stringify(header), 'utf8')]);
-  }
-  : () => RESPONSE_ENVELOPE;
+function frameworkResponseHeader(bytes) {
+  const header = JSON.parse(bytes.subarray(1).toString('utf8'));
+  header.kind = 2;
+  return Buffer.concat([Buffer.from([0xf2]), Buffer.from(JSON.stringify(header), 'utf8')]);
+}
 
 function dispatchOne() {
   const parts = received.parts;
@@ -54,19 +52,17 @@ function dispatchOne() {
     const payload = decodeBenchPayloadBody(parts[parts.length - 1].data());
     if (payload === null) throw new Error('invalid benchmark payload');
     if (received.replyToken !== null) {
-      echoHandler.handleL0({ body: payload });
+      echoHandler.handleL0(payload);
       received.reply()
-        .message(responseHeader(header))
+        .message(workerData.frameworkWire ? frameworkResponseHeader(header) : RESPONSE_ENVELOPE)
         .message(encodeBenchPayloadMessage(payload))
         .submit();
     } else {
-      commandHandler.handleL0({ body: payload });
+      commandHandler.handleL0(payload);
     }
   } catch (error) {
     metrics.recordError();
     parentPort.postMessage({ error: error.message, counted: true });
-  } finally {
-    received.close();
   }
 }
 

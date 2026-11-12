@@ -14,9 +14,9 @@ class EchoHandler {
     this.metrics.record(toBuffer(request && request.body));
     return request;
   }
-  handleL0(request) {
-    this.metrics.record(toBuffer(request && request.body));
-    return request;
+  handleL0(body) {
+    this.metrics.record(body);
+    return body;
   }
 }
 
@@ -26,8 +26,8 @@ class CommandHandler {
     this.metrics.record(toBuffer(message && message.body));
     return undefined;
   }
-  handleL0(message) {
-    this.metrics.record(toBuffer(message && message.body));
+  handleL0(body) {
+    this.metrics.record(body);
     return undefined;
   }
 }
