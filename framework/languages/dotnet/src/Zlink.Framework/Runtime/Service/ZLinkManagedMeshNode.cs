@@ -596,12 +596,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedSecurityIdentity);
         RunState(() =>
+        {
             _peerExpectations[peerRid] = new ZLinkMeshPeerExpectation(
                 endpoint,
                 expectedSecurityIdentity,
                 expectedLifecycleGeneration
-            )
-        );
+            );
+            SignalChannelSelectionChangedUnderLock();
+        });
     }
 
     public void RemovePeerExpectation(RoutingId peerRid, string endpoint)
@@ -617,7 +619,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 )
                     return;
                 if (_peerExpectations.Remove(peerRid))
+                {
+                    SignalChannelSelectionChangedUnderLock();
                     RetirePeerConnectionIntent(peerRid, ref notify);
+                }
             });
         }
         finally
@@ -10471,6 +10476,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     )
     {
         var generation = _selectedRoutes.GenerationOf(target);
+        ZLinkMeshPeerExpectation? targetExpectation =
+            _peerExpectations.TryGetValue(target, out var expected)
+            && (
+                lifecycleGeneration == 0
+                || expected.LifecycleGeneration == 0
+                || expected.LifecycleGeneration == lifecycleGeneration
+            )
+                ? expected
+                : null;
         var ready =
             generation != 0
             && _peersByRid.TryGetValue(target, out var peer)
@@ -10504,7 +10518,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             _channelSelectionChanged.Task,
             attempt,
             endpoint,
-            _connectionAttempts
+            _connectionAttempts,
+            targetExpectation
         );
     }
 

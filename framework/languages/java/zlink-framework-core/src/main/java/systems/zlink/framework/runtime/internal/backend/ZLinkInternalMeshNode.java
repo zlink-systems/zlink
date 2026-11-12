@@ -214,8 +214,42 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         return false;
     }
 
+    record PeerAdmissionExpectation(
+            String endpoint,
+            long lifecycleGeneration,
+            String securityIdentity,
+            ZLinkMeshNodeObjectRole objectRole,
+            String ownerId,
+            long leaseGeneration) {
+        public PeerAdmissionExpectation(
+                String endpoint,
+                long lifecycleGeneration,
+                String securityIdentity,
+                ZLinkMeshNodeObjectRole objectRole) {
+            this(endpoint, lifecycleGeneration, securityIdentity, objectRole, null, 0);
+        }
+
+        public PeerAdmissionExpectation {
+            Objects.requireNonNull(objectRole, "objectRole");
+            //  lifecycleGeneration is an opaque equality token: only zero
+            //  (absent) is invalid, not a negative long (spec 13 §7.1).
+            if (endpoint == null
+                    || endpoint.isBlank()
+                    || lifecycleGeneration == 0
+                    || securityIdentity == null
+                    || securityIdentity.isBlank()) {
+                throw new IllegalArgumentException("peer admission expectation must be complete");
+            }
+        }
+    }
+
     /** Core selection and logical admission, observed without controlling physical routes. */
-    record PeerRouteObservation(long selectedGeneration, boolean ready) {}
+    record PeerRouteObservation(
+            long selectedGeneration, boolean ready, PeerAdmissionExpectation expectation) {
+        public PeerRouteObservation(long selectedGeneration, boolean ready) {
+            this(selectedGeneration, ready, null);
+        }
+    }
 
     default PeerRouteObservation observePeerRoute(RoutingId peerRid) {
         return new PeerRouteObservation(0, false);

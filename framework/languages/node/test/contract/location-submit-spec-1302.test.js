@@ -203,6 +203,7 @@ test('operation deadline cancellation completes with DeadlineExceeded instead of
   };
   const runtime = new ServiceStatefulRuntime({
     topology: { peer: () => ({ descriptor: { lifecycleGeneration: 5n } }) },
+    peerLifecycleGeneration: () => 5n,
     observePeerRoute: () => ({ generation: 1n, ready: true }),
     observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved: () => () => {},
@@ -277,6 +278,7 @@ test('Instance activation does not start payload put when its deadline expires d
   };
   const runtime = new ServiceStatefulRuntime({
     topology: { peer: () => ({ descriptor: { lifecycleGeneration: 7n } }) },
+    peerLifecycleGeneration: () => 7n,
     observePeerRoute: () => ({ generation: 1n, ready: true }),
     observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved: () => () => {},

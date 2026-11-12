@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
@@ -23,6 +25,8 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -153,6 +157,51 @@ final class ZLinkJavaOwnerDescriptorWaitTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void otherGenerationAdmittedPeerPreservesTerminalWithoutSubmission(boolean removeExpectation)
+            throws Exception {
+        var clock = new AtomicLong(System.nanoTime());
+        try (var fixture = new Fixture(clock::get)) {
+            var old = fixture.admitOtherGeneration();
+            var join = fixture.join(Duration.ofMillis(100));
+            fixture.source
+                    .sourceTransportLane()
+                    .runNowOrQueue(() -> null)
+                    .toCompletableFuture()
+                    .join();
+            assertFalse(join.isDone());
+            assertEquals(0, fixture.bindingRequests.get());
+            if (removeExpectation) {
+                fixture.source
+                        .forgetPeerAdmissionExpectation(fixture.target.routingId())
+                        .toCompletableFuture()
+                        .get(3, TimeUnit.SECONDS);
+                // Keep the operation clock frozen while observing authority invalidation.
+                join.handle((reply, failure) -> null)
+                        .completeOnTimeout(null, 1, TimeUnit.SECONDS)
+                        .join();
+            }
+            // Drain the existing target observation before expiring the request budget.
+            fixture.source
+                    .sourceTransportLane()
+                    .runNowOrQueue(() -> null)
+                    .toCompletableFuture()
+                    .join();
+            clock.addAndGet(Duration.ofSeconds(1).toNanos());
+            var failure =
+                    assertThrows(ExecutionException.class, () -> join.get(3, TimeUnit.SECONDS));
+            assertEquals(old, fixture.admittedDescriptor());
+            assertEquals(0, fixture.bindingRequests.get());
+            assertEquals(0, fixture.received.get());
+            assertEquals(
+                    removeExpectation
+                            ? ZLinkFrameworkErrorKind.UNAVAILABLE
+                            : ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+        }
+    }
+
     private static void assertFailure(CompletableFuture<?> result, ZLinkFrameworkErrorKind kind) {
         var failure = assertThrows(ExecutionException.class, () -> result.get(3, TimeUnit.SECONDS));
         assertEquals(
@@ -268,6 +317,59 @@ final class ZLinkJavaOwnerDescriptorWaitTest {
                             ZLinkMeshNodeObjectRole.SERVER)
                     .toCompletableFuture()
                     .get(3, TimeUnit.SECONDS);
+        }
+
+        ZLinkServiceTopologyRegistry topology() throws Exception {
+            var field = ZLinkJavaRawMeshNode.class.getDeclaredField("topology");
+            field.setAccessible(true);
+            return (ZLinkServiceTopologyRegistry) field.get(source);
+        }
+
+        ZLinkServiceNodeDescriptor admittedDescriptor() throws Exception {
+            return topology().peer(target.routingId()).orElseThrow().descriptor();
+        }
+
+        ZLinkServiceNodeDescriptor admitOtherGeneration() throws Exception {
+            long oldGeneration = target.lifecycleGeneration() == 1L ? 2L : 1L;
+            String oldEndpoint = "inproc://retained-old-generation-" + UUID.randomUUID();
+            source.connectPeer(
+                    oldEndpoint,
+                    target.routingId(),
+                    oldGeneration,
+                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+            var old =
+                    new ZLinkServiceNodeDescriptor(
+                            "descriptor-wait",
+                            target.routingId(),
+                            oldGeneration,
+                            1,
+                            oldEndpoint,
+                            List.of(),
+                            ZLinkServiceNodeDescriptor.State.SERVING,
+                            ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                            1,
+                            List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
+                            ZLinkServiceNodeDescriptor.ObjectRole.SERVER,
+                            100,
+                            100,
+                            10,
+                            0,
+                            0);
+            var topology = topology();
+            source.sourceTransportLane()
+                    .runNowOrQueue(
+                            () -> {
+                                assertEquals(
+                                        ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
+                                        topology.admit(
+                                                old, "1", ServiceWireConstants.COMMAND_ADMIT));
+                                assertTrue(topology.isReady(target.routingId()));
+                                source.publishPeerObservation();
+                                return null;
+                            })
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            return old;
         }
 
         CompletableFuture<ZLinkInternalMeshNode.CanonicalActorJoinReply> join(Duration timeout) {

@@ -143,12 +143,33 @@ function descriptorFixture(t, resolvedGeneration = 7n) {
       });
       assert.equal(await raw.pumpOne(), 'infrastructure');
     },
+    async admitOtherGeneration() {
+      const old = { ...target, lifecycleGeneration: 2n };
+      routes.set(old.nodeRoutingId, 1n);
+      await raw.observeSelectedRoutes();
+      incoming.push({
+        sourceRid: old.nodeRoutingId,
+        routeGeneration: 1n,
+        parts: [meshWire.encodeRouteMeshAdmission(meshWire.M6aServiceWireCommand.admit, old)],
+        close() {}
+      });
+      assert.equal(await raw.pumpOne(), 'infrastructure');
+      assert.equal(raw.topology.admittedPeer(target.nodeRoutingId).remoteAdmitReceived, true);
+      raw.expectPeerByRoutingId(target.advertisedEndpoint, target.nodeRoutingId, 'default', 3n);
+      return old;
+    },
+    admittedDescriptor: () => raw.topology.admittedPeer(target.nodeRoutingId)?.descriptor,
+    async removeTargetExpectation() {
+      raw.expectedPeers.delete(target.nodeRoutingId);
+      // The existing connect observation wakes waiting admission without changing G0.
+      await raw.pumpBatch(false, false, true);
+    },
     invalidate() {
       raw.disconnectPeer(target.advertisedEndpoint, target.nodeRoutingId);
     },
-    expire() {
+    expire(expected = 1) {
       now += 80;
-      assert.equal(runtime.expireOperations(now, Number.POSITIVE_INFINITY), 1);
+      assert.equal(runtime.expireOperations(now, Number.POSITIVE_INFINITY), expected);
     },
     close() {
       runtime.close();
@@ -232,3 +253,33 @@ test('STREAM bind still rejects a successful lookup with another Actor generatio
     fixture.close();
   }
 });
+
+for (const removeExpectation of [false, true]) {
+  test(`STREAM bind preserves the terminal with an admitted older lifecycle (remove expectation: ${removeExpectation})`, async (t) => {
+    const fixture = descriptorFixture(t);
+    try {
+      const old = await fixture.admitOtherGeneration();
+      const result = fixture.bind().then(
+        () => undefined,
+        (error) => error
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(fixture.attempts, []);
+      assert.equal(fixture.bindingSubmissions(), 0);
+      if (removeExpectation) await fixture.removeTargetExpectation();
+      fixture.expire(removeExpectation ? 0 : 1);
+      const error = await result;
+      assert.deepEqual(fixture.admittedDescriptor(), old);
+      assert.deepEqual(fixture.attempts, []);
+      assert.equal(fixture.bindingSubmissions(), 0);
+      assert.equal(
+        error?.kind,
+        removeExpectation
+          ? framework.ZLinkFrameworkErrorKind.Unavailable
+          : framework.ZLinkFrameworkErrorKind.DeadlineExceeded
+      );
+    } finally {
+      fixture.close();
+    }
+  });
+}

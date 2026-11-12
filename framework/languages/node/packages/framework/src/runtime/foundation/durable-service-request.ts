@@ -13,13 +13,18 @@ export interface PeerRouteObservation {
   readonly selected?: boolean;
   readonly lifecycleGeneration?: bigint;
   readonly endpoint?: string;
+  readonly expectation?: {
+    readonly lifecycleGeneration?: bigint;
+    readonly endpoint?: string;
+    readonly securityIdentity?: string;
+  };
   /** Immutable socket snapshot; admission selects this target endpoint only while waiting. */
   readonly connectionAttempts?: readonly ConnectionAttempt[];
 }
 
 export interface DurableServiceRequestPort {
   readonly requestStopSignal?: AbortSignal;
-  observePeerRoute(target: string): PeerRouteObservation;
+  observePeerRoute(target: string, lifecycleGeneration?: bigint): PeerRouteObservation;
   observePeerRouteChanged(listener: (target: string) => void): () => void;
   observePeerConnectionIntentRemoved(listener: (target: string) => void): () => void;
   requestService(
@@ -46,7 +51,8 @@ export function admitServiceRequest(
   pending: OperationHandle<unknown>,
   start: (remainingMs: number, finished: () => void) => void,
   failed: (error: unknown) => void,
-  operationKind = 'Request'
+  operationKind = 'Request',
+  targetNodeGeneration?: bigint
 ): void {
   let baseline: PeerRouteObservation | undefined;
   let submitted = false;
@@ -98,7 +104,7 @@ export function admitServiceRequest(
     }
     try {
       const remaining = remainingRequestTimeout(operationKind, pending.deadlineMs)!;
-      const observation = port.observePeerRoute(target);
+      const observation = port.observePeerRoute(target, targetNodeGeneration);
       const attempts =
         baseline !== undefined || !observation.ready
           ? observation.connectionAttempts?.filter(
@@ -107,9 +113,14 @@ export function admitServiceRequest(
           : undefined;
       if (
         baseline !== undefined &&
-        ((baseline.lifecycleGeneration !== undefined &&
-          baseline.lifecycleGeneration !== observation.lifecycleGeneration) ||
-          (baseline.endpoint !== undefined && baseline.endpoint !== observation.endpoint))
+        (baseline.expectation !== undefined
+          ? baseline.expectation.lifecycleGeneration !==
+              observation.expectation?.lifecycleGeneration ||
+            baseline.expectation.endpoint !== observation.expectation?.endpoint ||
+            baseline.expectation.securityIdentity !== observation.expectation?.securityIdentity
+          : (baseline.lifecycleGeneration !== undefined &&
+              baseline.lifecycleGeneration !== observation.lifecycleGeneration) ||
+            (baseline.endpoint !== undefined && baseline.endpoint !== observation.endpoint))
       ) {
         unavailable('Request target descriptor changed.');
         return true;
@@ -186,7 +197,8 @@ export function requestDurableService(
   operationKind: string,
   signal?: AbortSignal,
   onSubmitted?: (signal: AbortSignal) => Promise<void>,
-  onAdmitted?: () => void
+  onAdmitted?: () => void,
+  targetNodeGeneration?: bigint
 ): Promise<readonly Buffer[]> {
   const stop = new AbortController();
   const cancellation = AbortSignal.any([
@@ -244,7 +256,8 @@ export function requestDurableService(
         pending.fail(error);
         reject(error);
       },
-      operationKind
+      operationKind,
+      targetNodeGeneration
     );
   });
 }

@@ -188,7 +188,8 @@ test('SourceRequestOwner uses received RID bytes instead of its display string',
   const runtime = new ServiceStatefulRuntime(
     {
       setServiceIngress() {},
-      topology: { peer: () => ({ descriptor: { lifecycleGeneration: 5n } }) }
+      topology: { peer: () => ({ descriptor: { lifecycleGeneration: 5n } }) },
+      peerLifecycleGeneration: () => 5n
     },
     'local',
     7n
@@ -223,9 +224,7 @@ test('SourceRequestOwner propagates programming errors from Store reads', async 
   );
 });
 
-const {
-  ServiceStatefulRuntime
-} = require('../../packages/framework/dist/internal');
+const { ServiceStatefulRuntime } = require('../../packages/framework/dist/internal');
 const {
   ReceiveKind
 } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
@@ -304,6 +303,7 @@ test('SourceRequestOwner reports typed Store failure and retains its cause', asy
       receive = handler;
     },
     topology: { peer: () => ({ descriptor: { lifecycleGeneration: 5n } }) },
+    peerLifecycleGeneration: () => 5n,
     mailbox: {
       tryEnqueue(record) {
         queued = record;
@@ -364,7 +364,8 @@ for (const asynchronous of [false, true]) {
     test(`SourceRequestOwner records ingress once async=${asynchronous} local=${local}`, async () => {
       const raw = {
         setServiceIngress() {},
-        topology: { peer: () => ({ descriptor: { lifecycleGeneration: 5n } }) }
+        topology: { peer: () => ({ descriptor: { lifecycleGeneration: 5n } }) },
+        peerLifecycleGeneration: () => 5n
       };
       const runtime = new ServiceStatefulRuntime(raw, 'local', 7n);
       const source = {

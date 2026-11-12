@@ -183,6 +183,113 @@ public sealed partial class StatefulServiceRuntimeTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task NativeSessionBind_OtherGenerationAdmittedPeerPreservesTerminalWithoutSubmission(
+        bool authorityChanged
+    )
+    {
+        var time = new ControllableTimeProvider();
+        await using var native = Systems.Zlink.Zlink.CreateContext();
+        var context = new MeshNodeShutdownSealTests.CanonicalRequestContext(native);
+        await using var source = new ZLinkManagedMeshNode(
+            context,
+            "mesh",
+            deadlineTimeProvider: time,
+            receivePollerFactory: () =>
+                new MeshNodeShutdownSealTests.CanonicalRequestPoller(
+                    Systems.Zlink.Zlink.CreatePoller()
+                )
+        );
+        source.SetRoutingId(RoutingId.From("other-generation-bind-source"));
+        await using var target = NewNode(
+            native,
+            "other-generation-bind-target",
+            deadlineTimeProvider: time
+        );
+        var attempts = 0;
+        target.SetBoundSessionBindHandler(
+            (_, _, _, reply, _) =>
+            {
+                Interlocked.Increment(ref attempts);
+                reply(RequestResult.Ok, 0, null);
+                return ValueTask.CompletedTask;
+            }
+        );
+        var suffix = Guid.NewGuid().ToString("N");
+        source.SetBind($"inproc://other-generation-source-{suffix}");
+        var endpoint = $"inproc://other-generation-target-{suffix}";
+        target.SetBind(endpoint);
+        source.Start();
+        var olderGeneration = target.Status().LifecycleGeneration;
+        var targetGeneration = olderGeneration == 1UL ? 2UL : 1UL;
+        source.SetPeerExpectation(
+            target.RoutingId,
+            endpoint,
+            ZLinkServiceSecurityIdentity.Plaintext,
+            olderGeneration
+        );
+        source.ConnectPeer(endpoint, target.RoutingId);
+        await source._lane.RunAsync(() =>
+            source._peersByRid.Add(
+                target.RoutingId,
+                new ZLinkMeshPeer(1)
+                {
+                    RoutingId = target.RoutingId,
+                    LifecycleGeneration = olderGeneration,
+                    Admitted = true,
+                    State = MeshPeerState.Admitted,
+                }
+            )
+        );
+        if (authorityChanged)
+            source.SetPeerExpectation(
+                target.RoutingId,
+                endpoint,
+                ZLinkServiceSecurityIdentity.Plaintext,
+                targetGeneration
+            );
+        var timeout = TimeSpan.FromSeconds(2);
+        var request = source
+            .BindBoundSessionAsync(
+                CanonicalBindRequest(target.RoutingId, targetGeneration),
+                timeout,
+                CancellationToken.None
+            )
+            .AsTask();
+        Assert.False(request.IsCompleted);
+        Assert.Equal(0, attempts);
+        Assert.Equal(0, context.NativeRequests);
+        Assert.Empty(context.Submissions);
+        if (authorityChanged)
+        {
+            source.RemovePeerExpectation(target.RoutingId, endpoint);
+            Assert.True(
+                await source._lane.RunAsync(() =>
+                    source._peersByRid.TryGetValue(target.RoutingId, out var peer)
+                    && peer.Admitted
+                    && peer.LifecycleGeneration == olderGeneration
+                )
+            );
+            // Keep the operation clock frozen while observing authority invalidation.
+            await Task.WhenAny(request, Task.Delay(TimeSpan.FromSeconds(1)));
+        }
+        time.AdvanceMonotonic(timeout);
+        var failure = await Record.ExceptionAsync(() => request.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0, context.NativeRequests);
+        Assert.Empty(context.Submissions);
+        var error = Assert.IsType<ZLinkFrameworkException>(failure);
+        Assert.Equal(
+            authorityChanged
+                ? ZLinkFrameworkErrorKind.Unavailable
+                : ZLinkFrameworkErrorKind.DeadlineExceeded,
+            error.Kind
+        );
+        Assert.Equal(0, attempts);
+        Assert.Equal(0, source.PendingOperationCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task NativeSessionBind_UsesIngressLifecycleWhenPeerChanges(bool retirePeer)
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
