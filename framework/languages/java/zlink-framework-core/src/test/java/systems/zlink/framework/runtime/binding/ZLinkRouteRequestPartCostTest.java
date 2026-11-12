@@ -16,13 +16,11 @@ import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceSendHeaderAllocationTest;
 
-import java.net.URLClassLoader;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -45,41 +43,14 @@ public final class ZLinkRouteRequestPartCostTest {
 
     @Test
     void requestAndReplyPartsUseOnlyTheirWireFrames() throws Exception {
-        var classpath = new LinkedHashSet<String>();
-        for (ClassLoader loader = getClass().getClassLoader();
-                loader != null;
-                loader = loader.getParent()) {
-            if (loader instanceof URLClassLoader urls) {
-                for (var url : urls.getURLs()) classpath.add(Path.of(url.toURI()).toString());
-            }
-        }
-        classpath.addAll(
-                List.of(System.getProperty("java.class.path").split(java.io.File.pathSeparator)));
-        Path output = Files.createTempFile("zlink-route-request-parts-", ".log");
-        try {
-            Process process =
-                    new ProcessBuilder(
-                                    Path.of(System.getProperty("java.home"), "bin", "java")
-                                            .toString(),
-                                    "--enable-native-access=ALL-UNNAMED",
-                                    "-Djava.io.tmpdir=" + System.getProperty("java.io.tmpdir"),
-                                    "-XX:-UseTLAB",
-                                    "-XX:-DoEscapeAnalysis",
-                                    "-XX:ActiveProcessorCount=2",
-                                    "-XX:FlightRecorderOptions=stackdepth=256",
-                                    "-cp",
-                                    String.join(java.io.File.pathSeparator, classpath),
-                                    getClass().getName())
-                            .redirectErrorStream(true)
-                            .redirectOutput(output.toFile())
-                            .start();
-            int exit = process.waitFor();
-            String log = Files.readString(output, StandardCharsets.UTF_8);
-            System.out.print(log);
-            assertEquals(0, exit, log);
-        } finally {
-            Files.deleteIfExists(output);
-        }
+        ZLinkServiceSendHeaderAllocationTest.runInJvm(
+                getClass(),
+                List.of(
+                        "-Djava.io.tmpdir=" + System.getProperty("java.io.tmpdir"),
+                        "-XX:-UseTLAB",
+                        "-XX:-DoEscapeAnalysis",
+                        "-XX:ActiveProcessorCount=2",
+                        "-XX:FlightRecorderOptions=stackdepth=256"));
     }
 
     public static void main(String[] args) throws Exception {
