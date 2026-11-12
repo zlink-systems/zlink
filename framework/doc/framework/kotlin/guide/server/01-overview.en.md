@@ -582,7 +582,7 @@ part of this map.
 - **Session server** — takes the client's real-time connection. The STREAM node receives the
   message, the session relay passes it over a **RouteMesh channel**, and the actor in the user
   spot an entry spot assigned handles it.
-- **Domain server** — node handlers and spots hold the state and process requests serially.
+- **Domain server** — spots and actors hold the state and process requests in order; node handlers keep no state.
 - **Location store** — manages server address information. The dotted lines are store lookups
   that find an endpoint, not a data path.
 
