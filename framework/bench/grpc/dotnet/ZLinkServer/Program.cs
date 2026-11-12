@@ -80,70 +80,7 @@ static string? ArgValue(string[] args, string name)
     return null;
 }
 
-internal sealed class EchoHandler(BenchServerMetrics metrics)
-    : IZLinkRouteRequestHandler<BenchPayload, BenchPayload>
-{
-    public ValueTask<BenchPayload> HandleAsync(
-        BenchPayload request,
-        ZLinkRouteMessageContext context,
-        CancellationToken cancellationToken
-    )
-    {
-        metrics.RecordReceived(request);
-        return ValueTask.FromResult(request);
-    }
-}
-
-internal sealed class CommandHandler(BenchServerMetrics metrics)
-    : IZLinkRouteSendHandler<BenchPayload>
-{
-    public ValueTask HandleAsync(
-        BenchPayload message,
-        ZLinkRouteMessageContext context,
-        CancellationToken cancellationToken
-    )
-    {
-        metrics.Record(message);
-        return ValueTask.CompletedTask;
-    }
-}
-
 #if ZLINK_DOTNET_LADDER_L0
-internal sealed class L0BenchHandler(BenchServerMetrics metrics)
-    : IZLinkRouteRequestHandler<Message, Message>, IZLinkRouteSendHandler<Message>
-{
-    public ValueTask<Message> HandleAsync(
-        Message request,
-        ZLinkRouteMessageContext context,
-        CancellationToken cancellationToken
-    ) => ValueTask.FromResult(HandleRequest(request));
-
-    public ValueTask HandleAsync(
-        Message message,
-        ZLinkRouteMessageContext context,
-        CancellationToken cancellationToken
-    )
-    {
-        HandleSend(message);
-        return ValueTask.CompletedTask;
-    }
-
-    public Message HandleRequest(Message request)
-    {
-        var payload = BenchPayload.Parser.ParseFrom(request.AsReadOnlySpan());
-        metrics.RecordReceived(payload);
-        var reply = new BenchPayload { Body = payload.Body };
-        var encoded = Message.Allocate(reply.CalculateSize());
-        reply.WriteTo(encoded.AsSpan());
-        return encoded;
-    }
-
-    public void HandleSend(Message message)
-    {
-        metrics.Record(BenchPayload.Parser.ParseFrom(message.AsReadOnlySpan()));
-    }
-}
-
 static void RunL0Owner(
     IRouterSocket router,
     L0BenchHandler handler,
@@ -194,4 +131,69 @@ static void RunL0Owner(
 
 static Message PayloadPart(Received received) =>
     received.IsSinglePart ? received.FirstPart() : received.Parts[^1];
+#endif
+
+internal sealed class EchoHandler(BenchServerMetrics metrics)
+    : IZLinkRouteRequestHandler<BenchPayload, BenchPayload>
+{
+    public ValueTask<BenchPayload> HandleAsync(
+        BenchPayload request,
+        ZLinkRouteMessageContext context,
+        CancellationToken cancellationToken
+    )
+    {
+        metrics.RecordReceived(request);
+        return ValueTask.FromResult(request);
+    }
+}
+
+internal sealed class CommandHandler(BenchServerMetrics metrics)
+    : IZLinkRouteSendHandler<BenchPayload>
+{
+    public ValueTask HandleAsync(
+        BenchPayload message,
+        ZLinkRouteMessageContext context,
+        CancellationToken cancellationToken
+    )
+    {
+        metrics.Record(message);
+        return ValueTask.CompletedTask;
+    }
+}
+
+#if ZLINK_DOTNET_LADDER_L0
+internal sealed class L0BenchHandler(BenchServerMetrics metrics)
+    : IZLinkRouteRequestHandler<Message, Message>, IZLinkRouteSendHandler<Message>
+{
+    ValueTask<Message> IZLinkRouteRequestHandler<Message, Message>.HandleAsync(
+        Message request,
+        ZLinkRouteMessageContext context,
+        CancellationToken cancellationToken
+    ) => ValueTask.FromResult(HandleRequest(request));
+
+    ValueTask IZLinkRouteSendHandler<Message>.HandleAsync(
+        Message message,
+        ZLinkRouteMessageContext context,
+        CancellationToken cancellationToken
+    )
+    {
+        HandleSend(message);
+        return ValueTask.CompletedTask;
+    }
+
+    public Message HandleRequest(Message request)
+    {
+        var payload = BenchPayload.Parser.ParseFrom(request.AsReadOnlySpan());
+        metrics.RecordReceived(payload);
+        var reply = new BenchPayload { Body = payload.Body };
+        var encoded = Message.Allocate(reply.CalculateSize());
+        reply.WriteTo(encoded.AsSpan());
+        return encoded;
+    }
+
+    public void HandleSend(Message message)
+    {
+        metrics.Record(BenchPayload.Parser.ParseFrom(message.AsReadOnlySpan()));
+    }
+}
 #endif
