@@ -148,6 +148,7 @@ public class ZLinkFrameworkBenchServer {
                         first = false;
                         if (permit != null) {
                             permit.handlerStarted();
+                            permit = null;
                         }
                         handleLadderL0(received, metrics);
                     } catch (ZlinkRecvException failure) {
