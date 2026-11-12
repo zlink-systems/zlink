@@ -21,7 +21,6 @@ import type {
   ZLinkRawReceivedRecord,
   ZLinkRawRouterPort
 } from '../backend/raw-binding-port';
-
 import { submitToRequestResult } from '../messaging/submission-result';
 import { copyPayloadBytes } from '../../contracts/Common/payload-slab';
 import { RequestResult, SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';

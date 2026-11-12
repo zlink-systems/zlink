@@ -422,7 +422,6 @@ export function nodeEventLoopPollerOf(socket: object): ZLinkNodeEventLoopPoller 
   return poller;
 }
 
-
 function requireSocketOptions<TOptions>(socket: { readonly options?: TOptions }): TOptions {
   if (socket.options === undefined) {
     throw new TypeError('Binding socket does not expose options.');

@@ -3752,13 +3752,8 @@ void stream_host_service_test_access_t::expire_core_sessions (
         for (const auto &rid : rids) {
             // These test-created sessions have no live Core route. Exercise
             // Core's typed NOT_FOUND result before normal queued expiration cleanup.
-            try {
-                listener->_core_socket->disconnect_rid (rid);
-            }
-            catch (const zlink::connect_error_t &error) {
-                if (error.result () != zlink::connect_result_t::not_found)
-                    throw;
-            }
+            disconnect_rid_if_present (
+              [&listener, &rid] { listener->_core_socket->disconnect_rid (rid); });
             {
                 const std::lock_guard lock (listener->_core_pending_disconnects_mutex);
                 listener->_core_pending_disconnects.push_back ({rid, "server_shutdown", {}, {}});
