@@ -81,11 +81,13 @@ void alias_survives_reconnect_directed_route ()
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (client, ZLINK_OPT_SNDTIMEO, &sndtimeo, sizeof (sndtimeo)));
 
+    char endpoint[MAX_SOCKET_STRING];
+    test_bind (server, "tcp://127.0.0.1:*", endpoint, sizeof (endpoint));
+
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_router_option (
       client, ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID, "ALIAS1", 6));
 
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, ENDPOINT_1));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, ENDPOINT_1));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
 
     zlink_routing_id_t rid;
     make_rid ("ALIAS1", &rid);
@@ -96,7 +98,7 @@ void alias_survives_reconnect_directed_route ()
     //  Force the transport down and stand a fresh peer up on the same endpoint.
     test_context_socket_close_zero_linger (server);
     msleep (SETTLE_TIME * 2);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server_rebind, ENDPOINT_1));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server_rebind, endpoint));
 
     //  After reconnect the same alias must still drive the directed route.
     directed_send_when_ready (client, &rid, server_rebind, "after-reconnect");
@@ -130,11 +132,13 @@ void back_to_back_aliases_bind_distinct_routes ()
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (server_b, ZLINK_OPT_RCVTIMEO, &rcvtimeo, sizeof (rcvtimeo)));
 
+    char endpoint_a[MAX_SOCKET_STRING];
+    char endpoint_b[MAX_SOCKET_STRING];
+    test_bind (server_a, "tcp://127.0.0.1:*", endpoint_a, sizeof (endpoint_a));
+    test_bind (server_b, "tcp://127.0.0.1:*", endpoint_b, sizeof (endpoint_b));
+
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (server_a, "SRV-A", 5));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (server_b, "SRV-B", 5));
-
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server_a, ENDPOINT_1));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server_b, ENDPOINT_2));
 
     void *monitor = NULL;
     test_monitor_probe_t probe;
@@ -145,10 +149,10 @@ void back_to_back_aliases_bind_distinct_routes ()
     //  the first connection is admitted. A socket-global one-shot slot loses A.
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_router_option (
       client, ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID, "ALIASA", 6));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, ENDPOINT_1));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint_a));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_router_option (
       client, ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID, "ALIASB", 6));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, ENDPOINT_2));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint_b));
 
     //  Both CONNECTION_READY events must arrive, each carrying its own alias.
     TEST_ASSERT_TRUE (test_monitor_probe_wait_count (&probe, 2, 3000));
