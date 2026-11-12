@@ -373,44 +373,44 @@ public sealed class MeshMailboxReadinessTests(Xunit.Abstractions.ITestOutputHelp
         // allocating claims or involving mailbox release. Warm the reused batch
         // first, as the real pump does when it retains its output batch.
         using var batch = new MeshReadyBatch { MaximumRecords = 0 };
-        var enumerate = CreateRegistryEnumerator<MeshMailboxKey>(fixture.Ready);
         for (var index = 0; index < iterations; index++)
-        {
-            enumerate();
             fixture.Node.DrainReady(domains, batch);
-        }
-        var enumerationBytes = PerCallAllocation.MinWindow(enumerate, iterations);
+        var enumeratorBytes = RegistryEnumeratorBytes<MeshMailboxKey>(fixture.Ready);
         var selectionBytes = PerCallAllocation.MinWindow(
             () => fixture.Node.DrainReady(domains, batch),
             iterations
         );
         output.WriteLine(
             $"owners={owners}; domains={domains}; calls={iterations}; "
-                + $"enumeration bytes/call={enumerationBytes / iterations}; "
+                + $"registry enumerator bytes={enumeratorBytes}; "
                 + $"selection bytes/call={selectionBytes / iterations}"
         );
-        // The registry enumeration is the only allowed allocation. Newer runtimes
-        // may allocate less for the same enumeration, never more for selection.
+        // The registry enumerator is the only allowed allocation. Whether the JIT
+        // keeps it on the heap depends on how far DrainReady has been optimized,
+        // which depends on the tests that ran before, so the bound is one
+        // heap-allocated enumerator per call, not a second method's measurement.
         Assert.True(
-            selectionBytes <= enumerationBytes,
-            $"selection allocated {selectionBytes} B, enumeration {enumerationBytes} B per {iterations} calls"
+            selectionBytes <= enumeratorBytes * iterations,
+            $"selection allocated {selectionBytes} B per {iterations} calls; one registry enumerator is {enumeratorBytes} B"
         );
         Assert.Equal(0, batch.Count);
         Assert.All(fixture.Ready.Values.Cast<bool>(), Assert.True);
     }
 
-    private static Action CreateRegistryEnumerator<TKey>(object registry)
+    private static object? s_escapedEnumerator;
+
+    // Storing the enumerator in a static field keeps the JIT from placing it on the
+    // stack, so this is the heap size of one enumerator in every tiering state.
+    private static long RegistryEnumeratorBytes<TKey>(object registry)
         where TKey : notnull
     {
         var ready = (ConcurrentDictionary<TKey, bool>)registry;
-        return () =>
-        {
-            foreach (var entry in ready)
-            {
-                if (entry.Value)
-                    continue;
-            }
-        };
+        s_escapedEnumerator = ready.GetEnumerator();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        s_escapedEnumerator = ready.GetEnumerator();
+        var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        s_escapedEnumerator = null;
+        return bytes;
     }
 
     // Framework-only fixture: no native context, transport, or worker is started.
