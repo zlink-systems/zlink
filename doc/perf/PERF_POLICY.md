@@ -84,10 +84,13 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
   catch-up은 기존 latency duration 동안 허용하고, 도달 뒤 같은 시간만큼 표본을 수집한다.
   deadline까지 도달하지 못하면 `latency`, `latency_p95`, `latency_p99`를
   `invalid:<reason>`으로 기록하고 throughput은 유효한 측정값을 유지한다.
+- PUBSUB multi latency가 invalid면 gate는 그 cell만 판정에서 제외하고 사유를 표시한다.
+  같은 행의 throughput을 포함한 다른 cell은 계속 판정한다.
 - **판정 외 참고값.** latency가 invalid이면 관측 latency 표본의
   `latency_ref_p50`, `latency_ref_p99`, progress tick에서 최소 subscriber
   in-flight의 최솟값 `inflight_floor`, 그리고 `inflight_floor_ms`(floor ÷ target rate, ms)를
-  판정에 쓰지 않는 참고값으로 기록한다.
+  `REFERENCE,` 접두어로 판정에 쓰지 않는 참고값으로 기록한다. `sender_late`도 같은
+  접두어를 쓴다.
 
 - `bindings/c/perf`는 `doc/guide` 및 `doc/spec/core` 문서에 기술된 public C API만 사용한다.
   내부 헤더나 내부 함수를 직접 호출하지 않는다.

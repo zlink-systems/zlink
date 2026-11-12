@@ -1,6 +1,7 @@
 import importlib.util
 import contextlib
 import io
+import math
 import os
 import pathlib
 import sys
@@ -15,6 +16,14 @@ RC = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 sys.modules[SPEC.name] = RC
 SPEC.loader.exec_module(RC)
+
+SINGLE_SPEC = importlib.util.spec_from_file_location(
+    "single_run_comparison", MODULE_PATH.parent / "single" / "run_comparison.py"
+)
+SINGLE_RC = importlib.util.module_from_spec(SINGLE_SPEC)
+assert SINGLE_SPEC and SINGLE_SPEC.loader
+sys.modules[SINGLE_SPEC.name] = SINGLE_RC
+SINGLE_SPEC.loader.exec_module(SINGLE_RC)
 
 CPP_MODULE_PATH = MODULE_PATH.parents[2] / "cpp" / "perf" / "run_comparison.py"
 CPP_SPEC = importlib.util.spec_from_file_location(
@@ -110,7 +119,7 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
             "sender_late",
         ):
             parsed, warning = RC.parse_result_line(
-                f"RESULT,current,PUBSUB,tcp,256,{metric},3.0", "tcp", {256}
+                f"REFERENCE,current,PUBSUB,tcp,256,{metric},3.0", "tcp", {256}
             )
             self.assertIsNone(parsed, metric)
             self.assertIsNone(warning, metric)
@@ -127,11 +136,42 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             RC.emit_benchmark_diag_line(
-                "RESULT,current,PUBSUB,tcp,256,latency_ref_p50,1.250000"
+                "REFERENCE,current,PUBSUB,tcp,256,latency_ref_p50,1.250000"
             )
-            RC.emit_benchmark_diag_line("RESULT,current,PUBSUB,tcp,256,sender_late,9")
+            RC.emit_benchmark_diag_line("REFERENCE,current,PUBSUB,tcp,256,sender_late,9")
         self.assertIn("latency_ref_p50,1.250000", output.getvalue())
         self.assertIn("sender_late,9", output.getvalue())
+
+    def test_multi_and_single_parsers_accept_invalid_values_consistently(self):
+        line = "RESULT,current,PUBSUB,tcp,256,throughput,invalid:engine_reason"
+        multi, multi_warning = RC.parse_result_line(line, "tcp", {256})
+        single, single_warning = SINGLE_RC.parse_metric_from_result_line(
+            line, "current", "PUBSUB", "tcp", 256
+        )
+        self.assertIsNotNone(multi)
+        self.assertIsNotNone(single)
+        self.assertTrue(math.isnan(multi[3]))
+        self.assertTrue(math.isnan(single[1]))
+        self.assertEqual(multi_warning, "invalid RESULT metric 'throughput': engine_reason")
+        self.assertEqual(single_warning, None)
+
+    def test_emit_result_lines_preserves_engine_invalid_reason(self):
+        parsed, warning = RC.parse_result_line(
+            "RESULT,current,PUBSUB,tcp,256,latency,invalid:engine_reason",
+            "tcp",
+            {256},
+        )
+        self.assertIn("engine_reason", warning)
+        value = RC._median_metric([parsed[3]])
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            RC.emit_result_lines({
+                ("PUBSUB", "tcp", 256, "latency"): value
+            })
+        self.assertIn(
+            "RESULT,current,PUBSUB,tcp,256,latency,invalid:engine_reason",
+            output.getvalue(),
+        )
 
     def test_one_way_phase_gates_follow_sender_and_receiver_roles(self):
         for pattern, receiver, sender in (
@@ -284,6 +324,7 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
             for line in (
                 "PACED_DIAG,pattern=STREAM,target_sender_rate=80\n",
                 "BENCH_DIAG,DEALER_DEALER,64,active_sender_rate,100\n",
+                "REFERENCE,current,PUBSUB,tcp,256,latency_ref_p50,1.250000\n",
                 "RESULT,current,STREAM,tcp,64,throughput,100\n",
                 "unrelated diagnostic\n",
             ):
@@ -291,6 +332,7 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
         self.assertEqual(output.getvalue(), (
             "PACED_DIAG,pattern=STREAM,target_sender_rate=80\n"
             "BENCH_DIAG,DEALER_DEALER,64,active_sender_rate,100\n"
+            "REFERENCE,current,PUBSUB,tcp,256,latency_ref_p50,1.250000\n"
         ))
 
     def test_paced_diagnostics_from_client_stdout_and_stderr_are_visible(self):
@@ -317,7 +359,7 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
         with contextlib.redirect_stdout(output):
             result = RC.run_command_with_metrics(
                 [sys.executable, "-c", (
-                    "print('RESULT,current,PUBSUB,tcp,256,latency_ref_p50,1.250000', "
+                    "print('REFERENCE,current,PUBSUB,tcp,256,latency_ref_p50,1.250000', "
                     "flush=True)"
                 )],
                 os.environ.copy(),
@@ -326,7 +368,7 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
         self.assertEqual(result["returncode"], 0)
         self.assertEqual(
             output.getvalue().strip(),
-            "RESULT,current,PUBSUB,tcp,256,latency_ref_p50,1.250000",
+            "REFERENCE,current,PUBSUB,tcp,256,latency_ref_p50,1.250000",
         )
 
     def test_stream_server_start_ready_token_parser(self):

@@ -20,11 +20,11 @@ class PerfRunnerTests(unittest.TestCase):
             "\n".join(
                 (
                     "RESULT,current,PUBSUB,tcp,256,throughput,1000",
-                    "RESULT,current,PUBSUB,tcp,256,latency_ref_p50,1.2",
-                    "RESULT,current,PUBSUB,tcp,256,latency_ref_p99,4.2",
-                    "RESULT,current,PUBSUB,tcp,256,inflight_floor,8",
-                    "RESULT,current,PUBSUB,tcp,256,inflight_floor_ms,0.8",
-                    "RESULT,current,PUBSUB,tcp,256,sender_late,3",
+                    "REFERENCE,current,PUBSUB,tcp,256,latency_ref_p50,1.2",
+                    "REFERENCE,current,PUBSUB,tcp,256,latency_ref_p99,4.2",
+                    "REFERENCE,current,PUBSUB,tcp,256,inflight_floor,8",
+                    "REFERENCE,current,PUBSUB,tcp,256,inflight_floor_ms,0.8",
+                    "REFERENCE,current,PUBSUB,tcp,256,sender_late,3",
                 )
             )
         )

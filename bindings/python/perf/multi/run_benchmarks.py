@@ -26,7 +26,6 @@ from perf_multi_common import (
     throughput_unit,
 )
 from perf_report import (
-    REQUIRED_METRICS,
     multi_auto_hwm_lines,
     parse_auto_hwm_detail_line,
     sort_result_data_lines,
@@ -1666,9 +1665,7 @@ def main(argv=None):
         line
         for chunk in emitted_chunks
         for line in chunk.splitlines()
-        if line.startswith("RESULT,")
-        and len(line.split(",")) == 7
-        and line.split(",")[5] in REQUIRED_METRICS
+        if line.startswith("RESULT,") and len(line.split(",")) == 7
     ]
     emitted_result_lines = sort_result_data_lines(emitted_result_lines)
     skipped_cases = 0

@@ -578,7 +578,7 @@ def run_command_with_metrics(
 
             if stream_name == "stdout":
                 stdout_buffer.append(line)
-                if line.startswith("RESULT,"):
+                if on_stdout_line is None or line.startswith("RESULT,"):
                     emit_benchmark_diag_line(line)
                 if on_stdout_line is not None:
                     try:
@@ -857,6 +857,25 @@ def run_cmake_build(cmake_build_dir, targets):
         return 127
 
 
+class InvalidMetric(float):
+    def __new__(cls, reason):
+        value = super().__new__(cls, float("nan"))
+        value.reason = reason
+        return value
+
+
+def _median_metric(values):
+    median = statistics.median(values)
+    if isinstance(median, float) and math.isnan(median):
+        reason = next(
+            (value.reason for value in values if isinstance(value, InvalidMetric)),
+            None,
+        )
+        if reason is not None:
+            return InvalidMetric(reason)
+    return median
+
+
 def parse_result_line(line, transport, expected_sizes):
     if not line.startswith("RESULT,"):
         return None, None
@@ -867,16 +886,10 @@ def parse_result_line(line, transport, expected_sizes):
         line_transport = parts[3].strip().lower()
         line_size = int(parts[4].strip())
         metric = parts[5].strip().lower()
-        if metric.startswith("latency_ref_") or metric in (
-            "inflight_floor",
-            "inflight_floor_ms",
-            "sender_late",
-        ):
-            return None, None
         value_text = parts[6].strip()
         if value_text.startswith("invalid:"):
-            value = float("nan")
             invalid_reason = value_text[len("invalid:") :]
+            value = InvalidMetric(invalid_reason)
         else:
             value = float(value_text)
             invalid_reason = None
@@ -912,13 +925,8 @@ def emit_benchmark_diag_line(line):
     stripped = (line or "").strip()
     if stripped.startswith(("MATCHED_DIAG,", "PACED_DIAG,", "BENCH_DIAG,")):
         print(stripped, flush=True)
-    elif stripped.startswith("RESULT,"):
-        parts = stripped.split(",")
-        if len(parts) == 7 and (
-            parts[5].startswith("latency_ref_")
-            or parts[5] in ("inflight_floor", "inflight_floor_ms", "sender_late")
-        ):
-            print(stripped, flush=True)
+    elif stripped.startswith("REFERENCE,"):
+        print(stripped, flush=True)
 
 
 def forward_multi_phase(line, source, pattern, server, client, expected_sizes):
@@ -3108,13 +3116,13 @@ def run_single_test(binary_name, lib_name, transport, size, pattern_name=""):
                 if len(p) >= 7:
                     try:
                         metric = p[5].strip().lower()
-                        if metric.startswith("latency_ref_") or metric in (
-                            "inflight_floor",
-                            "inflight_floor_ms",
-                            "sender_late",
-                        ):
-                            continue
-                        parsed.append({"metric": metric, "value": float(p[6])})
+                        value_text = p[6].strip()
+                        value = (
+                            InvalidMetric(value_text[len("invalid:") :])
+                            if value_text.startswith("invalid:")
+                            else float(value_text)
+                        )
+                        parsed.append({"metric": metric, "value": value})
                     except ValueError:
                         continue
         seen = {entry.get("metric", "").strip().lower() for entry in parsed}
@@ -3551,7 +3559,7 @@ def collect_data(binary_name, lib_name, pattern_name, num_runs, transports=None,
 
             for key in expected_keys:
                 vals = metrics_raw.get(key, [])
-                final_stats[key] = statistics.median(vals) if vals else 0
+                final_stats[key] = _median_metric(vals) if vals else 0
             if show_run_labels:
                 emit("      median:")
                 _emit_table_header(emit, True, "        ")
@@ -3736,7 +3744,7 @@ def collect_data(binary_name, lib_name, pattern_name, num_runs, transports=None,
 
         for key, vals in metrics_raw.items():
             if vals:
-                final_stats[key] = statistics.median(vals)
+                final_stats[key] = _median_metric(vals)
 
         if show_run_labels:
             emit("      median:")
@@ -4287,11 +4295,10 @@ def emit_result_lines(result_map):
         pattern, transport, size, metric = key
         value = result_map[key]
         precision = 6 if metric.startswith("latency") else 3
-        value_text = (
-            "invalid:receiver_not_caught_up_by_deadline"
-            if metric.startswith("latency") and isinstance(value, float) and math.isnan(value)
-            else f"{value:.{precision}f}"
-        )
+        if isinstance(value, InvalidMetric):
+            value_text = f"invalid:{value.reason}"
+        else:
+            value_text = f"{value:.{precision}f}"
         print(
             f"RESULT,current,{display_pattern_name(pattern)},"
             f"{transport},{size},{metric},{value_text}"

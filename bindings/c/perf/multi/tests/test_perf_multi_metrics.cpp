@@ -196,12 +196,18 @@ void test_pubsub_latency_reference_result_lines ()
             != std::string::npos);
     assert (invalid_lines.find (",latency_p99,invalid:receiver_not_caught_up_by_deadline")
             != std::string::npos);
-    assert (invalid_lines.find (",latency_ref_p50,1.500000") != std::string::npos);
-    assert (invalid_lines.find (",latency_ref_p99,4.000000") != std::string::npos);
-    assert (invalid_lines.find (",inflight_floor,8") != std::string::npos);
-    assert (invalid_lines.find (",inflight_floor_ms,0.800000") != std::string::npos);
-    assert (invalid_lines.find (",sender_late,3") != std::string::npos);
-    assert (invalid_lines.find (",latency_ref_p95,") == std::string::npos);
+    assert (invalid_lines.find ("REFERENCE,current,PUBSUB,tcp,256,latency_ref_p50,1.500000")
+            != std::string::npos);
+    assert (invalid_lines.find ("REFERENCE,current,PUBSUB,tcp,256,latency_ref_p99,4.000000")
+            != std::string::npos);
+    assert (invalid_lines.find ("REFERENCE,current,PUBSUB,tcp,256,inflight_floor,8")
+            != std::string::npos);
+    assert (invalid_lines.find ("REFERENCE,current,PUBSUB,tcp,256,inflight_floor_ms,0.800000")
+            != std::string::npos);
+    assert (invalid_lines.find ("REFERENCE,current,PUBSUB,tcp,256,sender_late,3")
+            != std::string::npos);
+    assert (invalid_lines.find ("REFERENCE,current,PUBSUB,tcp,256,latency_ref_p95,")
+            == std::string::npos);
 
     std::ostringstream no_late_output;
     saved = std::cout.rdbuf (no_late_output.rdbuf ());

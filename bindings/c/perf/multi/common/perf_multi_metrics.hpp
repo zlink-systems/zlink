@@ -160,15 +160,15 @@ inline void print_invalid_latency_result (const std::string &lib_type,
     for (const char *metric : {"latency", "latency_p95", "latency_p99"})
         std::cout << "RESULT," << lib_type << "," << pattern << "," << transport << "," << size
                   << "," << metric << ",invalid:" << reason << std::endl;
-    std::cout << "RESULT," << lib_type << ',' << pattern << ',' << transport << ',' << size
+    std::cout << "REFERENCE," << lib_type << ',' << pattern << ',' << transport << ',' << size
               << ",latency_ref_p50," << std::fixed << std::setprecision (6)
               << reference.p50_ns / 1000000.0 << std::endl;
-    std::cout << "RESULT," << lib_type << ',' << pattern << ',' << transport << ',' << size
+    std::cout << "REFERENCE," << lib_type << ',' << pattern << ',' << transport << ',' << size
               << ",latency_ref_p99," << std::fixed << std::setprecision (6)
               << reference.p99_ns / 1000000.0 << std::endl;
-    std::cout << "RESULT," << lib_type << ',' << pattern << ',' << transport << ',' << size
+    std::cout << "REFERENCE," << lib_type << ',' << pattern << ',' << transport << ',' << size
               << ",inflight_floor," << inflight_floor << std::endl;
-    std::cout << "RESULT," << lib_type << ',' << pattern << ',' << transport << ',' << size
+    std::cout << "REFERENCE," << lib_type << ',' << pattern << ',' << transport << ',' << size
               << ",inflight_floor_ms," << std::fixed << std::setprecision (6)
               << (target_rate > 0.0 ? inflight_floor / target_rate * 1000.0 : 0.0) << std::endl;
 }
@@ -181,7 +181,7 @@ inline void print_sender_late_result (const std::string &lib_type,
 {
     if (late_count == 0)
         return;
-    std::cout << "RESULT," << lib_type << ',' << pattern << ',' << transport << ',' << size
+    std::cout << "REFERENCE," << lib_type << ',' << pattern << ',' << transport << ',' << size
               << ",sender_late," << late_count << std::endl;
 }
 
