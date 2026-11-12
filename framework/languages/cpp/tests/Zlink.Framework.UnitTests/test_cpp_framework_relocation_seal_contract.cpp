@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "mailbox_claim_fixture.hpp"
 #include "../support/telemetry_observation.hpp"
 
 #include "../support/stateful_object_sync.hpp"
@@ -1330,12 +1331,12 @@ TEST (FrameworkRelocationSealContract, native_follow_increments_wire_hop_and_sto
                                           std::chrono::seconds (1), 2)
                        .result ()
                        .value ());
-        std::shared_ptr<mesh::service_mailbox_claim_t> claim;
+        zlink::framework::test::mailbox_claim_t claim;
         const auto receive_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
         while (!claim && std::chrono::steady_clock::now () < receive_deadline) {
             (void) target.pump_one (std::chrono::steady_clock::now ()).result ().value ();
-            claim =
-              target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 65536);
+            claim = zlink::framework::test::claim_mailbox (
+              target.mailbox (), mesh::service_mailbox_domain_t::application, 1, 65536);
             std::this_thread::yield ();
         }
         ASSERT_TRUE (claim);
@@ -1371,13 +1372,13 @@ TEST (FrameworkRelocationSealContract, native_follow_increments_wire_hop_and_sto
         EXPECT_FALSE (extra);
         // Drain an unexpected send so each regression row observes its own packet.
         if (extra) {
-            std::shared_ptr<mesh::service_mailbox_claim_t> unexpected;
+            zlink::framework::test::mailbox_claim_t unexpected;
             const auto drain_deadline =
               std::chrono::steady_clock::now () + std::chrono::seconds (5);
             while (!unexpected && std::chrono::steady_clock::now () < drain_deadline) {
                 (void) target.pump_one (std::chrono::steady_clock::now ()).result ().value ();
-                unexpected = target.mailbox ().try_claim (
-                  mesh::service_mailbox_domain_t::application, 1, 65536);
+                unexpected = zlink::framework::test::claim_mailbox (
+                  target.mailbox (), mesh::service_mailbox_domain_t::application, 1, 65536);
             }
             ASSERT_TRUE (unexpected);
             if (request)
@@ -1647,7 +1648,7 @@ TEST (FrameworkRelocationSealContract, ordinary_claim_transfers_batch_before_cut
         ASSERT_TRUE (mailbox.try_enqueue (std::move (original)));
     }
     const auto claim = mailbox.try_claim (domain, 64, 65536, [&] (const auto &claimed) noexcept {
-        for (auto *original : claimed->records)
+        for (auto original : claimed->records)
             batch.push_back (std::move (*original));
     });
     ASSERT_TRUE (claim);
@@ -1728,14 +1729,19 @@ TEST (FrameworkRelocationSealContract, ordinary_dispatch_failure_settles_each_re
     for (int index = 0; index < 64; ++index)
         enqueue ();
     unsigned started = 0, rejected = 0, calls = 0;
-    auto failed = host->dispatch_application_owner (
-      "node",
-      [&] (const auto &, const auto &, auto, auto) {
-          ++calls;
-          std::rethrow_exception (injected);
-      },
-      [&] { ++started; }, [&] { ++rejected; });
-    EXPECT_TRUE (zlink::framework::test::application_owner_result (failed).value ());
+    for (unsigned index = 0; index != 64; ++index) {
+        auto failed = host->dispatch_application_owner (
+          "node",
+          [&] (const auto &, const auto &, auto, auto) {
+              ++calls;
+              std::rethrow_exception (injected);
+          },
+          [&] { ++started; }, [&] { ++rejected; });
+        EXPECT_TRUE (zlink::framework::test::application_owner_result (failed).value ());
+        EXPECT_EQ (calls, index + 1);
+        EXPECT_EQ (mailbox.pending_messages (mesh::service_mailbox_domain_t::application),
+                   63 - index);
+    }
     EXPECT_EQ (calls, 64u);
     EXPECT_EQ (reported, 64u);
     EXPECT_EQ (started, 64u);
