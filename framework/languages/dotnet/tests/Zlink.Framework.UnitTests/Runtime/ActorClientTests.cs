@@ -421,9 +421,14 @@ public sealed class ActorClientTests
             );
 
             Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, error.Kind);
-            Assert.True(
-                error.Message.Contains("already submitted", StringComparison.Ordinal),
-                $"{terminal.Contract} did not report second-terminal rejection."
+            var admissionRejectedCall =
+                terminal.Contract
+                is nameof(IZLinkSendCall)
+                    or nameof(IZLinkPublishCall)
+                    or nameof(IZLinkActorSendCall);
+            Assert.Equal(
+                !admissionRejectedCall,
+                error.Message.Contains("already submitted", StringComparison.Ordinal)
             );
         }
     }

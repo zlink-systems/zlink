@@ -44,12 +44,15 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         string packetName,
         TMessage message,
         ZLinkCallMetadata? metadata,
-        ResolvedActorRoute? fixedRoute = null
+        ResolvedActorRoute? fixedRoute = null,
+        IZLinkAdmittedCallClaim? call = null
     )
     {
         using var operation = (
             await runtime.AdmitOperationAsync(boundExecution: true).ConfigureAwait(false)
         ).Enter();
+        // Spec 06-framework-api §7: a call is used only once admission accepts it.
+        call?.ClaimAfterAdmission();
         using var flow = ZLinkFlowContext.EnterCurrentOrCreate(
             ZLinkFlowOrigin.Application,
             runtime.Flow.CaptureEnabled
@@ -519,11 +522,17 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
         return MapRequestException(inner, operationName);
     }
 
+    // Lets a one-way call mark itself used inside the submission's own admission.
+    private interface IZLinkAdmittedCallClaim
+    {
+        void ClaimAfterAdmission();
+    }
+
     private sealed class ZLinkActorSendCall<TMessage>(
         ZLinkActorClient client,
         string actorId,
         TMessage message
-    ) : IZLinkActorSendCall
+    ) : IZLinkActorSendCall, IZLinkAdmittedCallClaim
     {
         private ZLinkCallMetadata? _metadata;
         private ZLinkOneWayCallGate _submission = new("Actor send");
@@ -540,18 +549,18 @@ internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkAc
             return this;
         }
 
-        public ValueTask Async()
-        {
-            _submission.Claim();
-            return client
+        public void ClaimAfterAdmission() => _submission.Claim();
+
+        public ValueTask Async() =>
+            client
                 .SubmitSendAsync(
                     actorId,
                     ZLinkMessageNameResolver.ResolveFromMessage(message),
                     message,
-                    _metadata
+                    _metadata,
+                    call: this
                 )
                 .EnsureAcceptedAsync("Actor send", ZLinkFrameworkErrorKind.NotFound);
-        }
     }
 
     private sealed class ZLinkActorRequestCall<TRequest>(
