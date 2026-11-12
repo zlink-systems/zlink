@@ -20,7 +20,4 @@ public static class RawEnvelopeHeaders
         "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"bench\",\"messageName\":\"BenchPayload\",\"contentType\":\"application/x-protobuf\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null}"
     );
 
-    public static readonly byte[] FrameworkCommand = Encoding.UTF8.GetBytes(
-        "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"bench\",\"messageName\":\"BenchPayload\",\"contentType\":\"application/x-protobuf\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null}"
-    );
 }

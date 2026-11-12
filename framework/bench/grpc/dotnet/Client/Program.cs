@@ -387,7 +387,7 @@ internal sealed class RawBenchTransport : IBenchTransport
         context = Systems.Zlink.Zlink.CreateContext();
         this.frameworkTarget = frameworkTarget;
         sendHeader = frameworkTarget
-            ? RawEnvelopeHeaders.FrameworkCommand
+            ? RawEnvelopeHeaders.FrameworkRequest
             : RawEnvelopeHeaders.Command;
         if (options.Scenario == "send-saturation")
         {
