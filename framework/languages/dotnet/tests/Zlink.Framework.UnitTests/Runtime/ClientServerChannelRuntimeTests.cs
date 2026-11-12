@@ -1483,6 +1483,14 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             var router = (IRouterSocket)bundle.Socket;
 
             await expiredRuntime.StopAsync(CancellationToken.None);
+            // Client stop does not wait for the server to observe the disconnect, so the
+            // route may still exist here. Remove it once; the expiry cleanup then sees NOT_FOUND.
+            try
+            {
+                router.DisconnectRid(expiredRid);
+            }
+            catch (ZlinkConnectException absent)
+                when (absent.Result == ZlinkConnectException.ErrorCode.NotFound) { }
             var disconnect = Assert.Throws<ZlinkConnectException>(() =>
                 router.DisconnectRid(expiredRid)
             );
