@@ -68,6 +68,22 @@ public final class ZLinkJavaLivenessDisconnectResultTest {
     }
 
     @Test
+    void clientServerRouterDisconnectTreatsOnlyNotFoundAsAlreadyClosed() {
+        var absent = new ZlinkConnectException(ConnectResult.NOT_FOUND, 2);
+        var calls = new AtomicInteger();
+        var absentRouter = new ZLinkJavaRouterSocket(socket(absent, calls));
+        assertDoesNotThrow(() -> absentRouter.disconnectPeer(PEER));
+        assertEquals(1, calls.get());
+
+        var failure = new ZlinkConnectException(ConnectResult.BUSY, 16);
+        var failureRouter = new ZLinkJavaRouterSocket(socket(failure, new AtomicInteger()));
+        assertSame(
+                failure,
+                assertThrows(
+                        ZlinkConnectException.class, () -> failureRouter.disconnectPeer(PEER)));
+    }
+
+    @Test
     void unrelatedFailureIsNotConsumed() {
         var calls = new AtomicInteger();
         var failure = new IllegalStateException("socket owner failed");
@@ -106,6 +122,7 @@ public final class ZLinkJavaLivenessDisconnectResultTest {
             propagated++;
         }
         suite.successfulClosureInvokesBindingOnce();
+        suite.clientServerRouterDisconnectTreatsOnlyNotFoundAsAlreadyClosed();
         suite.unrelatedFailureIsNotConsumed();
         System.out.printf(
                 "nativeNotFoundControl=passed absentErrnoCases=3 typedErrorsPropagated=%d successCalls=1 unrelatedFailure=preserved%n",
