@@ -1,3 +1,4 @@
+using Google.Protobuf;
 using Systems.Zlink;
 using WithGrpcBench.Shared;
 using Zlink.Framework.AspNetCore;
@@ -21,8 +22,13 @@ builder.Services.AddZLinkFramework(framework =>
         .AddRouteMesh("bench")
         .Listen(endpoint)
         .SetRoutingId(RoutingId.From("bench-server"));
+#if ZLINK_DOTNET_LADDER_L0
+    mesh.AddRouteRequestHandler<L0EchoHandler, Message, Message>("BenchPayload")
+        .AddRouteSendHandler<L0CommandHandler, Message>("BenchPayload");
+#else
     mesh.AddRouteRequestHandler<EchoHandler, BenchPayload, BenchPayload>("BenchPayload")
         .AddRouteSendHandler<CommandHandler, BenchPayload>("BenchPayload");
+#endif
 });
 
 var app = builder.Build();
@@ -86,3 +92,37 @@ internal sealed class CommandHandler(BenchServerMetrics metrics)
         return ValueTask.CompletedTask;
     }
 }
+
+#if ZLINK_DOTNET_LADDER_L0
+internal sealed class L0EchoHandler(BenchServerMetrics metrics)
+    : IZLinkRouteRequestHandler<Message, Message>
+{
+    public ValueTask<Message> HandleAsync(
+        Message request,
+        ZLinkRouteMessageContext context,
+        CancellationToken cancellationToken
+    )
+    {
+        var payload = BenchPayload.Parser.ParseFrom(request.AsReadOnlySpan());
+        metrics.RecordReceived(payload);
+        var reply = new BenchPayload { Body = payload.Body };
+        var encoded = Message.Allocate(reply.CalculateSize());
+        reply.WriteTo(encoded.AsSpan());
+        return ValueTask.FromResult(encoded);
+    }
+}
+
+internal sealed class L0CommandHandler(BenchServerMetrics metrics)
+    : IZLinkRouteSendHandler<Message>
+{
+    public ValueTask HandleAsync(
+        Message message,
+        ZLinkRouteMessageContext context,
+        CancellationToken cancellationToken
+    )
+    {
+        metrics.Record(BenchPayload.Parser.ParseFrom(message.AsReadOnlySpan()));
+        return ValueTask.CompletedTask;
+    }
+}
+#endif

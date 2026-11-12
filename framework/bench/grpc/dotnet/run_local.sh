@@ -8,6 +8,15 @@ bench_init dotnet "grpc-dotnet,zlink-dotnet,zlink-framework-dotnet" \
   "request-serial,request-backpressure,send-saturation" "1024,4096"
 
 CONFIGURATION=Release
+BENCH_TARGET_ROOT="${BENCH_TARGET_ROOT:-${ROOT_DIR}}"
+target_process_prefix=()
+source_process_prefix=()
+if [[ -n "${TARGET_CPUS:-}" ]]; then
+  target_process_prefix=(taskset -c "${TARGET_CPUS}")
+fi
+if [[ -n "${SOURCE_CPUS:-}" ]]; then
+  source_process_prefix=(taskset -c "${SOURCE_CPUS}")
+fi
 
 if [[ "${SKIP_BUILD}" != 1 ]]; then
   "${ROOT_DIR}/build.sh"
@@ -22,32 +31,41 @@ trap cleanup_cell EXIT
 for run in $(seq 1 "${RUNS}"); do
   run_id="${RUN_STAMP}-run${run}"
   for impl in "${implementations[@]}"; do
+    target_impl="${TARGET_IMPLEMENTATION:-${impl}}"
     case "${impl}" in
       grpc-dotnet)
         trigger_url="http://127.0.0.1:5200"
         source_stats_url="http://127.0.0.1:5201"
-        target_endpoint="http://127.0.0.1:5202"
-        target_command_endpoint=""
-        target_stats_url="http://127.0.0.1:5203"
-        target_project="${ROOT_DIR}/GrpcServer/WithGrpcBench.GrpcServer.csproj"
-        target_args=(--url "${target_endpoint}" --metrics-url "${target_stats_url}")
         ;;
       zlink-dotnet)
         trigger_url="http://127.0.0.1:5205"
         source_stats_url="http://127.0.0.1:5206"
-        target_endpoint="tcp://127.0.0.1:5207"
-        target_command_endpoint="tcp://127.0.0.1:5208"
-        target_stats_url="http://127.0.0.1:5209"
-        target_project="${ROOT_DIR}/ZLinkRawServer/WithGrpcBench.ZLinkRawServer.csproj"
-        target_args=(--endpoint "${target_endpoint}" --command-endpoint "${target_command_endpoint}" --metrics-url "${target_stats_url}")
         ;;
       zlink-framework-dotnet)
         trigger_url="http://127.0.0.1:5212"
         source_stats_url="http://127.0.0.1:5213"
+        ;;
+    esac
+    case "${target_impl}" in
+      grpc-dotnet)
+        target_endpoint="http://127.0.0.1:5202"
+        target_command_endpoint=""
+        target_stats_url="http://127.0.0.1:5203"
+        target_project="${BENCH_TARGET_ROOT}/GrpcServer/WithGrpcBench.GrpcServer.csproj"
+        target_args=(--url "${target_endpoint}" --metrics-url "${target_stats_url}")
+        ;;
+      zlink-dotnet)
+        target_endpoint="tcp://127.0.0.1:5207"
+        target_command_endpoint="tcp://127.0.0.1:5208"
+        target_stats_url="http://127.0.0.1:5209"
+        target_project="${BENCH_TARGET_ROOT}/ZLinkRawServer/WithGrpcBench.ZLinkRawServer.csproj"
+        target_args=(--endpoint "${target_endpoint}" --command-endpoint "${target_command_endpoint}" --metrics-url "${target_stats_url}")
+        ;;
+      zlink-framework-dotnet)
         target_endpoint="tcp://127.0.0.1:5214"
         target_command_endpoint=""
         target_stats_url="http://127.0.0.1:5215"
-        target_project="${ROOT_DIR}/ZLinkServer/WithGrpcBench.ZLinkServer.csproj"
+        target_project="${BENCH_TARGET_ROOT}/ZLinkServer/WithGrpcBench.ZLinkServer.csproj"
         target_args=(--endpoint "${target_endpoint}" --metrics-url "${target_stats_url}")
         ;;
     esac
@@ -55,7 +73,11 @@ for run in $(seq 1 "${RUNS}"); do
     for pattern in "${patterns[@]}"; do
       bench_skip_cell "${impl}" "${pattern}" && continue
       for payload in "${payloads[@]}"; do
-        cell_id="${impl}-${pattern}-${payload}"
+        if [[ "${target_impl}" == "${impl}" ]]; then
+          cell_id="${impl}-${pattern}-${payload}"
+        else
+          cell_id="cross-${impl}-to-${target_impl}-${pattern}-${payload}"
+        fi
         cell_dir="$(bench_cell_dir "${run}" "${impl}" "${pattern}" "${payload}")"
         mkdir -p "${cell_dir}"
         target_log="${cell_dir}/target.log"
@@ -63,7 +85,7 @@ for run in $(seq 1 "${RUNS}"); do
         target_stats_file="${cell_dir}/target-stats.json"
         echo "[bench] cell=${cell_id} run=${run}: start B then A" >&2
 
-        setsid dotnet run --no-build -c "${CONFIGURATION}" --project "${target_project}" -- "${target_args[@]}" >"${target_log}" 2>&1 &
+        setsid "${target_process_prefix[@]}" dotnet run --no-build -c "${CONFIGURATION}" --project "${target_project}" -- "${target_args[@]}" >"${target_log}" 2>&1 &
         b_pid=$!
         wait_for_stats "${target_stats_url}" 0
 
@@ -81,7 +103,7 @@ for run in $(seq 1 "${RUNS}"); do
         if [[ -n "${target_command_endpoint}" ]]; then
           source_args+=(--target-command-endpoint "${target_command_endpoint}")
         fi
-        setsid dotnet run --no-build -c "${CONFIGURATION}" --project "${ROOT_DIR}/Client/WithGrpcBench.Client.csproj" -- "${source_args[@]}" >"${source_log}" 2>&1 &
+        setsid "${source_process_prefix[@]}" dotnet run --no-build -c "${CONFIGURATION}" --project "${ROOT_DIR}/Client/WithGrpcBench.Client.csproj" -- "${source_args[@]}" >"${source_log}" 2>&1 &
         a_pid=$!
         wait_for_stats "${source_stats_url}" 1
 

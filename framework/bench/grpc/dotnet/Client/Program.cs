@@ -159,7 +159,16 @@ internal static class BenchTransport
                 options.TargetEndpoint,
                 options.Scenario == "send-saturation" ? options.SubmitConcurrency : 1
             ),
-            "zlink-dotnet" => new RawBenchTransport(options),
+            "zlink-dotnet" => new RawBenchTransport(
+                options,
+                frameworkTarget: Environment.GetEnvironmentVariable("ZLINK_DOTNET_RAW_TARGET")
+                    == "framework"
+            ),
+#if ZLINK_DOTNET_LADDER_L0
+            "zlink-framework-dotnet"
+                when Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_CLIENT") == "raw" =>
+                new RawBenchTransport(options, frameworkTarget: true),
+#endif
             "zlink-framework-dotnet" => await FrameworkBenchTransport.CreateAsync(options),
             _ => throw new InvalidOperationException(
                 $"Unknown implementation {options.Implementation}."
@@ -368,12 +377,14 @@ internal sealed class RawBenchTransport : IBenchTransport
     private readonly IContext context;
     private readonly RawBenchSocket? request;
     private readonly RawBenchSocket[] commands;
+    private readonly byte[] sendHeader;
     private readonly CancellationTokenSource completionStopping = new();
     private Thread? completionThread;
 
-    public RawBenchTransport(BenchOptions options)
+    public RawBenchTransport(BenchOptions options, bool frameworkTarget = false)
     {
         context = Systems.Zlink.Zlink.CreateContext();
+        sendHeader = frameworkTarget ? RawEnvelopeHeaders.Command : RawEnvelopeHeaders.Request;
         if (options.Scenario == "send-saturation")
         {
             // 서버 간 연결은 하나다. `SubmitConcurrency`는 stream 수이지 연결 수가 아니다.
@@ -387,8 +398,10 @@ internal sealed class RawBenchTransport : IBenchTransport
                     context,
                     options.RawSocket,
                     RoutingId.From($"bench-send-{Environment.ProcessId}"),
-                    RoutingId.From(BenchRoutingIds.RawCommandServer),
-                    options.TargetCommandEndpoint!
+                    RoutingId.From(
+                        frameworkTarget ? "bench-server" : BenchRoutingIds.RawCommandServer
+                    ),
+                    frameworkTarget ? options.TargetEndpoint : options.TargetCommandEndpoint!
                 ),
             ];
         }
@@ -398,7 +411,9 @@ internal sealed class RawBenchTransport : IBenchTransport
                 context,
                 options.RawSocket,
                 RoutingId.From($"bench-request-{Environment.ProcessId}"),
-                RoutingId.From(BenchRoutingIds.RawRequestServer),
+                RoutingId.From(
+                    frameworkTarget ? "bench-server" : BenchRoutingIds.RawRequestServer
+                ),
                 options.TargetEndpoint
             );
             commands = [];
@@ -497,7 +512,7 @@ internal sealed class RawBenchTransport : IBenchTransport
         Message? body = null;
         try
         {
-            header = Message.From(RawEnvelopeHeaders.Request);
+            header = Message.From(sendHeader);
             body = EncodeRawPayload(payload);
             await commands[stream % commands.Length]
                 .SubmitSendAsync(header, body, cancellationToken);
