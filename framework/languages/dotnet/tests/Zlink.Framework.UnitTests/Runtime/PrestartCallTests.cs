@@ -146,12 +146,24 @@ public sealed class PrestartCallTests : RegistrationValidationSupport
         var routes = host.Services.GetRequiredService<IZLinkRouteClient>();
         var call = routes.RequestToChannel("work", new TestChannelRequest("same-call"));
         var beforeStart = call.Async<TestChannelReply>();
+        var sendCall = routes.SendToChannel("work", new TestChannelRequest("same-send-call"));
+        var beforeStartSend = sendCall.Async();
         var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => beforeStart.AsTask());
         Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, error.Kind);
+        var sendError = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await beforeStartSend
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, sendError.Kind);
         await host.StartAsync();
         try
         {
             Assert.Equal("same-call", (await call.Async<TestChannelReply>()).Value);
+            await sendCall.Async();
+            var repeatedSend = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await sendCall.Async()
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, repeatedSend.Kind);
+            Assert.Contains("already submitted", repeatedSend.Message, StringComparison.Ordinal);
             await host
                 .Services.GetRequiredService<IZLinkFanoutClient>()
                 .Publish("events", new TestPublishedEvent("started"))
@@ -250,6 +262,153 @@ public sealed class PrestartCallTests : RegistrationValidationSupport
             }
         });
         Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, error.Kind);
+    }
+
+    [Theory]
+    [InlineData("spot-send")]
+    [InlineData("instance-send")]
+    [InlineData("actor-send")]
+    [InlineData("channel-send")]
+    [InlineData("node-send")]
+    [InlineData("fanout-publish")]
+    [InlineData("spot-publish")]
+    public async Task Rejected_before_start_send_or_publish_can_be_submitted_again_after_start(
+        string kind
+    )
+    {
+        var registrations = new ServiceCollection();
+        registrations.AddZLinkFramework(options =>
+        {
+            options.AddLocationStore(new CountingStore());
+            options.AddRouteMesh("mesh").Listen("tcp://127.0.0.1:0").Objects().Client();
+        });
+        await using var services = registrations.BuildServiceProvider();
+        var runtime = services.GetRequiredService<ZLinkFrameworkRuntime>();
+        var message = new Probe("same-call");
+        Func<ValueTask> submit;
+        switch (kind)
+        {
+            case "spot-send":
+                var spotCall = services
+                    .GetRequiredService<IZLinkSpotClient>()
+                    .SendToSpot("spot", message);
+                submit = () => spotCall.Async();
+                break;
+            case "instance-send":
+                var instanceCall = services
+                    .GetRequiredService<IZLinkSpotClient>()
+                    .SendToSpot("spot", message)
+                    .InstanceSpot();
+                submit = () => instanceCall.Async();
+                break;
+            case "actor-send":
+                var actorCall = services
+                    .GetRequiredService<IZLinkActorClient>()
+                    .SendToActor("actor", message);
+                submit = () => actorCall.Async();
+                break;
+            case "channel-send":
+                var channelCall = services
+                    .GetRequiredService<IZLinkRouteClient>()
+                    .SendToChannel("work", message);
+                submit = () => channelCall.Async();
+                break;
+            case "node-send":
+                var nodeCall = services
+                    .GetRequiredService<IZLinkRouteClient>()
+                    .SendToNode("mesh", RoutingId.From("node"), message);
+                submit = () => nodeCall.Async();
+                break;
+            case "fanout-publish":
+                var fanoutCall = services
+                    .GetRequiredService<IZLinkFanoutClient>()
+                    .Publish("events", message);
+                submit = () => fanoutCall.Async();
+                break;
+            case "spot-publish":
+                var publishCall = services
+                    .GetRequiredService<IZLinkSpotPublisherClient>()
+                    .Publish("events", "topic", message);
+                submit = () => publishCall.Async();
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(kind));
+        }
+
+        var beforeStart = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await submit()
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, beforeStart.Kind);
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var afterStart = await Record.ExceptionAsync(async () => await submit());
+            Assert.False(
+                afterStart is ZLinkFrameworkException exception
+                    && exception.Kind == ZLinkFrameworkErrorKind.InvalidOperation
+                    && exception.Message.Contains("already submitted", StringComparison.Ordinal),
+                afterStart?.ToString()
+            );
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task Accepted_fanout_call_is_single_use()
+    {
+        var registrations = new ServiceCollection();
+        registrations.AddZLinkFramework(options =>
+            options.AddFanoutChannel("events").EnablePublisher()
+        );
+        await using var services = registrations.BuildServiceProvider();
+        var runtime = services.GetRequiredService<ZLinkFrameworkRuntime>();
+        var call = services
+            .GetRequiredService<IZLinkFanoutClient>()
+            .Publish("events", new Probe("accepted"));
+        var beforeStart = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await call.Async()
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, beforeStart.Kind);
+
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            await call.Async();
+            var repeated = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await call.Async()
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, repeated.Kind);
+            Assert.Contains("already submitted", repeated.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task Send_rejected_after_stop_remains_shutting_down_when_resubmitted()
+    {
+        var registrations = new ServiceCollection();
+        registrations.AddZLinkFramework(_ => { });
+        await using var services = registrations.BuildServiceProvider();
+        var runtime = services.GetRequiredService<ZLinkFrameworkRuntime>();
+        var call = services
+            .GetRequiredService<IZLinkRouteClient>()
+            .SendToChannel("work", new Probe("after-stop"));
+        await runtime.StartAsync(CancellationToken.None);
+        await runtime.StopAsync(CancellationToken.None);
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await call.Async()
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, error.Kind);
+        }
     }
 
     private sealed class StartupCaller(IZLinkRouteClient routes, ZLinkFrameworkRuntime runtime)
