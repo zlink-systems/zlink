@@ -14,8 +14,8 @@ internal sealed class ZLinkPublishCall(
 
     public ValueTask Async(CancellationToken cancellationToken = default)
     {
-        _submission.Claim();
         using var operation = runtime.EnterOperation();
+        _submission.Claim();
         using var flow = ZLinkFlowContext.EnterCurrentOrCreate(
             ZLinkFlowOrigin.Application,
             runtime.Flow.CaptureEnabled
