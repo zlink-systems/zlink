@@ -34,6 +34,9 @@ const router = zlink.createRouterSocket(context);
 router.setRoutingId(zlink.RoutingId.from(Buffer.from('bench-server', 'ascii')));
 router.options.mandatory = true;
 router.bind(workerData.endpoint);
+const poller = zlink.createPoller();
+const events = zlink.createPollEvents(1);
+poller.add(router, [zlink.PollEventFlag.PollIn], 0);
 parentPort.postMessage({ ready: true });
 const received = new zlink.Received();
 
@@ -67,14 +70,25 @@ function dispatchOne() {
 async function receive() {
   try {
     for (;;) {
-      if (!router.recv(received, zlink.RecvFlags.None)) continue;
+      poller.wait(events, -1);
       do {
         dispatchOne();
-      } while (router.recv(received, zlink.RecvFlags.DontWait));
+      } while (tryRecv());
     }
   } finally {
+    events.close();
+    poller.close();
     router.close();
     context.close();
+  }
+}
+
+function tryRecv() {
+  try {
+    return router.recv(received, zlink.RecvFlags.DontWait);
+  } catch (error) {
+    if (error instanceof zlink.RecvError && error.result === zlink.RecvResult.NoData) return false;
+    throw error;
   }
 }
 
