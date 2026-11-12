@@ -7,6 +7,7 @@
 // the new route admits through a new handshake, even when Core keeps the old
 // pipe as a standby and never reports it disconnected.
 
+#include "mailbox_claim_fixture.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 
 #include <gtest/gtest.h>
@@ -173,9 +174,10 @@ TEST_P (CppFrameworkRequestAdmission, FirstRequestWaitsForAdmissionAndSendsOnce)
                              [&] { return target.mailbox ().pending_messages (domain) != 0; }));
     EXPECT_EQ (1u, target.mailbox ().pending_messages (domain));
     EXPECT_FALSE (terminal.await_ready ());
-    auto claim = target.mailbox ().try_claim (domain, 1, 65536);
+    auto claim = zlink::framework::test::claim_mailbox (target.mailbox (), domain, 1, 65536);
     ASSERT_TRUE (claim);
-    auto request = target.mailbox ().take ({claim, 0});
+    auto request =
+      std::optional<mesh::service_mailbox_record_t> (std::move (claim.originals.front ()));
     ASSERT_TRUE (request);
     EXPECT_TRUE (instance ? target.reply_instance_spot_activation (*request, 0, 0, payload)
                           : target.reply (*request, payload));
@@ -253,9 +255,10 @@ TEST (CppFrameworkMeshSelectedRoute, ReplacedIntentFailsWaitingRequestBeforeHeal
     ASSERT_TRUE (source.connect_peer (target.endpoint (), descriptor));
     std::size_t received = 0;
     ASSERT_TRUE (pump_until ({&source, &target}, [&] {
-        if (auto claim =
-              target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 65536)) {
-            if (auto request = target.mailbox ().take ({claim, 0})) {
+        if (auto claim = zlink::framework::test::claim_mailbox (
+              target.mailbox (), mesh::service_mailbox_domain_t::application, 1, 65536)) {
+            if (auto request = std::optional<mesh::service_mailbox_record_t> (
+                  std::move (claim.originals.front ()))) {
                 ++received;
                 (void) target.reply (*request, payload);
             }

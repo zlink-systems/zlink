@@ -14,12 +14,11 @@ namespace zlink::framework::runtime::host
 {
 struct public_host_runtime_test_access_t
 {
-    static task_t<std::size_t>
-    dispatch_claim (public_host_runtime_t &host,
-                    std::shared_ptr<mesh::service_mailbox_claim_t> claim,
-                    mesh::service_mailbox_t::application_dispatch_t dispatch)
+    static std::weak_ptr<mesh::service_mailbox_claim_t>
+    claim_of (const mailbox_callback_t &callback)
     {
-        return host.dispatch_application_claim (std::move (claim), std::move (dispatch));
+        const auto *settlement = std::get_if<mesh::service_mailbox_settlement_t> (&callback._value);
+        return settlement ? settlement->_claim : std::weak_ptr<mesh::service_mailbox_claim_t>{};
     }
 };
 }
@@ -172,14 +171,16 @@ class HandlerEntryPermit : public ::testing::Test
               ++invocation->permit_returns;
           },
           queue_t::origin_t::remote);
-        auto claim =
-          mailbox.try_claim_owner (domain, owner, 1, runtime::dispatch_limits::receive_batch_bytes);
-        ASSERT_TRUE (claim);
-        std::weak_ptr<mesh::service_mailbox_claim_t> claim_lifetime = claim;
+        std::weak_ptr<mesh::service_mailbox_claim_t> claim_lifetime;
+        std::size_t dispatched_records = 0;
         std::optional<task_t<std::optional<detail::route_dispatch_reply_t>>> pending;
-        auto dispatched = host::public_host_runtime_test_access_t::dispatch_claim (
-          target, std::move (claim),
+        auto dispatched = target.dispatch_application_owner (
+          owner,
           [&] (const auto &, const auto &received, auto payload, auto permit) {
+              ++dispatched_records;
+              claim_lifetime = host::public_host_runtime_test_access_t::claim_of (
+                received.release_mailbox_reservation);
+              EXPECT_FALSE (claim_lifetime.expired ());
               EXPECT_EQ (host::record_kind_t::node_send, received.kind);
               EXPECT_EQ ("peer", received.source_node_rid.to_string ());
               // This is the hosted Node pipeline handoff. Its ordinary prefix
@@ -190,9 +191,11 @@ class HandlerEntryPermit : public ::testing::Test
                                                                        std::move (permit));
               pending.emplace (
                 dispatcher.dispatch (received, std::move (payload), header, std::move (terminal)));
-          });
-        ASSERT_TRUE (dispatched.await_ready ());
-        ASSERT_EQ (1u, dispatched.result ().value ());
+          },
+          [] {}, [] {});
+        ASSERT_TRUE (test::application_owner_ready (dispatched));
+        ASSERT_TRUE (test::application_owner_result (dispatched).value ());
+        ASSERT_EQ (1u, dispatched_records);
         EXPECT_TRUE (claim_lifetime.expired ());
         RecordProperty ("claim_destroyed_before_resume", claim_lifetime.expired ());
         EXPECT_EQ (0u, mailbox.pending_messages (domain));

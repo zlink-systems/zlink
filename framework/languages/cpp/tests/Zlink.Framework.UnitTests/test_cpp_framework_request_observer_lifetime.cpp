@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "mailbox_claim_fixture.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "allocation_counter.hpp"
 #include "scope_exit.hpp"
@@ -101,13 +102,13 @@ struct fixture_t
         (void) owner.pump_one (std::chrono::steady_clock::now ()).result ().value ();
     }
 
-    std::shared_ptr<mesh::service_mailbox_claim_t> claim ()
+    zlink::framework::test::mailbox_claim_t claim ()
     {
         const auto deadline = std::chrono::steady_clock::now () + 5s;
         for (;;) {
             pump (replier);
-            auto claim =
-              replier.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 4096);
+            auto claim = zlink::framework::test::claim_mailbox (
+              replier.mailbox (), mesh::service_mailbox_domain_t::application, 1, 4096);
             if (claim)
                 return claim;
             require (std::chrono::steady_clock::now () < deadline, "request did not arrive");
@@ -115,7 +116,7 @@ struct fixture_t
         }
     }
 
-    void deliver (std::shared_ptr<mesh::service_mailbox_claim_t> claim)
+    void deliver (zlink::framework::test::mailbox_claim_t claim)
     {
         require (replier.reply (*claim->records.front (), reply_payload), "reply rejected");
         require (replier.mailbox ().release (*claim), "claim release failed");

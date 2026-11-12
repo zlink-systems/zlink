@@ -700,14 +700,6 @@ local_application_dispatch_t local_application_query (const local_application_di
     return query;
 }
 
-std::optional<owner_kind_t> stateful_application_owner (std::string_view owner)
-{
-    if (owner.starts_with (detail::activation_admission_t::actor_key_prefix))
-        return owner_kind_t::actor;
-    if (owner.starts_with (detail::activation_admission_t::spot_key_prefix))
-        return owner_kind_t::spot;
-    return std::nullopt;
-}
 
 } // namespace
 
@@ -735,7 +727,8 @@ struct application_claim_batch_t
                         bool stateful) noexcept
     {
         // These owners can enter a relocation cut even after this claim is made.
-        if (stateful && stateful_application_owner (claim->owner))
+        const auto kind = mesh::service_mailbox_t::application_owner_kind (claim->owner);
+        if (stateful && (kind == owner_kind_t::actor || kind == owner_kind_t::spot))
             return;
         for (std::size_t index = 0; index < claim->claimed_messages; ++index)
             entries[index].original.emplace (
@@ -8225,7 +8218,8 @@ public_host_runtime_t::dispatch_application_claim (
                         };
                         std::optional<stateful::object_ref_t> native_owner;
                         std::optional<stateful::retained_relocation_source_t> retained;
-                        const auto owner_kind = stateful_application_owner (claim->owner);
+                        const auto owner_kind =
+                          mesh::service_mailbox_t::application_owner_kind (claim->owner);
                         if (owner_kind == owner_kind_t::actor)
                             native_owner = co_await self->_objects.find_async (
                               stateful::object_kind_t::actor,
