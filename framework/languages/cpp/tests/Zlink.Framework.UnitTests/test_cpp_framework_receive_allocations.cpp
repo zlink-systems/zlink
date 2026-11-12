@@ -427,7 +427,8 @@ TEST (ReceiveAllocations, AutomaticClientServerSendRecordHasFixedAllocationCount
             // dto_traits removed one ready state from the former budget of 24 (#2751).
             // The per-dispatch handler is one make_shared instead of a transient
             // unique_ptr plus its shared_ptr control block (#4145).
-            EXPECT_EQ (actual.count, 22u);
+            // The dispatch scope keeps its first owned handle inline (#3868).
+            EXPECT_EQ (actual.count, 21u);
 #endif
             EXPECT_EQ (receive_handler_t::calls, ++expected_calls);
             EXPECT_EQ (

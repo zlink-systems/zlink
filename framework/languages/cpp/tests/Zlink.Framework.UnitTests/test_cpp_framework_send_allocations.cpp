@@ -429,8 +429,8 @@ TEST (SendAllocations, SynchronousNodeHandlerDoesNotConstructSharedTaskStates)
       detail::coroutine_task_shared_state_t<zlink::message_t>> ()};
     const auto adapter_allocations =
       measure_ready_operation ("synchronous node handler", state_sites, adapter);
-    // The handler instance and its entry in the dispatch scope (#4145); no task state.
-    EXPECT_EQ (adapter_allocations, 2u);
+    // Only the fresh handler allocates; its dispatch-scope entry is inline (#3868).
+    EXPECT_EQ (adapter_allocations, 1u);
     scope.reset ();
     EXPECT_EQ (provider.get_required<synchronous_route_handler_state_t> ().calls, 2u);
 }

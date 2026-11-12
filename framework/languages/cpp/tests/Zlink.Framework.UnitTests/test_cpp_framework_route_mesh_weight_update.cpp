@@ -596,6 +596,137 @@ TEST (CppFrameworkRouteMeshWeightUpdate, SoleTargetStopsAndResumesAfterLiveWeigh
     target_node.stop ();
 }
 
+TEST (CppFrameworkRouteMeshWeightUpdate, NextSendUsesPublishedDescriptorAfterStart)
+{
+    auto context = std::make_shared<zlink::context_t> ();
+    auto target_state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> ("send-snapshot-mesh");
+    target_state->core_context = context;
+    target_state->listen_endpoint = "inproc://send-snapshot-target";
+    target_state->routing_id = zlink::routing_id_t::from ("send-snapshot-target");
+    target_state->channels.emplace (
+      "X", zlink::framework::detail::mesh_channel_registration_t{100, {}, true, true});
+    zlink::framework::detail::mesh_node_runtime_t target_node (target_state);
+    target_node.start ().result ().value ();
+    auto &target = target_node.native_node ().transport ();
+
+    mesh::service_node_descriptor_t source_descriptor;
+    source_descriptor.mesh_name = "send-snapshot-mesh";
+    source_descriptor.node_routing_id = bytes ("send-snapshot-source");
+    source_descriptor.lifecycle_generation = 1;
+    source_descriptor.descriptor_revision = 1;
+    source_descriptor.advertised_endpoint = "inproc://send-snapshot-source";
+    mesh::raw_mesh_node_owner_t source (
+      zlink::framework::test::runtime_failure_options (
+        zlink::framework::runtime::mesh::raw_mesh_node_options_t{std::move (source_descriptor)}),
+      context);
+    source.start ();
+
+    const auto target_descriptor = target.topology ().local_descriptor ();
+    source.expect_peer (target_descriptor);
+    ASSERT_TRUE (source.connect_peer (target.endpoint (), target_descriptor));
+    ASSERT_TRUE (pump_until (source, target, [&] {
+        const auto peer = source.topology ().peer (target_descriptor.node_routing_id);
+        return peer && peer->ready;
+    }));
+
+    ASSERT_TRUE (await_task (source.send_to_channel (
+      "X", protocol::application_payload_t{"SnapshotSend", "application/json", bytes ("body")})));
+
+    const auto retained = source.topology ().peer (target_descriptor.node_routing_id);
+    ASSERT_TRUE (retained);
+    const auto observed = source.topology ().observe_peer (target_descriptor.node_routing_id);
+    target_node.set_channel_weight ("X", 0);
+    ASSERT_TRUE (pump_until (
+      source, target,
+      [&] { return peer_channel_weight (source, target_descriptor.node_routing_id, "X") == 0; }))
+      << "peer did not receive the runtime weight-zero descriptor update";
+    const auto current = observed ();
+    ASSERT_TRUE (current.peer);
+    EXPECT_EQ (0, current.peer->descriptor.channels.front ().weight);
+    EXPECT_EQ (100, retained->descriptor.channels.front ().weight);
+    RecordProperty ("retained_weight", retained->descriptor.channels.front ().weight);
+    RecordProperty ("published_weight", current.peer->descriptor.channels.front ().weight);
+    EXPECT_GT (current.peer->descriptor.descriptor_revision,
+               retained->descriptor.descriptor_revision);
+    const auto rejected_send =
+      source
+        .send_to_channel (
+          "X", protocol::application_payload_t{"SnapshotSend", "application/json", bytes ("body")})
+        .result ();
+    EXPECT_FALSE (rejected_send);
+    RecordProperty ("weight_zero_send_rejected", !rejected_send);
+    EXPECT_EQ (zlink::framework::framework_error_kind_t::unavailable, rejected_send.error_kind ());
+
+    target_node.set_channel_weight ("X", 100);
+    ASSERT_TRUE (pump_until (
+      source, target,
+      [&] { return peer_channel_weight (source, target_descriptor.node_routing_id, "X") == 100; }))
+      << "peer did not receive the restored positive-weight descriptor update";
+    ASSERT_TRUE (await_task (source.send_to_channel (
+      "X", protocol::application_payload_t{"SnapshotSend", "application/json", bytes ("body")})));
+
+    source.close ();
+    target_node.stop ();
+}
+
+// Object role is immutable within one lifecycle; a replacement lifecycle may
+// publish a different role. Node send must read that publication on its next call.
+TEST (CppFrameworkRouteMeshWeightUpdate, NextNodeSendUsesPublishedDescriptorAfterStart)
+{
+    auto context = std::make_shared<zlink::context_t> ();
+    auto source_state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> ("direct-snapshot-mesh");
+    source_state->core_context = context;
+    source_state->listen_endpoint = "inproc://direct-snapshot-source";
+    source_state->routing_id = zlink::routing_id_t::from ("direct-snapshot-source");
+    zlink::framework::detail::mesh_node_runtime_t source_node (source_state);
+    source_node.start ().result ().value ();
+    auto &source = source_node.native_node ().transport ();
+    mesh::service_node_descriptor_t descriptor{"direct-snapshot-mesh",
+                                               bytes ("direct-snapshot-target"), 1, 1,
+                                               "inproc://direct-snapshot-target"};
+    mesh::raw_mesh_node_owner_t target (zlink::framework::test::runtime_failure_options (
+                                          mesh::raw_mesh_node_options_t{std::move (descriptor)}),
+                                        context);
+    target.start ();
+    const auto target_descriptor = target.topology ().local_descriptor ();
+    source.expect_peer (target_descriptor);
+    ASSERT_TRUE (source.connect_peer (target.endpoint (), target_descriptor));
+    ASSERT_TRUE (pump_until (source, target, [&] {
+        const auto peer = source.topology ().peer (target_descriptor.node_routing_id);
+        return peer && peer->ready;
+    }));
+    const auto retained = source.topology ().peer (target_descriptor.node_routing_id);
+    ASSERT_TRUE (retained);
+    const auto target_rid = zlink::routing_id_t::from ("direct-snapshot-target");
+    zlink::framework::runtime::messaging::envelope_header_t header;
+    header.kind = zlink::framework::runtime::messaging::message_kind_t::command;
+    header.channel_name = "direct-snapshot-mesh";
+    header.message_name = "SnapshotSend";
+    header.content_type = "application/json";
+    auto parts = zlink::framework::runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
+      header, zlink::message_t::from ("\"body\""));
+    EXPECT_EQ (zlink::submit_result_t::ok,
+               await_task (source_node.send_to_node (target_rid, parts.items ())));
+
+    auto replacement = target_descriptor;
+    replacement.lifecycle_generation = 2;
+    replacement.descriptor_revision = 1;
+    replacement.object_role = mesh::service_object_role_t::client;
+    ASSERT_EQ (mesh::peer_admission_result_t::admitted,
+               source.topology ().admit (replacement, retained->connection_id, replacement));
+    const auto next_send = await_task (source_node.send_to_node (target_rid, parts.items ()));
+    EXPECT_EQ (zlink::submit_result_t::not_found, next_send);
+    EXPECT_EQ (mesh::service_object_role_t::none, retained->descriptor.object_role);
+    const auto current = source.topology ().peer (target_descriptor.node_routing_id);
+    ASSERT_TRUE (current);
+    EXPECT_EQ (mesh::service_object_role_t::client, current->descriptor.object_role);
+    RecordProperty ("next_node_send_not_found", next_send == zlink::submit_result_t::not_found);
+    target.close ();
+    source_node.stop ();
+}
+
 // A descriptor revision is read, published, and submitted to every admitted
 // route in one owner turn, so a route never receives a lower revision after a
 // higher one (wire-protocol §4 DescriptorRevision ordering).  The first

@@ -2,7 +2,9 @@
 
 #include "service_scope.hpp"
 
+#include <array>
 #include <atomic>
+#include <memory_resource>
 #include <mutex>
 #include <unordered_map>
 #include <utility>
@@ -122,7 +124,11 @@ class service_instance_store_t
 
     instance_index_t instances_by_type;
     instance_index_t framework_dependencies_by_type;
-    std::vector<std::shared_ptr<void>> instances;
+    alignas (std::shared_ptr<void>)
+      std::array<std::byte, sizeof (std::shared_ptr<void>)> first_instance_storage;
+    std::pmr::monotonic_buffer_resource instance_storage{first_instance_storage.data (),
+                                                         first_instance_storage.size ()};
+    std::pmr::vector<std::shared_ptr<void>> instances{&instance_storage};
 };
 
 class service_registry_t

@@ -46,12 +46,12 @@ mesh_record_dispatcher_t::dispatch (const runtime::host::receive_record_t &recor
     if (!parts.empty ())
         header.retained_header.message = std::move (parts.front ());
     runtime::messaging::message_parts_t message_parts (std::move (parts));
-    const std::string dispatch_channel =
+    std::string dispatch_channel =
       record.channel_name.empty () ? std::string (header.channel_name) : record.channel_name;
     const auto channel_dispatch =
       record.kind == record_kind_t::channel_send || record.kind == record_kind_t::channel_request;
     route_packet_dispatcher_t dispatcher (
-      dispatch_channel, *_services, *_serializers, *_handlers, _no_internal_packets,
+      std::move (dispatch_channel), *_services, *_serializers, *_handlers, _no_internal_packets,
       _dispatch_options, _filters,
       channel_dispatch ? handler_dispatch_kind_t::channel_send
                        : handler_dispatch_kind_t::node_direct_send,

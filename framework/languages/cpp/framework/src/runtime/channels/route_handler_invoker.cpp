@@ -38,12 +38,13 @@ route_handler_invoker_t::invoke (const route_handler_registry_t::entry_t &handle
         invocation_scope.emplace (
           service_scope_t::create (services, service_scope_kind_t::handler_invocation));
         auto &invocation_services = invocation_scope->provider ();
+        // This frame owns the callable until the awaited filter pipeline completes.
+        const auto invoke_handler = [&] {
+            return handler.invoker (invocation_services, serializers, message, context,
+                                    handler_start_callback_ref_t (enter_handler));
+        };
         auto pending = filters.invoke_filters_async (
-          dispatch_kind, invocation_services, serializers, context,
-          [&handler, &invocation_services, &serializers, &message, &context, &enter_handler] {
-              return handler.invoker (invocation_services, serializers, message, context,
-                                      handler_start_callback_ref_t (enter_handler));
-          });
+          dispatch_kind, invocation_services, serializers, context, std::ref (invoke_handler));
         if (!pending.await_ready () && executor)
             terminal.retain_physical_work (executor->retain_internal_work ());
         auto reply = co_await pending;
@@ -67,13 +68,10 @@ route_handler_invoker_t::invoke (const route_handler_registry_t::entry_t &handle
         completed = std::visit (
           [&] (const auto &completion) {
               using completion_type = std::decay_t<decltype (completion)>;
-              if constexpr (std::is_same_v<completion_type, route_request_completion_t>)
+              if constexpr (std::is_same_v<completion_type, route_request_completion_t>
+                            || std::is_same_v<completion_type, route_send_completion_t>)
                   return completion (result, context);
               else {
-                  if constexpr (std::is_same_v<completion_type, callback_completion_t>) {
-                      if (completion)
-                          return completion (result);
-                  }
                   return result
                            ? result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt)
                            : propagate_failure<std::optional<route_dispatch_reply_t>> (
@@ -85,8 +83,6 @@ route_handler_invoker_t::invoke (const route_handler_registry_t::entry_t &handle
     catch (...) {
         completed = current_exception_result<std::optional<route_dispatch_reply_t>> ();
     }
-    if (invocation_scope)
-        invocation_scope->close ();
     invocation_scope.reset ();
     before_application_handler = {};
     message = zlink::message_t{};

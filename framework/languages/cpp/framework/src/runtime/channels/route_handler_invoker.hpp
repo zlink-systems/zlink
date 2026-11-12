@@ -21,14 +21,23 @@ struct route_request_completion_t
                 const framework::route_message_context_t &context) const;
 };
 
+struct route_send_completion_t
+{
+    retained_dispatch_options_t options;
+    std::string router;
+    std::shared_ptr<void> registration;
+    route_received_packet_t received;
+    runtime::messaging::envelope_header_t header;
+    result_t<std::optional<route_dispatch_reply_t>>
+    operator() (const result_t<zlink::message_t> &dispatched,
+                const framework::route_message_context_t &) const;
+};
+
 class route_handler_invoker_t
 {
   public:
-    using callback_completion_t = std::function<result_t<std::optional<route_dispatch_reply_t>> (
-      const result_t<zlink::message_t> &)>;
-
     using completion_t =
-      std::variant<std::monostate, callback_completion_t, route_request_completion_t>;
+      std::variant<std::monostate, route_send_completion_t, route_request_completion_t>;
 
     static task_t<std::optional<route_dispatch_reply_t>>
     invoke (const route_handler_registry_t::entry_t &handler,

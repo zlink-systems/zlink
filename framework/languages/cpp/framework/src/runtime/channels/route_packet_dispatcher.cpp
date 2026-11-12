@@ -116,6 +116,42 @@ reply_route_error (const dispatch_options_t &options,
 
 } // namespace
 
+result_t<std::optional<route_dispatch_reply_t>>
+route_send_completion_t::operator() (const result_t<zlink::message_t> &dispatched,
+                                     const framework::route_message_context_t &) const
+{
+    if (!dispatched) {
+        dispatch_error_reporter_t (options).report_lazy ([&] {
+            auto event = message_dispatch_error_event_t{
+              dispatch_error_surface_t::route_mesh_channel,
+              dispatch_message_kind_t::send,
+              dispatch_reason_from_error (dispatched.error_kind ()),
+              dispatch_error_action_t::drop,
+              header.message_name,
+              router,
+              header.topic,
+              std::nullopt,
+              std::nullopt,
+              received.source_node_rid.to_string (),
+              header.correlation_id,
+              dispatched.error () ? std::make_exception_ptr (*dispatched.error ())
+                                  : std::exception_ptr{}};
+            event.flow_id = header.flow_id;
+            event.flow_origin = header.flow_origin;
+            event.mesh_name = router;
+            event.channel_route_kind = "route_mesh";
+            return event;
+        });
+        return detail::propagate_failure<std::optional<route_dispatch_reply_t>> (
+          dispatched, "routed send handler failed");
+    }
+    if (message_flow_tracer_t (options).enabled_for (message_flow_outcome_t::completed)) {
+        trace_route_flow (options, router, message_flow_outcome_t::completed,
+                          dispatch_message_kind_t::send, received, header);
+    }
+    return result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt);
+}
+
 route_packet_dispatcher_t::route_packet_dispatcher_t (std::string router_channel_id) :
     _router_channel_id (std::move (router_channel_id))
 {
@@ -300,49 +336,14 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
                                   route_received_packet_t{source, {}, {}, {}}, header);
             }
         };
-    auto complete = [options = _dispatch_options, router = _router_channel_id,
-                     registration = _registration, submit_reply = _submit_reply,
-                     received = route_received_packet_t{received.source_node_rid,
-                                                        received.request_seq,
-                                                        {},
-                                                        received.source_session_rid},
-                     header = std::move (header)] (const result_t<zlink::message_t> &dispatched)
-      -> result_t<std::optional<route_dispatch_reply_t>> {
-        if (!dispatched) {
-            dispatch_error_reporter_t (options).report_lazy ([&] {
-                auto event = message_dispatch_error_event_t{
-                  dispatch_error_surface_t::route_mesh_channel,
-                  dispatch_message_kind_t::send,
-                  dispatch_reason_from_error (dispatched.error_kind ()),
-                  dispatch_error_action_t::drop,
-                  header.message_name,
-                  router,
-                  header.topic,
-                  std::nullopt,
-                  std::nullopt,
-                  received.source_node_rid.to_string (),
-                  header.correlation_id,
-                  dispatched.error () ? std::make_exception_ptr (*dispatched.error ())
-                                      : std::exception_ptr{}};
-                event.flow_id = header.flow_id;
-                event.flow_origin = header.flow_origin;
-                event.mesh_name = router;
-                event.channel_route_kind = "route_mesh";
-                return event;
-            });
-            return detail::propagate_failure<std::optional<route_dispatch_reply_t>> (
-              dispatched, "routed send handler failed");
-        }
-        if (message_flow_tracer_t (options).enabled_for (message_flow_outcome_t::completed)) {
-            trace_route_flow (options, router, message_flow_outcome_t::completed,
-                              dispatch_message_kind_t::send, received, header);
-        }
-        return result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt);
-    };
+    route_send_completion_t complete{
+      _dispatch_options, _router_channel_id, _registration,
+      route_received_packet_t{
+        received.source_node_rid, received.request_seq, {}, received.source_session_rid},
+      std::move (header)};
     return _invoker.invoke (*handler, filters, _send_dispatch_kind, *_services, *_serializers,
                             std::move (body.value ()), std::move (context), std::move (before),
-                            route_handler_invoker_t::callback_completion_t (std::move (complete)),
-                            std::move (terminal), executor);
+                            std::move (complete), std::move (terminal), executor);
 }
 
 task_t<std::optional<route_dispatch_reply_t>> route_packet_dispatcher_t::dispatch_request (
