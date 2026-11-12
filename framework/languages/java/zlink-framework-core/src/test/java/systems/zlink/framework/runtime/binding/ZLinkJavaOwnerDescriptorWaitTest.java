@@ -316,10 +316,8 @@ final class ZLinkJavaOwnerDescriptorWaitTest {
                     .get(3, TimeUnit.SECONDS);
         }
 
-        ZLinkServiceTopologyRegistry topology() throws Exception {
-            var field = ZLinkJavaRawMeshNode.class.getDeclaredField("topology");
-            field.setAccessible(true);
-            return (ZLinkServiceTopologyRegistry) field.get(source);
+        ZLinkServiceTopologyRegistry topology() {
+            return source.topology;
         }
 
         ZLinkServiceNodeDescriptor admittedDescriptor() throws Exception {
