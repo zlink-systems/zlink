@@ -108,7 +108,7 @@ need them.
 === "Java"
 
     ```kotlin
-    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.32.0")
+    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.32.1")
     ```
 
     | Included package | Role |
@@ -137,8 +137,8 @@ need them.
 === "Kotlin"
 
     ```kotlin
-    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.32.0")
-    implementation("systems.zlink:zlink-framework-kotlin:0.32.0")
+    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.32.1")
+    implementation("systems.zlink:zlink-framework-kotlin:0.32.1")
     ```
 
     | Included package | Role |
@@ -284,7 +284,7 @@ sandbox.
     |---|---|---|
     | `.NET` | `Zlink.Stream.Connector` | nuget.org |
     | C++ | `zlink::stream_e2e_client` — the connector plus scenario helpers | vcpkg · Conan · source |
-    | Java · Kotlin | `systems.zlink:zlink-stream-connector:0.32.0` | Maven Central |
+    | Java · Kotlin | `systems.zlink:zlink-stream-connector:0.32.1` | Maven Central |
     | Node.js | `@zlink-systems/stream-connector` | npm |
 
     Only C++ has a dedicated target. `zlink::stream_e2e_client` adds scenario-writing helpers on
