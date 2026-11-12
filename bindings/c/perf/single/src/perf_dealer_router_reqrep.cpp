@@ -101,7 +101,6 @@ void run_dealer_router_reqrep (const std::string &transport,
     perf_single_reqrep::request_state_t request_state;
     request_state.run_id = next_single_metric_run_id ();
     request_state.msg_size = msg_size;
-    request_state.latency_sample_cap = perf_single_reqrep::resolve_latency_sample_cap ();
 
     const int duration_s = std::max (1, resolve_single_duration_seconds ());
     void *completion_poller = NULL;

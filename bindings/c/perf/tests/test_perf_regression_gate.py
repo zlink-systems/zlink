@@ -57,6 +57,26 @@ def report(
 
 
 class PerfRegressionGateTests(unittest.TestCase):
+    def test_reference_and_sender_metadata_are_not_verdict_cells(self):
+        contents = report() + "".join(
+            f"REFERENCE,current,PUBSUB,tcp,256,{metric},{value}\n"
+            for metric, value in (
+                ("latency_ref_p50", 1.25),
+                ("latency_ref_p99", 4.5),
+                ("inflight_floor", 8),
+                ("inflight_floor_ms", 0.8),
+                ("sender_late", 3),
+            )
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "report.txt"
+            path.write_text(contents, encoding="utf-8")
+            parsed = GATE.parse_report(path)
+        self.assertEqual(parsed.errors, [])
+        self.assertEqual(parsed.result_line_count, 20)
+        self.assertFalse(any(key[3].startswith("latency_ref_") for key in parsed.cells))
+        self.assertFalse(any(key[3] == "sender_late" for key in parsed.cells))
+
     def run_gate(self, baseline, candidate, *, suite="single"):
         baselines = [baseline] if isinstance(baseline, str) else baseline
         candidates = [candidate] if isinstance(candidate, str) else candidate
@@ -119,6 +139,25 @@ class PerfRegressionGateTests(unittest.TestCase):
         exit_code, output = self.run_gate(report(), report({"throughput": 94.9}))
         self.assertEqual(exit_code, 1)
         self.assertIn("FAIL regression", output)
+
+    def test_invalid_latency_is_listed_and_other_cells_are_judged(self):
+        baseline = report() + (
+            "RESULT,current,PUBSUB,tcp,256,throughput,100.0\n"
+            "RESULT,current,PUBSUB,tcp,256,latency,2.0\n"
+        )
+        candidate = report({"throughput": 94.9}) + (
+            "RESULT,current,PUBSUB,tcp,256,throughput,94.9\n"
+            "RESULT,current,PUBSUB,tcp,256,latency,"
+            "invalid:receiver_not_caught_up_by_deadline\n"
+        )
+        exit_code, output = self.run_gate(baseline, candidate)
+        self.assertEqual(exit_code, 1)
+        self.assertIn("FAIL regression", output)
+        self.assertIn(
+            "invalid: PUBSUB tcp 256 latency — receiver_not_caught_up_by_deadline",
+            output,
+        )
+        self.assertNotIn("| single | PUBSUB | tcp | 256 | latency |", output)
 
     def test_fails_zero_baseline_cell(self):
         exit_code, output = self.run_gate(report({"throughput": 0.0}), report())

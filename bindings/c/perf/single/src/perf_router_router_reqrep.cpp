@@ -198,7 +198,6 @@ void run_router_router_reqrep (const std::string &transport,
     perf_single_reqrep::request_state_t request_state;
     request_state.run_id = next_single_metric_run_id ();
     request_state.msg_size = msg_size;
-    request_state.latency_sample_cap = perf_single_reqrep::resolve_latency_sample_cap ();
     request_state.routed_request = true;
     request_state.target_rid = server_rid;
 

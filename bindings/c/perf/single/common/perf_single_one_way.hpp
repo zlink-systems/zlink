@@ -19,12 +19,11 @@ namespace perf_single_one_way
 
 struct state_t
 {
-    state_t () : run_id (0), msg_size (0), payload_size (0), active_received (0) {}
+    state_t () : run_id (0), msg_size (0), payload_size (0) {}
 
     uint32_t run_id;
     size_t msg_size;
     size_t payload_size;
-    std::atomic<unsigned long long> active_received;
     latency_stats_builder_t latency;
 };
 
@@ -255,8 +254,7 @@ inline bool run_active_phase (void *sender_,
         return false;
     }
 
-    state_->active_received.store (0, std::memory_order_release);
-    state_->latency = latency_stats_builder_t ();
+    state_->latency.reset ();
 
     std::atomic<unsigned long long> sent_count (0);
     std::atomic<bool> sender_ok (true);
@@ -307,7 +305,6 @@ inline bool run_active_phase (void *sender_,
                     const uint64_t recv_ts_ns = perf_single_metric::now_ns ();
                     if (recv_ts_ns < active_deadline_ns && header_ok
                         && single_header_matches_run (*state_, header)) {
-                        state_->active_received.fetch_add (1, std::memory_order_relaxed);
                         state_->latency.add (single_latency_ns_at (header, recv_ts_ns));
                     }
                     continue;
@@ -343,12 +340,12 @@ inline bool run_active_phase (void *sender_,
                       << "] active phase failed sent="
                       << sent_count.load (std::memory_order_relaxed)
                       << " received="
-                      << state_->active_received.load (std::memory_order_relaxed) << std::endl;
+                      << state_->latency.count () << std::endl;
         }
         return false;
     }
 
-    *received_out_ = state_->active_received.load (std::memory_order_relaxed);
+    *received_out_ = state_->latency.count ();
     if (*received_out_ == 0)
         return false;
     *latency_out_ = state_->latency.snapshot ();

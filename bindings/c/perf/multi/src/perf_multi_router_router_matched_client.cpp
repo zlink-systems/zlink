@@ -4,7 +4,6 @@
 #include "../common/perf_multi_handshake.hpp"
 #include "../common/perf_multi_metric_header.hpp"
 #include "../common/perf_multi_socket_reqrep.hpp"
-#include "../common/perf_multi_weighted_latency.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -33,7 +32,6 @@ namespace
 
 const char *const k_pattern = PERF_MATCHED_PATTERN_NAME;
 const char *const k_server_routing_id = "SERVER";
-const size_t k_child_sample_cap = 1024;
 
 bool is_reqrep ()
 {
@@ -54,13 +52,14 @@ struct child_command_t
 struct child_result_t
 {
     int32_t status;
-    uint32_t sample_count;
     uint64_t received;
     uint64_t accepted;
     uint64_t paced_received;
     uint64_t latency_count;
     double latency_sum_ns;
-    double samples[k_child_sample_cap];
+    double latency_min_ns;
+    double latency_max_ns;
+    uint64_t latency_buckets[perf_latency_histogram_t::bucket_count];
 };
 
 struct child_slot_t
@@ -184,15 +183,12 @@ bool run_reqrep_case (perf_multi_socket_reqrep::client_state_t *state,
         return received > 0 && *active_accepted > 0;
     }
 
-    std::vector<double> samples;
-    state->latency.append_samples (&samples);
     result->latency_count = state->latency.count ();
     result->latency_sum_ns = state->latency.sum_ns ();
-    if (samples.size () > k_child_sample_cap)
-        return false;
-    result->sample_count = static_cast<uint32_t> (samples.size ());
-    for (size_t i = 0; i < result->sample_count; ++i)
-        result->samples[i] = samples[i];
+    result->latency_min_ns = state->latency.min_ns ();
+    result->latency_max_ns = state->latency.max_ns ();
+    std::memcpy (result->latency_buckets, state->latency.buckets (),
+                 sizeof (result->latency_buckets));
     return result->latency_count > 0;
 }
 
@@ -213,12 +209,12 @@ bool run_sendsend_case (void *socket,
     double latency_sum = 0.0;
     long latency_count = 0;
     bench_latency_stats_t latency;
-    std::vector<double> samples;
+    bench_latency_sampler_t latency_histogram;
     if (!perf_multi_client::run_echo_window_round_robin (
           sockets, settings, payload, payload_size, msg_size, k_server_routing_id, true,
           command.run_id, command.phase, perf_multi_client::metric_capture_bytes (), window_seconds,
           true, schedule != NULL, transport == "tcp", &received, &latency_sum, &latency_count,
-          &latency, &samples, k_child_sample_cap, active_accepted, schedule,
+          &latency, &latency_histogram, active_accepted, schedule,
           &result->paced_received))
         return false;
     if (!schedule) {
@@ -229,11 +225,10 @@ bool run_sendsend_case (void *socket,
 
     result->latency_count = static_cast<uint64_t> (std::max<long> (0, latency_count));
     result->latency_sum_ns = latency_sum;
-    if (samples.size () > k_child_sample_cap)
-        return false;
-    result->sample_count = static_cast<uint32_t> (samples.size ());
-    for (size_t i = 0; i < result->sample_count; ++i)
-        result->samples[i] = samples[i];
+    result->latency_min_ns = latency_histogram.min_ns ();
+    result->latency_max_ns = latency_histogram.max_ns ();
+    std::memcpy (result->latency_buckets, latency_histogram.buckets (),
+                 sizeof (result->latency_buckets));
     return latency_count > 0;
 }
 
@@ -262,8 +257,7 @@ int child_main (int index,
         return 11;
     }
 
-    perf_multi_socket_reqrep::client_state_t reqrep_state (
-      k_child_sample_cap);
+    perf_multi_socket_reqrep::client_state_t reqrep_state;
     if (is_reqrep ()) {
         reqrep_state.slots.resize (1);
         reqrep_state.slots[0].owner = &reqrep_state;
@@ -328,7 +322,7 @@ int child_main (int index,
                     << " run_id=" << command.run_id << " size=" << command.msg_size
                     << " prepared=" << prepared << " active_accepted=" << active_accepted
                     << " received=" << result.received << " latency_count=" << result.latency_count
-                    << " sample_count=" << result.sample_count << " successful_completions="
+                    << " successful_completions="
                     << (is_reqrep () ? reqrep_state.successful_completion_count : 0)
                     << " failed_completions="
                     << (is_reqrep () ? reqrep_state.failed_completion_count : 0)
@@ -418,8 +412,7 @@ int run_client (const std::string &lib_name,
         uint64_t total_received = 0;
         uint64_t total_latency_count = 0;
         double total_latency = 0.0;
-        std::vector<perf_multi_latency::weighted_sample_t> samples;
-        samples.reserve (children.size () * k_child_sample_cap);
+        bench_latency_sampler_t total_latency_histogram;
         const perf_multi_metric::phase_t phases[] = {perf_multi_metric::phase_active,
                                                      perf_multi_metric::phase_latency};
         // All ACTIVE replies and retained sends must drain before any child
@@ -445,39 +438,40 @@ int run_client (const std::string &lib_name,
                               << " received=" << result.received
                               << " latency_count=" << result.latency_count
                               << " latency_sum_ns=" << result.latency_sum_ns
-                              << " sample_count=" << result.sample_count << std::endl;
+                              << std::endl;
                     ok = false;
                     break;
                 }
                 if (command.phase == perf_multi_metric::phase_active) {
-                    if (result.received == 0 || result.latency_count != 0
-                        || result.sample_count != 0) {
+                    if (result.received == 0 || result.latency_count != 0) {
                         std::cerr << "[perf-multi-matched] invalid ACTIVE result child=" << i
                                   << " reason=expected_positive_received_and_zero_latency"
                                   << " status=" << result.status << " received=" << result.received
                                   << " latency_count=" << result.latency_count
-                                  << " sample_count=" << result.sample_count << std::endl;
+                                  << std::endl;
                         ok = false;
                         break;
                     }
                     total_received += result.received;
                     command.total_accepted += result.accepted;
                 } else {
-                    if (result.received != 0 || result.latency_count == 0
-                        || result.sample_count > k_child_sample_cap
-                        || !perf_multi_latency::append_weighted_samples (
-                          result.latency_count, result.samples, result.sample_count, &samples)) {
+                    if (result.received != 0 || result.latency_count == 0) {
                         std::cerr
                           << "[perf-multi-matched] invalid LATENCY result child=" << i
                           << " reason=expected_zero_received_positive_latency_and_valid_samples"
                           << " status=" << result.status << " received=" << result.received
                           << " latency_count=" << result.latency_count
-                          << " sample_count=" << result.sample_count << std::endl;
+                          << std::endl;
                         ok = false;
                         break;
                     }
                     total_latency_count += result.latency_count;
                     total_latency += result.latency_sum_ns;
+                    total_latency_histogram.merge_buckets (result.latency_buckets,
+                                                           result.latency_count,
+                                                           result.latency_sum_ns,
+                                                           result.latency_min_ns,
+                                                           result.latency_max_ns);
                 }
             }
         }
@@ -486,8 +480,7 @@ int run_client (const std::string &lib_name,
             break;
         }
 
-        const bench_latency_stats_t latency =
-          perf_multi_latency::aggregate (total_latency_count, total_latency, &samples);
+        const bench_latency_stats_t latency = total_latency_histogram.snapshot ();
         print_result (
           lib_name, k_pattern, transport, msg_size,
           throughput_per_second (
