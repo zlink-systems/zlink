@@ -10,10 +10,60 @@
 #include <string.h>
 #include <vector>
 
-SETUP_TEARDOWN_TESTCONTEXT
-
 namespace
 {
+void *tracked_sockets[3] = {};
+void *tracked_monitor = NULL;
+void *tracked_poller = NULL;
+void *tracked_poller_socket = NULL;
+fd_t tracked_client_fd = retired_fd;
+
+void track_socket (void *socket_)
+{
+    for (size_t i = 0; i < sizeof (tracked_sockets) / sizeof (tracked_sockets[0]);
+         ++i) {
+        if (!tracked_sockets[i]) {
+            tracked_sockets[i] = socket_;
+            return;
+        }
+    }
+    abort ();
+}
+
+void forget_socket (void *socket_)
+{
+    for (size_t i = 0; i < sizeof (tracked_sockets) / sizeof (tracked_sockets[0]);
+         ++i) {
+        if (tracked_sockets[i] == socket_) {
+            tracked_sockets[i] = NULL;
+            return;
+        }
+    }
+}
+
+void cleanup_test_resources ()
+{
+    if (tracked_poller) {
+        if (tracked_poller_socket)
+            zlink_poller_remove (tracked_poller, tracked_poller_socket);
+        zlink_poller_destroy (&tracked_poller);
+        tracked_poller_socket = NULL;
+    }
+    if (tracked_monitor)
+        zlink_monitor_close (&tracked_monitor);
+    if (tracked_client_fd != retired_fd) {
+        close (tracked_client_fd);
+        tracked_client_fd = retired_fd;
+    }
+    for (size_t i = 0; i < sizeof (tracked_sockets) / sizeof (tracked_sockets[0]);
+         ++i) {
+        if (tracked_sockets[i]) {
+            test_context_socket_close_zero_linger (tracked_sockets[i]);
+            tracked_sockets[i] = NULL;
+        }
+    }
+}
+
 const int sample_count = 20;
 const int reconnect_ivl_ms = 50;
 const int disconnect_limit_ms = 200;
@@ -64,6 +114,7 @@ void close_socket (void *socket_)
 {
     if (!socket_)
         return;
+    forget_socket (socket_);
     test_context_socket_close_zero_linger (socket_);
 }
 
@@ -71,6 +122,7 @@ void *new_socket (int type_)
 {
     void *socket = test_context_socket (type_);
     TEST_ASSERT_NOT_NULL (socket);
+    track_socket (socket);
     set_zero_linger (socket);
     return socket;
 }
@@ -102,6 +154,7 @@ void *open_client_monitor (void *client_)
     options.events = ZLINK_EVENT_CONNECTION_READY | ZLINK_EVENT_DISCONNECTED;
     void *monitor = zlink_socket_monitor_open (client_, &options);
     TEST_ASSERT_NOT_NULL (monitor);
+    tracked_monitor = monitor;
     set_zero_linger (monitor);
     return monitor;
 }
@@ -270,6 +323,8 @@ void run_disconnect_progress_case (transport_t transport_, bool register_client_
     if (register_client_) {
         idle_poller = zlink_poller_new ();
         TEST_ASSERT_NOT_NULL (idle_poller);
+        tracked_poller = idle_poller;
+        tracked_poller_socket = client;
         TEST_ASSERT_EQUAL_INT (
           ZLINK_CONFIG_OK,
           zlink_poller_add (idle_poller, client, client, ZLINK_POLLIN));
@@ -340,15 +395,6 @@ void run_disconnect_progress_case (transport_t transport_, bool register_client_
                                    disconnected_summary.p95);
     TEST_ASSERT_LESS_OR_EQUAL_INT (reconnect_limit_ms, ready_summary.p95);
 
-    if (idle_poller) {
-        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
-                               zlink_poller_remove (idle_poller, client));
-        TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK,
-                               zlink_poller_destroy (&idle_poller));
-    }
-    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_monitor_close (&monitor));
-    close_socket (client);
-    close_socket (server);
 }
 
 void init_message (zlink_msg_t *message_, const char *text_)
@@ -371,6 +417,8 @@ bool wait_completion (void *client_, zlink_completion_t *completion_,
 {
     void *poller = zlink_poller_new ();
     TEST_ASSERT_NOT_NULL (poller);
+    tracked_poller = poller;
+    tracked_poller_socket = client_;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_OK,
       zlink_poller_add (poller, client_, client_, ZLINK_POLLCOMPLETION));
@@ -388,7 +436,9 @@ bool wait_completion (void *client_, zlink_completion_t *completion_,
     }
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
                            zlink_poller_remove (poller, client_));
+    tracked_poller_socket = NULL;
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_poller_destroy (&poller));
+    tracked_poller = NULL;
     return received;
 }
 
@@ -528,10 +578,18 @@ void run_immediate_reconnect_request_case (transport_t transport_,
             static_cast<unsigned long long> (
               request_delivered ? replacement_ready.event.connection_id : 0));
 
-    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_monitor_close (&monitor));
-    close_socket (client);
-    close_socket (server);
 }
+}
+
+void setUp ()
+{
+    setup_test_context ();
+}
+
+void tearDown ()
+{
+    cleanup_test_resources ();
+    teardown_test_context ();
 }
 
 void test_tcp_registered_without_waiter_progresses ()
@@ -576,6 +634,7 @@ void test_stream_disconnect_reconnect_without_application_poll ()
     char endpoint[MAX_SOCKET_STRING];
     bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
     fd_t client_fd = connect_socket (endpoint);
+    tracked_client_fd = client_fd;
     event_observation_t event;
     TEST_ASSERT_TRUE (wait_monitor_event (
       monitor, ZLINK_EVENT_CONNECTION_READY, 0, true, event_timeout_ms, &event));
@@ -590,8 +649,10 @@ void test_stream_disconnect_reconnect_without_application_poll ()
       monitor, ZLINK_EVENT_DISCONNECTED, original_connection_id, false,
       event_timeout_ms, &event));
     close (client_fd);
+    tracked_client_fd = retired_fd;
     TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (server, endpoint));
     client_fd = connect_socket (endpoint);
+    tracked_client_fd = client_fd;
     TEST_ASSERT_TRUE (wait_monitor_event (
       monitor, ZLINK_EVENT_CONNECTION_READY, 0, true, event_timeout_ms, &event));
     TEST_ASSERT_NOT_EQUAL (0, event.event.connection_id);
@@ -599,9 +660,6 @@ void test_stream_disconnect_reconnect_without_application_poll ()
     TEST_ASSERT_EQUAL_UINT (4, event.event.routing_id.size);
     TEST_ASSERT_TRUE (memcmp (original_rid.data, event.event.routing_id.data,
                              original_rid.size) != 0);
-    close (client_fd);
-    TEST_ASSERT_EQUAL_INT (0, zlink_close (monitor));
-    close_socket (server);
 }
 
 void test_inproc_registered_server_disconnect_progresses ()
