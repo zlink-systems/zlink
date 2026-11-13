@@ -9,6 +9,7 @@ import {
 
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendActorRef, ZLinkBackendMeshNode } from '../backend/contracts';
+import { ZLinkConfigurationException } from '../configuration';
 import { isStructuralGuardEnabled } from '../execution/state-lane';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -172,7 +173,9 @@ export class ZLinkActorRuntimeState {
   private spotIdValue: RoutingId | undefined;
   private spotGenerationValue: bigint | undefined;
   private spotMembershipEpochValue = 0n;
+  // Preserve the exact incarnation until teardown finalization, even after native removal.
   private nativeActorRefValue: ZLinkBackendActorRef | undefined;
+  private nativeActorDestroyed = false;
   private entryNodeRidValue: RoutingId | undefined;
   boundSessionValue: ZLinkRemoteBoundSessionTarget | undefined;
   private remoteActorPacketTargetValue: ZLinkRemoteActorPacketTarget | undefined;
@@ -229,6 +232,15 @@ export class ZLinkActorRuntimeState {
   }
 
   get nativeActorRef(): ZLinkBackendActorRef | undefined {
+    return this.nativeActorRefValue;
+  }
+
+  currentActorRef(): ZLinkBackendActorRef {
+    if (this.nativeActorRefValue === undefined) {
+      throw new ZLinkConfigurationException(
+        `Actor '${this.actorId}' lifecycle identity is not initialized.`
+      );
+    }
     return this.nativeActorRefValue;
   }
 
@@ -370,22 +382,24 @@ export class ZLinkActorRuntimeState {
       );
     }
 
-    const task = Promise.resolve().then(() => destroy(actorRef));
+    const task = Promise.resolve()
+      .then(() => destroy(this.nativeActorDestroyed ? undefined : actorRef))
+      .catch((error: unknown) => {
+        // A caller may start another attempt only after this attempt has failed.
+        if (this.destroyTask === task) {
+          this.destroyTask = undefined;
+          this.movingValue = false;
+        }
+        throw error;
+      });
     this.destroyTask = task;
     return task;
   }
 
   markNativeActorDestroyed(actorRef: ZLinkBackendActorRef): void {
     if (this.nativeActorRefValue === actorRef) {
-      this.nativeActorRefValue = undefined;
+      this.nativeActorDestroyed = true;
     }
-  }
-
-  clearFailedDestroy(task: Promise<void>): void {
-    if (this.destroyTask === task) {
-      this.destroyTask = undefined;
-    }
-    this.movingValue = false;
   }
 
   ensureContext(createContext: () => ZLinkActorContext): ZLinkActorContext {
@@ -440,6 +454,7 @@ export class ZLinkActorRuntimeState {
       this.createRequestPayloadValue = undefined;
       this.configured = false;
       this.nativeActorRefValue = undefined;
+      this.nativeActorDestroyed = false;
       this.entryNodeRidValue = undefined;
       return true;
     }
@@ -489,6 +504,7 @@ export class ZLinkActorRuntimeState {
 
   setNativeActorRef(actorRef: ZLinkBackendActorRef): void {
     this.nativeActorRefValue = actorRef;
+    this.nativeActorDestroyed = false;
     this.entryNodeRidValue ??= toFrameworkRoutingId(actorRef.nodeRid);
   }
 
@@ -571,6 +587,7 @@ export class ZLinkActorRuntimeState {
     this.spotGenerationValue = undefined;
     this.spotMembershipEpochValue = 0n;
     this.nativeActorRefValue = undefined;
+    this.nativeActorDestroyed = false;
     this.entryNodeRidValue = undefined;
     this.boundSessionValue = undefined;
     this.remoteActorPacketTargetValue = undefined;
@@ -594,6 +611,7 @@ export class ZLinkActorRuntimeState {
     this.spotValue = undefined;
     this.spotIdValue = undefined;
     this.nativeActorRefValue = undefined;
+    this.nativeActorDestroyed = false;
     // The arriving relocation installs the binding it carries.
     this.boundSessionValue = undefined;
     this.remoteActorPacketTargetValue = undefined;

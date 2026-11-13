@@ -84,13 +84,18 @@ test('Actor factory receives the sole identity context and mismatched context is
   }
   const manager = new framework.DefaultZLinkActorManager({
     actorFactories: new Map([['player', ExactFactory]]),
+    nativeActorNode: {
+      actorLookup: () => undefined,
+      createActor: (actorId) => ({ nodeRid: 'node-a', actorId, generation: 7n }),
+      status: () => ({ routingId: 'node-a', lifecycleGeneration: 1n })
+    },
     actorMeshNameProvider: () => 'play'
   }, detachedTaskRunner);
   const actor = await manager.getOrCreateActor('player-7', 'player');
 
   assert.equal(actor.context, suppliedContext);
   assert.equal(actor.context.actorId, 'player-7');
-  assert.equal(actor.context.objectGeneration, 1n);
+  assert.equal(actor.context.objectGeneration, 7n);
   assert.equal(actor.context.meshName, 'play');
   for (const legacyField of [
     'actorRef',
