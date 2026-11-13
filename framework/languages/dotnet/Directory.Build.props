@@ -1,6 +1,7 @@
 <Project>
     <PropertyGroup>
         <ZLinkFrameworkTargetFrameworks Condition="'$(ZLinkFrameworkTargetFrameworks)' == ''">net8.0</ZLinkFrameworkTargetFrameworks>
+        <DefineConstants Condition="'$(ZLinkDotnetLadderLevel)' == 'L1'">$(DefineConstants);ZLINK_DOTNET_LADDER_L1</DefineConstants>
         <ZLinkRepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../..'))</ZLinkRepoRoot>
         <ZLinkFrameworkVersionFile>$([System.IO.Path]::Combine('$(MSBuildThisFileDirectory)', 'VERSION'))</ZLinkFrameworkVersionFile>
         <ZLinkUseBindingsSource Condition="'$(ZLinkUseBindingsSource)' == ''">false</ZLinkUseBindingsSource>
