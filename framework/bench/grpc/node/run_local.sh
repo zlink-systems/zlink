@@ -29,7 +29,8 @@ trap cleanup_cell EXIT
 for run in $(seq 1 "${RUNS}"); do
   run_id="${RUN_STAMP}-run${run}"
   for impl in "${implementations[@]}"; do
-    case "${impl}" in
+    target_impl="${BENCH_TARGET_SERVER:-${impl}}"
+    case "${target_impl}" in
       grpc-node)
         trigger_url="http://127.0.0.1:5220"
         source_stats_url="http://127.0.0.1:5221"
@@ -55,8 +56,19 @@ for run in $(seq 1 "${RUNS}"); do
         target_stats_url="http://127.0.0.1:5235"
         target_command=(node zlink-framework-server/main.js --endpoint "${target_endpoint}" \
           --metrics-url "${target_stats_url}")
+        l0_two_routers=0
+        if [[ "${ZLINK_LADDER_L0_SERVER:-0}" == 1 && "${ZLINK_LADDER_L0_TWO_ROUTERS:-1}" != 0 ]]; then
+          l0_two_routers=1
+          target_command_endpoint="tcp://127.0.0.1:5236"
+          target_command+=(--command-endpoint "${target_command_endpoint}")
+        fi
         ;;
     esac
+    if [[ "${impl}" == zlink-node && "${target_impl}" == zlink-framework-node ]]; then
+      if [[ "${l0_two_routers:-0}" != 1 ]]; then
+        target_command_endpoint="${target_endpoint}"
+      fi
+    fi
 
     for pattern in "${patterns[@]}"; do
       bench_skip_cell "${impl}" "${pattern}" && continue

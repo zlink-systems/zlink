@@ -9,12 +9,16 @@ const {
   ZLINK_ROUTE_CLIENT,
   zlinkFramework
 } = require('@zlink-systems/nestjs');
-const { ZLINK_PROTOBUF_CONTENT_TYPE } = require(
-  '@zlink-systems/framework-codec-protobuf/framework'
-);
-
 const contract = require('../shared/framework-bench-contract');
-const { createBenchPayloadSerializer } = require('../shared/framework-protobuf');
+const ladderL5ToL7 = process.env.ZLINK_LADDER_L5_7_CLIENT === '1';
+let ZLINK_PROTOBUF_CONTENT_TYPE;
+let createBenchPayloadSerializer;
+if (!ladderL5ToL7) {
+  ({ ZLINK_PROTOBUF_CONTENT_TYPE } = require(
+    '@zlink-systems/framework-codec-protobuf/framework'
+  ));
+  ({ createBenchPayloadSerializer } = require('../shared/framework-protobuf'));
+}
 
 async function createFrameworkTransport(options) {
   class BenchClientModule {}
@@ -24,14 +28,16 @@ async function createFrameworkTransport(options) {
         inject: [],
         useFactory: () => {
           const builder = zlinkFramework();
-          builder.codecs().use({
-            register: (codecs) => {
-              codecs.addSerializer(
-                ZLINK_PROTOBUF_CONTENT_TYPE,
-                createBenchPayloadSerializer()
-              );
-            }
-          });
+          if (!ladderL5ToL7) {
+            builder.codecs().use({
+              register: (codecs) => {
+                codecs.addSerializer(
+                  ZLINK_PROTOBUF_CONTENT_TYPE,
+                  createBenchPayloadSerializer()
+                );
+              }
+            });
+          }
           const mesh = builder.addRouteMesh(contract.MESH_NAME)
             .listen('tcp://127.0.0.1:0')
             .routingId(`${contract.CLIENT_ROUTING_ID}-${process.pid}`);
@@ -71,6 +77,7 @@ async function createFrameworkTransport(options) {
 
 function toBuffer(value) {
   if (Buffer.isBuffer(value)) return value;
+  if (typeof value === 'string') return Buffer.from(value, 'base64');
   return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
 }
 
