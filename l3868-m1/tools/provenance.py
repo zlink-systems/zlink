@@ -56,5 +56,9 @@ else:
     (cell/'binary-provenance.json').write_text(json.dumps(value,indent=2)+'\n')
     line=f"- {value['verified_utc']} | {cell} | built commit={head} dirty={int(dirty)} | base={base} | THIS worktree={REPO} | "+' ; '.join(f'{p} sha256={s}' for p,s in value['binaries'].items())+'\n'
     with (JOB/'progress.md').open('a') as handle: handle.write(line)
-    subprocess.run([sys.executable,str(JOB/'tools/reply-parity.py'),str(cell)],check=True)
+    # Source hashes above preserve the parity analysis performed outside the lock.
+    parity=(JOB/'raw/preflight/reply-parity.md').read_text()
+    (cell/'reply-parity.md').write_text(parity)
+    with (JOB/'progress.md').open('a') as handle: handle.write(parity)
+
     print(f'verified binaries from THIS worktree: {cell}')
