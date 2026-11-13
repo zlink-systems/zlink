@@ -4,7 +4,9 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { allocatePayloadBytes } = require('../../packages/framework/dist/contracts/Common/payload-slab');
+const {
+  allocatePayloadBytes
+} = require('../../packages/framework/dist/contracts/Common/payload-slab');
 
 const MODULE_ALLOCATION_FLAG = '--jitless';
 const {
@@ -206,7 +208,10 @@ test('channel header decode avoids framework JSON parsing and a full header copy
   t.diagnostic(
     `1000 calls: before=${baselineTotals.objects} objects/${baselineTotals.bytes} bytes, after=${currentTotals.objects} objects/${currentTotals.bytes} bytes`
   );
-  assert.ok(currentTotals.objects < baselineTotals.objects, 'header decode must allocate fewer objects');
+  assert.ok(
+    currentTotals.objects < baselineTotals.objects,
+    'header decode must allocate fewer objects'
+  );
   assert.ok(currentTotals.bytes < baselineTotals.bytes, 'header decode must allocate fewer bytes');
   const profileAllocations = await trackedCodecAllocations(
     '/internal/framework-json-v1.js',
@@ -481,6 +486,39 @@ test('canonical header validation does not allocate property growth storage', as
   assert.deepEqual(decode().metadata, {});
 });
 
+test('request header encoding avoids per-call Date and correlation string intermediates', async (t) => {
+  if (runAllocationTest(t)) return;
+  const codec = require('../../packages/framework/dist/runtime/channels/channel-envelope');
+  const codecs = { serializers: new Map() };
+  const payload = Buffer.from('payload');
+  const encode = () =>
+    codec.encodeChannelEnvelopePartsAtDeadline(
+      1,
+      'allocation',
+      'Packet',
+      payload,
+      2000000000000,
+      undefined,
+      codecs,
+      undefined,
+      false
+    );
+  for (let index = 0; index < 1000; index++) encode();
+  const allocations = await trackedCodecAllocations(
+    '/runtime/channels/channel-envelope.js',
+    encode
+  );
+  // The parts array and its storage, the native setTime result, and the ISO
+  // string are the four module-owned allocations in interpreter mode. A new
+  // Date or string concatenation per request exceeds this budget.
+  assertAllocationBudget(t, allocations, 4.25, 152);
+  const parts = encode();
+  assert.equal(parts[1], payload);
+  const header = codec.decodeChannelHeader([ZLinkBufferMessage.fromOwned(parts[0])], false);
+  assert.match(header.correlationId, /^[0-9a-f]{32}$/);
+  assert.equal(header.deadline, '2033-05-18T03:33:20.000Z');
+});
+
 test('correlation IDs use the fixed zero prefix without constructing padStart intermediates', (t) => {
   const codec = require('../../packages/framework/dist/runtime/channels/channel-envelope');
   const padStart = t.mock.method(String.prototype, 'padStart');
@@ -522,7 +560,9 @@ test('remote reply decode and completion add no standalone fresh backing', (t) =
   const {
     ZLinkNodeRawMeshBackend
   } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
-  const { closeMeshCompletion } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
+  const {
+    closeMeshCompletion
+  } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
   const slabReply = wire.encodeMultipartApplicationPayload(
     [Buffer.from('remote reply')],
     constants.SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
@@ -555,11 +595,7 @@ test('remote reply decode and completion add no standalone fresh backing', (t) =
   assert.equal(statefulDecoded.payload.toString(), 'remote stateful reply');
   assert.notStrictEqual(statefulDecoded.payload.buffer, slabStatefulReply.buffer);
   assert.notStrictEqual(statefulDecoded.payload.buffer, allocatePayloadBytes(1).buffer);
-  const statefulCompletion = materializeRemoteCompletion(
-    backend,
-    statefulDecoded,
-    1n
-  );
+  const statefulCompletion = materializeRemoteCompletion(backend, statefulDecoded, 1n);
   try {
     assert.equal(statefulCompletion.parts[0].data().toString(), 'remote stateful reply');
     assert.equal(freshBackingCount, 0);

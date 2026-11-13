@@ -96,6 +96,7 @@ const preparedChannelHeaders = new WeakMap<
 const CHANNEL_CORRELATION_FIELD = ',"correlationId":';
 const CHANNEL_DEADLINE_FIELD = ',"deadline":';
 const CHANNEL_CORRELATION_TEXT_LENGTH = 32;
+const CHANNEL_CORRELATION_PREFIX_BYTES = CHANNEL_CORRELATION_TEXT_LENGTH / 4;
 const PREPARED_CHANNEL_CORRELATION = '0'.repeat(CHANNEL_CORRELATION_TEXT_LENGTH);
 const PREPARED_CHANNEL_DEADLINE = '2000-01-01T00:00:00.000Z';
 const CHANNEL_CORRELATION_TEXT = /^[0-9a-f]{32}$/;
@@ -108,17 +109,22 @@ const CHANNEL_FLOW_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{
 // as lowercase hex: unique among the runtime's pending requests (spec 06-obs/04
 // §3) without drawing random bytes for every request — the shape Java
 // ZLinkServiceOperationIds uses.
-const CHANNEL_CORRELATION_PREFIX = randomBytes(CHANNEL_CORRELATION_TEXT_LENGTH / 4).toString('hex');
-let channelCorrelationCounter = 0;
+const CHANNEL_CORRELATION_BYTES = randomBytes(CHANNEL_CORRELATION_TEXT_LENGTH / 2);
+CHANNEL_CORRELATION_BYTES.fill(0, CHANNEL_CORRELATION_PREFIX_BYTES);
+// Encoding is synchronous on the event loop. This scratch Date is set for
+// every deadline; it never caches or extends an operation's deadline.
+const CHANNEL_DEADLINE_DATE = new Date(0);
 
 export function newChannelCorrelationId(): string {
-  channelCorrelationCounter += 1;
-  const suffix = channelCorrelationCounter.toString(16);
-  return (
-    CHANNEL_CORRELATION_PREFIX +
-    PREPARED_CHANNEL_CORRELATION.slice(suffix.length, CHANNEL_CORRELATION_TEXT_LENGTH / 2) +
-    suffix
-  );
+  for (
+    let index = CHANNEL_CORRELATION_BYTES.length - 1;
+    index >= CHANNEL_CORRELATION_PREFIX_BYTES;
+    index -= 1
+  ) {
+    CHANNEL_CORRELATION_BYTES[index] = (CHANNEL_CORRELATION_BYTES[index] + 1) & 0xff;
+    if (CHANNEL_CORRELATION_BYTES[index] !== 0) break;
+  }
+  return CHANNEL_CORRELATION_BYTES.toString('hex', 0);
 }
 
 export function encodeChannelEnvelopeParts(
@@ -518,7 +524,7 @@ function encodePayload(
       request === undefined
         ? correlationIdForOutboundKind(kind, correlationId)
         : request.correlationId,
-      deadlineUnixMs === undefined ? null : new Date(deadlineUnixMs).toISOString(),
+      deadlineForChannelHeader(deadlineUnixMs),
       topic ?? null,
       contractPart === 'reply' ? undefined : null,
       contractPart === 'reply' ? undefined : null,
@@ -530,6 +536,12 @@ function encodePayload(
     ),
     message
   ];
+}
+
+function deadlineForChannelHeader(unixMs: number | undefined): string | null {
+  if (unixMs === undefined) return null;
+  CHANNEL_DEADLINE_DATE.setTime(unixMs);
+  return CHANNEL_DEADLINE_DATE.toISOString();
 }
 
 function toMessageLike(value: unknown, schema?: ZLinkJsonSchema): MessageLike {
@@ -708,17 +720,9 @@ function preparedChannelHeader(
   if (correlationId === null && flowId === undefined) return prepared.bytes;
   const bytes = Buffer.allocUnsafe(prepared.bytes.byteLength);
   prepared.bytes.copy(bytes);
-  if (correlationId !== null)
-    bytes.write(
-      correlationId,
-      prepared.correlationOffset,
-      CHANNEL_CORRELATION_TEXT_LENGTH,
-      'ascii'
-    );
-  if (deadline !== null)
-    bytes.write(deadline, prepared.deadlineOffset, PREPARED_CHANNEL_DEADLINE.length, 'ascii');
-  if (flowId !== undefined)
-    bytes.write(flowId, prepared.flowOffset, PREPARED_CHANNEL_FLOW.length, 'ascii');
+  if (correlationId !== null) bytes.write(correlationId, prepared.correlationOffset, 'ascii');
+  if (deadline !== null) bytes.write(deadline, prepared.deadlineOffset, 'ascii');
+  if (flowId !== undefined) bytes.write(flowId, prepared.flowOffset, 'ascii');
   return bytes;
 }
 
