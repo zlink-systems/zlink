@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+root = Path('/root/worktree/zlink-v21-s033/l3868-next')
+build = root / 'build-l3868-next'
+step = sys.argv[1]
+records = []
+for name in ('bench_cpp_client', 'bench_cpp_framework_server', 'bench_cpp_zlink_server',
+             'bench_cpp_grpc_server', 'bench_cpp_ladder_contract_test'):
+    binary = build / name
+    inputs = subprocess.check_output(['ninja', '-C', str(build), '-t', 'inputs', name], text=True)
+    sources = []
+    for line in inputs.splitlines():
+        path = (build / line).resolve()
+        if path.is_file() and path.is_relative_to(root) and path.suffix in ('.cpp', '.hpp', '.h', '.inc', '.proto'):
+            sources.append(path)
+    assert sources, name
+    latest = max(sources, key=lambda path: path.stat().st_mtime_ns)
+    assert binary.stat().st_mtime_ns > latest.stat().st_mtime_ns, (name, str(latest))
+    records.append(dict(binary=str(binary), sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
+                        binary_mtime_ns=binary.stat().st_mtime_ns, source_count=len(sources),
+                        newest_source=str(latest), source_mtime_ns=latest.stat().st_mtime_ns))
+record = dict(step=step, head=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
+              status=subprocess.check_output(['git', 'status', '--short'], cwd=root, text=True),
+              records=records)
+output = Path('/root/jobs/fx/cx/v21/s033/l3868-impl2/raw') / f'build-{step}-evidence.json'
+output.write_text(json.dumps(record, ensure_ascii=False, indent=2) + '\n')
+print(f'{step}: {len(records)} binaries newer than all transitive worktree sources; sha256 in {output}')
