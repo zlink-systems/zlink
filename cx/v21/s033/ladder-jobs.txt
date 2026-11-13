@@ -1,5 +1,5 @@
-N4json|Node L4: Buffer.toJSON 배열·base64 decode 제거(6e48bdf5fb 후속)|n4json2
 C4json|C++ L4 typed JSON 손실 원인·production 수정|c4json
 N2net|Node L2 .NET 대조·수정(손실 29% 후속)|n2net
 J57|Java L5~L7 dispatch 손실 원인·수정(.NET·C++ 대조)|j57
 D57|.NET L5~L7 dispatch 손실 원인·수정(j57 Java와 대조)|d57
+N4w|Node JSON encode 구조: 단일 writer 대 JSON.stringify 규칙 수·비용 비교|n4w
