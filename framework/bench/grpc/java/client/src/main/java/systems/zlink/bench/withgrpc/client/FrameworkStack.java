@@ -144,7 +144,8 @@ public final class FrameworkStack implements AutoCloseable {
     }
 
     private static java.util.List<systems.zlink.contracts.messaging.Message> envelopeParts(
-            int kind, systems.zlink.contracts.messaging.Message body) {
+            int kind,
+            systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView body) {
         var header =
                 ZLinkChannelEnvelope.create(
                         kind,

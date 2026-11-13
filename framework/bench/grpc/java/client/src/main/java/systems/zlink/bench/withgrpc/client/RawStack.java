@@ -95,8 +95,8 @@ public final class RawStack implements AutoCloseable {
             @Override
             public RawSubmission submitRaw(int payloadSize, byte phase, long sequence) {
                 var operation = router.request(peer);
-                Message body = RawWire.encodeBenchPayloadMessage(
-                    payloadSize, runId, phase, sequence);
+                var body = ZLinkFrameworkMultipartView.owned(
+                    RawWire.encodeBenchPayloadMessage(payloadSize, runId, phase, sequence));
                 List<Message> envelope;
                 try {
                     envelope = envelopeFactory.encode(kind, body);
@@ -136,7 +136,7 @@ public final class RawStack implements AutoCloseable {
 
     @FunctionalInterface
     public interface EnvelopeFactory {
-        List<Message> encode(int kind, Message body);
+        List<Message> encode(int kind, ZLinkFrameworkMultipartView body);
     }
 
     /** A send payload prepared by a logical stream before it enters the socket gate. */
@@ -217,8 +217,8 @@ public final class RawStack implements AutoCloseable {
 
         @Override
         public PreparedSend prepareRaw(int payloadSize, byte phase, long sequence) {
-            Message body = RawWire.encodeBenchPayloadMessage(
-                    payloadSize, runId, phase, sequence);
+            var body = ZLinkFrameworkMultipartView.owned(
+                    RawWire.encodeBenchPayloadMessage(payloadSize, runId, phase, sequence));
             List<Message> parts;
             try {
                 parts = envelopeFactory.encode(kind, body);
