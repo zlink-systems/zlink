@@ -47,8 +47,15 @@ for run in $(seq 1 "${RUNS}"); do
         target_endpoint="tcp://127.0.0.1:5247"
         target_command_endpoint="tcp://127.0.0.1:5248"
         target_stats_url="http://127.0.0.1:5249"
-        target_command=("${RAW_BIN}" --endpoint "${target_endpoint}" \
-          --command-endpoint "${target_command_endpoint}" --metrics-url "${target_stats_url}")
+        if [[ "${ZLINK_BENCH_CROSS_FRAMEWORK_SERVER:-}" == 1 ]]; then
+          target_endpoint="tcp://127.0.0.1:5254"
+          target_command_endpoint=""
+          target_stats_url="http://127.0.0.1:5255"
+          target_command=("${FW_BIN}" --endpoint "${target_endpoint}" --metrics-url "${target_stats_url}")
+        else
+          target_command=("${RAW_BIN}" --endpoint "${target_endpoint}" \
+            --command-endpoint "${target_command_endpoint}" --metrics-url "${target_stats_url}")
+        fi
         ;;
       zlink-framework-java)
         trigger_url="http://127.0.0.1:5252"
