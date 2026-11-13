@@ -104,14 +104,14 @@ class ladder_driver_t final : public driver_t
     void prepare_streams (int count) override
     {
         _encoders.clear ();
-        if (_level == 0)
+        if (_level == 0 || _level == 1)
             return;
         for (int i = 0; i < count; ++i)
             _encoders.emplace_back (std::make_unique<ladder::encoder_t> (_level));
     }
     void submit (std::shared_ptr<stream_t> stream, int index, uint64_t seq) override
     {
-        if (_level == 0) {
+        if (_level == 0 || _level == 1) {
             submit_raw (*_socket, _target, std::move (stream), seq);
             return;
         }

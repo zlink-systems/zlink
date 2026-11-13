@@ -4,6 +4,7 @@
 #include <zlink/codecs/protobuf.hpp>
 #include <zlink/framework/detail/ablation_ladder.hpp>
 #include "runtime/dispatch/application_job_queue.hpp"
+#include "runtime/dispatch/application_job_queue_capacity.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
@@ -299,20 +300,30 @@ int direct_server (const std::string &endpoint, Metrics &metrics, std::atomic<bo
     fw::runtime::mesh::raw_mesh_node_owner_t owner (
       owner_options (zlink::routing_id_t::from ("bench-server"), endpoint));
     owner.ablation_start ();
+    std::unique_ptr<fw::runtime::application_job_queue_t> application_jobs;
+    if (level >= 1) {
+        application_jobs = std::make_unique<fw::runtime::application_job_queue_t> (
+          fw::runtime::resolve_application_job_queue_configuration (
+            fw::application_job_queue_profile_t::balanced, std::nullopt,
+            fw::runtime::detect_application_job_queue_processor_limits ()));
+    }
     std::fprintf (stderr, "#4350 target L%d: real raw_mesh_node_owner_t; fixed handler\n", level);
     struct state_t {
         fw::runtime::mesh::raw_mesh_node_owner_t &owner;
         fixed_handler_t<Metrics> handler;
     } state{owner, {metrics, level}};
-    owner.ablation_receive (stop, [] (void *opaque, zlink::received_t &received) {
+    owner.ablation_receive (stop, [] (void *opaque, zlink::received_t &received,
+                                    fw::runtime::application_job_queue_t::permit_t *permit) {
         auto &state = *static_cast<state_t *> (opaque);
         if (handle_control (state.owner.ablation_socket (), received, state.owner.startup_descriptor ()))
             return;
         // L6: one handler, constructed outside the receive loop, called directly.
+        if (permit)
+            permit->release_for_handler_entry ();
         auto payload = state.handler.handle (received);
         if (received.reply_token ())
             raw_reply (received, payload);
-    }, &state);
+    }, &state, application_jobs.get ());
     return 0;
 }
 }

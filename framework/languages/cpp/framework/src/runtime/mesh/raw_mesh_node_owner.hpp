@@ -160,7 +160,9 @@ class raw_mesh_node_owner_t
     zlink::router_socket_t &ablation_socket ();
     zlink::poller_t &ablation_poller ();
     void ablation_receive (std::atomic<bool> &stop,
-                           void (*handler) (void *, zlink::received_t &), void *state);
+                           void (*handler) (void *, zlink::received_t &,
+                                            application_job_queue_t::permit_t *),
+                           void *state, application_job_queue_t *application_jobs = nullptr);
 #endif
     void close ();
     bool started () const noexcept;

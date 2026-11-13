@@ -524,16 +524,25 @@ zlink::router_socket_t &raw_mesh_node_owner_t::ablation_socket () { return *_rou
 zlink::poller_t &raw_mesh_node_owner_t::ablation_poller () { return *_ingress_poller; }
 
 void raw_mesh_node_owner_t::ablation_receive (
-  std::atomic<bool> &stop, void (*handler) (void *, zlink::received_t &), void *state)
+  std::atomic<bool> &stop,
+  void (*handler) (void *, zlink::received_t &, application_job_queue_t::permit_t *),
+  void *state, application_job_queue_t *application_jobs)
 {
     zlink::received_t received;
     while (!stop.load ()) {
+        std::optional<application_job_queue_t::permit_t> permit;
+        if (application_jobs) {
+            permit = application_jobs->wait_for_supply_blocking (
+              application_job_queue_t::origin_t::remote);
+            if (!permit)
+                return;
+        }
         const int rc = _router->recv (received, zlink::recv_flags_t::none);
         if (rc != 0) {
             std::this_thread::sleep_for (std::chrono::microseconds (50));
             continue;
         }
-        handler (state, received);
+        handler (state, received, permit ? &*permit : nullptr);
     }
 }
 #endif
