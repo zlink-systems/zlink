@@ -180,7 +180,7 @@ jobs:
           Add-Content -LiteralPath $env:GITHUB_ENV -Value "ZLINK_LIBRARY_PATH=$runtime"
           Add-Content -LiteralPath $env:GITHUB_PATH -Value (Join-Path $corePrefix "bin")
 
-      - name: Run Framework Java core and integration tests
+      - name: Run Framework Java core, integration and Spring starter tests
         if: ${{ !inputs.skip_tests }}
         working-directory: framework/languages/java
         shell: bash
@@ -215,7 +215,7 @@ jobs:
         run: |
           .\scripts\ci\framework-java-test-results.ps1 `
             -Mode summarize `
-            -InputPath "framework/languages/java/zlink-framework-core/build/test-results" `
+            -InputPath "framework/languages/java/zlink-framework-core/build/test-results", "framework/languages/java/zlink-framework-spring-boot-starter/build/test-results" `
             -OutputPath ".artifacts/framework-java-results/${{ matrix.target.name }}" `
             -Platform "${{ matrix.target.name }}" `
             -MinimumTests $env:FRAMEWORK_JAVA_MIN_TESTS
