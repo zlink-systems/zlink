@@ -13,10 +13,10 @@ import jdk.jfr.consumer.RecordingFile;
 
 import org.junit.jupiter.api.Test;
 
-import java.net.URLClassLoader;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceSendHeaderAllocationTest;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
@@ -34,20 +34,9 @@ public final class ZLinkSerialTurnAllocationTest {
 
     @Test
     void synchronousTurnsAllocateOnlyTheirGateAndCompletionObserver() throws Exception {
-        var classpath = new LinkedHashSet<String>();
-        for (ClassLoader loader = getClass().getClassLoader();
-                loader != null;
-                loader = loader.getParent()) {
-            if (loader instanceof URLClassLoader urls) {
-                for (var url : urls.getURLs()) classpath.add(Path.of(url.toURI()).toString());
-            }
-        }
-        classpath.addAll(
-                List.of(System.getProperty("java.class.path").split(java.io.File.pathSeparator)));
-        String currentClasspath = String.join(java.io.File.pathSeparator, classpath);
-        long[] actual = allocationTotals(runProbe(currentClasspath, false));
+        long[] actual = allocationTotals(runProbe(false));
         assertUnfilteredAllocationBudget(actual);
-        long[] mutation = allocationTotals(runProbe(currentClasspath, true));
+        long[] mutation = allocationTotals(runProbe(true));
         assertEquals(
                 actual[0] + UNFILTERED_DISPATCHES,
                 mutation[0],
@@ -75,32 +64,11 @@ public final class ZLinkSerialTurnAllocationTest {
                 "rounded bytes per unfiltered dispatch");
     }
 
-    private String runProbe(String classpath, boolean addObject) throws Exception {
-        var output = Files.createTempFile("zlink-turn-allocation", ".log");
-        try {
-            var process =
-                    new ProcessBuilder(
-                                    Path.of(System.getProperty("java.home"), "bin", "java")
-                                            .toString(),
-                                    "--enable-native-access=ALL-UNNAMED",
-                                    "-Xint",
-                                    "-XX:-UseTLAB",
-                                    "-XX:FlightRecorderOptions=stackdepth=128",
-                                    "-cp",
-                                    classpath,
-                                    getClass().getName(),
-                                    Boolean.toString(addObject))
-                            .redirectErrorStream(true)
-                            .redirectOutput(output.toFile())
-                            .start();
-            int exit = process.waitFor();
-            String log = Files.readString(output);
-            System.out.print(log);
-            assertEquals(0, exit, log);
-            return log;
-        } finally {
-            Files.deleteIfExists(output);
-        }
+    private String runProbe(boolean addObject) throws Exception {
+        return ZLinkServiceSendHeaderAllocationTest.runInJvm(
+                getClass(),
+                List.of("-Xint", "-XX:-UseTLAB", "-XX:FlightRecorderOptions=stackdepth=128"),
+                Boolean.toString(addObject));
     }
 
     private static long[] allocationTotals(String log) {
