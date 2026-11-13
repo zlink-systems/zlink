@@ -20,13 +20,15 @@ const lazyFramework = l0Server && process.env.ZLINK_LADDER_L0_LAZY_FRAMEWORK !==
 const l0rServer = l0Server && process.env.ZLINK_LADDER_L0R === '1';
 const l1Permit = l0Server && process.env.ZLINK_LADDER_L1_PERMIT === '1';
 let applicationJobQueue;
+let ApplicationJobQueue;
+let resolveApplicationJobQueueConfiguration;
 if (l0rServer || l1Permit) {
   require('@zlink-systems/framework');
+  ({ ApplicationJobQueue, resolveApplicationJobQueueConfiguration } = require(
+    '../../../../languages/node/packages/framework/dist/runtime/host/application-job-queue'
+  ));
 }
 if (l1Permit) {
-  const { ApplicationJobQueue, resolveApplicationJobQueueConfiguration } = require(
-    '../../../../languages/node/packages/framework/dist/runtime/host/application-job-queue'
-  );
   applicationJobQueue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
 }
 const frameworkWire = process.env.ZLINK_LADDER_L0_FRAMEWORK_CLIENT === '1'
