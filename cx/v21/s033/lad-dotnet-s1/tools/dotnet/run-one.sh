@@ -33,8 +33,18 @@ assert 'scheduling_invalid=' not in s, s
 assert 'affinity_invalid=' not in s, s
 for phase,expected in [('source_start','0-5'),('target_start','8-13'),('mid_active_source','0-5'),('mid_active_target','8-13')]:
     policies=[line for line in s.splitlines() if line.startswith(phase+'_tid=')]
-    affinities=[line for line in s.splitlines() if line.startswith(phase+'_affinity ') and f'cpus={expected}' in line]
-    assert policies and len(affinities)>=len(policies), (phase,len(policies),len(affinities))
+    affinities=[line.rsplit('cpus=',1)[1] for line in s.splitlines() if line.startswith(phase+'_affinity ') and 'cpus=' in line]
+    assert policies and len(affinities)==len(policies), (phase,len(policies),len(affinities))
+    low,high=map(int,expected.split('-'))
+    for value in affinities:
+        cpus=[]
+        for part in value.split(','):
+            ends=part.split('-')
+            assert len(ends) in (1,2), (phase,value)
+            first=int(ends[0]); last=int(ends[-1])
+            assert low<=first<=last<=high, (phase,value,expected)
+            cpus.extend(range(first,last+1))
+        assert cpus, (phase,value)
     policy_ix=[i for i,line in enumerate(s.splitlines()) if line.startswith(phase+'_tid=')]
     lines=s.splitlines()
     for i in policy_ix:

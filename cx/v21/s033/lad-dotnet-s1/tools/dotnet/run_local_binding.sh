@@ -42,7 +42,7 @@ binding_sched_snapshot() {
       affinity="$(awk '/^Cpus_allowed_list:/ {print $2}' "$task/status" 2>/dev/null || true)"
       printf '%s_affinity tid=%s cpus=%s\n' "$label" "$tid" "${affinity:-unavailable}" >> "$BINDING_SCHED_FILE"
       if [[ "$label" == source_start || "$label" == mid_active_source ]]; then expected=0-5; else expected=8-13; fi
-      [[ "$affinity" == "$expected" ]] || printf 'affinity_invalid=%s:%s:%s\n' "$label" "$tid" "${affinity:-unavailable}" >> "$BINDING_SCHED_FILE"
+      binding_cpu_list_allowed "$affinity" "$expected" || printf 'affinity_invalid=%s:%s:%s\n' "$label" "$tid" "${affinity:-unavailable}" >> "$BINDING_SCHED_FILE"
       policy="$(chrt -p "$tid" 2>&1 || true)"
       printf '%s\n' "$policy" >> "$BINDING_SCHED_FILE"
       if ! grep -q 'current scheduling policy: SCHED_OTHER' <<<"$policy"; then printf 'scheduling_invalid=%s:%s\n' "$label" "$tid" >> "$BINDING_SCHED_FILE"; fi
@@ -52,6 +52,19 @@ binding_sched_snapshot() {
   { printf '\n%s_utc=%s\n%s_pid=%s\n' "$label" "$(date -u +%FT%TZ)" "$label" "$root_pid"; } >> "$BINDING_SCHED_FILE"
   record_sched_process "$root_pid"
 }
+binding_cpu_list_allowed() {
+  local actual="$1" expected="$2" low high part first last
+  IFS='-' read -r low high <<<"$expected"
+  IFS=',' read -r -a parts <<<"$actual"
+  ((${#parts[@]} > 0)) || return 1
+  for part in "${parts[@]}"; do
+    if [[ "$part" =~ ^([0-9]+)-([0-9]+)$ ]]; then first=${BASH_REMATCH[1]}; last=${BASH_REMATCH[2]}
+    elif [[ "$part" =~ ^[0-9]+$ ]]; then first="$part"; last="$part"
+    else return 1
+    fi
+    (( first >= low && last <= high && first <= last )) || return 1
+  done
+}
 binding_process_split_ok() {
   local pid="$1" expected="$2" tid actual child
   [[ -r /proc/"$pid"/status ]] || return 0
@@ -59,7 +72,7 @@ binding_process_split_ok() {
     [[ -d "$task" ]] || continue
     tid="${task##*/}"
     actual="$(awk '/^Cpus_allowed_list:/ {print $2}' "$task/status" 2>/dev/null || true)"
-    [[ "$actual" == "$expected" ]] || return 1
+    binding_cpu_list_allowed "$actual" "$expected" || return 1
   done
   for child in $(pgrep -P "$pid" 2>/dev/null || true); do binding_process_split_ok "$child" "$expected" || return 1; done
 }
@@ -69,7 +82,28 @@ binding_wait_for_cpu_split() {
     if binding_process_split_ok "$BINDING_SOURCE_PID" '0-5' && binding_process_split_ok "$BINDING_TARGET_PID" '8-13'; then ready=1; break; fi
     sleep 0.25
   done
-  [[ "$ready" == 1 ]] || { echo 'quiet guard did not narrow source/target CPU affinity to 0-5 / 8-13 before warmup' >&2; return 1; }
+  if [[ "$ready" != 1 ]]; then
+    for role in source target; do
+      if [[ "$role" == source ]]; then pid="$BINDING_SOURCE_PID"; else pid="$BINDING_TARGET_PID"; fi
+      {
+        printf 'affinity_wait_failure role=%s root_pid=%s\n' "$role" "$pid"
+        dump_process_tree() {
+          local process="$1" child
+          [[ -d /proc/$process ]] || return 0
+          printf 'process pid=%s cmd=' "$process"; tr '\0' ' ' </proc/$process/cmdline; printf '\n'
+          for task in /proc/$process/task/*; do
+            [[ -d "$task" ]] || continue
+            printf 'thread tid=%s ' "${task##*/}"
+            awk '/^Cpus_allowed_list:/ {printf "cpus=%s\n", $2}' "$task/status"
+          done
+          for child in $(pgrep -P "$process" 2>/dev/null || true); do dump_process_tree "$child"; done
+        }
+        dump_process_tree "$pid"
+      } >>"$BINDING_SCHED_FILE"
+    done
+    echo 'quiet guard did not narrow source/target CPU affinity to 0-5 / 8-13 before warmup' >&2
+    return 1
+  fi
 }
 binding_sched_start() {
   local cpu state val

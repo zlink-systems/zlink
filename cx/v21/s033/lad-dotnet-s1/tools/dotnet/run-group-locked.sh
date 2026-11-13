@@ -17,7 +17,11 @@ for level in "${levels[@]}"; do
     for stage in warm counted; do
       (( SECONDS - start < 1500 )) || { echo '25-minute stop boundary reached' >&2; exit 124; }
       stamp="dotnet-${level}-${pattern}-${size}-${stage}-$(date -u +%Y%m%dT%H%M%SZ)"
-      out="$job/raw/$level/$pattern-$size/$stage"
+      stage_root="$job/raw/$level/$pattern-$size/$stage"
+      mkdir -p "$stage_root"
+      attempt=1
+      while [[ -e "$stage_root/attempt$attempt" ]]; do attempt=$((attempt+1)); done
+      out="$stage_root/attempt$attempt"
       mkdir -p "$out"
       commit=$(git -C "$root" rev-parse HEAD)
       dirty=clean; [[ -z "$(git -C "$root" status --porcelain)" ]] || dirty=dirty

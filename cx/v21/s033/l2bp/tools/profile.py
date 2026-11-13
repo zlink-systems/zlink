@@ -58,7 +58,7 @@ def launch(role, cmd):
 
 def request(url, body=None):
     data = None if body is None else json.dumps(body).encode()
-    with urllib.request.urlopen(urllib.request.Request(url, data=data, headers={'content-type':'application/json'}), timeout=9 if body is not None else .8) as r:
+    with urllib.request.urlopen(urllib.request.Request(url, data=data, headers={'content-type':'application/json'}), timeout=max(args.warmup,args.duration)+2 if body is not None else .8) as r:
         return json.load(r)
 
 def await_ready(url, require=True):

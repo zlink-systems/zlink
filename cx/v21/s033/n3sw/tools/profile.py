@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, os, pathlib, signal, socket, subprocess, sys, threading, time, urllib.request
+import hashlib, json, os, pathlib, signal, socket, subprocess, sys, threading, time, urllib.request
 ROOT = pathlib.Path('/root/worktree/zlink-v21-s033/n3sw-scratch')
 JOB = pathlib.Path('/root/jobs/fx/cx/v21/s033/n3sw')
 BENCH = ROOT / 'framework/bench/grpc/node'
@@ -8,6 +8,19 @@ level, pattern, size, label = sys.argv[1:]
 size = int(size)
 out = JOB / 'raw' / label
 out.mkdir(parents=True, exist_ok=False)
+artifacts = [ROOT/'framework/languages/node/packages/framework/dist/runtime/foundation/service-wire-m6a-codec.js',
+             ROOT/'framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js',
+             ROOT/'framework/languages/node/node_modules/@zlink-systems/zlink/prebuilds/linux-x64/zlink.node']
+for a in artifacts[:2]:
+    source_file = pathlib.Path(str(a).replace('/dist/','/src/')).with_suffix('.ts')
+    assert a.stat().st_mtime > source_file.stat().st_mtime, f'stale build: {a}'
+def git(*args): return subprocess.check_output(['git',*args],cwd=ROOT,text=True).strip()
+metadata = dict(head=git('rev-parse','HEAD'),base=git('merge-base','HEAD','origin/main'),
+                dirty=git('status','--short'),artifacts={str(a):hashlib.sha256(a.read_bytes()).hexdigest() for a in artifacts},
+                cpus=CPUS,method='profiling only; no measure.lock; durations <=20s; absolute numbers noisy')
+(out/'build.json').write_text(json.dumps(metadata,indent=2)+'\n')
+with (JOB/'progress.md').open('a') as progress:
+    progress.write(f"\n- 프로파일 {label}: HEAD={metadata['head']}, base={metadata['base']}, dirty={metadata['dirty']!r}; artifact 경로·SHA256·freshness: `raw/{label}/build.json`. Receive raw `zlink-raw-server/main.js:47-53,64-75` ↔ ladder `zlink-framework-server/main.js:209-239` (DontWait/NoData/batch); reply raw `:82-86` ↔ ladder `:109-123` (새 protobuf/body, envelope/service framing 외 동일). Wait·metrics atomic 추가 0; L3 encode part당 copy 1 + binding frame copy 1, decode byte copy 0, final view/wrapper 각각 2. `call-shape.md` 기준.\n")
 ports = []
 for _ in range(5):
     with socket.socket() as s:

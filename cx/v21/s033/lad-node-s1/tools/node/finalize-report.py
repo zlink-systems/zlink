@@ -31,7 +31,7 @@ def step_series(v,p,s,newhold_prev=None):
     # Table A reports the first single counted result for each step; paired confirmation
     # medians and G5 are reported separately in Table B.
     q=paths(v,p,s,'counted')
-    if not q: raise SystemExit(f'missing counted result: {v} {p}-{s}')
+    if not q: return None,None
     return val(q[0]),[q[0]]
 
 def start_time(path):
@@ -42,15 +42,19 @@ def start_time(path):
 def pair_series(prev,new,p,s):
     prev_count=paths(prev,p,s,'counted')
     new_count=paths(new,p,s,'counted')
-    if not prev_count or not new_count: raise SystemExit(f'missing pair results {prev}->{new} {p}-{s}')
+    if not prev_count or not new_count: return None
     # Previous step's latest run and new step's first run belong to this hold.
     prev_base,new_base=prev_count[-1],new_count[0]
     hold_start=start_time(new_base)
+    next_step={'L1':'L2','L2':'L3','L3':'L4','L4':'L5_7'}.get(new)
+    next_paths=paths(next_step,p,s,'counted') if next_step else []
+    hold_end=start_time(next_paths[0]) if next_paths else None
     sets=[]
     for v,base in ((prev,prev_base),(new,new_base)):
         group=[base]
         for phase in ('repeat2','repeat3'):
-            ps=[x for x in paths(v,p,s,phase) if start_time(x)>hold_start]
+            ps=[x for x in paths(v,p,s,phase)
+                if start_time(x)>hold_start and (hold_end is None or start_time(x)<hold_end)]
             if ps: group.extend(ps)
         sets.append(group)
     values=[[val(x) for x in group] for group in sets]
@@ -69,12 +73,20 @@ for p,s in CELLS:
     b= float(binding[cell]['msg_s']); bp=pathlib.Path(binding[cell]['raw']); bs=pathlib.Path(binding[cell]['scheduling'])
     parts=[f'{p}-{s}',f'{link(f"{b:,.0f}",bp)} {link("sched",bs)}']
     fw,_=step_series('L5_7',p,s)
-    ratio=fw/b
+    ratio=(fw/b) if fw is not None else None
     for v in VARIANTS:
         x,ps=step_series(v,p,s)
-        # For an explicit 3-run confirmation, the representative table value is the median.
-        parts.append(f'{link(f"{x:,.0f}",ps[0])} {link("sched",ps[0].parent/"scheduling.txt")}')
-    parts.append(f'{ratio:.3f}')
+        if x is None:
+            invalid=[]
+            for phase in ('warm','counted'):
+                impl='zlink-framework-node'
+                invalid += sorted((ROOT/v/f'{p}-{s}'/phase).glob(f'attempt*/run1/{impl}-{p}-{s}/results.json'))
+            if invalid:
+                parts.append(f'N/A {link("invalid raw",invalid[-1])} {link("sched",invalid[-1].parent/"scheduling.txt")}')
+            else: parts.append('N/A')
+        else:
+            parts.append(f'{link(f"{x:,.0f}",ps[0])} {link("sched",ps[0].parent/"scheduling.txt")}')
+    parts.append(f'{ratio:.3f}' if ratio is not None else 'N/A')
     rows_a.append('| '+' | '.join(parts)+' |')
 
 rows_b=[]
@@ -86,7 +98,16 @@ for p,s in CELLS:
     status='PASS' if ratio>=.95 else 'FAIL'
     vals=[f'{ratio:.3f} {status} ({link("L0 raw",l0p)} {link("L0 sched",l0p.parent/"scheduling.txt")} {link("binding raw",bp)} {link("binding sched",bs)})']
     for new,prev in TRANSITIONS[1:]:
-        loss,budget,ind,sets,meds,g5=pair_series(prev,new,p,s)
+        result=pair_series(prev,new,p,s)
+        if result is None:
+            invalid=[]
+            if new=='L5_7':
+                for phase in ('warm','counted'):
+                    invalid += sorted((ROOT/new/f'{p}-{s}'/phase).glob(f'attempt*/run1/zlink-framework-node-{p}-{s}/results.json'))
+            evidence=refs(invalid[-1:]) if invalid else ''
+            vals.append(f'N/A (유효 counted 없음) {evidence}')
+            continue
+        loss,budget,ind,sets,meds,g5=result
         status='판정 불가' if ind else ('PASS' if loss<=budget else 'FAIL')
         a,bset=sets
         evidence=refs(a+bset)

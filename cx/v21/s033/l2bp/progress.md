@@ -16,3 +16,11 @@
 - Node 첫 정상 profile L1/L2 모두 count 일치·오류 0. `raw/node/baseline-L1-b`, `raw/node/baseline-L2`; CPU 요약 `cpu-summary.json`. L1 19444.5 vs L2 13729.0 msg/s(진단 전용), 손실 29.4%. Java 최초 시작 시도는 trigger HTTP가 phase 완료까지 기다리는 계약을 runner가 즉시 응답으로 가정해 중단. 기존 raw를 보존하고 runner를 비동기 HTTP 관찰로 수정.
 
 - Java L2 profile 직전: 최초 scratch 빌드 HEAD=e8721a0776 clean, base=494c5f4827, SHA256 `raw/java-build-fingerprint.json`. receive raw `ZLinkRawBenchServer.java:94-109` vs ladder `:129-185,208-220`, reply raw `:115-127` vs ladder `:240-259`. L2 header/body 소유권 외 wait/poller 추가 없음.
+
+- 첫 Java profile은 3초 warmup 조건에서 L1/L2 CPU·allocation·wall 차이를 확보했으나, target CPU의 compiler 비중과 yield 경합이 커 throughput 손실 방향이 뒤집혔다(53609.75 → 64327.75). 정식 21.9% 손실을 이 수치로 대체하지 않는다. 더 긴 9초 warmup으로 동일 scratch L1/L2를 다시 profile한다. 각 process 19초 timeout, 전체 관찰 18초 상한. HEAD/dirty/base/SHA256은 `raw/java-build-fingerprint.json` 그대로이고 receive/reply 및 추가 비용 대조는 `call-shape.md`.
+
+- Java 9초 warmup L2 profile 직전: e8721a0776 clean, base=494c5f4827, scratch jar/SHA256 `raw/java-build-fingerprint.json`, receive/reply와 메시지당 추가 비용 `call-shape.md`. 9초 warmup L1 정상 완료. 최초 9초 시도는 진행 중이던 구 runner의 HTTP timeout 때문에 중단됐으며 `raw/java/warm-L1`에 보존.
+
+- 원인·결정 소유 표·production 수정안을 `report.md`에 먼저 기록했다. 원본 사본 `raw/report-before-implementation.md`. 이제 B 범위의 private codec 최적화와 회귀 검사를 시작한다. public API·spec·binding 변경 없음.
+
+- Java main 최초 회귀 실행은 test 시작 전에 single-use Gradle daemon 종료로 실패했다(`raw/java-regression-before.log`). main 변경 전의 codec과 동일한 scratch 빌드에 새 회귀 test만 복사해 전 상태를 검사한다. production 파일은 아직 수정하지 않았다.
