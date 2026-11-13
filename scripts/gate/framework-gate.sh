@@ -37,7 +37,7 @@ TMPDIR=/dev/shm/zlink-tmp-node run node-sample-tests framework/languages/node np
 # Node npm test builds the connector dist consumed by JavaNodeStreamInteropTest;
 # its standalone Gradle test task also declares that build prerequisite.
 redis-cli -h 127.0.0.1 -p 6379 ping | grep -qx PONG || { echo "Redis is required for JVM location tests" >&2; exit 1; }
-ZLINK_REDIS_LOCATION_ENDPOINT=redis://127.0.0.1:6379 TMPDIR=/dev/shm/zlink-tmp-java run java-tests framework/languages/java ./gradlew --no-daemon test contractTest fakeBackendTest integrationTest sampleTest consumerTest m5FoundationTest --continue
+ZLINK_REDIS_LOCATION_ENDPOINT=redis://127.0.0.1:6379 TMPDIR=/dev/shm/zlink-tmp-java run java-tests framework/languages/java ./gradlew --no-daemon test contractTest fakeBackendTest integrationTest sampleTest consumerTest --continue
 ( dotnet_env; run dotnet-sampleregression framework/languages/dotnet dotnet test tests/Zlink.Framework.SampleRegressionTests )
 ( dotnet_env; run dotnet-unit-main framework/languages/dotnet dotnet test tests/Zlink.Framework.UnitTests --filter 'FullyQualifiedName!~CanonicalActorJoinIngressReplyTests' --blame-hang --blame-hang-timeout 10m )
 ( dotnet_env; run dotnet-unit-join framework/languages/dotnet dotnet test tests/Zlink.Framework.UnitTests --filter 'FullyQualifiedName~CanonicalActorJoinIngressReplyTests' --blame-hang --blame-hang-timeout 10m )

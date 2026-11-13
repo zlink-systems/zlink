@@ -23,8 +23,8 @@ import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistryTesting;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceSendHeaderAllocationTest;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
+import systems.zlink.framework.testsupport.ChildJvm;
 
 import java.lang.reflect.Proxy;
 import java.nio.file.Files;
@@ -319,7 +319,7 @@ public final class ZLinkJavaRequestCompletionCostTest {
 
     /** Runs allocation assertions with TLAB disabled, including under the normal Gradle JVM. */
     public static void launchAllocationProbe(Class<?> testClass, String mode) throws Exception {
-        ZLinkServiceSendHeaderAllocationTest.runInJvm(
+        ChildJvm.runInJvm(
                 testClass,
                 List.of(
                         "-Djava.io.tmpdir=" + System.getProperty("java.io.tmpdir"),
