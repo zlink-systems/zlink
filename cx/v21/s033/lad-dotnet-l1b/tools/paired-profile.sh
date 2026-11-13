@@ -6,7 +6,6 @@ SERVER_DIR="$ROOT/framework/bench/grpc/dotnet/ZLinkServer/bin/Release/net8.0"
 L0_DIR="$JOB/raw/builds/l0-server-net8.0"
 L1_DIR="$JOB/raw/builds/l1-server-net8.0"
 PROFILE_ROOT="$OUTPUT_DIR"
-export PATH="$JOB/tools/profile:$PATH"
 for variant in L0 L1; do
   if [[ "$variant" == L0 ]]; then cp -a "$L0_DIR/." "$SERVER_DIR/"; else cp -a "$L1_DIR/." "$SERVER_DIR/"; fi
   out="$PROFILE_ROOT/$variant"
