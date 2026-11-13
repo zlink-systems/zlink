@@ -97,7 +97,7 @@ export class DefaultZLinkActorContext implements ZLinkActorContext {
   }
 
   get objectGeneration(): bigint {
-    return this.state.nativeActorRef?.generation ?? 1n;
+    return this.state.currentActorRef().generation;
   }
 
   get spotId(): SpotId | undefined {
