@@ -5,12 +5,8 @@ import { encodeActorReply } from '../actors/actor-reply';
 import { ZLinkStreamMessageKind } from '../streams/protocol';
 import {
   decodeApplicationPayload,
-  encodeMultipartApplicationPayload
+  encodeFrameworkMultipartApplicationMessage
 } from '../foundation/service-wire-m6a-codec';
-import {
-  SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
-  SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE
-} from '../foundation/service-wire-constants.generated';
 import { OperationTimeoutError } from '../foundation/operation-registry';
 import { durableRequestCanReplay } from '../foundation/durable-service-request';
 import { UINT64_MAX, ZlinkStreamContentType } from '@zlink-systems/stream-wire';
@@ -5897,17 +5893,15 @@ function maintenanceReplyRelay(
   const application =
     direct && completion.result.ok
       ? decodeApplicationPayload(
-          encodeMultipartApplicationPayload(
+          encodeFrameworkMultipartApplicationMessage(
             encodeActorReply(
               Buffer.from(packet.header, 'base64'),
               ZLinkStreamMessageKind.Response,
               value,
               serializers,
               flowEnabled
-            ),
-            SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
-            SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE
-          )
+            )
+          ).takeData()
         )
       : undefined;
   return {

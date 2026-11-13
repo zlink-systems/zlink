@@ -124,11 +124,17 @@ export function submitBindingAsyncSend(
   payload: unknown
 ): Promise<void> {
   try {
-    const submission = submitBindingSend(operation, payload);
-    return submission.result === SubmitResult.Backpressured ? submission.admitted : completedSend;
+    return sendAdmission(submitBindingSend(operation, payload));
   } catch (error) {
     return Promise.reject(error);
   }
+}
+
+/** An OK submit has no admission left; only a backpressured send waits for its token. */
+export function sendAdmission(
+  submission: import('../raw-binding-port').ZLinkRawSendSubmission
+): Promise<void> {
+  return submission.result === SubmitResult.Backpressured ? submission.admitted : completedSend;
 }
 
 export function submitBindingSend(

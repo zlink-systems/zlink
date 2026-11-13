@@ -1,6 +1,9 @@
+import type { ServiceWireOwnedFrame } from '../foundation/service-wire-m6a-codec';
 import type { ConnectionAttempt } from '@zlink-systems/zlink';
 import type { OperationHandle } from '../foundation/operation-registry';
 import type { SubmitResult } from './runtime-values';
+
+export type ZLinkRawOutboundPart = Uint8Array | string | ServiceWireOwnedFrame;
 
 export interface ZLinkRawSendSubmission {
   readonly result: typeof SubmitResult.Ok | typeof SubmitResult.Backpressured;
@@ -16,7 +19,7 @@ export interface ZLinkRawReceivedRecord {
    * record (Core ROUTER §10.1); 0n for a non-ROUTER receive. Equality only.
    */
   readonly routeGeneration: bigint;
-  readonly reply?: (parts: readonly (Uint8Array | string)[]) => void;
+  readonly reply?: (parts: readonly ZLinkRawOutboundPart[]) => void;
   readonly parts: readonly Buffer[];
   /** Releases the ordinary Framework-owned receive record exactly once. */
   close(): void;
@@ -61,15 +64,15 @@ export interface ZLinkRawRouterRoute {
 export interface ZLinkRawRouterPort extends ZLinkRawSocketPort {
   setReceiveFlowState(state: 'running' | 'paused'): void;
   /** Reports Core submit synchronously; admitted observes only pending admission. */
-  submitSend(targetRid: string, parts: readonly Uint8Array[]): ZLinkRawSendSubmission;
+  submitSend(targetRid: string, parts: readonly ZLinkRawOutboundPart[]): ZLinkRawSendSubmission;
   disconnectRid?(routingId: string): void;
   localEndpoint(): string;
   setRoutingId(routingId: string): void;
   connectToRoutingId(routingId: string, endpoint: string): void;
-  send(targetRid: string, parts: readonly Uint8Array[]): Promise<void>;
+  send(targetRid: string, parts: readonly ZLinkRawOutboundPart[]): Promise<void>;
   request<T>(
     targetRid: string,
-    parts: readonly Uint8Array[],
+    parts: readonly ZLinkRawOutboundPart[],
     timeoutMs: number,
     onReply: (parts: readonly Buffer[]) => T,
     onFailed: (error: unknown) => T,
@@ -85,9 +88,9 @@ export interface ZLinkRawRouterPort extends ZLinkRawSocketPort {
 
 export interface ZLinkRawDealerPort extends ZLinkRawSocketPort {
   setRoutingId(routingId: string): void;
-  send(parts: readonly Uint8Array[]): Promise<void>;
+  send(parts: readonly ZLinkRawOutboundPart[]): Promise<void>;
   request(
-    parts: readonly Uint8Array[],
+    parts: readonly ZLinkRawOutboundPart[],
     timeoutMs: number,
     onAdmitted?: () => void
   ): Promise<readonly Buffer[]>;
