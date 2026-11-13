@@ -44,6 +44,8 @@ import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 @EnableZLinkFramework
 @SpringBootApplication(proxyBeanMethods = false)
 public class ZLinkFrameworkBenchServer {
+    private static final ZLinkServiceM6AWireCodec SERVICE_WIRE =
+            new ZLinkServiceM6AWireCodec();
     // These are handed to the context as @Bean METHODS, not as singletons registered
     // on the bean factory. A registered singleton has an instance but no bean
     // DEFINITION, and the framework's Spring handler factory asks whether each
@@ -224,11 +226,10 @@ public class ZLinkFrameworkBenchServer {
             metrics.recordError();
             return;
         }
-        var serviceWire = new ZLinkServiceM6AWireCodec();
         long correlation = 0;
         try {
             if (received.replyToken().isPresent()) {
-                var serviceHeader = serviceWire.decodeChannelRequestHeader(
+                var serviceHeader = SERVICE_WIRE.decodeChannelRequestHeader(
                         wireParts.getFirst().toByteArray());
                 if (!BenchContract.CHANNEL_NAME.equals(serviceHeader.channelName())) {
                     metrics.recordError();
@@ -236,7 +237,7 @@ public class ZLinkFrameworkBenchServer {
                 }
                 correlation = serviceHeader.correlation();
             } else if (!BenchContract.CHANNEL_NAME.equals(
-                    serviceWire.decodeChannelSendHeader(wireParts.getFirst().toByteArray()))) {
+                    SERVICE_WIRE.decodeChannelSendHeader(wireParts.getFirst().toByteArray()))) {
                 metrics.recordError();
                 return;
             }
@@ -274,7 +275,7 @@ public class ZLinkFrameworkBenchServer {
                         Message framed = ZLinkServiceM6AWireCodec.encodeFrameworkMultipartMessage(
                                 java.util.List.of(responseHeader, responseBody));
                         Message serviceHeader = Message.from(
-                                serviceWire.encodeReplyHeader(replyCorrelation, 0, 0))) {
+                                SERVICE_WIRE.encodeReplyHeader(replyCorrelation, 0, 0))) {
                     received.reply().message(serviceHeader).message(framed).submit();
                 }
             }
