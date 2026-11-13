@@ -2,7 +2,7 @@
 
 ## 판정
 
-판정은 **bench configuration/call-shape fault**다. L5~L7 bench의 **admission 단계 전달 누락**이 원인이다. Framework runtime 결함이나 Framework 전용 in-flight 제한으로 분류하지 않는다. Main bench는 `admitted()`를 기다린 뒤 같은 stream의 다음 request를 제출하지만, ladder는 reply future만 반환해 이 대기를 생략한다. 고정 window 추가나 timeout·capacity 증가는 필요하지 않다.
+판정은 **bench configuration/call-shape fault**다. L5~L7 bench의 [admission 단계 전달 누락](/root/worktree/zlink-v21-s033/lad-java-l57p/framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/FrameworkStack.java:177)이 원인이다. Framework runtime 결함이나 Framework 전용 in-flight 제한으로 분류하지 않는다. Main bench는 `admitted()`를 기다린 뒤 같은 stream의 다음 request를 제출하지만, ladder는 reply future만 반환해 이 대기를 생략한다. 고정 window 추가나 timeout·capacity 증가는 필요하지 않다.
 
 초기 소스는 `/root/worktree/zlink-v21-s033/lad-java-l57p`, branch `exp/4350-java-ladder-l57p`, commit `ee7e5c3343bda3bf2069395b66fbe39fc7eb5507`이다. 최초 `git status --short`는 비어 있었다. 이 보고서는 실패 재현의 결과이며 처리량 성능 판정을 하지 않는다.
 
@@ -50,7 +50,7 @@ Bench 패턴의 기준은 `framework/bench/grpc/README.ko.md:95-101`이다. Repl
 
 `peak_in_flight`는 `BenchDrivers.java:914-918`에서 stream별 peak를 합산하므로 실제 동시 최대의 상계다. 따라서 slot 한도 초과의 실측 근거는 합산 peak만이 아니라 위 `currentInFlight` 표본이다. Logical in-flight에는 아직 Core slot을 얻지 않은 Framework 작업도 포함된다. Core slot 사용량 자체와 owner/application queue depth는 `/bench/stats`에 노출되지 않아 측정하지 않았다.
 
-4K counted의 집계도 같은 경계를 보인다([results.json](raw/baseline-L5_7/request-backpressure-4096/counted/run1/zlink-framework-java-request-backpressure-4096/results.json)). `submitted − received = 165,553 − 72,221 = 93,332`는 capacity 오류 수와 같고, `received − completed = 72,221 − 34,279 = 37,942`는 timeout 수와 같다. Target의 오류는 0이다. Timeout은 target이 request를 받지 않았다는 뜻이 아니다.
+4K counted의 집계도 같은 경계를 보인다([results.json](raw/baseline-L5_7/request-backpressure-4096/counted/run1/zlink-framework-java-request-backpressure-4096/results.json)). `submitted − received = 165,553 − 72,221 = 93,332`는 capacity 오류 수와 같고, `received − completed = 72,221 − 34,279 = 37,942`는 timeout 수와 같다. Target의 오류는 0이다. 이 실행에서는 timeout 요청도 target 수신 집계에 포함됐다는 관계가 확인된다.
 
 기존 trace의 실패 event에는 `errorType`/`errorMessage`가 없었다. 개별 flow의 오류 종류는 추정하지 않고, 오류 종류별 정확한 건수는 같은 run의 `results.warmup.json`과 source의 `client_error` 집계를 사용했다. Trace-on 실행은 계측 부하가 있으므로 처리량 비교에서 제외한다. 이후 대조는 모두 기본 trace 설정으로 실행했다.
 
@@ -58,7 +58,29 @@ Bench 패턴의 기준은 `framework/bench/grpc/README.ko.md:95-101`이다. Repl
 
 모든 raw는 `jl57bp/raw/`에 보존한다. 아래 표에서 `warm` 디렉터리는 버린 선행 실행이고, `counted` 디렉터리는 뒤의 진단 실행이다. 각 실행 내부의 10초 warmup은 `results.warmup.json`, 5초 active는 `results.json`에 따로 기록된다. **이번 1K active 오류는 재현되지 않았고, 내부 warmup에서 두 오류 종류가 재현됐다.** 4K는 내부 warmup과 active에서 모두 재현됐다. 따라서 1K active에서 항상 실패한다고 주장하지 않는다.
 
-<!-- RESULT_TABLES -->
+
+### Counted 실행 — active 5초
+
+| 경로 | payload | submitted | completed | received | capacity / timeout | peak in-flight | raw |
+|---|---:|---:|---:|---:|---:|---:|---|
+| baseline-L5_7 | 1024 | 197,797 | 197,797 | 197,797 | 0 / 0 | 9,701 | [result](raw/baseline-L5_7/request-backpressure-1024/counted/run1/zlink-framework-java-request-backpressure-1024/results.json) |
+| baseline-L5_7 | 4096 | 165,553 | 34,279 | 72,221 | 93,332 / 37,942 | 78,600 | [result](raw/baseline-L5_7/request-backpressure-4096/counted/run1/zlink-framework-java-request-backpressure-4096/results.json) |
+| baseline-main | 1024 | 224,394 | 224,394 | 224,394 | 0 / 0 | 845 | [result](raw/baseline-main/request-backpressure-1024/counted/run1/zlink-framework-java-request-backpressure-1024/results.json) |
+| baseline-main | 4096 | 218,446 | 218,446 | 218,446 | 0 / 0 | 581 | [result](raw/baseline-main/request-backpressure-4096/counted/run1/zlink-framework-java-request-backpressure-4096/results.json) |
+| fixed-L5_7 | 1024 | 184,309 | 184,309 | 184,309 | 0 / 0 | 767 | [result](raw/fixed-L5_7/request-backpressure-1024/counted/run1/zlink-framework-java-request-backpressure-1024/results.json) |
+| fixed-L5_7 | 4096 | 136,324 | 136,324 | 136,324 | 0 / 0 | 463 | [result](raw/fixed-L5_7/request-backpressure-4096/counted/run1/zlink-framework-java-request-backpressure-4096/results.json) |
+
+### 같은 counted 실행 — 내부 warmup 10초
+
+| 경로 | payload | submitted | completed | capacity / timeout | peak in-flight | raw |
+|---|---:|---:|---:|---:|---:|---|
+| baseline-L5_7 | 1024 | 221,530 | 36,194 | 146,893 / 38,443 | 76,292 | [warmup](raw/baseline-L5_7/request-backpressure-1024/counted/run1/zlink-framework-java-request-backpressure-1024/results.warmup.json) |
+| baseline-L5_7 | 4096 | 186,121 | 36,984 | 108,237 / 40,900 | 77,082 | [warmup](raw/baseline-L5_7/request-backpressure-4096/counted/run1/zlink-framework-java-request-backpressure-4096/results.warmup.json) |
+| baseline-main | 1024 | 278,505 | 278,505 | 0 / 0 | 930 | [warmup](raw/baseline-main/request-backpressure-1024/counted/run1/zlink-framework-java-request-backpressure-1024/results.warmup.json) |
+| baseline-main | 4096 | 280,575 | 280,575 | 0 / 0 | 757 | [warmup](raw/baseline-main/request-backpressure-4096/counted/run1/zlink-framework-java-request-backpressure-4096/results.warmup.json) |
+| fixed-L5_7 | 1024 | 192,816 | 192,816 | 0 / 0 | 953 | [warmup](raw/fixed-L5_7/request-backpressure-1024/counted/run1/zlink-framework-java-request-backpressure-1024/results.warmup.json) |
+| fixed-L5_7 | 4096 | 136,978 | 136,978 | 0 / 0 | 607 | [warmup](raw/fixed-L5_7/request-backpressure-4096/counted/run1/zlink-framework-java-request-backpressure-4096/results.warmup.json) |
+
 
 전체 선행 warm·counted 실행의 phase별 수치는 [results-summary.json](raw/results-summary.json)에 있다. 오류가 난 실행은 throughput gate의 유효 셀로 사용하지 않는다. Main과 ladder는 payload 크기·submit thread 수·deadline·CPU 조건이 같고 serializer는 각각 protobuf/typed JSON이다. 수정 후에는 JSON을 유지한 채 admission 전달만 바꾸므로 serializer 변경을 원인 제거로 사용하지 않는다.
 
@@ -132,4 +154,33 @@ Main 원본 대조에서는 위 환경의 `ZLINK_BENCH_LADDER_L5_7`을 제거하
 - 수정 전/후 규칙 수: bench admission 대기 판정 위치 **1 → 1**(`BenchDrivers.runBackpressure`). Admission을 driver에 전달하지 않던 ladder adapter 경로를 바로잡았다. 새 state·flag·queue·lock·timer·retry는 없다.
 - 관련 호출 경로 점검: 발견 1건(admission 전달 누락), 수정 1건, 별도 이관 0건이다. 새 helper·중복 DTO·매핑표를 추가하지 않았다.
 
-<!-- FINAL_VALIDATION -->
+- 검증: [AdmissionProgressTest](raw/admission-progress-test.log) exit 0. Admission 전 다음 제출 금지, admission 뒤 reply 대기 없이 다음 제출, admission 실패의 단일 집계를 기존 테스트로 확인했다.
+- 수정 후 counted: 1K **184,309건**, 4K **136,324건**이 각각 `submitted=completed=received`, `errors=0`, `abandoned=0`이다. 위 결과 표의 각 raw가 근거다. 별도 discarded warm 실행과 내부 warmup도 모두 오류 0이다.
+- Scheduling·집계 검사: [verification.json](raw/verification.json)의 **13개 실행**에서 모든 기록 thread가 시작·mid-active에 `SCHED_OTHER`, source mask 0–5 / target 8–13이었다. Source terminal 집계와 target 집계도 검사했다. 원본 실패 raw의 오류 건수와 집계를 그대로 보존했다.
+- 로컬 커밋: `cffa8009d33bb520fe3b783c41a2184b2d91902d` — `bench(java): preserve ladder request admission (#4350)`. 초기 commit 이후 커밋은 이 하나이며 branch는 `exp/4350-java-ladder-l57p`다. [최종 상태](raw/final-state.json)는 clean worktree와 수정 source SHA-256을 기록한다. Push·GitHub 작업은 하지 않았다.
+- 측정 시점은 초기 HEAD + dirty=true이며, 각 fixed `artifacts.txt`의 source SHA-256과 설치 JAR hash가 최종 커밋에 해당하는 source/build를 식별한다. 커밋 뒤 source 내용은 바뀌지 않았다.
+- 남은 실패: 수정 후 이 범위의 실패는 없다. 이번 원본 1K active에서는 오류가 재현되지 않았다는 한계와 queue depth·Core slot occupancy가 공개 bench stats에 없다는 한계는 위에 구분했다. 이 결과는 짧은 진단 검증이며 throughput gate 판정은 아니다.
+
+### Exclusive hold 기록
+
+| 용도 | UTC 시작–종료 | 경과 | raw |
+|---|---|---:|---|
+| Normal flow 진단 | 20:37:06–20:38:10 | 64초 | [holds](raw/holds.txt) |
+| 원본 L5~L7 두 셀 | 20:40:20–20:46:01 | 341초 | [holds](raw/holds.txt) |
+| Main 두 셀 | 20:50:27–20:52:05 | 98초 | [holds](raw/holds.txt) |
+| Admission 테스트 + 수정 후 두 셀 | 21:19:36–21:21:14 | 98초 | [fixed hold](raw/fixed-hold.txt) |
+
+모든 hold는 `flock -x /root/jobs/fx/cx/measure.lock` 아래에서 10분 이내였다. 날짜는 2026-11-13 UTC다. 빌드와 집계는 hold 밖에서 수행했다.
+
+수정 후 빌드는 lock 밖에서 다음 명령으로 성공했다([build-fixed.log](raw/build-fixed.log)). `:client:testClasses`는 테스트 클래스를 컴파일하며 테스트 실행은 아래 별도 hold에서 한다.
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 \
+PATH=/usr/lib/jvm/java-25-openjdk-amd64/bin:$PATH \
+framework/bench/grpc/java/gradlew --no-daemon --max-workers=1 \
+  assemble installDist :client:testClasses
+
+flock -x /root/jobs/fx/cx/measure.lock \
+  timeout --signal=TERM --kill-after=10s 580s \
+  bash /root/jobs/fx/cx/v21/s033/jl57bp/tools/run-fixed-locked.sh
+```

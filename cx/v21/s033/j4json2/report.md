@@ -48,7 +48,22 @@ writer/generator는 per-call이지만 ObjectWriter wrapper 생성이나 per-call
 
 ## Profile 증거
 
-실행 전 기록이다. scratch build 후 L3/L4 send-saturation 4096, request-serial 1024를 CPU+allocation JFR로 확인하고 이 절을 갱신한다. [호출 비교](call-shape.md), [profile 설정](raw/profile.jfc), [실행 script](raw/profile-bench.py). 모든 실행은 taskset 6-7,14-15를 상속한다. profile process 수명은 timeout 19.6 s + kill grace 0.3 s로 각각 20 s 미만이며 throughput 수치는 개선 판정에 사용하지 않는다.
+수정 전 production profile을 확인했다. L3 send 4K와 serial 1K는 `raw/before-sync-L3-*`, L4 send 4K는 `raw/before-overlap-L4-send-saturation-4096`, L4 serial 1K는 `raw/before-query-L4-request-serial-1024`에 있다. 각 cell의 source/target JFR, active stats, process 수명, 시작·중간 thread affinity/policy 및 artifact SHA-256을 보존했다. 모든 process는 taskset 6-7,14-15를 상속하며 JFR recording duration=18 s, JVM watchdog=19.6 s + kill grace 0.3 s다. **msg/s나 처리율 비율은 비교하지 않는다.** 네 cell 모두 errors=0·submitted=completed=received이며 모든 관측 thread affinity가 6-7,14-15이고 JVM 최대 수명은 18.63–19.03 s다. [검증 원문](raw/before-profile-validation.json). scheduling policy는 각 raw에 기록했으며 다른 측정 hold 때는 SCHED_IDLE로 실행한 profile이다. counted throughput run으로 사용하지 않는다.
+
+| 실제 증거 | 관측 |
+|---|---|
+| [L4 send target JFR summary](raw/before-overlap-L4-send-saturation-4096/target.summary.json) | active window CPU/native sample 528개 중 typed decode stack에 202개. allocation stack에 StringUTF16.compress, String.encode8859_1, Arrays.copyOfRange(String backing), Base64$Decoder.decode, Base64$Encoder.encode, decodeJson:109의 whole JSON heap copy가 나타난다 |
+| [L4 send source summary](raw/before-overlap-L4-send-saturation-4096/source.summary.json) | ByteArrayBuilder.toByteArray/_allocMore, UTF8JsonGenerator, DefaultSerializerProvider, IOContext, LinkedList.Node가 나타난다. 입력 bytes→JSON String→UTF-8 경로가 아니라 streaming generator와 builder copy 경로다 |
+| [L3 summaries](raw/before-sync-L3-all-summaries.json) | 같은 service frame·binding 경로를 실행하지만 typed JsonMessageSerializer/profile의 CPU·allocation stack은 없다 |
+| [고정 횟수 allocation counter](raw/allocation-before.csv) | ThreadMXBean으로 각 크기·operation을 5000번 warm한 뒤 5000번의 thread allocated bytes를 읽었다. 1K encode 1848 B/message, heap decode 7464 B/message, native decode 8860 B/message. 4K encode 11184.5 B/message, heap decode 26920 B/message, native decode 32360 B/message |
+
+JFR allocation weight는 sampling 추정치이므로 site별 정확한 allocation 수나 message당 B로 나누지 않는다. per-message 값은 고정 횟수 counter이며 String/payload buffer 개수는 library source와 bytecode로 대조한다. counter의 ByteBuffer wrapper 등 control object는 JIT scalar replacement에 따라 달라질 수 있다. B=0에서는 empty String/backing 공유가 있어 일반 N>0의 buffer 개수를 그대로 적용하지 않는다.
+
+[호출 비교](call-shape.md), [profile 설정](raw/profile.jfc), [실행 script](raw/profile-bench.py), [allocation probe](raw/TypedBytesAllocationProbe.java), [production 소스 동일성](raw/production-base-parity.json). 준비 실패·cap에 의해 잘린 자료는 유효 cell과 구분하고 삭제하지 않는다.
+
+### Scratch L4 선택 조건
+
+9d9901eb2c의 `framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/BenchClient.java:158-162`는 mode selector에서 L4를 누락한다. L4 단독 flag는 ready probe가 잘못된 route 경로로 가므로 profile에 쓰지 않는다. 소스 수정 없이 L3+L4 flag를 함께 주면 mode selector가 binding-shaped 경로를 선택하고 `FrameworkStack.java:136-143`, target `ZLinkFrameworkBenchServer.java:202-207`는 L4를 우선한다. DTO·production codec·측정 조건을 바꾸지 않는다. `before-*`의 준비 실패 raw는 남기며 유효 profile과 섞지 않는다.
 
 ## 교차언어 비교
 
@@ -77,4 +92,4 @@ C++의 동적 storage 수는 allocator/container 구현에 의존한다. 이 소
 
 ## 구현·검증 결과
 
-아직 production 변경 전이다. profile 확인 후 unit test로 0,1,2,3,127,128,1024,4096 bytes의 JSON byte-identical 결과·roundtrip·invalid Base64 rejection 및 token String 미생성을 검증한다. Java format check와 touched path framework tests를 수행한 뒤 결과와 local commit을 기입한다.
+구현 전 보고서 snapshot은 raw/report-before-implementation.md에 남겼다. scratch production decoder 수정 및 작업 branch의 회귀 test 추가 후, quiet guard로 build/test가 정지된 상태다. 최종 검증에서는 unit test로 0,1,2,3,127,128,1024,4096 bytes의 JSON byte-identical 결과·roundtrip·invalid Base64 rejection 및 token String 미생성을 검증한다. Java format check와 touched path framework tests를 수행한 뒤 결과와 local commit을 기입한다.

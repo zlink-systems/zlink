@@ -36,3 +36,7 @@
 - Java post-fix JFR: CanonicalReader.string의 char[] sample source/target 모두 0(전 39,059,456/37,748,736B). 228,958건 count 일치·오류 0, process 전체 16.79초. 관련 permit/lane/multipart/ID/flow helper class parity는 `raw/java-profile-dependency-parity.json`.
 
 - Node 강제 compile 완료. source보다 최신인 dist에서 NON_ASCII_CORRELATION_ID 존재, 기각한 CANONICAL_STRING_SPECIAL/boolean deadline Map 부재, 생성 ID 직접 반환을 확인했다. `raw/node-final-fingerprint.json`. 이 artifact로 codec profile과 최종 185개 focused test를 실행한다.
+
+- Node 최종 L2 profile 직전: scratch 2bef18aa94+최종 production codec/새 test, main source와 byte 동일. fresh/hash/dirty `raw/node-scratch-fixed-fingerprint.json`. 원래 binding SHA ed260e4... 유지. receive raw `main.js:47-81` vs ladder `:166-205`, reply raw `:82-86` vs ladder `:206-212`; 변경은 ID 중복 검사·deadline Map 제거, wait/hop/body copy 추가 0. 최종 artifact의 185 focused tests·targeted format/lint 통과. 단독 paired 비교는 `raw/node/paired-codec/summary.json`.
+
+- 완료: Java ddc13b0615, Node 5f3a59bff6 local commit. main clean. 최종 Java 1348/Node 185 tests, 두 언어 format 및 Node lint 통과. post-fix L2 Java 228958/Node 48336 count 일치·errors=abandoned=0. report.md에 원인·소유/spec·parity·분류·규칙 수·검증·남은 성능 판정 범위를 반영했다. push/PR/GitHub/measure.lock 사용 없음.

@@ -8,6 +8,13 @@ out.mkdir(exist_ok=False)
 procs=[]
 files=[]
 start=time.monotonic()
+scratch=build.parent.with_name('c4json-scratch')
+source_time=max(p.stat().st_mtime for top in ['framework/bench/grpc/cpp','framework/languages/cpp','bindings/cpp'] for p in (scratch/top).rglob('*') if p.is_file() and p.suffix in ['.hpp','.cpp','.h'])
+artifacts={str(build/n):{'sha256':hashlib.sha256((build/n).read_bytes()).hexdigest(),'newer_than_sources':(build/n).stat().st_mtime>source_time} for n in ['bench_cpp_client','bench_cpp_framework_server']}
+assert all(v['newer_than_sources'] for v in artifacts.values()),artifacts
+with (job/'progress.md').open('a') as f:
+ f.write('\n- BEFORE '+str(out)+': scratch commit 62e766f88d, production base df42a4df40; profile only, call-shape.md; artifacts='+json.dumps(artifacts)+'\n')
+(out/'before.json').write_text(json.dumps({'artifacts':artifacts,'scratch_commit':'62e766f88d','worktree_base':'df42a4df40','call_shape':'call-shape.md','cpus':'6-7,14-15'},indent=2))
 def expired(*args):raise TimeoutError('19 second profile run limit')
 signal.signal(signal.SIGALRM,expired);signal.alarm(19)
 def spawn(args,name,env=None):
