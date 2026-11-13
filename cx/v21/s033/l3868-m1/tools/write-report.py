@@ -84,7 +84,7 @@ def main():
  lines+=['','| 셀 | daily binding | L0 첫 실행 | L1 첫 실행 | L0÷daily | L1÷daily | 첫 step loss |','|---|---:|---:|---:|---:|---:|---:|']
  for c in cells:
   v=c['variants'];d=c['daily'];row=f'{c["pattern"]} {c["size"]//1024}K'
-  b=link(f'{d["msg_s"]:,.0f}',d['raw']) if d else '미완료'
+  b=link(f'{d["msg_s"]:,.0f}',d['raw']) if d else linked(v['binding'])
   a=linked(stats(v['L0']['runs'][:1])) if v['L0'] else '미완료'
   n=linked(stats(v['L1']['runs'][:1])) if v['L1'] else '미완료'
   ratio=lambda k:f'{c[k]:.4f}' if k in c else '—'
