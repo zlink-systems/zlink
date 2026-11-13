@@ -1,0 +1,1 @@
+2026-11-13T23:27:20.028753+00:00 c4json raw 재집계: decode 1K=22회/9,424 B, 4K=26회/36,306 B. typed frame480 B, parser state8 B, raw token4,095/16,383 B, unescaped token3,817/15,339 B, output1,024/4,096 B. raw/c4json-decode-costs.json. 현재 build slot 대기, 새 측정 없음.

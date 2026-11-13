@@ -176,3 +176,5 @@ Framework가 추가하는 실행 자원 전환을 message의 호출 경로에서
 남은 항목은 공식 동일 조건에서의 L4/L5~L7 21% budget 재판정이다. 이번 작업에서는 지시대로 measure.lock을 사용하지 않았고 처리량 판정을 하지 않았다. Target generic queue bookkeeping, Spring handler 초기화와 JSON 비용은 profile에 보존했다. 이 비용을 scope 공유·serializer 등록·timeout 증가로 우회하지 않았다. Core unit test와 format의 남은 실패는 없다.
 
 최종 scheduling 감사에서 초기 L4 send 진단 `baseline-c1-L4-send`의 관측 정책이 SCHED_IDLE임을 확인했다. 그 자료는 raw에 보존하고 최종 L4 표에서 제외했다. 같은 호출·JAR·CPU 조건의 `c1-L4-send-policy-confirmed`를 새로 실행해 count 일치·errors 0·시작/active 전체 thread SCHED_OTHER를 확인했다. L5~L7 전후 네 실행도 두 snapshot에서 모두 SCHED_OTHER였다. 정책을 강제로 바꾸거나 measure.lock을 취득하지 않았다.
+
+로컬 commit: `da04022584` (`perf/4356-java-l57`). Push·PR 없음. Worktree clean, 남은 자체 Java/Gradle/profile process 0. 최종 검증은 [metadata](raw/final-verification.json)다. 모든 raw와 재현용 scratch를 보존했다.
