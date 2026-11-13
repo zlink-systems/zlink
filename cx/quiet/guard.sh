@@ -6,7 +6,7 @@
 #    so it cannot preempt the measured threads; restored to SCHED_OTHER on release.
 # Each pause is logged with the holder PID so a run that overlapped can be found.
 L=/root/jobs/fx/cx/measure.lock; LOG=/root/jobs/fx/cx/quiet/guard.log
-BUILD='stress-ng|cc1plus|/cc1 |collect2|bin/ld |ld\.(bfd|gold) |/ninja|ninja -j|cmake --build|cmake -S|MSBuild\.dll|VBCSCompiler|dotnet (build|msbuild|publish|pack|restore|test)|GradleDaemon|GradleWorkerMain|GradleWrapperMain|gradlew|javac|kotlinc|/tsc( |$)|esbuild|npm (run )?(build|test)|node --test|ctest|testhost|vstest|_test( |$)|protoc'
+BUILD='stress-ng|cc1plus|/cc1 |collect2|bin/ld |ld\.(bfd|gold) |/ninja|ninja -j|cmake --build|cmake -S|MSBuild\.dll|VBCSCompiler|dotnet (build|msbuild|publish|pack|restore|test)|GradleDaemon|GradleWorkerMain|GradleWrapperMain|gradlew|javac|kotlinc|/tsc( |$)|esbuild|npm (run )?(build|test)|node --test|ctest|testhost|vstest|_test( |$)|protoc|(^| |/)(tar|zstd|xz|pigz|gzip|du|bfs|find|rg|rsync|sha256sum)( |$)|git (gc|push|fetch|pull|clone|repack|fsck|archive)'
 AGENTS='codex exec|codex-code-|claude --'
 stopped=(); idled=()
 desc() { local p=$1; echo $p; for c in $(pgrep -P $p); do desc $c; done; }
@@ -22,13 +22,16 @@ while :; do
   h=$(lslocks -n -o PID,MODE,PATH | awk -v l=$L '$3==l && $2=="WRITE"{print $1; exit}')
   if [ -n "$h" ]; then
     declare -A mine=(); for p in $(desc $h); do mine[$p]=1; done
+    # the measurement itself must run SCHED_OTHER: its waiter was forked by an agent that an
+    # earlier hold set SCHED_IDLE, and children inherit that (A/A + Java m1 ran IDLE, 11-13 16:3x)
+    for p in $h $(desc $h); do chrt -a -o -p 0 $p 2>/dev/null; done
     mine[$$]=1
     # the holder's ancestors (its own job shell/codex) stay as they are
     a=$h; while [ -n "$a" ] && [ "$a" -gt 1 ]; do mine[$a]=1; a=$(awk '{print $4}' /proc/$a/stat 2>/dev/null); done
     while read -r pid args; do
       [ -n "${mine[$pid]}" ] && continue
       if [[ " ${stopped[*]} " != *" $pid "* ]] && kill -STOP $pid 2>/dev/null; then stopped+=($pid); echo "$(date -u +%FT%TZ) holder=$h stop $pid ${args:0:120}" >> $LOG; fi
-    done < <(ps -eo pid=,args= | grep -E "$BUILD" | grep -vE 'grep|guard\.sh|flock ')
+    done < <(ps -eo pid=,args= | grep -E "$BUILD" | grep -vE 'grep|guard\.sh|flock |dc\.ts|dchat ')
     for root in $(ps -eo pid=,args= | grep -E "$AGENTS" | grep -v grep | awk '{print $1}'); do
       for p in $(desc $root); do
         [ -n "${mine[$p]}" ] && continue

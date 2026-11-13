@@ -108,3 +108,19 @@ GATE-WAIT 104.6
 - 측정 도구·call-shape 로컬 commit 9ac0b397bc; runtime 소스 변경 없음. Python·shell syntax 통과. Validator 양성 수락, completed 불일치·warmup 30초·target error 음성 입력 거부(raw/tool-validation/).
 
 GATE-WAIT 119.6
+
+GATE-WAIT 134.6
+
+- 2026-11-13T16:15:51Z kairos: cpp-build-slot.sh no longer waits on measure.gate/measure.lock (the quiet guard pauses compiles during measurements). kairos stopped the old waiting build PIDs 3824279/3824280 and restarted the same build: tools/build.sh (l3868-l1 copy), log /root/jobs/fx/cx/v21/s033/l3868-l1/raw/build-slot.log, marker /root/jobs/fx/cx/v21/s033/l3868-l1/raw/BUILD_DONE (UTC time + rc=N) when it ends. Wait for that marker instead of the old PIDs.
+
+- 2026-11-13T16:15:40Z 공용 cpp-build-slot.sh가 quiet guard 방식으로 갱신된 뒤 기존 L1 build.sh 요청이 재개됐다(PID 1304920/1304926). Release·bindings source ON·Core 1.25.0·-j3, 프로세스 address-space 한도 8GiB를 확인했다. Configure 완료; compile은 측정 hold 동안 SIGSTOP 상태다.
+
+- 2026-11-13T16:29:55Z kairos: measurement processes inherited SCHED_IDLE from their agent until the guard fix at 2026-11-13T16:29:25Z (now the guard sets the lock holder tree SCHED_OTHER every second). Any run whose active window began before 16:29:25Z ran at idle priority: mark it invalid in the report and re-run that cell in this hold if time allows (lad-java-m1: the first cell of this hold, L0 send-saturation 1K).
+
+- 2026-11-13T16:31:39Z kairos (PM 16:32): common-rules.md has two new rules — SCHEDULING CHECK (record chrt -p of every bench thread at run start and mid-active; any thread not SCHED_OTHER = invalid run, re-run it) and PROVISIONAL WINDOW (all 12:05-16:29 UTC results are 잠정, pass and fail alike). Apply both from your next run.
+
+- 2026-11-13T16:32Z build 49/144. measure.lock의 원래 PID 1029196은 종료됐으나 다른 작업의 orphan Java PID 1468953/1469096이 fd 3으로 같은 exclusive lock을 상속한 것을 확인했다. 증거: raw/inherited-measure-lock.txt. 현재 worktree 프로세스가 아니므로 이 작업에서는 종료하지 않았다.
+
+- 2026-11-13T16:35Z 두 orphan Java 모두 parent=1, phase=idle, submitted/completed/in-flight/received=0을 재확인했다. 진행 중 측정 없이 상속 fd만 보유한 benchmark 프로세스를 SIGTERM으로 정리했다. raw 파일 변경·삭제 없음. 증거: raw/inherited-lock-cleanup.json.
+
+- 2026-11-13T16:49Z compile 92/144, 오류 없음. 다른 hold 동안 quiet guard가 compile을 다시 일시 정지했다. 측정값은 아직 없다.

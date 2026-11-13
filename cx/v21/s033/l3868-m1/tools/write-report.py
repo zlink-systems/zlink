@@ -27,7 +27,14 @@ def linked(s):
  return ' / '.join(link(f'{r["msg_s"]:,.0f}',r['path']) for r in s['runs'])
 def reference():
  p=RAW/'binding-daily-reference.json'
- return json.loads(p.read_text()) if p.exists() else None
+ if not p.exists():return None
+ value=json.loads(p.read_text())
+ value.setdefault('date_utc',value.get('utc_date'))
+ for c in value['cells'].values():
+  c.setdefault('msg_s',c.get('msg_per_second'))
+  c.setdefault('raw',(c.get('raw_paths') or [None])[0])
+  assert c['msg_s'] and c['raw']
+ return value
 def main():
  phase=sys.argv[1] if len(sys.argv)>1 else 'partial';ref=reference();cells=[];plan=[];profiles=[]
  for pattern in PATTERNS:
@@ -96,11 +103,11 @@ def main():
   n=len(c['step_previous']['runs']) if 'step_previous' in c else '—'
   lines.append(f'| {c["pattern"]} {c["size"]//1024}K | {c.get("L0_verdict","미완료")} | {c.get("L1_verdict","미완료")} | {loss} | {n} |')
  if any(v and len(v['runs'])==3 for c in cells for v in c['variants'].values()):
-  lines+=['','| 3회 확인 셀 | variant | 실행값(msg/s) | median | G5 spread |','|---|---|---|---:|---:|']
+  lines+=['','| 3회 확인 셀 | variant | 실행값(msg/s) | median | median÷daily | G5 spread |','|---|---|---|---:|---:|---:|']
   for c in cells:
    for name,v in c['variants'].items():
     if v and len(v['runs'])==3:
-     lines.append(f'| {c["pattern"]} {c["size"]//1024}K | {name} | {linked(v)} | {v["median"]:,.0f} | {100*v["spread"]:.2f}% ({"통과" if v["g5"] else "실패"}) |')
+     lines.append(f'| {c["pattern"]} {c["size"]//1024}K | {name} | {linked(v)} | {v["median"]:,.0f} | {v["median"]/c["daily"]["msg_s"]:.4f} | {100*v["spread"]:.2f}% ({"통과" if v["g5"] else "실패"}) |')
   for c in cells:
    if 'L0_confirm_ratio' in c:lines.append(f'\n{c["pattern"]} {c["size"]//1024}K L0 3회 확인 ratio(이번 hold pair median): {c["L0_confirm_ratio"]:.4f}. Daily ratio와 구분하며 L0 확인 판정에만 사용한다.')
  lines+=['',f'[hold 시작](raw/lock-windows/{phase}-before.txt) · [hold 종료](raw/lock-windows/{phase}-after.txt) · [계산 입력·실행별 원본](raw/summary.json).']

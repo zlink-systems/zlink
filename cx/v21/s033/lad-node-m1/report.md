@@ -2,15 +2,7 @@
 
 기준 HEAD: `c512887606aeb686eccc53162d9f02c3c4db63ed` (L0 경로 정합성, L1 permit, L0R module-load switch 포함). 코드 변경 없음: 실험 코드는 이미 로컬 커밋 상태다.
 
-호출 형태 대조는 [call-shape.md](call-shape.md)에 기록했다. 측정 전에 커밋과 산출물 해시, binding/L0/L0R/L1 receive·reply 코드 위치를 `progress.md`에 기록한다.
-
-측정 결과는 lock hold 종료 직후 여기에 추가한다.
-
-## 진행 중 첫 수치
-
-| 시나리오 | 크기 | binding msg/s | 오류·완료 일치 | 원시 파일 |
-|---|---:|---:|---|---|
-| send-saturation | 1024 | 110892.6 | errors=0, submitted=completed=received=561108 | `raw/session/binding/run1/zlink-node-send-saturation-1024/results.json` |
+호출 형태 대조는 [call-shape.md](call-shape.md)에 기록했다. Binding과 L0/L0R은 두 ROUTER의 DontWait batch 및 setImmediate pump를 공유한다. L0는 고정 handler 직접 호출, L0R은 top-level Framework/queue 모듈 load, L1은 receive별 permit 추가다. Reply는 모두 새 protobuf body와 operation을 만들어 두 part를 submit한다.
 
 ## 기본 hold 결과
 
@@ -46,7 +38,7 @@ Target CPU sample 비율은 L0→L0R에서 `recv` `framework/languages/node/node
 ## 최종 판정
 
 - L0의 binding 대비 0.95 이상 기준은 send-saturation 4K에서 미달이다 (L0 78,579.6 / binding 87,063.2 msg/s, 원시 파일: `raw/session/L0/run1/zlink-framework-node-send-saturation-4096/results.json`, `raw/session/binding/run1/zlink-node-send-saturation-4096/results.json`).
-- L1 단계 기준은 기본 hold에서 세 셀 미달, 경계 확인 셀 두 곳 통과, 나머지 세 셀 통과다. 미달은 send-saturation 4K (17.19%), request-serial 1K (43.76%), request-serial 4K (13.73%)다. 위 기본 hold raw 표가 각 수치를 인용한다.
+- L1 단계 기준은 세 셀 미달, 세 셀 통과다. 미달은 send-saturation 4K (17.19%), request-serial 1K (43.76%), request-serial 4K (13.73%)다. send-saturation 1K와 request-backpressure 1K 경계 pair는 3회 확인 후 통과했고 request-backpressure 4K는 기본 hold에서 통과했다. 위 기본 hold raw 표가 각 수치를 인용한다.
 - L0R module-load 손실이 request-serial 4K에서 9.84%로 관측되어 profiling을 수행했다. Target RSS는 78.7→94.4 MiB, GC 표본 share는 0.6→1.7%였으며 상세 raw 위치는 profiling 절에 적었다.
 - 검증: `framework/bench/grpc/node/build.sh` 성공, framework queue `dist` 산출물이 해당 `src`보다 새롭고 native addon은 이 worktree의 `node_modules`에서 확인했다. 측정 셀은 모두 errors=0 및 submitted=completed=received 검사를 통과했다. 추가 테스트는 실행하지 않았다.
 - 구현 변경은 HEAD `c512887606aeb686eccc53162d9f02c3c4db63ed`에 이미 커밋되어 있어 이번 작업에서 새 코드 커밋은 없었다.
