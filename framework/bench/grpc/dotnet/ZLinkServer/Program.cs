@@ -7,6 +7,7 @@ using Zlink.Framework.Contracts.Channels;
 using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Contracts.Dispatch;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Messaging;
 
 var endpoint = ArgValue(args, "--endpoint") ?? "tcp://127.0.0.1:5214";
 var metricsUrl = ArgValue(args, "--metrics-url") ?? "http://127.0.0.1:5215";
@@ -15,7 +16,7 @@ var builder = WebApplication.CreateBuilder(args);
 ConfigureQuietLogging(builder);
 builder.WebHost.UseUrls(metricsUrl);
 builder.Services.AddSingleton<BenchServerMetrics>();
-#if !ZLINK_DOTNET_LADDER_L0 && !ZLINK_DOTNET_LADDER_L1
+#if !ZLINK_DOTNET_LADDER_L0 && !ZLINK_DOTNET_LADDER_L1 && !ZLINK_DOTNET_LADDER_L2
 builder.Services.AddZLinkFramework(framework =>
 {
     framework.Codecs.Use(ZLinkProtobufCodec.Default);
@@ -42,36 +43,61 @@ app.MapPost(
     }
 );
 app.MapGet("/bench/stats", () => Results.Ok(metrics.Snapshot()));
-#if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1
+#if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2
 using var context = Systems.Zlink.Zlink.CreateContext();
 using var router = context.CreateRouterSocket();
 router.SetRoutingId(RoutingId.From("bench-server"));
 router.Options.ReceiveTimeout = TimeSpan.FromMilliseconds(100);
 router.Bind(endpoint);
 var handler = new L0BenchHandler(metrics);
-#if ZLINK_DOTNET_LADDER_L1
-var queueCapacity = ZLinkApplicationJobQueueCapacityResolver.Resolve(
-    ZLinkApplicationJobQueueProfile.Balanced,
-    null,
-    ZLinkApplicationJobQueueCapacityResolver.ResolveEffectiveProcessorCount(
-        Environment.ProcessorCount
-    )
-);
-using var queue = new ZLinkApplicationJobQueue(queueCapacity);
-var receiver = Task.Run(() =>
-    RunL1Owner(router, handler, metrics, queue, app.Lifetime.ApplicationStopping)
-);
-#else
-var receiver = Task.Run(() => RunL0Owner(router, handler, metrics, app.Lifetime.ApplicationStopping));
-#endif
-try
+var ladderLevel = Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_LEVEL") ?? "L0";
+if (ladderLevel is not ("L0" or "L1" or "L2"))
+    throw new ArgumentOutOfRangeException(nameof(ladderLevel), ladderLevel, "Unknown ladder level.");
+var decodeEnvelope = ladderLevel == "L2";
+if (ladderLevel == "L0")
 {
-    await app.RunAsync();
+    var receiver = Task.Run(() =>
+        RunL0Owner(router, handler, metrics, decodeEnvelope, app.Lifetime.ApplicationStopping)
+    );
+    try
+    {
+        await app.RunAsync();
+    }
+    finally
+    {
+        context.Shutdown();
+        await receiver;
+    }
 }
-finally
+else
 {
-    context.Shutdown();
-    await receiver;
+    var queueCapacity = ZLinkApplicationJobQueueCapacityResolver.Resolve(
+        ZLinkApplicationJobQueueProfile.Balanced,
+        null,
+        ZLinkApplicationJobQueueCapacityResolver.ResolveEffectiveProcessorCount(
+            Environment.ProcessorCount
+        )
+    );
+    using var queue = new ZLinkApplicationJobQueue(queueCapacity);
+    var receiver = Task.Run(() =>
+        RunL1Owner(
+            router,
+            handler,
+            metrics,
+            queue,
+            decodeEnvelope,
+            app.Lifetime.ApplicationStopping
+        )
+    );
+    try
+    {
+        await app.RunAsync();
+    }
+    finally
+    {
+        context.Shutdown();
+        await receiver;
+    }
 }
 #else
 await app.RunAsync();
@@ -97,11 +123,12 @@ static string? ArgValue(string[] args, string name)
     return null;
 }
 
-#if ZLINK_DOTNET_LADDER_L0
+#if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2
 static void RunL0Owner(
     IRouterSocket router,
     L0BenchHandler handler,
     BenchServerMetrics metrics,
+    bool decodeEnvelope,
     CancellationToken stopping
 )
 {
@@ -112,6 +139,11 @@ static void RunL0Owner(
         {
             if (!router.Recv(received, RecvFlags.None))
                 continue;
+
+#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2
+            if (decodeEnvelope)
+                _ = ZLinkEnvelopeCodec.DecodeHeader(received.FirstPart());
+#endif
 
             using var replyBody = received.ReplyToken is null
                 ? null
@@ -143,16 +175,15 @@ static void RunL0Owner(
     }
 }
 
-static Message PayloadPart(Received received) =>
-    received.IsSinglePart ? received.FirstPart() : received.Parts[^1];
 #endif
 
-#if ZLINK_DOTNET_LADDER_L1
+#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2
 static async Task RunL1Owner(
     IRouterSocket router,
     L0BenchHandler handler,
     BenchServerMetrics metrics,
     ZLinkApplicationJobQueue queue,
+    bool decodeEnvelope,
     CancellationToken stopping
 )
 {
@@ -165,6 +196,11 @@ static async Task RunL1Owner(
             permit = await queue.AcquireAsync(stopping, ZLinkApplicationJobOrigin.Remote);
             if (!router.Recv(received, RecvFlags.None))
                 continue;
+
+#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2
+            if (decodeEnvelope)
+                _ = ZLinkEnvelopeCodec.DecodeHeader(received.FirstPart());
+#endif
 
             if (received.ReplyToken is not null)
             {
@@ -204,6 +240,9 @@ static async Task RunL1Owner(
     }
 }
 
+#endif
+
+#if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2
 static Message PayloadPart(Received received) =>
     received.IsSinglePart ? received.FirstPart() : received.Parts[^1];
 #endif
@@ -236,7 +275,7 @@ internal sealed class CommandHandler(BenchServerMetrics metrics)
     }
 }
 
-#if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1
+#if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2
 internal sealed class L0BenchHandler(BenchServerMetrics metrics)
     : IZLinkRouteRequestHandler<Message, Message>, IZLinkRouteSendHandler<Message>
 {

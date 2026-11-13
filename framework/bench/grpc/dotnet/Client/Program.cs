@@ -16,6 +16,9 @@ using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Contracts.Channels;
 using Zlink.Framework.Contracts.Dispatch;
+#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2
+using Zlink.Framework.Runtime.Messaging;
+#endif
 
 AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
 
@@ -378,6 +381,8 @@ internal sealed class RawBenchTransport : IBenchTransport
     private readonly RawBenchSocket? request;
     private readonly RawBenchSocket[] commands;
     private readonly bool frameworkTarget;
+    private readonly bool encodeEnvelopeHeaders;
+    private readonly TimeSpan requestTimeout;
     private readonly CancellationTokenSource completionStopping = new();
     private Thread? completionThread;
 
@@ -385,6 +390,10 @@ internal sealed class RawBenchTransport : IBenchTransport
     {
         context = Systems.Zlink.Zlink.CreateContext();
         this.frameworkTarget = frameworkTarget;
+        encodeEnvelopeHeaders =
+            frameworkTarget
+            && Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_LEVEL") == "L2";
+        requestTimeout = options.Timeout;
         if (options.Scenario == "send-saturation")
         {
             // 서버 간 연결은 하나다. `SubmitConcurrency`는 stream 수이지 연결 수가 아니다.
@@ -424,8 +433,22 @@ internal sealed class RawBenchTransport : IBenchTransport
 
     public void MarkReady() => Ready = true;
 
-    private Message CreateSendHeader(bool isRequest)
+    private Message CreateSendHeader(bool isRequest, TimeSpan? timeout = null)
     {
+#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2
+        if (
+            encodeEnvelopeHeaders
+        )
+        {
+            var header = ZLinkClientCallCodec.CreateEnvelope(
+                isRequest ? ZLinkMessageKind.Request : ZLinkMessageKind.Command,
+                "bench",
+                "BenchPayload",
+                timeout
+            );
+            return ZLinkEnvelopeCodec.EncodeHeader(header, "application/x-protobuf");
+        }
+#endif
         return Message.From(isRequest ? RawEnvelopeHeaders.Request : RawEnvelopeHeaders.Command);
     }
 
@@ -477,7 +500,7 @@ internal sealed class RawBenchTransport : IBenchTransport
         Message? body = null;
         try
         {
-            header = CreateSendHeader(isRequest: true);
+            header = CreateSendHeader(isRequest: true, timeout: requestTimeout);
             body = EncodeRawPayload(payload);
             RequestSubmission submission = request!.SubmitRequest(header, body, cancellationToken);
             return new RawRequestSubmission(
