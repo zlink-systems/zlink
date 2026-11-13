@@ -134,6 +134,13 @@ public final class FrameworkStack implements AutoCloseable {
             throw new IllegalStateException("L0 operation requested outside ladder mode");
         }
         if (System.getenv("ZLINK_BENCH_LADDER_L2") != null) {
+            if (System.getenv("ZLINK_BENCH_LADDER_L3") != null) {
+                return send
+                        ? ladderBinding.sendWithServiceWireEnvelope(
+                                ZLinkChannelEnvelope.KIND_COMMAND, FrameworkStack::envelopeParts)
+                        : ladderBinding.requestWithServiceWireEnvelope(
+                                ZLinkChannelEnvelope.KIND_REQUEST, FrameworkStack::envelopeParts);
+            }
             return send
                     ? ladderBinding.sendWithEnvelope(
                             ZLinkChannelEnvelope.KIND_COMMAND, FrameworkStack::envelopeParts)
@@ -184,7 +191,8 @@ public final class FrameworkStack implements AutoCloseable {
     private static boolean ladderMode() {
         return System.getenv("ZLINK_BENCH_LADDER_L0") != null
                 || System.getenv("ZLINK_BENCH_LADDER_L1") != null
-                || System.getenv("ZLINK_BENCH_LADDER_L2") != null;
+                || System.getenv("ZLINK_BENCH_LADDER_L2") != null
+                || System.getenv("ZLINK_BENCH_LADDER_L3") != null;
     }
 
     @EnableZLinkFramework
