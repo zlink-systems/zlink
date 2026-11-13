@@ -15,7 +15,7 @@ const { BenchServerMetrics, startStatsServer } = require('../shared/bench-server
 const rawWire = require('../shared/raw-wire');
 const { RESPONSE_ENVELOPE, ROUTING_IDS, decodeBenchPayloadBody, encodeBenchPayloadMessage } = rawWire;
 const zlink = require('@zlink-systems/zlink');
-const { EchoHandler, CommandHandler } = require('./bench-handlers');
+const { EchoHandler, CommandHandler, BENCH_SERVER_METRICS } = require('./bench-handlers');
 const ladderL5ToL7 = process.env.ZLINK_LADDER_L5_7_SERVER === '1';
 const l0Server = process.env.ZLINK_LADDER_L0_SERVER === '1' && !ladderL5ToL7;
 const lazyFramework = l0Server && process.env.ZLINK_LADDER_L0_LAZY_FRAMEWORK !== '0';
@@ -47,6 +47,7 @@ let contract;
 let createBenchPayloadSerializer;
 let Module;
 let Injectable;
+let Inject;
 let NestFactory;
 let ZLinkModule;
 let zlinkFramework;
@@ -57,7 +58,7 @@ if (!lazyFramework) {
     ({ createBenchPayloadSerializer } = require('../shared/framework-protobuf'));
   }
   require('reflect-metadata');
-  ({ Module, Injectable } = require('@nestjs/common'));
+  ({ Module, Injectable, Inject } = require('@nestjs/common'));
   ({ NestFactory } = require('@nestjs/core'));
   ({ ZLinkModule, zlinkFramework } = require('@zlink-systems/nestjs'));
   if (process.env.ZLINK_LADDER_L5_7_SERVER !== '1') {
@@ -65,6 +66,8 @@ if (!lazyFramework) {
   }
   Injectable()(EchoHandler);
   Injectable()(CommandHandler);
+  Inject(BENCH_SERVER_METRICS)(EchoHandler, undefined, 0);
+  Inject(BENCH_SERVER_METRICS)(CommandHandler, undefined, 0);
 }
 
 const argv = process.argv.slice(2);
@@ -362,8 +365,7 @@ Module({
     })
   ],
   providers: [
-    { provide: EchoHandler, useFactory: () => new EchoHandler(metrics) },
-    { provide: CommandHandler, useFactory: () => new CommandHandler(metrics) }
+    { provide: BENCH_SERVER_METRICS, useValue: metrics }
   ]
 })(BenchServerModule);
 

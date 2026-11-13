@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 'use strict';
 
+const BENCH_SERVER_METRICS = Symbol('BENCH_SERVER_METRICS');
+
 function toBuffer(body) {
   if (body === undefined || body === null) return Buffer.alloc(0);
   if (Buffer.isBuffer(body)) return body;
@@ -33,4 +35,4 @@ class CommandHandler {
   }
 }
 
-module.exports = { EchoHandler, CommandHandler, toBuffer };
+module.exports = { EchoHandler, CommandHandler, BENCH_SERVER_METRICS, toBuffer };
