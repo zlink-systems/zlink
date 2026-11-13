@@ -17,14 +17,12 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkMeshApplicationRece
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceSendHeaderAllocationTest;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
 
-import java.net.URLClassLoader;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -47,40 +45,13 @@ public final class ZLinkJavaIngressAllocationTest {
     }
 
     static void runIsolated(Class<?> mainClass) throws Exception {
-        var classpath = new LinkedHashSet<String>();
-        for (ClassLoader loader = mainClass.getClassLoader();
-                loader != null;
-                loader = loader.getParent()) {
-            if (loader instanceof URLClassLoader urls) {
-                for (var url : urls.getURLs()) classpath.add(Path.of(url.toURI()).toString());
-            }
-        }
-        classpath.addAll(
-                List.of(System.getProperty("java.class.path").split(java.io.File.pathSeparator)));
-        Path output = Files.createTempFile("zlink-ingress-allocation-", ".log");
-        try {
-            Process process =
-                    new ProcessBuilder(
-                                    Path.of(System.getProperty("java.home"), "bin", "java")
-                                            .toString(),
-                                    "--enable-native-access=ALL-UNNAMED",
-                                    "-XX:-UseTLAB",
-                                    "-XX:-DoEscapeAnalysis",
-                                    "-XX:ActiveProcessorCount=2",
-                                    "-XX:FlightRecorderOptions=stackdepth=128",
-                                    "-cp",
-                                    String.join(java.io.File.pathSeparator, classpath),
-                                    mainClass.getName())
-                            .redirectErrorStream(true)
-                            .redirectOutput(output.toFile())
-                            .start();
-            int exit = process.waitFor();
-            String log = Files.readString(output, StandardCharsets.UTF_8);
-            System.out.print(log);
-            assertEquals(0, exit, log);
-        } finally {
-            Files.deleteIfExists(output);
-        }
+        ZLinkServiceSendHeaderAllocationTest.runInJvm(
+                mainClass,
+                List.of(
+                        "-XX:-UseTLAB",
+                        "-XX:-DoEscapeAnalysis",
+                        "-XX:ActiveProcessorCount=2",
+                        "-XX:FlightRecorderOptions=stackdepth=128"));
     }
 
     public static void main(String[] args) throws Exception {
