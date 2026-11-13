@@ -869,7 +869,7 @@ class actor_client_impl_t final : public actor_client_t,
             auto copied = parts.items ();
             const auto submit = co_await runtime->request_to_actor (
               actor.native_ref, copied, operation, timeout, {}, actor.authority_owner_generation,
-              actor.owner_lease_generation);
+              actor.owner_lease_generation, std::nullopt, actor.node_generation);
             if (submit != zlink::submit_result_t::ok)
                 throw runtime::messaging::map_submit_result_exception (submit, "Actor submission");
             receiver.admitted->complete (result_t<void>::success ());

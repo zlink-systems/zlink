@@ -1626,7 +1626,8 @@ std::shared_ptr<task_completion_source_t<void>> raw_mesh_node_owner_t::start_req
   mesh_request_metric_t request_metric,
   std::optional<foundation::operation_registry_t::request_identity_t> request,
   std::shared_ptr<task_completion_source_t<void>> admitted,
-  physical_receiver_t receiver)
+  physical_receiver_t receiver,
+  std::uint64_t target_lifecycle_generation)
 {
     const auto wait_owner = detail::current_wait_owner ();
     struct request_start_t
@@ -1639,9 +1640,16 @@ std::shared_ptr<task_completion_source_t<void>> raw_mesh_node_owner_t::start_req
     auto start = _lane.run_sync ([this, &header, &request_metric, &target_routing_id,
                                   &application_payload, request = std::move (request),
                                   requested_correlation, target_claimed, deadline, wait_owner,
-                                  &callback, admitted = std::move (admitted),
+                                  target_lifecycle_generation, &callback,
+                                  admitted = std::move (admitted),
                                   receiver = std::move (receiver)] () mutable {
-        const auto peer = _topology.peer (target_routing_id);
+        const auto observed_peer = _topology.peer (target_routing_id);
+        const auto *peer =
+          observed_peer
+              && (target_lifecycle_generation == 0
+                  || observed_peer->descriptor.lifecycle_generation == target_lifecycle_generation)
+            ? observed_peer.get ()
+            : nullptr;
         if (!target_claimed && !peer && !_topology.expected_peers ()->contains (target_routing_id))
             return std::optional<request_start_t>{};
         auto encoded_payload = protocol::encode_application_payload_message (application_payload);
@@ -1673,7 +1681,7 @@ std::shared_ptr<task_completion_source_t<void>> raw_mesh_node_owner_t::start_req
                     observe_request (operations, operation, correlation, std::move (result),
                                      receiver);
                 };
-                if (!start_admitted_request (port, peer.get (), target_routing_id, wire, deadline,
+                if (!start_admitted_request (port, peer, target_routing_id, wire, deadline,
                                              value.admitted, finish)) {
                     std::vector<std::uint8_t> target_owner (target_routing_id.begin (),
                                                             target_routing_id.end ());
@@ -1681,7 +1689,8 @@ std::shared_ptr<task_completion_source_t<void>> raw_mesh_node_owner_t::start_req
                     (void) submit_registered_request (
                       port, std::move (peer_observer), _operations, value.operation,
                       value.correlation, std::move (target_owner), std::move (wire), {}, deadline,
-                      value.admitted->task (), value.admitted, std::move (finish), receiver);
+                      value.admitted->task (), value.admitted, std::move (finish), receiver,
+                      target_lifecycle_generation);
                 }
             }
         }
@@ -1716,12 +1725,13 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
   mesh_request_metric_t request_metric,
   std::optional<foundation::operation_registry_t::request_identity_t> request,
   std::shared_ptr<task_completion_source_t<void>> admitted,
-  physical_receiver_t receiver)
+  physical_receiver_t receiver,
+  std::uint64_t target_lifecycle_generation)
 try {
     auto source = start_request_with_header (
       target_routing_id, header, application_payload, deadline, std::move (callback),
       requested_correlation, target_claimed, std::move (request_metric), std::move (request),
-      std::move (admitted), std::move (receiver));
+      std::move (admitted), std::move (receiver), target_lifecycle_generation);
     if (!source)
         return task_t<bool> (result_t<bool>::success (false));
     return await_request_admission (source->task ());
@@ -2057,7 +2067,7 @@ task_t<relocation_prepare_response_t> raw_mesh_node_owner_t::request_relocation_
     (void) co_await submit_registered_request (
       std::move (port), observe_request_peer (target_routing_id), _operations, id, std::nullopt,
       target_routing_id, std::move (parts), protocol::pack_infrastructure_reply, deadline,
-      completion->task ());
+      completion->task (), {}, {}, {}, prepare.target.target_node_generation);
     const auto [terminal, packed] = co_await pending;
     if (terminal != foundation::operation_terminal_t::completed)
         co_return relocation_prepare_response_t{};
@@ -2406,7 +2416,7 @@ raw_mesh_node_owner_t::request_to_spot (const std::vector<std::uint8_t> &target_
       },
       application_payload, deadline, std::move (callback), correlation, true,
       mesh_request_metric_t (_request_metrics, mesh_request_surface_t::spot),
-      request_identity (operation));
+      request_identity (operation), {}, {}, target.target_node_generation);
 }
 
 task_t<bool> raw_mesh_node_owner_t::send_to_actor (
@@ -2471,9 +2481,9 @@ task_t<bool> raw_mesh_node_owner_t::request_to_actor (
             protocol::command::actorRequest, source_actor, target, exact, correlation,
             message_follow_hop_count, bound_session_source);
       },
-      application_payload, deadline, std::move (callback), correlation, false,
+      application_payload, deadline, std::move (callback), correlation, true,
       mesh_request_metric_t (_request_metrics, mesh_request_surface_t::actor),
-      request_identity (operation), {}, std::move (receiver));
+      request_identity (operation), {}, std::move (receiver), target.target_node_generation);
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_user_spot_create (
@@ -2851,7 +2861,8 @@ task_t<actor_join_wire_outcome_t> raw_mesh_node_owner_t::request_actor_join (
     (void) co_await submit_registered_request (
       std::move (port), observe_request_peer (target_routing_id), _operations, id,
       request.correlation, target_routing_id, std::move (parts),
-      protocol::pack_infrastructure_reply, deadline, completion->task ());
+      protocol::pack_infrastructure_reply, deadline, completion->task (), {}, {}, {},
+      request.target_spot.target_node_generation);
     const auto [terminal, packed] = co_await pending;
     if (terminal != foundation::operation_terminal_t::completed) {
         outcome.failure = terminal == foundation::operation_terminal_t::timed_out

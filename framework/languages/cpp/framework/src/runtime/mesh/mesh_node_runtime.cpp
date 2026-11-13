@@ -2165,14 +2165,15 @@ task_t<zlink::submit_result_t> mesh_node_runtime_t::request_to_actor (
   std::uint64_t authority_owner_generation,
   std::uint64_t owner_lease_generation,
   std::optional<runtime::protocol::actor_message_header_t::bound_session_source_t>
-    bound_session_source)
+    bound_session_source,
+  std::uint64_t node_generation)
 {
     if (!_node) {
         throw configuration_error ("MeshNode has not started");
     }
     co_return co_await _node->request_to_actor (target, parts, operation_id, timeout, metadata,
                                                 authority_owner_generation, owner_lease_generation,
-                                                std::move (bound_session_source));
+                                                std::move (bound_session_source), node_generation);
 }
 
 zlink::context_t &mesh_node_runtime_t::native_context ()
@@ -3719,6 +3720,7 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
         }
         std::uint64_t authority_owner_generation = 0;
         std::uint64_t owner_lease_generation = 0;
+        std::uint64_t node_generation = 0;
         if (targets_local_node && !spot_runtime.actor_route (target_actor)) {
             if (spot_runtime.actor_transfer_marker_enabled ()) {
                 spot_runtime.emit_actor_transfer_marker ("message_follow_expired", target_actor, {},
@@ -3736,6 +3738,7 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
              * route names the target node (checked above), so this holds for
              * a binding to this node too: an Actor that just relocated here
              * may still have the previous owner's fence in the Location cache. */
+            node_generation = stale_route.target_node_generation;
             authority_owner_generation = stale_route.authority_owner_generation;
             owner_lease_generation = stale_route.owner_lease_generation;
         } else if (_actor_route_resolver) {
@@ -3752,13 +3755,16 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
             // the old and new owners and let a later packet overtake backlog.
             if (!await_remote_admission)
                 target_node_rid = resolved->node_rid;
+            node_generation = resolved->node_generation;
             authority_owner_generation = resolved->authority_owner_generation;
             owner_lease_generation = static_cast<std::uint64_t> (resolved->owner.lease_generation);
         } else if (_user_spot_store) {
             const auto authority = co_await _user_spot_store->read_authority (
               runtime::actor_authority_key (target_actor.actor_id ().value ()));
-            if (const auto *snapshot = std::get_if<authority_snapshot_t> (&authority))
+            if (const auto *snapshot = std::get_if<authority_snapshot_t> (&authority)) {
                 authority_owner_generation = snapshot->authority_owner_generation;
+                node_generation = snapshot->allocation.target.node_lifecycle_generation;
+            }
         }
         const auto kind = header.kind;
         auto encoded = encode_actor_packet (header, payload);
@@ -3790,7 +3796,7 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
         host::pending_operation_t operation;
         auto submission = request_to_actor (native_actor, encoded.items (), operation, timeout, {},
                                             authority_owner_generation, owner_lease_generation,
-                                            wire_bound_session_source);
+                                            wire_bound_session_source, node_generation);
         auto admitted = co_await detail::request_admission_source_t{};
         observe_request_failure (operation, admitted, "Actor relay request");
         const auto submitted = co_await submission;

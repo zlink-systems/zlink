@@ -3650,6 +3650,116 @@ claim_actor_join (mesh::raw_mesh_node_owner_t &target)
     return claim;
 }
 
+
+// Authority-selected lifecycle generations wait independently of an older admitted peer.
+void verify_authority_generation_request (std::string_view path, bool invalidated)
+{
+    using namespace zlink::framework;
+    mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("authority-generation-source")}));
+    mesh::raw_mesh_node_owner_t target (zlink::framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("authority-generation-target")}));
+    source.start ();
+    target.start ();
+    auto remote = target.topology ().local_descriptor ();
+    admit_pair (source, target, remote);
+    const auto admitted_generation = remote.lifecycle_generation;
+    remote.lifecycle_generation = admitted_generation == std::numeric_limits<std::uint64_t>::max ()
+                                    ? 1
+                                    : std::numeric_limits<std::uint64_t>::max ();
+    if (path == "prepare")
+        remote.lifecycle_generation = admitted_generation == 1 ? 2 : 1;
+    source.expect_peer (remote);
+#if !defined(_WIN32)
+    request_submissions.store (0);
+    count_request_submissions.store (true);
+#endif
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    auto verify_waiting = [&] {
+        assert (source.pending_operation_count () == 1);
+#if !defined(_WIN32)
+        assert (request_submissions.load () == 0);
+#endif
+        assert (
+          !target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 1, 4096));
+        assert (
+          !target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 4096));
+    };
+    auto end_wait = [&] {
+        verify_waiting ();
+        if (invalidated) {
+            source.forget_peer (remote.node_routing_id, remote.advertised_endpoint);
+            const auto remaining = source.topology ().peer (remote.node_routing_id);
+            assert (remaining && remaining->descriptor.lifecycle_generation == admitted_generation);
+            assert (peer_ready (source, remote.node_routing_id));
+        } else {
+            assert (await_task (source.expire_requests (deadline + 1s)) == 1);
+        }
+    };
+    if (path == "join") {
+        auto pending =
+          source.request_actor_join (remote.node_routing_id,
+                                     actor_join_request (source.topology ().local_descriptor (),
+                                                         remote, 8181, "actor", "spot"),
+                                     std::nullopt, 2s);
+        end_wait ();
+        const auto result = await_task (std::move (pending));
+        assert (!result.reply);
+        assert (result.failure
+                == (invalidated ? mesh::actor_join_wire_failure_t::unavailable
+                                : mesh::actor_join_wire_failure_t::deadline_exceeded));
+    } else if (path == "prepare") {
+        auto pending = source.request_relocation_prepare (
+          remote.node_routing_id,
+          relocation_prepare_request (source.topology ().local_descriptor (), remote), 2s);
+        end_wait ();
+        const auto result = await_task (std::move (pending));
+        assert (!result.ready && !result.failed);
+        if (invalidated)
+            assert (await_task (source.expire_requests (deadline + 1s)) == 0);
+    } else {
+        assert (path == "spot" || path == "actor");
+        std::promise<foundation::operation_terminal_t> promise;
+        auto terminal = promise.get_future ();
+        auto callback = [&promise] (auto result, auto) { promise.set_value (result); };
+        protocol::application_payload_t payload{"AuthorityGeneration", "application/json", {}};
+        task_t<bool> pending =
+          path == "spot" ? source.request_to_spot (
+                             remote.node_routing_id, "source-spot",
+                             protocol::spot_route_fence_t{"spot", 1, remote.node_routing_id,
+                                                          remote.lifecycle_generation, 1, 1},
+                             payload, 2s, callback)
+                         : source.request_to_actor (
+                             remote.node_routing_id, std::nullopt,
+                             protocol::actor_route_fence_t{"actor", 1, remote.node_routing_id,
+                                                           remote.lifecycle_generation, 1, 1},
+                             payload, 2s, callback);
+        end_wait ();
+        assert (terminal.wait_for (250ms) == std::future_status::ready);
+        assert (terminal.get ()
+                == (invalidated ? foundation::operation_terminal_t::route_unavailable
+                                : foundation::operation_terminal_t::timed_out));
+        try {
+            (void) await_task (std::move (pending));
+            assert (false);
+        }
+        catch (const framework_exception_t &error) {
+            assert (error.kind ()
+                    == (invalidated ? framework_error_kind_t::unavailable
+                                    : framework_error_kind_t::deadline_exceeded));
+        }
+    }
+    if (invalidated)
+        assert (std::chrono::steady_clock::now () < deadline);
+    assert (source.pending_operation_count () == 0);
+#if !defined(_WIN32)
+    assert (request_submissions.load () == 0);
+    count_request_submissions.store (false);
+#endif
+    source.close ();
+    target.close ();
+}
+
 void verify_actor_join_waits_for_admit_without_replay ()
 {
     for (const bool handover : {false, true}) {
@@ -4160,10 +4270,9 @@ void verify_actor_join_mismatched_correlation_reply_classifies_protocol_error ()
     target.close ();
 }
 
-// Canonical actorJoin(28)'s target Spot fence is intentionally not a
-// transport decision. Once the source peer and its execution generation are
-// authenticated, raw ingress routes this frame to the Store-backed admission,
-// which owns the target/owner fence terminal.
+// Matching target RID and lifecycle generation permits sender admission.
+// The receiving owner independently rejects a stale target authority fence;
+// raw ingress must preserve that request for the receiving admission owner.
 void verify_actor_join_target_fence_reaches_admission ()
 {
     mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
@@ -4182,8 +4291,6 @@ void verify_actor_join_target_fence_reaches_admission ()
 
     auto request =
       actor_join_request (source_descriptor, target_descriptor, 4646, "actor-5", "spot-5");
-    request.target_spot.target_node_routing_id = bytes ("stale-target");
-    request.target_spot.target_node_generation = 99;
 
     mesh::actor_join_wire_outcome_t outcome;
     std::atomic_bool settled{false};
@@ -4196,8 +4303,20 @@ void verify_actor_join_target_fence_reaches_admission ()
     assert (claim && claim->records.size () == 1);
     assert (claim->records.front ()->correlation
             && *claim->records.front ()->correlation == request.correlation);
-    assert (target.reply_actor_join ((*claim->records.front ()),
-                                     protocol::actor_join_result_t::rejected, std::nullopt, 0, 0));
+    // This raw fixture models the receiving admission owner with a newer authority fence.
+    auto current_target = request.target_spot;
+    ++current_target.authority_owner_generation;
+    const auto incoming = protocol::decode_actor_join_28 (
+      zlink::framework::detail::backend::copy_binding_parts (claim->records.front ()->parts ()));
+    assert (incoming.target_spot.target_node_rid == target_descriptor.node_routing_id);
+    assert (incoming.target_spot.target_node_generation == target_descriptor.lifecycle_generation);
+    const auto admission_result = incoming.target_spot.expected_authority_owner_generation
+                                      == current_target.authority_owner_generation
+                                    ? protocol::actor_join_result_t::accepted
+                                    : protocol::actor_join_result_t::rejected;
+    assert (admission_result == protocol::actor_join_result_t::rejected);
+    assert (
+      target.reply_actor_join ((*claim->records.front ()), admission_result, std::nullopt, 0, 0));
     assert (target.mailbox ().release (*claim));
 
     const auto deadline = std::chrono::steady_clock::now () + 2s;
@@ -4817,6 +4936,10 @@ void verify_unadmitted_route (bool repeat_hello)
 int main (int argc, char **argv)
 {
     zlink::framework::completion_owner_t completion_owner;
+    if (argc == 4 && std::string_view (argv[1]) == "--authority-generation-case") {
+        verify_authority_generation_request (argv[2], std::string_view (argv[3]) == "invalidated");
+        return 0;
+    }
     if (argc == 3 && std::string_view (argv[1]) == "--bound-session-descriptor-case") {
         verify_bound_session_bind_missing_descriptor (argv[2]);
         return 0;
@@ -4873,6 +4996,8 @@ int main (int argc, char **argv)
                 verify_stale_rid_disconnect_preserves_same_endpoint_replacement ();
             else if (name == "bilateral")
                 verify_bilateral_raw_connection_without_public_pipe_id_keeps_survivor ();
+            else if (name == "join-target-fence")
+                verify_actor_join_target_fence_reaches_admission ();
             else if (name == "join")
                 verify_actor_join_waits_for_admit_without_replay ();
             else
@@ -4990,6 +5115,9 @@ int main (int argc, char **argv)
     verify_actor_join_rejected_reply_completes_typed_failure ();
     verify_actor_join_wrong_source_generation_is_fenced ();
     verify_actor_join_mismatched_correlation_reply_classifies_protocol_error ();
+    for (const auto path : {"join", "prepare", "spot", "actor"})
+        for (const bool invalidated : {false, true})
+            verify_authority_generation_request (path, invalidated);
     verify_actor_join_target_fence_reaches_admission ();
     return 0;
 }

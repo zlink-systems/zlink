@@ -116,7 +116,7 @@ fw::tests::allocation_measurement_t caller_baseline (host::actor_handle_t &actor
             }
         }();
         EXPECT_EQ (pending.result ().value (), scenario < 2
-                                                 ? zlink::submit_result_t::not_connected
+                                                 ? zlink::submit_result_t::not_found
                                                  : zlink::submit_result_t::invalid_handle);
     });
 }
