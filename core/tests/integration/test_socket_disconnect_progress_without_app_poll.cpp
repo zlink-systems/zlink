@@ -41,16 +41,20 @@ void forget_socket (void *socket_)
     }
 }
 
-void cleanup_test_resources ()
+// Release everything first, then report: an assertion here would skip the
+// remaining cleanup and leave zlink_ctx_term waiting on the open objects.
+bool cleanup_test_resources ()
 {
+    bool released = true;
     if (tracked_poller) {
         if (tracked_poller_socket)
-            zlink_poller_remove (tracked_poller, tracked_poller_socket);
-        zlink_poller_destroy (&tracked_poller);
+            released &= zlink_poller_remove (tracked_poller, tracked_poller_socket)
+                        == ZLINK_CONFIG_OK;
+        released &= zlink_poller_destroy (&tracked_poller) == ZLINK_CLOSE_OK;
         tracked_poller_socket = NULL;
     }
     if (tracked_monitor)
-        zlink_monitor_close (&tracked_monitor);
+        released &= zlink_monitor_close (&tracked_monitor) == ZLINK_CLOSE_OK;
     if (tracked_client_fd != retired_fd) {
         close (tracked_client_fd);
         tracked_client_fd = retired_fd;
@@ -62,6 +66,7 @@ void cleanup_test_resources ()
             tracked_sockets[i] = NULL;
         }
     }
+    return released;
 }
 
 const int sample_count = 20;
@@ -588,8 +593,9 @@ void setUp ()
 
 void tearDown ()
 {
-    cleanup_test_resources ();
+    const bool released = cleanup_test_resources ();
     teardown_test_context ();
+    TEST_ASSERT_TRUE_MESSAGE (released, "poller or monitor release failed");
 }
 
 void test_tcp_registered_without_waiter_progresses ()
