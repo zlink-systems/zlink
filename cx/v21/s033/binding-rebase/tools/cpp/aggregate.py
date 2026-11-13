@@ -16,7 +16,7 @@ for pattern in ('send-saturation','request-serial','request-backpressure'):
   raw=Path((RAW/key/'counted'/'valid-result.path').read_text().strip())
   sched=raw.with_name('scheduling.txt')
   r=json.loads(raw.read_text())['cells'][0]; txt=sched.read_text()
-  assert r['errors']==r['server_errors']==r['target_stats']['errors']==0
+  assert r['errors']==r.get('server_errors',0)==r['target_stats']['errors']==0
   assert r['submitted']==r['completed']==r['target_stats']['received']
   assert all(f'cpu{cpu}.state{state}.disable_at_run_start=1' in txt for cpu in (0,8) for state in (2,3))
   assert 'scheduling_invalid=' not in txt

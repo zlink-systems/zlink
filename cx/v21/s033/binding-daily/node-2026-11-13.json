@@ -1,29 +1,32 @@
 {
-  "date_utc": "2026-11-13",
+  "language": "node",
+  "utc_date": "2026-11-13",
+  "conditions": "C2·C3 off, SCHED_OTHER, CPU split 0-5/8-13 + housekeeping 6-7,14-15, warm run per cell, guard v7",
+  "measured_utc": "2026-11-13T18:27:51.294179+00:00",
   "cells": {
     "send-saturation-1024": {
-      "msg_s": 110892.6,
-      "raw": "raw/session/binding/run1/zlink-node-send-saturation-1024/results.json"
+      "msg_s": 113435.4,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/node/send-saturation-1024/counted/attempt1/run1/zlink-node-send-saturation-1024/results.json"
     },
     "send-saturation-4096": {
-      "msg_s": 87063.2,
-      "raw": "raw/session/binding/run1/zlink-node-send-saturation-4096/results.json"
+      "msg_s": 86577.4,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/node/send-saturation-4096/counted/attempt1/run1/zlink-node-send-saturation-4096/results.json"
     },
     "request-serial-1024": {
-      "msg_s": 7202,
-      "raw": "raw/session/binding/run1/zlink-node-request-serial-1024/results.json"
+      "msg_s": 7323.4,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/node/request-serial-1024/counted/attempt1/run1/zlink-node-request-serial-1024/results.json"
     },
     "request-serial-4096": {
-      "msg_s": 6995.2,
-      "raw": "raw/session/binding/run1/zlink-node-request-serial-4096/results.json"
+      "msg_s": 7612,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/node/request-serial-4096/counted/attempt1/run1/zlink-node-request-serial-4096/results.json"
     },
     "request-backpressure-1024": {
-      "msg_s": 30957.2,
-      "raw": "raw/session/binding/run1/zlink-node-request-backpressure-1024/results.json"
+      "msg_s": 29873,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/node/request-backpressure-1024/counted/attempt1/run1/zlink-node-request-backpressure-1024/results.json"
     },
     "request-backpressure-4096": {
-      "msg_s": 22793.2,
-      "raw": "raw/session/binding/run1/zlink-node-request-backpressure-4096/results.json"
+      "msg_s": 25836.4,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/node/request-backpressure-4096/counted/attempt1/run1/zlink-node-request-backpressure-4096/results.json"
     }
   }
 }

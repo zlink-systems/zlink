@@ -8,5 +8,4 @@ mkdir -p "$out"
 export SKIP_BUILD=1 RUNS=1 IMPLEMENTATIONS="$impl" PATTERNS="$pattern" PAYLOAD_SIZES="$payload"
 export WARMUP_SECONDS="$warmup" DURATION_SECONDS=5 SOURCE_CPUS=0-7 TARGET_CPUS=8-15
 export OUTPUT_DIR="$out" RUN_STAMP="$stamp" SUBMIT_CONCURRENCY=8 WINDOW=100 SCHEDULING_RECORD=1
-export PATH="/root/jobs/fx/cx/v21/s033/r4190m/tools:$PATH"
 bash "$LANG_DIR/run_local_binding.sh" >"$out/driver.log" 2>&1

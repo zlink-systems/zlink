@@ -1,0 +1,32 @@
+{
+  "language": "cpp",
+  "utc_date": "2026-11-13",
+  "conditions": "C2·C3 off, SCHED_OTHER, CPU split 0-5/8-13 + housekeeping 6-7,14-15, warm run per cell, guard v7",
+  "measured_utc": "2026-11-13T18:24:34.412855+00:00",
+  "cells": {
+    "send-saturation-1024": {
+      "msg_s": 507627.265715,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/cpp/send-saturation-1024/counted/attempt1/run1/zlink-cpp-send-saturation-1024/results.json"
+    },
+    "send-saturation-4096": {
+      "msg_s": 225263.045846,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/cpp/send-saturation-4096/counted/attempt1/run1/zlink-cpp-send-saturation-4096/results.json"
+    },
+    "request-serial-1024": {
+      "msg_s": 12294.253556,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/cpp/request-serial-1024/counted/attempt1/run1/zlink-cpp-request-serial-1024/results.json"
+    },
+    "request-serial-4096": {
+      "msg_s": 11071.664813,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/cpp/request-serial-4096/counted/attempt1/run1/zlink-cpp-request-serial-4096/results.json"
+    },
+    "request-backpressure-1024": {
+      "msg_s": 115785.570527,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/cpp/request-backpressure-1024/counted/attempt1/run1/zlink-cpp-request-backpressure-1024/results.json"
+    },
+    "request-backpressure-4096": {
+      "msg_s": 125560.587017,
+      "raw": "/root/jobs/fx/cx/v21/s033/binding-rebase/raw/cpp/request-backpressure-4096/counted/attempt1/run1/zlink-cpp-request-backpressure-4096/results.json"
+    }
+  }
+}
