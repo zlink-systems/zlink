@@ -60,6 +60,9 @@ int main (int argc, char **argv)
                 return 2;
             std::signal (SIGINT, target_signal);
             std::signal (SIGTERM, target_signal);
+            if (level == 4 && !raw_mesh)
+                return ladder::direct_server<server_metrics_t, ladder::typed_payload_t> (
+                  endpoint, metrics, stop_target, level, false);
             return ladder::direct_server (endpoint, metrics, stop_target, level, raw_mesh);
         }
 #endif

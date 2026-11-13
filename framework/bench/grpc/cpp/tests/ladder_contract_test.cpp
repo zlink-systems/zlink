@@ -33,12 +33,13 @@ struct test_metrics_t
         require (decode_payload (data, size, &stamp) && stamp.run_id == 123
                    && stamp.seq == 456 && stamp.phase == phase_active
                    && stamp.payload_size == size,
-                 "target did not receive the original stamped protobuf body");
+                 "target did not receive the original stamped body");
         ++count;
     }
 };
 
 // Four finite records, no benchmark driver, warmup, throughput or latency result.
+template <typename Payload = ladder::payload_t>
 void socket_contract (int level)
 {
     zlink::context_t context;
@@ -68,7 +69,7 @@ void socket_contract (int level)
                   fw::runtime::resolve_application_job_queue_configuration (
                     fw::application_job_queue_profile_t::balanced, std::nullopt,
                     fw::runtime::detect_application_job_queue_processor_limits ()));
-            ladder::fixed_handler_t handler{metrics, level};
+            ladder::fixed_handler_t<test_metrics_t, Payload> handler{metrics, level};
             zlink::received_t received;
             for (int record = 0; record < 4; ++record) {
                 std::optional<fw::runtime::application_job_queue_t::permit_t> permit;
@@ -139,16 +140,16 @@ void socket_contract (int level)
         auto request = encoder.encode (size, 123, phase_active, 456, false, std::chrono::seconds (2));
         auto reply = source.request (target_rid).message (request[0]).message (request[1])
                        .timeout (std::chrono::seconds (2)).submit ();
-        const auto decoded = ladder::decode_reply (reply, level, 456);
+        const auto decoded = ladder::decode_reply<Payload> (reply, level, 456);
         require (decoded.body ().size () == size, "reply body size changed");
         decoded_header_t stamp;
         require (decode_payload (decoded.body ().data (), size, &stamp) && stamp.seq == 456,
-                 "source completion lost the protobuf stamp");
+                 "source completion lost the body stamp");
         if (level >= 2) {
             if (level >= 3) {
                 auto saved = std::move (reply[0]);
                 reply[0] = ladder::protocol::encode_reply_header_message (999, 0, 0);
-                require_rejected ([&] { ladder::decode_reply (reply, level, 456); },
+                require_rejected ([&] { ladder::decode_reply<Payload> (reply, level, 456); },
                                   "source accepted the wrong service correlation");
                 reply[0] = std::move (saved);
                 const auto views = ladder::application_views (reply);
@@ -159,7 +160,7 @@ void socket_contract (int level)
                   ladder::protocol::application_payload_t::from_parts (std::move (invalid)));
             } else
                 reply[0] = ladder::message ("{broken");
-            require_rejected ([&] { ladder::decode_reply (reply, level, 456); },
+            require_rejected ([&] { ladder::decode_reply<Payload> (reply, level, 456); },
                               "source completion accepted a malformed envelope");
         }
     }
@@ -205,6 +206,45 @@ void reply_contract ()
                       "source completion accepted an error envelope");
     std::puts ("reply contract: correlation preserved; malformed envelope/body and error rejected");
 }
+
+void typed_codec_contract ()
+{
+    const auto serializer = ladder::typed_serializer ();
+    require (serializer.content_type () == "application/json", "L4 default serializer is not JSON");
+    for (size_t size : {1024, 4096}) {
+        auto value = ladder::make_typed_payload (size, 123, phase_active, 456);
+        auto encoded = serializer.serialize (value);
+        require (encoded.to_string ().starts_with ("{\"body\":\""),
+                 "L4 byte body did not use the default base64 JSON field");
+        require (serializer.deserialize (encoded).body () == value.body (),
+                 "typed JSON lost arbitrary binary bytes");
+        auto request = ladder::messaging::client_call_codec_t{}.create_envelope (
+          ladder::messaging::message_kind_t::request, "bench", "BenchPayload",
+          std::chrono::seconds (2), {}, {}, serializer.content_type ());
+        auto response = ladder::reply_parts (value, request);
+        auto header = ladder::messaging::envelope_codec_t{}.decode_header (response[0], false).value ();
+        require (header.content_type == serializer.content_type ()
+                   && header.correlation_id == request.correlation_id,
+                 "typed reply lost content type or correlation");
+        require (serializer.deserialize (fw::detail::encoded_payload_from_raw (response[1])).body ()
+                   == value.body (), "fresh typed reply changed its body");
+        for (auto invalid : {"{broken", "{\"body\":123}", "{\"body\":\"!invalid!\"}", "{}"}) {
+            auto bad = ladder::message (invalid);
+            require_rejected ([&] { serializer.deserialize (fw::detail::encoded_payload_from_raw (bad)); },
+                              "typed JSON accepted malformed data");
+            std::vector<zlink::message_t> reply;
+            reply.push_back (response[0].copy ());
+            reply.push_back (bad.copy ());
+            require_rejected ([&] { ladder::decode_reply<ladder::typed_payload_t> (reply, 2, 0); },
+                              "source completion accepted malformed typed JSON");
+        }
+        require_rejected ([&] {
+            fw::detail::deserialize_typed_payload (serializer, response[1], "application/x-protobuf");
+        }, "typed receiver accepted a mismatched content type");
+    }
+    std::puts ("typed codec: default JSON/base64 roundtrip; invalid JSON/base64/type/content-type rejected");
+}
+
 }
 
 int main ()
@@ -212,7 +252,12 @@ int main ()
     try {
         ladder::verify_wire ();
         reply_contract ();
-        socket_contract (fw::detail::ablation::level ());
+        typed_codec_contract ();
+        const auto level = fw::detail::ablation::level ();
+        if (level == 4)
+            socket_contract<ladder::typed_payload_t> (level);
+        else
+            socket_contract (level);
     }
     catch (const std::exception &error) {
         std::fprintf (stderr, "ladder contract: %s\n", error.what ());

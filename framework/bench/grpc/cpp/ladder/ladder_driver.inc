@@ -132,8 +132,13 @@ class ladder_driver_t final : public driver_t
             observe_binding (std::move (submission.reply),
               [stream, seq, level] (const auto &reply) {
                   try {
-                      auto payload = ladder::decode_reply (reply, level, seq);
-                      stream->finish (0, &payload, seq);
+                      if (level >= 4) {
+                          auto payload = ladder::decode_reply<ladder::typed_payload_t> (reply, level, seq);
+                          stream->finish_bytes (0, payload.body ().data (), payload.body ().size (), seq);
+                      } else {
+                          auto payload = ladder::decode_reply (reply, level, seq);
+                          stream->finish (0, &payload, seq);
+                      }
                   } catch (const std::exception &error) {
                       stream->finish (0, nullptr, seq, &error);
                   }

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 #include "../common/bench_common.hpp"
+#include "ladder_payload.hpp"
 #include <zlink/codecs/protobuf.hpp>
 #include <zlink/framework/detail/ablation_ladder.hpp>
 #include "runtime/dispatch/application_job_queue.hpp"
@@ -28,7 +29,7 @@ inline zlink::message_t message (std::string_view bytes)
 {
     return zlink::message_t::from (std::as_bytes (std::span (bytes)));
 }
-inline auto serializer ()
+inline auto protobuf_serializer ()
 {
     // This is the exact serializer selected by the Framework protobuf extension.
     return fw::detail::extension_serializer_traits_t<payload_t>::make_serializer ();
@@ -110,9 +111,13 @@ class encoder_t
   public:
     explicit encoder_t (int level) : _level (level)
     {
+        if (level >= 4) {
+            _type = fw::detail::serializer_registry_access_t::request_plan (typed_serializer ());
+        }
         if (level >= 2 || level < 0) {
-            _type = std::make_shared<fw::detail::request_type_plan_t> (
-              fw::detail::prepare_request_type ("BenchPayload", "application/x-protobuf"));
+            if (!_type)
+                _type = std::make_shared<fw::detail::request_type_plan_t> (
+                  fw::detail::prepare_request_type ("BenchPayload", "application/x-protobuf"));
             _channel = std::make_shared<fw::detail::prepared_header_fragment_t> (
               fw::detail::prepare_request_channel ("bench"));
         }
@@ -124,22 +129,27 @@ class encoder_t
         zlink::message_t body;
         // L4 restores the Framework typed codec. L0 still performs all of
         // the raw binding benchmark's payload allocation and protobuf encode.
-        payload_t value;
-        value.mutable_body ()->assign (size, '\xab');
-        stamp_payload (value.mutable_body ()->data (), size, run, phase, seq);
-        body = _level >= 4
-          ? fw::detail::encoded_payload_to_raw (serializer ().serialize (value))
-          : message (encode_bench_payload (value));
+        if (_level >= 4) {
+            auto value = make_typed_payload (size, run, phase, seq);
+            const auto selected = typed_serializer ();
+            _type = fw::detail::serializer_registry_access_t::request_plan (selected);
+            body = fw::detail::encoded_payload_to_raw (selected.serialize (value));
+        } else {
+            payload_t value;
+            value.mutable_body ()->assign (size, '\xab');
+            stamp_payload (value.mutable_body ()->data (), size, run, phase, seq);
+            body = message (encode_bench_payload (value));
+        }
         if (_level >= 0 && _level < 2)
             return {message (request_envelope ()), std::move (body)};
         messaging::client_call_codec_t codec;
         auto header = codec.create_envelope (
           command ? messaging::message_kind_t::command : messaging::message_kind_t::request,
           "bench", "BenchPayload", command ? std::chrono::milliseconds (0) : timeout, {}, {},
-          "application/x-protobuf");
+          _type->content_type);
         auto encoded = fw::detail::encoded_payload_from_raw (std::move (body));
         auto envelope = command
-          ? codec.encode_payload_parts (header, std::move (encoded), "application/x-protobuf")
+          ? codec.encode_payload_parts (header, std::move (encoded), _type->content_type)
           : (_level >= 3 || _level < 0)
             ? codec.encode_service_payload_parts (std::move (header), std::move (encoded), _type, _channel)
             : codec.encode_payload_parts (std::move (header), std::move (encoded), _type, _channel);
@@ -180,19 +190,27 @@ inline void verify_wire ()
             messaging::envelope_codec_t{}.decode_header (bytes, false).value ();
         }
     };
-    for (int level : {0, 1, 2, 3}) {
+    for (int level : {0, 1, 2, 3, 4}) {
         for (size_t size : {1024, 4096}) {
             for (bool command : {true, false}) {
                 encoder_t encoder (level);
                 auto parts = encoder.encode (size, 123, phase_active, 456, command);
                 auto views = application_views (parts);
                 validate_envelope (level, views[0]);
-                auto payload = serializer ().deserialize (fw::detail::encoded_payload_from_raw (views[1]));
-                decoded_header_t header;
-                if (payload.body ().size () != size
-                    || !decode_payload (payload.body ().data (), size, &header)
-                    || header.run_id != 123 || header.phase != phase_active || header.seq != 456)
-                    throw std::runtime_error ("ladder wire roundtrip failed");
+                const auto validate_payload = [&] (const auto &payload) {
+                    decoded_header_t header;
+                    if (payload.body ().size () != size
+                        || !decode_payload (payload.body ().data (), size, &header)
+                        || header.run_id != 123 || header.phase != phase_active || header.seq != 456)
+                        throw std::runtime_error ("ladder wire roundtrip failed");
+                };
+                if (level >= 4) {
+                    const auto envelope = messaging::envelope_codec_t{}.decode_header (views[0], false).value ();
+                    if (envelope.content_type != typed_serializer ().content_type ())
+                        throw std::runtime_error ("typed payload did not select default JSON");
+                    validate_payload (typed_serializer ().deserialize (fw::detail::encoded_payload_from_raw (views[1])));
+                } else
+                    validate_payload (protobuf_serializer ().deserialize (fw::detail::encoded_payload_from_raw (views[1])));
                 if (level >= 3 || level < 0) {
                     auto broken = parts[1].copy ();
                     broken.data ()[0] = std::byte{0xff};
@@ -217,11 +235,11 @@ inline void verify_wire ()
     std::puts ("negative checks: malformed raw/framework envelope rejected");
 }
 
-template <typename Metrics> struct fixed_handler_t
+template <typename Metrics, typename Payload = payload_t> struct fixed_handler_t
 {
     Metrics &metrics;
     int level;
-    payload_t handle (zlink::received_t &received,
+    Payload handle (zlink::received_t &received,
                       std::optional<messaging::envelope_header_t> &header)
     {
         auto &parts = received.parts ();
@@ -241,9 +259,10 @@ template <typename Metrics> struct fixed_handler_t
             auto decoded = messaging::envelope_codec_t{}.decode_header_view (application[0], false);
             header.emplace (std::move (decoded.value ()));
         }
-        payload_t payload;
-        if (level >= 4) {
-            payload = serializer ().deserialize (fw::detail::encoded_payload_from_raw (application[1]));
+        Payload payload;
+        if constexpr (std::is_same_v<Payload, typed_payload_t>) {
+            payload = fw::detail::deserialize_typed_payload (
+              typed_serializer (), application[1], header->content_type);
         } else if (!payload.ParseFromArray (application[1].data (), static_cast<int> (application[1].size ()))) {
             throw std::runtime_error ("invalid raw protobuf payload");
         }
@@ -255,16 +274,19 @@ template <typename Metrics> struct fixed_handler_t
     }
 };
 
-inline std::array<zlink::message_t, 2> reply_parts (
-  const payload_t &payload, const std::optional<messaging::envelope_header_t> &request)
+template <typename Payload>
+std::array<zlink::message_t, 2> reply_parts (
+  const Payload &payload, const std::optional<messaging::envelope_header_t> &request)
 {
-    // L2 changes only the envelope; every level retains the binding's fresh
-    // reply body, protobuf encode and two-part submit.
-    payload_t reply;
+    // Every level creates a fresh reply body and fresh parts. L4 selects the
+    // default typed JSON serializer; L0-L3 retain the raw protobuf encoder.
+    Payload reply;
     reply.set_body (payload.body ());
-    const std::string encoded = encode_bench_payload (reply);
-    zlink::message_t echo = zlink::message_t::from (
-      std::as_bytes (std::span<const char> (encoded.data (), encoded.size ())));
+    zlink::message_t echo;
+    if constexpr (std::is_same_v<Payload, typed_payload_t>)
+        echo = fw::detail::encoded_payload_to_raw (typed_serializer ().serialize (reply));
+    else
+        echo = message (encode_bench_payload (reply));
     if (request) {
         fw::detail::channel_reply_writer_t writer;
         auto response = writer.reply_raw_envelope (
@@ -276,7 +298,8 @@ inline std::array<zlink::message_t, 2> reply_parts (
     return {message (response_envelope ()), std::move (echo)};
 }
 
-inline void raw_reply (zlink::received_t &received, const payload_t &payload,
+template <typename Payload>
+void raw_reply (zlink::received_t &received, const Payload &payload,
                        const std::optional<messaging::envelope_header_t> &request,
                        const std::optional<std::uint64_t> &correlation)
 {
@@ -292,7 +315,8 @@ inline void raw_reply (zlink::received_t &received, const payload_t &payload,
     received.reply ().message (service_header).message (service_body).submit ();
 }
 
-inline payload_t decode_reply (const std::vector<zlink::message_t> &parts, int level,
+template <typename Payload = payload_t>
+Payload decode_reply (const std::vector<zlink::message_t> &parts, int level,
                                 std::uint64_t sequence)
 {
     if (parts.size () != 2)
@@ -320,13 +344,17 @@ inline payload_t decode_reply (const std::vector<zlink::message_t> &parts, int l
               header.error_code.value_or ("request_failed"),
               header.error_message.value_or ("route request failed"), "route request");
     }
-    payload_t payload;
-    if (!payload.ParseFromArray (views[1].data (), static_cast<int> (views[1].size ())))
-        throw std::runtime_error ("invalid raw reply protobuf");
-    return payload;
+    if constexpr (std::is_same_v<Payload, typed_payload_t>)
+        return typed_serializer ().deserialize (fw::detail::encoded_payload_from_raw (views[1]));
+    else {
+        Payload payload;
+        if (!payload.ParseFromArray (views[1].data (), static_cast<int> (views[1].size ())))
+            throw std::runtime_error ("invalid raw reply protobuf");
+        return payload;
+    }
 }
 
-template <typename Metrics>
+template <typename Metrics, typename Payload = payload_t>
 int direct_server (const std::string &endpoint, Metrics &metrics, std::atomic<bool> &stop,
                    int level, bool raw_mesh)
 {
@@ -370,7 +398,7 @@ int direct_server (const std::string &endpoint, Metrics &metrics, std::atomic<bo
     std::fprintf (stderr, "#4350 target L%d: real raw_mesh_node_owner_t; fixed handler\n", level);
     struct state_t {
         fw::runtime::mesh::raw_mesh_node_owner_t &owner;
-        fixed_handler_t<Metrics> handler;
+        fixed_handler_t<Metrics, Payload> handler;
     } state{owner, {metrics, level}};
     owner.ablation_receive (stop, [] (void *opaque, zlink::received_t &received,
                                     fw::runtime::application_job_queue_t::permit_t *permit) {
@@ -379,7 +407,7 @@ int direct_server (const std::string &endpoint, Metrics &metrics, std::atomic<bo
         if (handle_control (state.owner.ablation_socket (), received,
                             state.owner.startup_descriptor (), nullptr, &correlation))
             return;
-        // L6: one handler, constructed outside the receive loop, called directly.
+        // L0-L4: one fixed handler; activation/scope starts at L5_7.
         if (permit)
             permit->release_for_handler_entry ();
         std::optional<messaging::envelope_header_t> header;

@@ -193,7 +193,7 @@ if(ZLINK_CPP_ABLATION_LADDER)
   bench_target(bench_cpp_ladder_contract_test)
   target_include_directories(bench_cpp_ladder_contract_test PRIVATE ${BENCH_PROTO_GEN_DIR})
   target_link_libraries(bench_cpp_ladder_contract_test PRIVATE zlink::framework_codec_protobuf)
-  foreach(level RANGE 0 3)
+  foreach(level RANGE 0 4)
     add_test(NAME bench_cpp_ladder_L${level} COMMAND bench_cpp_ladder_contract_test)
     set_tests_properties(bench_cpp_ladder_L${level} PROPERTIES
       ENVIRONMENT "ZLINK_CPP_LADDER_LEVEL=${level}" TIMEOUT 30)

@@ -9,14 +9,14 @@ namespace zlink::framework::detail::ablation
 {
 // Restoration order: permit, envelope, service framing, typed codec,
 // owner queue/worker, activation/scope, registry/completion/deadline.
-// L0/L1/L2/L3 and the unchanged main path are executable in this job.
+// L0/L1/L2/L3/L4 and the unchanged main path are executable in this job.
 inline int level ()
 {
     static const int value = [] {
         const auto *input = std::getenv ("ZLINK_CPP_LADDER_LEVEL");
         const int parsed = input ? std::atoi (input) : 8;
-        if (parsed != 0 && parsed != 1 && parsed != 2 && parsed != 3 && parsed != 8)
-            throw std::invalid_argument ("this step implements L0 (0), L1 (1), L2 (2), L3 (3) and main (8)");
+        if (parsed != 0 && parsed != 1 && parsed != 2 && parsed != 3 && parsed != 4 && parsed != 8)
+            throw std::invalid_argument ("this step implements L0 (0), L1 (1), L2 (2), L3 (3), L4 (4) and main (8)");
         return parsed;
     } ();
     return value;
