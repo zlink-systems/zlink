@@ -1,6 +1,6 @@
 # C++ L4 typed JSON 조사·수정안
 
-현재 단계는 진단이다. Production 변경은 시작하지 않았다. 아래 원인 후보는 코드로 확인했으며, CPU·allocation profile 확보 뒤 기여도를 확정한다. Scratch Release 빌드는 다른 작업의 측정 guard에 의해 일시 정지되어 있다. `measure.lock`을 사용하거나 guard를 우회하지 않는다.
+분리 production CPU·allocation 진단과 수정안을 먼저 보고한 뒤 구현·검증을 시작했다. 구현 전 보고서는 [raw 사본](raw/report-before-implementation.md)에 보존했다. 아래 내부 byte 처리 비용은 분리한 production JSON bulk probe의 CPU·allocation profile로 확인했다. 전체 ladder profile과 registry/native 계수는 build 완료 뒤 추가한다. Scratch Release 빌드는 다른 작업의 측정 guard에 의해 일시 정지되어 있다. `measure.lock`을 사용하거나 guard를 우회하지 않는다.
 
 ## 확인한 경로
 
@@ -24,6 +24,25 @@
 
 대조 원문: [Java serializer](raw/java-serializer-source.txt), [Java profile](raw/java-profile-source.txt), [.NET codec](raw/dotnet-codec-source.txt), [Node profile](raw/node-profile-source.txt). 이번 수정은 byte field의 관찰 가능한 동작을 바꾸지 않고 C++ 내부의 변환 비용을 줄인다. 다른 언어의 구현 비용이 다른 것은 spec gap으로 분류하지 않는다.
 
+## 확보한 CPU·allocation 근거
+
+분리 probe는 production과 동일한 scratch `J`의 `encode/try_decode`를 호출한다. 입력은 bench와 같은 0xab byte field다. 각 perf run은 4초, CPUs 6-7,14-15이며 처리량 판정을 하지 않는다. Registry의 string owner 및 Core metadata는 이 probe 범위 밖이다.
+
+| 크기 | encode C++ new / 요청 bytes | decode C++ new / 요청 bytes | raw |
+|---|---:|---:|---|
+| 1K | 5 / 5,213 | 32 / 10,447 | [allocation](raw/baseline-bulk-allocations.txt) |
+| 4K | 7 / 21,599 | 38 / 40,401 | 같은 raw |
+
+| CPU self sample | 1K | 4K | 근거 |
+|---|---:|---:|---|
+| encode string push_back | 46.94% | 47.03% | [1K](raw/baseline-bulk-encode-1024.self.txt), [4K](raw/baseline-bulk-encode-4096.self.txt) |
+| encode write_string 자체 | 21.06% | 23.24% | 같은 raw. 4K push_back 중 42.02%p는 write_string 아래다 |
+| decode memchr | 25.78% | 26.76% | [1K](raw/baseline-bulk-decode-1024.self.txt), [4K](raw/baseline-bulk-decode-4096.self.txt) |
+| decode decode_bytes 자체 | 9.24% | 9.09% | 같은 raw |
+| decode lexer get 자체 | 26.71% | 29.79% | 같은 raw. JSON token 처리 비용도 남는다 |
+
+CPU 원인은 encode의 Base64 임시 string과 일반 string writer의 중복 순회·문자 append, decode의 alphabet 선형 검색과 output vector 반복 확장이다. Nlohmann의 SAX lexer token buffer 비용도 관측됐다. Library parser를 교체하거나 wire를 바꿔 이 비용을 숨기지 않는다. 이 수치는 분리 probe의 shape이며 전체 ladder의 손실 기여율로 환산하지 않는다.
+
 ## Production 수정 제안
 
 **분류 B(기존 C++ codec의 불필요한 처리 비용), 소유 계층 Framework typed JSON codec.** Spec [message model §5](raw/message-model-source.txt): UTF-8 JSON, padded RFC 4648 Base64 및 기존 오류 판정을 유지한다. Public API·wire·bench DTO 변경이 필요하지 않다.
@@ -41,5 +60,5 @@
 
 - 수정 전 C++ format check 통과: [raw](raw/format-baseline.log).
 - 독립 Python RFC 4648 JSON fixture 8개 준비: [크기·SHA256](raw/independent-goldens.json). 크기는 0, 1, 2, 3, 127, 128, 1024, 4096이다. 수정 전 production 출력과 비교할 예정이다.
-- CPU L3/L4 send-saturation 4K·request-serial 1K profile, per-message C++ new 및 native malloc 계수, copy 계수는 build 완료 뒤 이 보고서에 추가한다.
-- Runtime 구현·unit test·local commit은 아직 없다. Raw는 보존한다.
+- L3/L4 send-saturation 4K·request-serial 1K 전체 profile, registry의 per-message C++ new 및 native malloc 계수, copy 계수는 build 완료 뒤 이 보고서에 추가한다.
+- 공통 production byte writer/decoder와 byte-identical JSON·decode·allocation 회귀 test를 구현했다. Release build·test·전체 ladder profile·local commit은 진행 중이다. Raw는 보존한다.

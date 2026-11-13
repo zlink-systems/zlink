@@ -42,7 +42,15 @@ for step in ("L3", "L4"):
       "--stats-url","http://127.0.0.1:26331","--target-endpoint","tcp://127.0.0.1:26334",
       "--target-command-endpoint","tcp://127.0.0.1:26336","--target-stats-url","http://127.0.0.1:26335",
       "--output",str(output)]
+    primary=pathlib.Path("/root/worktree/zlink-v21-s033/n4json")
+    def git(*args): return subprocess.check_output(["git", *args],cwd=primary,text=True).strip()
+    provenance={"scratch_archive":"ae8a5178b5","primary_head":git("rev-parse","HEAD"),
+      "primary_dirty":bool(git("status","--porcelain")),"primary_base":git("merge-base","HEAD","origin/main"),
+      "archive_base":git("merge-base","ae8a5178b5","origin/main"),
+      "preload_sha256":hashlib.sha256((job/"tools/allocation-preload.cjs").read_bytes()).hexdigest()}
+    (output/"provenance.json").write_text(json.dumps(provenance,indent=2))
     with (job/"progress.md").open("a") as f:
+      f.write("\n"+json.dumps(provenance)+"\n")
       f.write(f"\nProfile {output.name}: scratch archive ae8a5178b5, primary base df42a4df40; CPUs 6-7,14-15, no measure.lock, shape only.\n")
       for rel in ("framework/bench/grpc/node/client/main.js", "framework/bench/grpc/node/shared/raw-wire.js",
                   "framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js",
@@ -53,7 +61,7 @@ for step in ("L3", "L4"):
       src=root/"framework/languages/node/packages/framework/src/runtime/channels/channel-envelope.ts"
       assert (root/"framework/languages/node/packages/framework/dist/runtime/channels/channel-envelope.js").stat().st_mtime >= src.stat().st_mtime
       f.write("Receive/reply and waits/allocations/copies: see call-shape.md; L3/L4 add only restored features.\n")
-    procs=[]; handles=[]; started=time.monotonic()
+    procs=[]; handles=[]; failure=None; started=time.monotonic()
     try:
       for role,args in (("target",target_args),("source",source_args)):
         log=(output/f"{role}.log").open("w"); handles.append(log)
@@ -89,6 +97,7 @@ for step in ("L3", "L4"):
         (output/f"{phase}-source-stats.json").write_text(json.dumps(stats,indent=2))
       (output/"target-stats.json").write_text(json.dumps(http(26335,"/bench/stats"),indent=2))
     except Exception as e:
+      failure=e
       (output/"error.txt").write_text(repr(e))
       print(output.name,"FAILED",e,flush=True)
     finally:
@@ -100,3 +109,4 @@ for step in ("L3", "L4"):
       for h in handles: h.close()
       (output/"lifetime.json").write_text(json.dumps({"wall_seconds":time.monotonic()-started,"exit_codes":{r:p.returncode for r,p in procs},"pids":{r:p.pid for r,p in procs}}))
     print(output.name,"done",flush=True)
+    if failure is not None: sys.exit(1)

@@ -1,0 +1,14 @@
+perf(node): service wire frame을 native 저장소에 직접 기록한다 (#4353)
+
+Node와 Channel multipart를 최종 native Message에 기록하고 raw port에서
+public binding submit으로 소유권을 이전한다. 고정 profile header는 기존
+writer에서 한 번 만들며 길이 검증과 multipart writer를 재사용한다.
+로컬 전달은 native Buffer를 보존하고, 제출 전 실패와 취소는 frame을 해제한다.
+
+소유 계층: Framework service wire codec과 raw binding port.
+스펙: wire protocol §2, payload ownership §1–5.
+교차언어: C++·Java·.NET의 native frame writer와 retained decoder 대조.
+분류: B. 완성 frame 저장소 생성 위치 2→1; wire 형식 소유자 1→1.
+
+검증: workspace build, focused contracts 172/172, M6A runtime 48/48,
+추가 copy invariant 18/18, typecheck, touched ESLint, Node format check.
