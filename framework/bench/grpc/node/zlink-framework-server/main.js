@@ -12,13 +12,16 @@
 
 const { argValue, argInt } = require('../shared/args');
 const { BenchServerMetrics, startStatsServer } = require('../shared/bench-server-metrics');
-const { RESPONSE_ENVELOPE, ROUTING_IDS, decodeBenchPayloadBody, encodeBenchPayloadMessage } = require('../shared/raw-wire');
+const rawWire = require('../shared/raw-wire');
+const { RESPONSE_ENVELOPE, ROUTING_IDS, decodeBenchPayloadBody, encodeBenchPayloadMessage } = rawWire;
 const zlink = require('@zlink-systems/zlink');
 const { EchoHandler, CommandHandler } = require('./bench-handlers');
 const l0Server = process.env.ZLINK_LADDER_L0_SERVER === '1';
 const lazyFramework = l0Server && process.env.ZLINK_LADDER_L0_LAZY_FRAMEWORK !== '0';
 const l0rServer = l0Server && process.env.ZLINK_LADDER_L0R === '1';
 const l1Permit = l0Server && process.env.ZLINK_LADDER_L1_PERMIT === '1';
+const l2Envelope = l0Server && process.env.ZLINK_LADDER_L2_ENVELOPE === '1';
+const l2rEnvelope = l0Server && process.env.ZLINK_LADDER_L2R_ENVELOPE === '1';
 let applicationJobQueue;
 let ApplicationJobQueue;
 let resolveApplicationJobQueueConfiguration;
@@ -31,6 +34,7 @@ if (l0rServer || l1Permit) {
 if (l1Permit) {
   applicationJobQueue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
 }
+if (l2Envelope || l2rEnvelope) rawWire.requireProductionChannelEnvelope();
 const frameworkWire = process.env.ZLINK_LADDER_L0_FRAMEWORK_CLIENT === '1'
   || process.env.ZLINK_CROSS_FRAMEWORK_WIRE === '1';
 let contract;
@@ -106,6 +110,7 @@ if (l0Server) {
       handled += 1;
       const parts = received.parts;
       try {
+        if (l2Envelope) rawWire.decodeProductionChannelHeader(parts);
         const header = frameworkWire ? parts[0].data() : null;
         const payload = decodeBenchPayloadBody(parts[parts.length - 1].data());
         if (payload === null) throw new Error('invalid benchmark payload');
@@ -143,6 +148,7 @@ if (l0Server) {
       handled += 1;
       try {
         const parts = commandReceived.parts;
+        if (l2Envelope) rawWire.decodeProductionChannelHeader(parts);
         const payload = decodeBenchPayloadBody(parts[parts.length - 1].data());
         if (payload === null) throw new Error('invalid benchmark payload');
         commandHandler.handleL0(payload);
@@ -187,6 +193,7 @@ if (l0Server) {
   async function pumpRequestsWithPermits() {
     return pumpWithPermits(router, received, (permit) => {
       const parts = received.parts;
+      if (l2Envelope) rawWire.decodeProductionChannelHeader(parts);
       const payload = decodeBenchPayloadBody(parts[parts.length - 1].data());
       if (payload === null) throw new Error('invalid benchmark payload');
       if (received.replyToken !== null) {
@@ -206,6 +213,7 @@ if (l0Server) {
   async function pumpCommandsWithPermits() {
     return pumpWithPermits(commandRouter, commandReceived, (permit) => {
       const parts = commandReceived.parts;
+      if (l2Envelope) rawWire.decodeProductionChannelHeader(parts);
       const payload = decodeBenchPayloadBody(parts[parts.length - 1].data());
       if (payload === null) throw new Error('invalid benchmark payload');
       permit.releaseBeforeHandler();

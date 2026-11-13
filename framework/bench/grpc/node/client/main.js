@@ -172,6 +172,12 @@ function createRawTransport(options) {
   const ladderL0 = process.env.ZLINK_LADDER_L0_CLIENT === '1'
     && options.implementation === 'zlink-framework-node';
   const frameworkWire = process.env.ZLINK_CROSS_FRAMEWORK_WIRE === '1';
+  const ladderL2 = process.env.ZLINK_LADDER_L2_CLIENT === '1'
+    && options.implementation === 'zlink-framework-node';
+  if (process.env.ZLINK_LADDER_L2R_CLIENT === '1'
+      && options.implementation === 'zlink-framework-node') {
+    rawWire.requireProductionChannelEnvelope();
+  }
   const peerId = ladderL0 && !frameworkWire ? rawWire.ROUTING_IDS.rawRequestServer : 'bench-server';
   const commandPeerId = frameworkWire && !ladderL0 ? 'bench-server' : rawWire.ROUTING_IDS.rawCommandServer;
   const commandEnvelope = frameworkWire ? rawWire.frameworkEnvelope(3) : rawWire.REQUEST_ENVELOPE;
@@ -241,10 +247,13 @@ function createRawTransport(options) {
   };
 
   const submitRequest = (payload) => {
+    const body = rawWire.encodeBenchPayloadMessage(payload);
     const submission = requestSocket.socket
       .request(requestSocket.peer)
-      .message(frameworkWire ? rawWire.frameworkEnvelope(1) : rawWire.REQUEST_ENVELOPE)
-      .message(rawWire.encodeBenchPayloadMessage(payload))
+      .message(ladderL2
+        ? rawWire.encodeProductionChannelHeader(1, options.requestTimeoutMs)
+        : frameworkWire ? rawWire.frameworkEnvelope(1) : rawWire.REQUEST_ENVELOPE)
+      .message(body)
       .timeout(options.requestTimeoutMs)
       .submit();
     const reply = submission.reply.then((parts) => {
@@ -262,10 +271,13 @@ function createRawTransport(options) {
 
   const submitSend = (stream, payload) => {
     const socket = sendSockets[stream % sendSockets.length];
+    const body = rawWire.encodeBenchPayloadMessage(payload);
     return socket.socket
       .send(socket.peer)
-      .message(commandEnvelope)
-      .message(rawWire.encodeBenchPayloadMessage(payload))
+      .message(ladderL2
+        ? rawWire.encodeProductionChannelHeader(3)
+        : commandEnvelope)
+      .message(body)
       .submit();
   };
 

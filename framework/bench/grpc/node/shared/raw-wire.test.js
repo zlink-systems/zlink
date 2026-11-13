@@ -47,6 +47,26 @@ test('framework schema serializer preserves the same protobuf body bytes', () =>
   assert.deepEqual(decoded.body, body);
 });
 
+test('production L2 channel header preserves the raw protobuf body path', () => {
+  const body = raw.encodeBenchPayloadMessage(Buffer.from(bodyHex, 'hex'));
+  try {
+    const header = raw.encodeProductionChannelHeader(1, 30000);
+    const decoded = raw.decodeProductionChannelHeader([{ data: () => header }]);
+    assert.equal(decoded.formatMarker, 0xf2);
+    assert.equal(decoded.kind, 1);
+    assert.equal(decoded.channelName, 'bench');
+    assert.equal(decoded.messageName, 'BenchPayload');
+    assert.equal(decoded.contentType, 'application/x-protobuf');
+    assert.match(decoded.correlationId, /^[0-9a-f]{32}$/);
+    assert.ok(decoded.deadline);
+    assert.deepEqual(body.data(), Buffer.from(wireHex, 'hex'));
+    const badHeader = Buffer.from(header.toString('utf8').replace('"formatMarker":242', '"formatMarker":0'));
+    assert.throws(() => raw.decodeProductionChannelHeader([{ data: () => badHeader }]));
+  } finally {
+    body.close();
+  }
+});
+
 for (const size of [127, 128, 1024, 4096]) {
   test(`raw protobuf wire remains identical for ${size}-byte body`, () => {
     const body = header.createPayloadBytes(size, 0x01020304, header.PHASE_ACTIVE,
