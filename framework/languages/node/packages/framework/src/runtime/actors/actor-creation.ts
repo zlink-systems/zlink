@@ -211,7 +211,7 @@ export class ZLinkActorCreationCoordinator {
         await this.options.locationLifecycle?.setActorRef(
           actorType,
           actorId,
-          { actorId, objectGeneration: 1n, meshName, nodeRid },
+          toFrameworkActorRef(state.currentActorRef(), meshName),
           0n
         );
       }

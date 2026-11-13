@@ -99,7 +99,10 @@ function fixture({
     assert.equal(location.spotId, entry ? 'node-a' : target.spotId);
     events.push('joined');
     if (lifecycleFailure) throw new Error('OnJoinedActor failed');
-    if (destroyAfterJoined) state.markNativeActorDestroyed(actorRef);
+    if (destroyAfterJoined) {
+      state.markNativeActorDestroyed(actorRef);
+      state.clearAfterDestroy();
+    }
   };
   const activation = {
     spotId: target.spotId,
