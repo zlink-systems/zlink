@@ -123,7 +123,8 @@ public class ZLinkFrameworkBenchServer {
 
     private static void pumpLadderL0(RouterSocket router, BenchServerMetrics metrics) {
         boolean permitsEnabled = System.getenv("ZLINK_BENCH_LADDER_L1") != null
-                || System.getenv("ZLINK_BENCH_LADDER_L2") != null;
+                || System.getenv("ZLINK_BENCH_LADDER_L2") != null
+                || System.getenv("ZLINK_BENCH_LADDER_L3") != null;
         ZLinkApplicationJobQueue permits = permitsEnabled
                 ? new ZLinkApplicationJobQueue(
                         ZLinkApplicationJobQueueProfile.BALANCED,
@@ -132,50 +133,37 @@ public class ZLinkFrameworkBenchServer {
                 : null;
         try (Received received = new Received()) {
             while (true) {
-                boolean first = true;
-                while (true) {
-                    ZLinkApplicationJobQueue.Permit permit = null;
-                    try {
-                        if (permitsEnabled) {
-                            permit = permits.acquireBlocking(
-                                    ZLinkApplicationJobQueue.Origin.REMOTE);
-                        }
-                        boolean receivedMessage = router.recv(
-                                received, first ? RecvFlags.NONE : RecvFlags.DONT_WAIT);
-                        if (!receivedMessage) {
-                            if (permit != null) {
-                                permit.close();
-                            }
-                            break;
-                        }
-                        first = false;
-                        if (permit != null) {
-                            permit.handlerStarted();
-                            permit = null;
-                        }
-                        handleLadderL0(received, metrics);
-                    } catch (ZlinkRecvException failure) {
-                        if (failure.getResult() == RecvResult.TERMINATED) {
-                            return;
-                        }
-                        if (failure.getResult() != RecvResult.NO_DATA) {
-                            metrics.recordError();
-                            System.err.println("L0 receive failed: " + failure);
-                        }
-                        if (failure.getResult() == RecvResult.NO_DATA || first) {
-                            break;
-                        }
-                    } catch (InterruptedException interrupted) {
-                        Thread.currentThread().interrupt();
+                ZLinkApplicationJobQueue.Permit permit = null;
+                try {
+                    if (permitsEnabled) {
+                        permit = permits.acquireBlocking(
+                                ZLinkApplicationJobQueue.Origin.REMOTE);
+                    }
+                    if (!router.recv(received, RecvFlags.NONE)) {
+                        continue;
+                    }
+                    if (permit != null) {
+                        permit.handlerStarted();
+                        permit = null;
+                    }
+                    handleLadderL0(received, metrics);
+                } catch (ZlinkRecvException failure) {
+                    if (failure.getResult() == RecvResult.TERMINATED) {
                         return;
-                    } catch (RuntimeException failure) {
+                    }
+                    if (failure.getResult() != RecvResult.NO_DATA) {
                         metrics.recordError();
-                        System.err.println("L0 owner failed: " + failure);
-                        break;
-                    } finally {
-                        if (permit != null) {
-                            permit.close();
-                        }
+                        System.err.println("L0 receive failed: " + failure);
+                    }
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return;
+                } catch (RuntimeException failure) {
+                    metrics.recordError();
+                    System.err.println("L0 owner failed: " + failure);
+                } finally {
+                    if (permit != null) {
+                        permit.close();
                     }
                 }
             }
