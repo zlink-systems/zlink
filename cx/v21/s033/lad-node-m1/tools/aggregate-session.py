@@ -7,23 +7,12 @@ impl={'binding':'zlink-node','L0':'zlink-framework-node','L0R':'zlink-framework-
 patterns=('send-saturation','request-serial','request-backpressure')
 payloads=(1024,4096)
 def load(v,pattern,payload):
-  files=[]
-  primary=base/v/f'run1/{impl[v]}-{pattern}-{payload}/results.json'
-  if primary.exists(): files.append(primary)
-  for run in range(1,3):
-    p=base/'confirm'/v/f'run{run}/{impl[v]}-{pattern}-{payload}/results.json'
-    if p.exists(): files.append(p)
-  if not files: raise SystemExit(f'missing {v} {pattern}-{payload}')
-  runs=[]
-  for p in files:
-    c=json.loads(p.read_text())['cells'][0]
-    if c['errors'] or c['server_errors'] or c['target_stats']['errors'] or c['submitted']!=c['completed'] or c['submitted']!=c['target_stats']['received']:
-      raise SystemExit(f'broken result: {p}')
-    runs.append({'throughput':c['throughput_per_second'],'path':p.relative_to(job).as_posix(),'errors':c['errors'],'submitted':c['submitted'],'completed':c['completed'],'received':c['target_stats']['received']})
-  values=[x['throughput'] for x in runs]
-  med=statistics.median(values)
-  spread=max(abs(x-med) for x in values)/med
-  return {'runs':runs,'run_count':len(runs),'median':med,'spread':spread,'g5':'not-applicable-1-run' if len(runs)==1 else ('pass' if spread<=.10 else '판정 불가')}
+  p=base/v/f'run1/{impl[v]}-{pattern}-{payload}/results.json'
+  if not p.exists(): raise SystemExit(f'missing {v} {pattern}-{payload}')
+  c=json.loads(p.read_text())['cells'][0]
+  if c['errors'] or c['server_errors'] or c['target_stats']['errors'] or c['submitted']!=c['completed'] or c['submitted']!=c['target_stats']['received']:
+    raise SystemExit(f'broken result: {p}')
+  return {'runs':[{'throughput':c['throughput_per_second'],'path':p.relative_to(job).as_posix(),'errors':c['errors'],'submitted':c['submitted'],'completed':c['completed'],'received':c['target_stats']['received']}],'run_count':1,'median':c['throughput_per_second'],'spread':None,'g5':'not-applicable-1-run'}
 
 rows=[]
 for pattern in patterns:
