@@ -194,6 +194,7 @@ jobs:
           ./gradlew --no-daemon --max-workers="${worker_count}" \
             :zlink-framework-core:test \
             :zlink-framework-core:integrationTest \
+            :zlink-framework-spring-boot-starter:test \
             -Pzlink.includeSamples=false
 
       # 위 step은 `-Pzlink.includeSamples=false`로 샘플 composite build를 아예 등록하지
