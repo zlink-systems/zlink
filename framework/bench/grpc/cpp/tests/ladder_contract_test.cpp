@@ -77,13 +77,29 @@ void socket_contract (int level)
                       fw::runtime::application_job_queue_t::origin_t::remote);
                 require (target.recv (received, zlink::recv_flags_t::none) == 0,
                          "contract target recv failed");
+                std::optional<std::uint64_t> correlation;
+                require (!ladder::handle_control (target, received,
+                           ladder::descriptor (target_rid, "inproc://ladder-contract"),
+                           nullptr, &correlation), "unexpected control record");
                 if (permit)
                     permit->release_for_handler_entry ();
                 const auto *body_storage = received.parts ()[1].data ();
+                const auto body_size = received.parts ()[1].size ();
                 std::optional<ladder::messaging::envelope_header_t> header;
                 auto payload = handler.handle (received, header);
-                require (received.parts ()[1].data () == body_storage,
-                         "L2 envelope handling replaced the payload storage");
+                if (level < 3)
+                    require (received.parts ()[1].data () == body_storage,
+                             "L2 envelope handling replaced the payload storage");
+                else {
+                    require (!received.parts ()[1].valid (), "L3 did not move the received frame");
+                    require (header && header->retained_header.message.has_value (),
+                             "L3 did not retain its borrowed header through reply");
+                    const auto retained = reinterpret_cast<std::uintptr_t> (
+                      header->retained_header.message->data ());
+                    const auto first = reinterpret_cast<std::uintptr_t> (body_storage);
+                    require (retained >= first && retained < first + body_size,
+                             "L3 copied its unpacked header bytes");
+                }
                 if (level >= 2) {
                     require (header.has_value (), "target did not retain its parsed envelope");
                     require ((header->kind == ladder::messaging::message_kind_t::request)
@@ -91,19 +107,27 @@ void socket_contract (int level)
                              "command/request envelope kind changed");
                     require (header->deadline.has_value () == received.reply_token ().has_value (),
                              "request deadline missing or command gained a deadline");
-                    const auto first = reinterpret_cast<std::uintptr_t> (received.parts ()[0].data ());
+                    const auto &retained = level >= 3 ? *header->retained_header.message
+                                                       : received.parts ()[0];
+                    const auto first = reinterpret_cast<std::uintptr_t> (retained.data ());
                     const auto text = reinterpret_cast<std::uintptr_t> (header->channel_name.data ());
-                    require (text >= first && text < first + received.parts ()[0].size (),
+                    require (text >= first && text < first + retained.size (),
                              "target parser did not borrow the retained envelope header");
                     auto saved = std::move (received.parts ()[0]);
-                    received.parts ()[0] = ladder::message ("{broken");
+                    received.parts ()[0] = ladder::message (level >= 3 ? "bad-wire" : "{broken");
                     std::optional<ladder::messaging::envelope_header_t> invalid;
-                    require_rejected ([&] { handler.handle (received, invalid); },
-                                      "target accepted a malformed envelope");
+                    std::optional<std::uint64_t> invalid_correlation;
+                    require_rejected ([&] {
+                        ladder::handle_control (target, received,
+                          ladder::descriptor (target_rid, "inproc://ladder-contract"),
+                          nullptr, &invalid_correlation);
+                        handler.handle (received, invalid);
+                    },
+                                      "target accepted a malformed wire/envelope header");
                     received.parts ()[0] = std::move (saved);
                 }
                 if (received.reply_token ())
-                    ladder::raw_reply (received, payload, header);
+                    ladder::raw_reply (received, payload, header, correlation);
             }
         }
         catch (...) { target_failure = std::current_exception (); }
@@ -121,7 +145,20 @@ void socket_contract (int level)
         require (decode_payload (decoded.body ().data (), size, &stamp) && stamp.seq == 456,
                  "source completion lost the protobuf stamp");
         if (level >= 2) {
-            reply[0] = ladder::message ("{broken");
+            if (level >= 3) {
+                auto saved = std::move (reply[0]);
+                reply[0] = ladder::protocol::encode_reply_header_message (999, 0, 0);
+                require_rejected ([&] { ladder::decode_reply (reply, level, 456); },
+                                  "source accepted the wrong service correlation");
+                reply[0] = std::move (saved);
+                const auto views = ladder::application_views (reply);
+                std::vector<zlink::message_t> invalid;
+                invalid.push_back (ladder::message ("{broken"));
+                invalid.push_back (zlink::message_t::from (views[1]));
+                reply[1] = ladder::protocol::encode_application_payload_message (
+                  ladder::protocol::application_payload_t::from_parts (std::move (invalid)));
+            } else
+                reply[0] = ladder::message ("{broken");
             require_rejected ([&] { ladder::decode_reply (reply, level, 456); },
                               "source completion accepted a malformed envelope");
         }

@@ -50,12 +50,14 @@ inline void control (zlink::router_socket_t &socket, const zlink::routing_id_t &
 // measured data path. No mesh owner/operation/handler is constructed here.
 inline bool handle_control (zlink::router_socket_t &socket, zlink::received_t &received,
                             const fw::runtime::mesh::service_node_descriptor_t &local,
-                            std::atomic<bool> *admitted = nullptr)
+                            std::atomic<bool> *admitted = nullptr,
+                            std::optional<std::uint64_t> *correlation = nullptr)
 {
     if (received.parts ().empty () || received.parts ()[0].size () == 0
         || *reinterpret_cast<const char *> (received.parts ()[0].data ()) == '{')
         return false;
-    const auto kind = protocol::decode_header (protocol::message_bytes (received.parts ()[0])).kind;
+    const auto wire = protocol::decode_header (protocol::message_bytes (received.parts ()[0]));
+    const auto kind = wire.kind;
     if (kind == protocol::command::hello || kind == protocol::command::admit) {
         (void) protocol::decode_route_mesh_admission (
           protocol::message_bytes (received.parts ()[0]), kind, received.routing_id ()->to_bytes ());
@@ -76,6 +78,17 @@ inline bool handle_control (zlink::router_socket_t &socket, zlink::received_t &r
     }
     if (kind == protocol::command::reject)
         throw std::runtime_error ("raw mesh peer admission rejected");
+    if (correlation) {
+        if (kind == protocol::command::nodeRequest) {
+            if (!received.reply_token ())
+                throw protocol::service_wire_error_t ("node request has no binding reply token");
+            *correlation = protocol::decode_node_request_header (
+              protocol::message_bytes (received.parts ()[0]));
+        } else if (kind != protocol::command::nodeSend || wire.flags != 0
+                   || received.parts ()[0].size () != protocol::prefix_size) {
+            throw protocol::service_wire_error_t ("invalid ladder node send/request header");
+        }
+    }
     return false;
 }
 
@@ -127,7 +140,9 @@ class encoder_t
         auto encoded = fw::detail::encoded_payload_from_raw (std::move (body));
         auto envelope = command
           ? codec.encode_payload_parts (header, std::move (encoded), "application/x-protobuf")
-          : codec.encode_payload_parts (std::move (header), std::move (encoded), _type, _channel);
+          : (_level >= 3 || _level < 0)
+            ? codec.encode_service_payload_parts (std::move (header), std::move (encoded), _type, _channel)
+            : codec.encode_payload_parts (std::move (header), std::move (encoded), _type, _channel);
         if (_level >= 3 || _level < 0) {
             auto application = std::move (envelope).take_application_payload ();
             return {command ? protocol::encode_node_send_header_message ()
@@ -165,7 +180,7 @@ inline void verify_wire ()
             messaging::envelope_codec_t{}.decode_header (bytes, false).value ();
         }
     };
-    for (int level : {0, 1, 2}) {
+    for (int level : {0, 1, 2, 3}) {
         for (size_t size : {1024, 4096}) {
             for (bool command : {true, false}) {
                 encoder_t encoder (level);
@@ -209,31 +224,33 @@ template <typename Metrics> struct fixed_handler_t
     payload_t handle (zlink::received_t &received,
                       std::optional<messaging::envelope_header_t> &header)
     {
-        const auto &parts = received.parts ();
+        auto &parts = received.parts ();
         if (parts.size () != 2 || parts[0].size () == 0)
             throw std::runtime_error ("invalid ladder wire part shape");
-        std::array<std::span<const std::byte>, 2> legacy{parts.at (0).bytes (), parts.at (1).bytes ()};
-        std::vector<std::span<const std::byte>> packed;
-        std::span<const std::span<const std::byte>> views = legacy;
-        if (*reinterpret_cast<const char *> (parts[0].data ()) != '{') {
-            packed = application_views (parts);
-            views = packed;
+        std::vector<zlink::message_t> unpacked;
+        std::span<const zlink::message_t> application = parts;
+        if (level >= 3 || level < 0) {
+            // Production retained Message slices own the received frame. No
+            // application bytes are copied while removing the service wrapper.
+            unpacked = protocol::decode_application_parts (std::move (parts[1]), false);
+            application = unpacked;
         }
-        if (views.size () != 2)
+        if (application.size () != 2)
             throw std::runtime_error ("ladder application must have two parts");
         if (level >= 2 || level < 0) {
-            auto decoded = packed.empty ()
-              ? messaging::envelope_codec_t{}.decode_header_view (parts[0], false)
-              : messaging::envelope_codec_t{}.decode_header (views[0], false);
+            auto decoded = messaging::envelope_codec_t{}.decode_header_view (application[0], false);
             header.emplace (std::move (decoded.value ()));
         }
         payload_t payload;
         if (level >= 4) {
-            payload = serializer ().deserialize (fw::detail::encoded_payload_from_raw (views[1]));
-        } else if (!payload.ParseFromArray (views[1].data (), static_cast<int> (views[1].size ()))) {
+            payload = serializer ().deserialize (fw::detail::encoded_payload_from_raw (application[1]));
+        } else if (!payload.ParseFromArray (application[1].data (), static_cast<int> (application[1].size ()))) {
             throw std::runtime_error ("invalid raw protobuf payload");
         }
         metrics.record (payload.body ().data (), payload.body ().size ());
+        // Same retained-header transfer as mesh_record_dispatcher.cpp:47.
+        if (!unpacked.empty ())
+            header->retained_header.message = std::move (unpacked[0]);
         return payload;
     }
 };
@@ -260,18 +277,15 @@ inline std::array<zlink::message_t, 2> reply_parts (
 }
 
 inline void raw_reply (zlink::received_t &received, const payload_t &payload,
-                       const std::optional<messaging::envelope_header_t> &request)
+                       const std::optional<messaging::envelope_header_t> &request,
+                       const std::optional<std::uint64_t> &correlation)
 {
     auto response = reply_parts (payload, request);
-    if (*reinterpret_cast<const char *> (received.parts ()[0].data ()) == '{') {
+    if (!correlation) {
         received.reply ().message (response[0]).message (response[1]).submit ();
         return;
     }
-    // Canonical peers retain their existing wire contract. This compatibility
-    // adapter is outside the primary L0 raw wire.
-    const auto correlation = protocol::decode_node_request_header (
-      protocol::message_bytes (received.parts ()[0]));
-    auto service_header = protocol::encode_reply_header_message (correlation, 0, 0);
+    auto service_header = protocol::encode_reply_header_message (*correlation, 0, 0);
     auto service_body = protocol::encode_application_payload_message (
       protocol::application_payload_t::from_parts (
         messaging::message_parts_t (std::move (response[0]), std::move (response[1])).take_items ()));
@@ -285,7 +299,8 @@ inline payload_t decode_reply (const std::vector<zlink::message_t> &parts, int l
         throw std::runtime_error ("invalid ladder reply part count");
     if (level >= 3 || level < 0) {
         const auto wire = protocol::decode_reply_header (protocol::message_bytes (parts[0]));
-        if (wire.correlation != sequence + 1 || wire.terminal_result != 0)
+        if (parts[0].size () != protocol::reply_header_t::encoded_size
+            || wire.correlation != sequence + 1 || wire.terminal_result != 0)
             throw std::runtime_error ("invalid service reply correlation/terminal");
     }
     const std::array<std::span<const std::byte>, 2> legacy{parts[0].bytes (), parts[1].bytes ()};
@@ -331,12 +346,13 @@ int direct_server (const std::string &endpoint, Metrics &metrics, std::atomic<bo
             if (!poller.wait (&event, 1, std::chrono::milliseconds (50)))
                 continue;
             while (socket.recv (received, zlink::recv_flags_t::dontwait) == 0) {
-                if (handle_control (socket, received, local))
+                std::optional<std::uint64_t> correlation;
+                if (handle_control (socket, received, local, nullptr, &correlation))
                     continue;
                 std::optional<messaging::envelope_header_t> header;
                 auto payload = handler.handle (received, header);
                 if (received.reply_token ())
-                    raw_reply (received, payload, header);
+                    raw_reply (received, payload, header, correlation);
             }
         }
         return 0;
@@ -359,7 +375,9 @@ int direct_server (const std::string &endpoint, Metrics &metrics, std::atomic<bo
     owner.ablation_receive (stop, [] (void *opaque, zlink::received_t &received,
                                     fw::runtime::application_job_queue_t::permit_t *permit) {
         auto &state = *static_cast<state_t *> (opaque);
-        if (handle_control (state.owner.ablation_socket (), received, state.owner.startup_descriptor ()))
+        std::optional<std::uint64_t> correlation;
+        if (handle_control (state.owner.ablation_socket (), received,
+                            state.owner.startup_descriptor (), nullptr, &correlation))
             return;
         // L6: one handler, constructed outside the receive loop, called directly.
         if (permit)
@@ -367,7 +385,7 @@ int direct_server (const std::string &endpoint, Metrics &metrics, std::atomic<bo
         std::optional<messaging::envelope_header_t> header;
         auto payload = state.handler.handle (received, header);
         if (received.reply_token ())
-            raw_reply (received, payload, header);
+            raw_reply (received, payload, header, correlation);
     }, &state, application_jobs.get ());
     return 0;
 }
