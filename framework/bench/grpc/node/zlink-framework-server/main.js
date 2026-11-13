@@ -29,6 +29,8 @@ if (l1Permit) {
   );
   applicationJobQueue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
 }
+const frameworkWire = process.env.ZLINK_LADDER_L0_FRAMEWORK_CLIENT === '1'
+  || process.env.ZLINK_CROSS_FRAMEWORK_WIRE === '1';
 let contract;
 let createBenchPayloadSerializer;
 let Module;
@@ -61,7 +63,10 @@ if (l0Server) {
   const router = zlink.createRouterSocket(ctx);
   const twoRouters = process.env.ZLINK_LADDER_L0_TWO_ROUTERS !== '0';
   const commandRouter = twoRouters ? zlink.createRouterSocket(ctx) : null;
-  router.setRoutingId(zlink.RoutingId.from(Buffer.from('bench-server', 'ascii')));
+  router.setRoutingId(zlink.RoutingId.from(Buffer.from(
+    frameworkWire ? 'bench-server' : ROUTING_IDS.rawRequestServer,
+    'ascii'
+  )));
   router.options.mandatory = true;
   if (commandRouter !== null) {
     commandRouter.setRoutingId(zlink.RoutingId.from(Buffer.from(ROUTING_IDS.rawCommandServer, 'ascii')));
@@ -72,8 +77,6 @@ if (l0Server) {
   startStatsServer(metricsUrl, metrics, { implementation: 'zlink-framework-node-l0', endpoint });
   const received = new zlink.Received();
   const commandReceived = commandRouter === null ? null : new zlink.Received();
-  const frameworkWire = process.env.ZLINK_LADDER_L0_FRAMEWORK_CLIENT === '1'
-    || process.env.ZLINK_CROSS_FRAMEWORK_WIRE === '1';
   const echoHandler = new EchoHandler(metrics);
   const commandHandler = new CommandHandler(metrics);
   const IDLE_SPIN_LIMIT = 20000;

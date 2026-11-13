@@ -172,8 +172,8 @@ function createRawTransport(options) {
   const ladderL0 = process.env.ZLINK_LADDER_L0_CLIENT === '1'
     && options.implementation === 'zlink-framework-node';
   const frameworkWire = process.env.ZLINK_CROSS_FRAMEWORK_WIRE === '1';
-  const peerId = ladderL0 || frameworkWire ? 'bench-server' : rawWire.ROUTING_IDS.rawRequestServer;
-  const commandPeerId = ladderL0 || frameworkWire ? 'bench-server' : rawWire.ROUTING_IDS.rawCommandServer;
+  const peerId = ladderL0 && !frameworkWire ? rawWire.ROUTING_IDS.rawRequestServer : 'bench-server';
+  const commandPeerId = frameworkWire && !ladderL0 ? 'bench-server' : rawWire.ROUTING_IDS.rawCommandServer;
   const commandEnvelope = frameworkWire ? rawWire.frameworkEnvelope(3) : rawWire.REQUEST_ENVELOPE;
   const requestSocket =
     options.scenario === 'send-saturation'
@@ -195,7 +195,7 @@ function createRawTransport(options) {
             context,
             `bench-source-send-${process.pid}`,
             commandPeerId,
-            ladderL0 ? options.targetEndpoint : options.targetCommandEndpoint
+            options.targetCommandEndpoint
           )
         ]
       : [];
