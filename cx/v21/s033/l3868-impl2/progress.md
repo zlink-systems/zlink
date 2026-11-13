@@ -6,3 +6,6 @@
 
 - L2 `fbdcb16e26` 로컬 커밋. Release 최종 빌드·freshness 5 binaries·bench tests 9/9 통과.
 - L3 초기 빌드 완료; quiet guard가 테스트를 시작하기 전 shell을 일시 정지했다. 추가 prefix parse를 수신 경계로 통합한 최종 소스를 검증 대기 중이다.
+
+- L3 `dd83e75df4` 로컬 커밋. 최종 Release 빌드·freshness 5 binaries·bench tests 10/10 통과.
+- 두 단계 호출 대조와 최종 단일 build의 L2 모드 대조 완료. 측정 없음.

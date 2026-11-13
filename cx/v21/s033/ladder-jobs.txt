@@ -1,5 +1,5 @@
 C++|L2 envelope header 구현(측정 없음, 별도 worktree)|l3868-impl2
-.NET|L5 구현(측정 없음; L3·L4 완료)|lad-dotnet-impl5
+.NET|구현 완료(L0~L4 + L5~L7 묶음 de0507ae48), 측정 대기|lad-dotnet-impl5
 Node|L4 codec 구현(측정 없음; L2·L3 완료)|lad-node-impl4c
 기반|A/A 3차(C-state 끔 + CPU 분리, 각 5회)|aa-noise5
 Java|L5~L7 묶음 구현(측정 없음; L4 완료)|lad-java-impl5

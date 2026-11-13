@@ -1,23 +1,23 @@
 # C++ L2 (#4352) 호출 대조
 
-작업 경로 `/root/worktree/zlink-v21-s033/l3868-next`, 시작 HEAD `a67753ede4`, L1 기준 `608513f260`, L2 커밋 `fbdcb16e26`. 측정하지 않는다. 아래 행은 L2 커밋의 소스 기준이다. Release 빌드, bench test 9/9, 바이너리 5개의 source/header freshness 검사를 통과했다. `B=framework/bench/grpc/cpp`, `R=framework/languages/cpp/framework/src/runtime`.
+작업 경로 `/root/worktree/zlink-v21-s033/l3868-next`, 시작 HEAD `a67753ede4`, L1 기준 `608513f260`, L2 커밋 `fbdcb16e26`. 측정하지 않는다. 아래 행은 L3까지 포함한 최종 단일 build(`dd83e75df4`)의 L2 모드 기준이다. L2 커밋 당시 대조는 `raw/call-shape-L2-commit.md`에 보존했다. Release 빌드, bench test 9/9, 바이너리 5개의 source/header freshness 검사를 통과했다. `B=framework/bench/grpc/cpp`, `R=framework/languages/cpp/framework/src/runtime`.
 
 | 경로·작업 | binding file:line | L2 file:line | 동일 여부·복원 기능 |
 |---|---|---|---|
-| source payload 생성·stamp·protobuf encode·새 body | `B/client/bench_cpp_client.cpp:447,461` | `B/ladder/ladder_wire.hpp:114` | 동일 작업·같은 `encode_bench_payload`; typed codec 복원 없음 |
-| source 새 header | `B/client/bench_cpp_client.cpp:459` 상수 envelope 복사 | `B/ladder/ladder_wire.hpp:123` create_envelope → encode_payload_parts | L2: 실제 Framework command/request header; request correlation·deadline 포함 |
+| source payload 생성·stamp·protobuf encode·새 body | `B/client/bench_cpp_client.cpp:447,461` | `B/ladder/ladder_wire.hpp:127` | 동일 작업·같은 `encode_bench_payload`; typed codec 복원 없음 |
+| source 새 header | `B/client/bench_cpp_client.cpp:459` 상수 envelope 복사 | `B/ladder/ladder_wire.hpp:136` create_envelope → encode_payload_parts | L2: 실제 Framework command/request header; request correlation·deadline 포함 |
 | source 2-part send/request·binding observer | `B/client/bench_cpp_client.cpp:465,471,472,482` | `B/ladder/ladder_driver.inc:121,129,132,142` | 같은 binding API·같은 admitted/reply observer·stream finish/admit |
 | target 수신 전 permit | 없음 | `R/mesh/raw_mesh_node_owner.cpp:535` | L1 유지: 실제 application job queue 예약 |
 | target recv·오류 처리 | `B/zlink/bench_zlink_cpp_server.cpp:41,84` | `R/mesh/raw_mesh_node_owner.cpp:526,541` | 같은 blocking recv(none), stop.load, 실패 시 50us sleep; readiness wait·drain 추가 없음 |
-| target header parse | 없음 | `B/ladder/ladder_wire.hpp:224` → `R/messaging/envelope_codec.cpp:1301` | L2: decode_header_view 1회; 입력 header를 빌리고 파싱 결과를 reply까지 보존 |
-| target protobuf parse·metrics | `B/zlink/bench_zlink_cpp_server.cpp:54,56,97,99` | `B/ladder/ladder_wire.hpp:233,236` | 동일 protobuf ParseFromArray·metrics.record; payload 원본 Message/span 유지 |
-| target handler 진입 | 직접 실행 | `B/ladder/ladder_wire.hpp:364` | L0 고정 handler 직접 호출, L1 permit release 유지; worker·DI 추가 없음 |
-| target 새 reply envelope | `B/zlink/bench_zlink_cpp_server.cpp:58` | `B/ladder/ladder_wire.hpp:251` → `R/channels/channel_reply_writer.cpp:12,41` | L2: 이미 파싱한 request로 response header 생성·encode; 재파싱 없음 |
-| target 새 reply protobuf body | `B/zlink/bench_zlink_cpp_server.cpp:61` | `B/ladder/ladder_wire.hpp:246` | 동일 새 payload·set_body 복사·protobuf encode·새 Message; request part 재사용 없음 |
-| target 2-part reply submit | `B/zlink/bench_zlink_cpp_server.cpp:67` | `B/ladder/ladder_wire.hpp:267` | 같은 received.reply().message().message().submit() |
+| target header parse | 없음 | `B/ladder/ladder_wire.hpp:241` → `R/messaging/envelope_codec.cpp:1301` | L2: decode_header_view 1회; 입력 header를 빌리고 파싱 결과를 reply까지 보존 |
+| target protobuf parse·metrics | `B/zlink/bench_zlink_cpp_server.cpp:54,56,97,99` | `B/ladder/ladder_wire.hpp:247,250` | 동일 protobuf ParseFromArray·metrics.record; payload 원본 Message/span 유지 |
+| target handler 진입 | 직접 실행 | `B/ladder/ladder_wire.hpp:382` | L0 고정 handler 직접 호출, L1 permit release 유지; worker·DI 추가 없음 |
+| target 새 reply envelope | `B/zlink/bench_zlink_cpp_server.cpp:58` | `B/ladder/ladder_wire.hpp:268` → `R/channels/channel_reply_writer.cpp:12,41` | L2: 이미 파싱한 request로 response header 생성·encode; 재파싱 없음 |
+| target 새 reply protobuf body | `B/zlink/bench_zlink_cpp_server.cpp:61` | `B/ladder/ladder_wire.hpp:263` | 동일 새 payload·set_body 복사·protobuf encode·새 Message; request part 재사용 없음 |
+| target 2-part reply submit | `B/zlink/bench_zlink_cpp_server.cpp:67` | `B/ladder/ladder_wire.hpp:285` | 같은 received.reply().message().message().submit() |
 | source completion wait | `B/client/bench_cpp_client.cpp:622` | `B/ladder/ladder_driver.inc:40` | 같은 binding POLLCOMPLETION wait; owner queue·registry 추가 없음 |
-| source completion header | 없음 | `B/ladder/ladder_wire.hpp:300` | L2: 실제 envelope.decode_header 1회·실제 error mapper |
-| source completion protobuf·counter | `B/client/bench_cpp_client.cpp:474` | `B/ladder/ladder_wire.hpp:308`, `B/ladder/ladder_driver.inc:135` | 동일 protobuf ParseFromArray·stream.finish·admit; 수동 protobuf field shortcut 제거 |
+| source completion header | 없음 | `B/ladder/ladder_wire.hpp:315` | L2: 실제 envelope.decode_header 1회·실제 error mapper |
+| source completion protobuf·counter | `B/client/bench_cpp_client.cpp:474` | `B/ladder/ladder_wire.hpp:323`, `B/ladder/ladder_driver.inc:135` | 동일 protobuf ParseFromArray·stream.finish·admit; 수동 protobuf field shortcut 제거 |
 
 Request는 `client_call_codec.cpp:73`의 준비된 type/channel fragment overload를 사용한다. Body는 `encoded_payload_from_raw`/`encoded_payload_to_raw` 사이에서 move하며 복사하지 않는다.
 
@@ -27,7 +27,7 @@ Request는 `client_call_codec.cpp:73`의 준비된 type/channel fragment overloa
 
 Java `bf83275257`·.NET `2590b2a030`는 source envelope encode/target parse를 복원하고 raw reply를 유지한다. C++ L2는 네 경로의 envelope 기능을 모두 복원하므로 response encode와 completion parse도 포함한다. 이는 L2 기능 차이이며 L3·L4 비용은 포함하지 않는다. 언어 간 단계 손실을 직접 비교할 때 이 범위를 구분해야 한다.
 
-판정 소유: envelope 형식·검증은 기존 codec 1곳, reply header는 기존 writer 1곳(전/후 각 1→1). 별도 정책 상태·queue·lock 없음. 이번 실험의 중복 parse 2→1(수신·응답 합계); protobuf 수동 completion shortcut 1→0. 복원 범위 밖 차이 0을 커밋 조건으로 삼는다.
+판정 소유: envelope 형식·검증은 기존 codec 1곳, reply header는 기존 writer 1곳(전/후 각 1→1). 별도 정책 상태·queue·lock 없음. 이번 실험의 request header 재파싱 제거(수신·응답 합계 2→1); protobuf 수동 completion shortcut 1→0. 복원 범위 밖 차이 0을 커밋 조건으로 삼는다.
 
 | 정상 메시지당 비용 | binding / L0 | L1 추가 | L2 추가 |
 |---|---|---|---|
@@ -41,3 +41,5 @@ Java `bf83275257`·.NET `2590b2a030`는 source envelope encode/target parse를 �
 Allocation은 위에서 명시한 Framework container 외 Core/native Message 내부까지 추정하지 않는다. Header cache hit/miss와 invalid input 경로도 production codec이 소유한다.
 
 검증: `raw/build-L2-final.log`, `raw/ctest-L2.log`, `raw/build-L2-evidence.json`. 복원 범위 밖 차이 0.
+
+최종 단일 build에서도 L0~L3 전체 bench test 10/10 통과: `raw/ctest-L3-final.log`.

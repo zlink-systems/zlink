@@ -1,6 +1,6 @@
 # C++ L3 (#4353) 호출 대조
 
-작업 경로 `/root/worktree/zlink-v21-s033/l3868-next`, 이전 단계 L2 `fbdcb16e26`. 측정하지 않는다. `B=framework/bench/grpc/cpp`, `R=framework/languages/cpp/framework/src/runtime`. 아래 line은 L3 소스 기준이다. L2 커밋의 호출 대조는 [call-shape-L2.md](call-shape-L2.md)가 보존한다.
+작업 경로 `/root/worktree/zlink-v21-s033/l3868-next`, 이전 단계 L2 `fbdcb16e26`. 측정하지 않는다. `B=framework/bench/grpc/cpp`, `R=framework/languages/cpp/framework/src/runtime`. 아래 line은 L3 로컬 커밋 `dd83e75df4`의 소스 기준이다. L2 커밋의 호출 대조는 [call-shape-L2.md](call-shape-L2.md)가 보존한다.
 
 | 경로·작업 | binding file:line | L3 file:line | 동일 여부·복원 기능 |
 |---|---|---|---|
@@ -40,4 +40,4 @@ Production 근거:
 
 L3의 correlation은 수신 경계가 해석한 stack 값 하나이며 registry/timeout queue를 추가하지 않는다. Header 보존은 기존 envelope_header_t.retained_header를 재사용한다. 수신의 이전 span vector는 retained Message vector로 바꿨다. Framework parser 판정 위치는 target 2→1이며 service framing 형식은 기존 service_wire_codec 한 곳(1→1)이 소유한다. Completion은 operation registry/request storage(L7)를 복원하지 않았으므로 decoder의 표준 vector overload(`R/protocol/service_wire_codec.cpp:3365`)를 사용한다. Main의 `mesh_node_runtime.cpp:4406`은 같은 decode kernel의 PMR overload를 request storage로 호출한다. 이 container allocation은 L3 framing 비용으로 기록하고 L7 allocator 경로를 앞당겨 추가하지 않는다. Core/native 내부 allocation 총계는 추정하지 않는다.
 
-검증·커밋 결과는 완료 후 추가한다. 복원 범위 밖 차이는 커밋 전에 0이어야 한다.
+최종 Release 빌드·bench test 10/10·바이너리 5개 freshness/sha256 검사를 통과했다. 근거: `raw/build-L3-final.log`, `raw/ctest-L3-final.log`, `raw/build-L3-final-evidence.json`. 정상·잘못된 입력을 함께 검사했으며 복원 범위 밖 차이 0이다.

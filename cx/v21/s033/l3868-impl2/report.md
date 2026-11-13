@@ -5,7 +5,7 @@
 | 단계 | 복원 기능 | 로컬 commit | 빌드·테스트 |
 |---|---|---|---|
 | L2 #4352 | 요청·응답 envelope 생성, target/completion header 각 1회 parse | `fbdcb16e26` | Release, bench 9/9, 바이너리 5개 freshness 통과 |
-| L3 #4353 | node send/request/reply header, multipart pack/unpack, retained frame | 최종 검증 대기 | 초기 Release 빌드 통과; quiet guard 대기 |
+| L3 #4353 | node send/request/reply header, multipart pack/unpack, retained frame | `dd83e75df4` | 최종 Release, bench 10/10, 바이너리 5개 freshness 통과 |
 
 `R=framework/languages/cpp/framework/src/runtime`, `B=framework/bench/grpc/cpp`. L2 line은 해당 커밋 기준이다.
 
@@ -16,7 +16,7 @@
 
 L2 근거: [최종 build](raw/build-L2-final.log), [test 9/9](raw/ctest-L2.log), [freshness·sha256](raw/build-L2-evidence.json). 1K/4K command·request/reply와 correlation 보존, 잘못된 envelope/protobuf/error 거부를 socket 계약 테스트로 확인했다.
 
-L3 최종 근거는 guard 해제 후 추가한다. 서버에 부하를 보내는 bench smoke는 실행하지 않았다.
+L3 근거: [최종 build](raw/build-L3-final.log), [test 10/10](raw/ctest-L3-final.log), [freshness·sha256](raw/build-L3-final-evidence.json), [commit 연결](raw/commit-evidence.json). L0~L3의 1K/4K command·request/reply, 원본 frame 이동·header 수명, 잘못된 framing/envelope/correlation 거부를 확인했다. 서버에 부하를 보내는 bench smoke는 실행하지 않았다.
 
 소유 계층·spec: Framework envelope codec/reply writer와 service wire codec; `02-channel-transport/06-wire-protocol.ko.md` §2 multipart profile·§4 application record. Production runtime 동작은 바꾸지 않는다.
 교차언어 대조: Java `bf83275257`, .NET `2590b2a030`의 source encode/target parse와 대조했다. C++ L2는 response encode·completion parse도 포함하며 참고 언어의 raw reply 유지 범위와 다르다.
@@ -25,3 +25,7 @@ L3 최종 근거는 guard 해제 후 추가한다. 서버에 부하를 보내는
 점검: 4건 수정(type serializer 초기화, 수동 protobuf completion, generic request encoder, service prefix/correlation 중복 parse), 이관 0건.
 
 측정 재개 시 같은 build의 `ZLINK_CPP_LADDER_LEVEL=1` 대 `2`, 이어서 `2` 대 `3`을 비교한다. 비교마다 send-saturation·request-serial·request-backpressure × 1024/4096 B의 6셀만 측정한다. 각 1회와 경계 반복은 common-rules.md를 따른다. 이번 작업의 성능 수치는 없다.
+
+변경 파일: `B/CMakeLists.txt`, `B/ladder/ladder_wire.hpp`, `B/ladder/ladder_driver.inc`, `B/tests/ladder_contract_test.cpp`, `framework/languages/cpp/framework/include/zlink/framework/detail/ablation_ladder.hpp`.
+
+남은 실패 없음. common-rules의 종료 규칙에 따라 이번에 만든 `build-l3868-next`만 삭제했다. Test/configuration 로그와 compile commands는 `raw/`에 보존했다. 재빌드는 `cpp-build-slot.sh bash`로 [configure 스크립트](tools/configure-build-inner.sh)를 실행한다(Release·source binding·Core 1.25.0·-j3·25 GiB 제한).
