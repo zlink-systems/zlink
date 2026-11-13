@@ -16,7 +16,7 @@ using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Contracts.Channels;
 using Zlink.Framework.Contracts.Dispatch;
-#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3
+#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
 using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Spots;
@@ -170,7 +170,7 @@ internal static class BenchTransport
                 frameworkTarget: Environment.GetEnvironmentVariable("ZLINK_DOTNET_RAW_TARGET")
                     == "framework"
             ),
-#if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3
+#if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
             "zlink-framework-dotnet"
                 when Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_CLIENT") == "raw" =>
                 new RawBenchTransport(options, frameworkTarget: true),
@@ -386,6 +386,7 @@ internal sealed class RawBenchTransport : IBenchTransport
     private readonly bool frameworkTarget;
     private readonly bool encodeEnvelopeHeaders;
     private readonly bool encodeServiceWire;
+    private readonly bool encodeTypedPayload;
     private long nextServiceCorrelation;
     private readonly TimeSpan requestTimeout;
     private readonly CancellationTokenSource completionStopping = new();
@@ -397,10 +398,13 @@ internal sealed class RawBenchTransport : IBenchTransport
         this.frameworkTarget = frameworkTarget;
         encodeEnvelopeHeaders =
             frameworkTarget
-            && Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_LEVEL") is "L2" or "L3";
+            && Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_LEVEL") is "L2" or "L3" or "L4";
         encodeServiceWire =
             frameworkTarget
-            && Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_LEVEL") == "L3";
+            && Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_LEVEL") is "L3" or "L4";
+        encodeTypedPayload =
+            frameworkTarget
+            && Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_LEVEL") == "L4";
         requestTimeout = options.Timeout;
         if (options.Scenario == "send-saturation")
         {
@@ -443,7 +447,7 @@ internal sealed class RawBenchTransport : IBenchTransport
 
     private Message CreateSendHeader(bool isRequest, TimeSpan? timeout = null)
     {
-#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3
+#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
         if (
             encodeEnvelopeHeaders
         )
@@ -508,10 +512,11 @@ internal sealed class RawBenchTransport : IBenchTransport
         Message? body = null;
         try
         {
-            header = CreateSendHeader(isRequest: true, timeout: requestTimeout);
-            body = EncodeRawPayload(payload);
+            var payloadParts = CreatePayloadParts(payload, isRequest: true);
+            header = payloadParts[0];
+            body = payloadParts[1];
             ulong serviceCorrelation = 0;
-#if ZLINK_DOTNET_LADDER_L3
+#if ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
             if (encodeServiceWire)
             {
                 serviceCorrelation = NextServiceCorrelation();
@@ -541,7 +546,8 @@ internal sealed class RawBenchTransport : IBenchTransport
                     header,
                     body,
                     encodeEnvelopeHeaders,
-                    serviceCorrelation
+                    serviceCorrelation,
+                    encodeTypedPayload
                 )
             );
         }
@@ -576,9 +582,10 @@ internal sealed class RawBenchTransport : IBenchTransport
         Message? body = null;
         try
         {
-            header = CreateSendHeader(isRequest: false);
-            body = EncodeRawPayload(payload);
-#if ZLINK_DOTNET_LADDER_L3
+            var payloadParts = CreatePayloadParts(payload, isRequest: false);
+            header = payloadParts[0];
+            body = payloadParts[1];
+#if ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
             if (encodeServiceWire)
             {
                 var serviceHeader = Message.From(
@@ -630,6 +637,31 @@ internal sealed class RawBenchTransport : IBenchTransport
         }
     }
 
+    private IReadOnlyList<Message> CreatePayloadParts(BenchPayload payload, bool isRequest)
+    {
+#if ZLINK_DOTNET_LADDER_L4
+        if (encodeTypedPayload)
+        {
+            var envelope = ZLinkClientCallCodec.CreateEnvelope(
+                isRequest ? ZLinkMessageKind.Request : ZLinkMessageKind.Command,
+                "bench",
+                "BenchTypedPayload",
+                isRequest ? requestTimeout : null
+            );
+            return ZLinkClientCallCodec.EncodeEnvelopeParts(
+                envelope,
+                new BenchTypedPayload(payload.Body.ToByteArray()),
+                null
+            );
+        }
+#endif
+        return
+        [
+            CreateSendHeader(isRequest, isRequest ? requestTimeout : null),
+            EncodeRawPayload(payload),
+        ];
+    }
+
     private static Message EncodeRawPayload(BenchPayload payload)
     {
         var body = Message.Allocate(payload.CalculateSize());
@@ -650,7 +682,8 @@ internal sealed class RawBenchTransport : IBenchTransport
         Message header,
         Message body,
         bool decodeEnvelopeHeader,
-        ulong serviceCorrelation
+        ulong serviceCorrelation,
+        bool typedPayload
     )
     {
         IReadOnlyList<Message>? parts = null;
@@ -663,7 +696,7 @@ internal sealed class RawBenchTransport : IBenchTransport
             if (decodeEnvelopeHeader && serviceCorrelation == 0)
                 _ = ZLinkEnvelopeCodec.DecodeHeader(parts[0]);
 #endif
-#if ZLINK_DOTNET_LADDER_L3
+#if ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
             if (serviceCorrelation != 0)
             {
                 if (
@@ -686,6 +719,22 @@ internal sealed class RawBenchTransport : IBenchTransport
                 {
                     if (replyParts.Length != 2)
                         throw new InvalidOperationException("Service wire reply payload was invalid.");
+#if ZLINK_DOTNET_LADDER_L4
+                    if (typedPayload)
+                    {
+                        var replyHeader = ZLinkEnvelopeCodec.DecodeHeader(replyParts[0]);
+                        if (
+                            replyHeader.Kind != ZLinkMessageKind.Response
+                            || replyHeader.ContentType != ZLinkEnvelopeCodec.DefaultContentType
+                        )
+                            throw new InvalidOperationException("Typed JSON reply envelope was invalid.");
+                        var typedReply = (BenchTypedPayload)ZLinkEnvelopeCodec.DecodeBody(
+                                replyParts,
+                                typeof(BenchTypedPayload)
+                            )!;
+                        return new BenchPayload { Body = ByteString.CopyFrom(typedReply.Body) };
+                    }
+#endif
                     return RawWire.Decode(replyParts[^1].AsReadOnlySpan());
                 }
                 finally
@@ -709,7 +758,7 @@ internal sealed class RawBenchTransport : IBenchTransport
         }
     }
 
-#if ZLINK_DOTNET_LADDER_L3
+#if ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
     private ulong NextServiceCorrelation() => checked((ulong)Interlocked.Increment(ref nextServiceCorrelation));
 #endif
 }

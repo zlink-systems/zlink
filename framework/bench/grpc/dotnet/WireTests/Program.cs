@@ -37,3 +37,15 @@ foreach (var size in new[] { 29, 127, 128, 1024 })
     }
 }
 Console.WriteLine("dotnet raw wire identity: 29, 127, 128, 1024 bytes PASS");
+
+var typedBody = BenchMetricHeaders.CreatePayloadBytes(127, 7, BenchPhase.Active, 42);
+var typedPayload = new BenchTypedPayload(typedBody);
+var jsonOptions = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+var typedJson = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(typedPayload, jsonOptions);
+var typedJsonText = System.Text.Encoding.UTF8.GetString(typedJson);
+if (!typedJsonText.StartsWith("{\"body\":\"", StringComparison.Ordinal))
+    throw new InvalidOperationException("Typed DTO did not use the default JSON body field.");
+var decodedTypedPayload = System.Text.Json.JsonSerializer.Deserialize<BenchTypedPayload>(typedJson, jsonOptions);
+if (decodedTypedPayload is null || !decodedTypedPayload.Body.AsSpan().SequenceEqual(typedBody))
+    throw new InvalidOperationException("Typed JSON did not preserve arbitrary payload bytes.");
+Console.WriteLine("dotnet typed DTO JSON/base64 roundtrip: PASS");

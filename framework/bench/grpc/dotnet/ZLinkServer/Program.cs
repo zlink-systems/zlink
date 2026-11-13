@@ -21,7 +21,7 @@ var builder = WebApplication.CreateBuilder(args);
 ConfigureQuietLogging(builder);
 builder.WebHost.UseUrls(metricsUrl);
 builder.Services.AddSingleton<BenchServerMetrics>();
-#if !ZLINK_DOTNET_LADDER_L0 && !ZLINK_DOTNET_LADDER_L1 && !ZLINK_DOTNET_LADDER_L2 && !ZLINK_DOTNET_LADDER_L3
+#if !ZLINK_DOTNET_LADDER_L0 && !ZLINK_DOTNET_LADDER_L1 && !ZLINK_DOTNET_LADDER_L2 && !ZLINK_DOTNET_LADDER_L3 && !ZLINK_DOTNET_LADDER_L4
 builder.Services.AddZLinkFramework(framework =>
 {
     framework.Codecs.Use(ZLinkProtobufCodec.Default);
@@ -48,7 +48,7 @@ app.MapPost(
     }
 );
 app.MapGet("/bench/stats", () => Results.Ok(metrics.Snapshot()));
-#if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3
+#if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
 using var context = Systems.Zlink.Zlink.CreateContext();
 using var router = context.CreateRouterSocket();
 router.SetRoutingId(RoutingId.From("bench-server"));
@@ -56,18 +56,18 @@ router.Options.ReceiveTimeout = TimeSpan.FromMilliseconds(100);
 router.Bind(endpoint);
 var handler = new L0BenchHandler(metrics);
 var ladderLevel = Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_LEVEL") ?? "L0";
-if (ladderLevel is not ("L0" or "L1" or "L2" or "L3"))
+if (ladderLevel is not ("L0" or "L1" or "L2" or "L3" or "L4"))
     throw new ArgumentOutOfRangeException(nameof(ladderLevel), ladderLevel, "Unknown ladder level.");
-var decodeEnvelope = ladderLevel is "L2" or "L3";
-var decodeServiceWire = ladderLevel == "L3";
+var decodeEnvelope = ladderLevel is "L2" or "L3" or "L4";
+var decodeServiceWire = ladderLevel is "L3" or "L4";
+var decodeTypedPayload = ladderLevel == "L4";
 ZLinkEnvelopeHeader? preparedReplyHeader = null;
 #if ZLINK_DOTNET_LADDER_L2
-var replyCodecs = new ZLinkCodecRegistryBuilder();
-replyCodecs.Use(ZLinkProtobufCodec.Default);
+var ladderCodecs = CreateLadderCodecs();
 preparedReplyHeader = ZLinkEnvelopeCodec.PrepareResponse(
     "bench",
     typeof(BenchPayload),
-    replyCodecs
+    ladderCodecs!
 );
 #endif
 if (ladderLevel == "L0")
@@ -111,6 +111,7 @@ else
             decodeEnvelope,
             preparedReplyHeader,
             decodeServiceWire,
+            decodeTypedPayload,
             app.Lifetime.ApplicationStopping
         )
     );
@@ -137,6 +138,15 @@ static void ConfigureQuietLogging(WebApplicationBuilder builder)
     );
 }
 
+#if ZLINK_DOTNET_LADDER_L2
+static ZLinkCodecRegistryBuilder CreateLadderCodecs()
+{
+    var codecs = new ZLinkCodecRegistryBuilder();
+    codecs.Use(ZLinkProtobufCodec.Default);
+    return codecs;
+}
+#endif
+
 static string? ArgValue(string[] args, string name)
 {
     for (var i = 0; i < args.Length - 1; i++)
@@ -148,7 +158,7 @@ static string? ArgValue(string[] args, string name)
     return null;
 }
 
-#if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3
+#if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
 static void RunL0Owner(
     IRouterSocket router,
     L0BenchHandler handler,
@@ -166,7 +176,7 @@ static void RunL0Owner(
             if (!router.Recv(received, RecvFlags.None))
                 continue;
 
-#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3
+#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
             ZLinkEnvelopeHeader? requestHeader = null;
             if (decodeEnvelope)
                 requestHeader = ZLinkEnvelopeCodec.DecodeHeader(received.FirstPart());
@@ -211,7 +221,7 @@ static void RunL0Owner(
 
 #endif
 
-#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3
+#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
 static async Task RunL1Owner(
     IRouterSocket router,
     L0BenchHandler handler,
@@ -220,6 +230,7 @@ static async Task RunL1Owner(
     bool decodeEnvelope,
     ZLinkEnvelopeHeader? preparedReplyHeader,
     bool decodeServiceWire,
+    bool decodeTypedPayload,
     CancellationToken stopping
 )
 {
@@ -233,16 +244,21 @@ static async Task RunL1Owner(
             if (!router.Recv(received, RecvFlags.None))
                 continue;
 
-#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3
+#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
             ZLinkEnvelopeHeader? requestHeader = null;
             if (decodeEnvelope && !decodeServiceWire)
                 requestHeader = ZLinkEnvelopeCodec.DecodeHeader(received.FirstPart());
 #endif
 
-#if ZLINK_DOTNET_LADDER_L3
+#if ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
             if (decodeServiceWire)
             {
-                await HandleServiceWire(received, handler, permit);
+                await HandleServiceWire(
+                    received,
+                    handler,
+                    permit,
+                    decodeTypedPayload
+                );
                 continue;
             }
 #endif
@@ -320,16 +336,17 @@ static void ReplyL2(
 }
 #endif
 
-#if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3
+#if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
 static Message PayloadPart(Received received) =>
     received.IsSinglePart ? received.FirstPart() : received.Parts[^1];
 #endif
 
-#if ZLINK_DOTNET_LADDER_L3
+#if ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
 static async Task HandleServiceWire(
     Received received,
     L0BenchHandler handler,
-    ZLinkApplicationJobQueueLease permit
+    ZLinkApplicationJobQueueLease permit,
+    bool decodeTypedPayload
 )
 {
     if (
@@ -356,24 +373,79 @@ static async Task HandleServiceWire(
     )
         throw new InvalidOperationException("Service wire request kind was invalid.");
 
-    _ = ZLinkEnvelopeCodec.DecodeHeader(envelopeParts);
+    var envelopeHeader = ZLinkEnvelopeCodec.DecodeHeader(envelopeParts);
+    if (decodeTypedPayload && (
+        envelopeHeader.MessageName != "BenchTypedPayload"
+        || envelopeHeader.ContentType != ZLinkEnvelopeCodec.DefaultContentType
+    ))
+        throw new InvalidOperationException("Typed JSON service payload was invalid.");
     await permit.ReleaseForHandlerStartAsync();
     if (!isRequest)
     {
-        handler.HandleSend(envelopeParts.GetSpan(1));
+        if (decodeTypedPayload)
+            handler.HandleSend((BenchTypedPayload)ZLinkEnvelopeCodec.DecodeBody(
+                envelopeParts,
+                typeof(BenchTypedPayload),
+                envelopeHeader.ContentType,
+                null
+            )!);
+        else
+            handler.HandleSend(envelopeParts.GetSpan(1));
         return;
     }
 
-    using var replyBody = handler.HandleRequest(envelopeParts.GetSpan(1));
-    using var responseHeader = Message.From(RawEnvelopeHeaders.Response);
-    using var framedReply = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(
-        [responseHeader, replyBody]
-    );
-    using var serviceReply = Message.From(
-        ZLinkServiceWireCodec.EncodeReply(application.Correlation, 0, 0)
-    );
-    received.Reply().Message(serviceReply).Message(framedReply).Submit();
+    Message framedReply;
+    if (decodeTypedPayload)
+    {
+        var request = (BenchTypedPayload)
+            ZLinkEnvelopeCodec.DecodeBody(
+                envelopeParts,
+                typeof(BenchTypedPayload),
+                envelopeHeader.ContentType,
+                null
+            )!;
+        framedReply = EncodeTypedReply(handler.HandleRequest(request), envelopeHeader);
+    }
+    else
+        framedReply = EncodeRawReply(handler.HandleRequest(envelopeParts.GetSpan(1)));
+    using (framedReply)
+    {
+        using var serviceReply = Message.From(
+            ZLinkServiceWireCodec.EncodeReply(application.Correlation, 0, 0)
+        );
+        received.Reply().Message(serviceReply).Message(framedReply).Submit();
+    }
 }
+
+static Message EncodeRawReply(Message replyBody)
+{
+    using (replyBody)
+    using (var responseHeader = Message.From(RawEnvelopeHeaders.Response))
+        return ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(
+            [responseHeader, replyBody]
+        );
+}
+
+#if ZLINK_DOTNET_LADDER_L4
+static Message EncodeTypedReply(BenchTypedPayload reply, ZLinkEnvelopeHeader requestHeader)
+{
+    var header = ZLinkChannelReplyWriter.CreateReplyHeader(
+        ZLinkMessageKind.Response,
+        "bench",
+        requestHeader
+    );
+    var parts = ZLinkEnvelopeCodec.EncodeParts(header, reply, typeof(BenchTypedPayload), null);
+    try
+    {
+        return ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(parts);
+    }
+    finally
+    {
+        foreach (var part in parts)
+            part.Dispose();
+    }
+}
+#endif
 #endif
 
 internal sealed class EchoHandler(BenchServerMetrics metrics)
@@ -404,7 +476,7 @@ internal sealed class CommandHandler(BenchServerMetrics metrics)
     }
 }
 
-#if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3
+#if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
 internal sealed class L0BenchHandler(BenchServerMetrics metrics)
     : IZLinkRouteRequestHandler<Message, Message>, IZLinkRouteSendHandler<Message>
 {
@@ -437,11 +509,27 @@ internal sealed class L0BenchHandler(BenchServerMetrics metrics)
         return encoded;
     }
 
+    public BenchPayload HandleRequest(BenchPayload request)
+    {
+        metrics.RecordReceived(request);
+        return new BenchPayload { Body = request.Body };
+    }
+
+    public BenchTypedPayload HandleRequest(BenchTypedPayload request)
+    {
+        metrics.RecordReceived(request);
+        return request;
+    }
+
     public void HandleSend(Message message)
     {
         HandleSend(message.AsReadOnlySpan());
     }
 
     public void HandleSend(ReadOnlySpan<byte> message) => metrics.Record(BenchPayload.Parser.ParseFrom(message));
+
+    public void HandleSend(BenchPayload message) => metrics.Record(message);
+
+    public void HandleSend(BenchTypedPayload message) => metrics.Record(message);
 }
 #endif

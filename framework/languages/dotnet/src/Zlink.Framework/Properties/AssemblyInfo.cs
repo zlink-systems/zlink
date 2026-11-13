@@ -7,7 +7,7 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Zlink.Framework.Locations.Redis.Tests")]
 [assembly: InternalsVisibleTo("Zlink.Framework.AspNetCore")]
 [assembly: InternalsVisibleTo("SpotActorTransfer.ActorNode")]
-#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3
+#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
 [assembly: InternalsVisibleTo("WithGrpcBench.ZLinkServer")]
 [assembly: InternalsVisibleTo("WithGrpcBench.Client")]
 #endif
