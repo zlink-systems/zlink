@@ -4,7 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceSendHeaderAllocationTest;
+import systems.zlink.framework.testsupport.ChildJvm;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -16,7 +16,7 @@ public final class ZLinkRequestContinuationAllocationTest {
 
     @Test
     void countsCompletionNodesWithPositiveAndNegativeControls() throws Exception {
-        ZLinkServiceSendHeaderAllocationTest.runInAllocationJvm(getClass());
+        ChildJvm.runInAllocationJvm(getClass());
     }
 
     private static void negative() {

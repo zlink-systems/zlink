@@ -30,8 +30,8 @@ import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkTypeAwareHandlerActivator;
+import systems.zlink.framework.testsupport.ChildJvm;
 
-import java.net.URLClassLoader;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.*;
@@ -46,39 +46,7 @@ public final class ZLinkTypedSendReceiveCostTest {
 
     @Test
     void typedSendDoesNotRepeatHeaderViewsOrConstructorIteration() throws Exception {
-        var classpath = new LinkedHashSet<String>();
-        for (ClassLoader loader = getClass().getClassLoader();
-                loader != null;
-                loader = loader.getParent()) {
-            if (loader instanceof URLClassLoader urls)
-                for (var url : urls.getURLs()) classpath.add(Path.of(url.toURI()).toString());
-        }
-        classpath.addAll(
-                List.of(System.getProperty("java.class.path").split(java.io.File.pathSeparator)));
-        Path output = Files.createTempFile("typed-send-cost-", ".log");
-        try {
-            var process =
-                    new ProcessBuilder(
-                                    Path.of(System.getProperty("java.home"), "bin", "java")
-                                            .toString(),
-                                    "--enable-native-access=ALL-UNNAMED",
-                                    "-XX:-UseTLAB",
-                                    "-XX:-DoEscapeAnalysis",
-                                    "-XX:ActiveProcessorCount=2",
-                                    "-XX:FlightRecorderOptions=stackdepth=128",
-                                    "-cp",
-                                    String.join(java.io.File.pathSeparator, classpath),
-                                    getClass().getName())
-                            .redirectErrorStream(true)
-                            .redirectOutput(output.toFile())
-                            .start();
-            int exit = process.waitFor();
-            String log = Files.readString(output);
-            System.out.print(log);
-            assertEquals(0, exit, log);
-        } finally {
-            Files.deleteIfExists(output);
-        }
+        ChildJvm.runInAllocationJvm(getClass());
     }
 
     public static void main(String[] args) throws Exception {

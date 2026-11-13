@@ -8,8 +8,8 @@ import jdk.jfr.consumer.RecordingFile;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceSendHeaderAllocationTest;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
+import systems.zlink.framework.testsupport.ChildJvm;
 
 import java.nio.file.Files;
 import java.util.Optional;
@@ -26,7 +26,7 @@ public final class ZLinkSendSelectionAllocationTest {
 
     @Test
     void ownerChannelSendUsesThePreparedPeerDirectly() throws Exception {
-        ZLinkServiceSendHeaderAllocationTest.runInAllocationJvm(getClass());
+        ChildJvm.runInAllocationJvm(getClass());
     }
 
     public static void main(String[] args) throws Exception {
