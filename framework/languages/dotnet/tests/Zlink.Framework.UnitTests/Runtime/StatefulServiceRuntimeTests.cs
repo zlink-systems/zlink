@@ -1881,9 +1881,11 @@ public sealed partial class StatefulServiceRuntimeTests
             spot.AuthorityOwnerGeneration,
             17
         );
-        Assert.Equal(SubmitResult.NotFound, source.SendToActor(actor, [payload]));
+        // Authority names node generation G+1 while only G is admitted: no route
+        // to the authority's owner, so send is NotConnected (submit spec §5).
+        Assert.Equal(SubmitResult.NotConnected, source.SendToActor(actor, [payload]));
         Assert.Equal(
-            SubmitResult.NotFound,
+            SubmitResult.NotConnected,
             source
                 .EntrySpot()
                 .SendToSpot(target.RoutingId, spotId, spot.LifecycleGeneration, [payload])
