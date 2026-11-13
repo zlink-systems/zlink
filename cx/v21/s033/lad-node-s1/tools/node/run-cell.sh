@@ -70,3 +70,10 @@ for phase in ('source_start','target_start','mid_active_source','mid_active_targ
     assert any('current scheduling policy: SCHED_OTHER' in line for line in t.splitlines()), f'missing SCHED_OTHER evidence: {sched}'
 print(c['throughput_per_second'])
 PY
+python3 - "$result" "$sched" "$variant" "$pattern" "$size" "$phase" <<'PY'
+import json,sys
+result,sched,variant,pattern,size,phase=sys.argv[1:]
+cell=json.load(open(result))['cells'][0]
+with open('/root/jobs/fx/cx/v21/s033/lad-node-s1/progress.md','a',encoding='utf-8') as f:
+    f.write(f"\n- result {variant} {pattern}-{size} {phase}={cell['throughput_per_second']} msg/s; raw={result}; scheduling={sched}\n")
+PY

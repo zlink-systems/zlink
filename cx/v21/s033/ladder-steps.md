@@ -16,3 +16,14 @@
 | .NET | 있음 69891f4446 | 묶음 2b6da5af64 (L4 JSON 수정 뒤 다시 쌓음) |
 | Java | 있음 e8721a0776 | 묶음 f3e3933567 |
 | Node | 있음 2bef18aa94 | 묶음 7d1afa98a9 |
+
+## L4 serializer 대조 (#4354: 기본 typed JSON serializer, 메시지별 codec 등록 없음) — 11-13 19:05 UTC
+
+L0~L3의 body는 binding과 같은 protobuf bytes입니다(L2·L3 응답 envelope의 protobuf content type도 이것). typed codec은 L4부터입니다.
+
+| 언어 | L4 serializer | codec 등록 | bench file:line | L5~L7 |
+|---|---|---|---|---|
+| C++ | 기본 typed JSON (`I/contracts/codecs/serializer.hpp:345-375`) | 없음 | `B/ladder/ladder_payload.hpp:21-26`, `ladder_wire.hpp:132-136,278-296` (276b84f248) | level 7에서 protobuf 등록 끔 `bench_framework_cpp_server.cpp:82` (62e766f88d) |
+| Java | 기본 JSON `ZLinkJsonMessageSerializer` | 없음 | `RawStack.java:481`, `ZLinkFrameworkBenchServer.java:348` (9d9901eb2c) | typed DTO `BenchTypedPayload`(record) → JSON. 서버·client 공통 설정에 `ZLinkProtobufCodec` 등록이 남아 있으나 protobuf 메시지 전용이라 이 DTO에는 쓰이지 않음 (f3e3933567) |
+| .NET | **protobuf** `ZLinkProtobufCodec` | **있음** `ZLinkServer/Program.cs:178` | (1bcaebde9e) | 수정 중: lad-dotnet-l4j가 기본 JSON으로 바꾸고 다시 쌓음 |
+| Node | 기본 typed JSON (codec 인자 없는 `encodeChannelEnvelopeParts`/`encodeChannelReplyParts`, content type `application/json`) | 없음 | `shared/raw-wire.js:119,135,151` (ae8a5178b5) | L5_7 server·client에서 protobuf 등록 끔 `zlink-framework-server/main.js:345-354`, `client/framework-transport.js:28-40` (7d1afa98a9) |

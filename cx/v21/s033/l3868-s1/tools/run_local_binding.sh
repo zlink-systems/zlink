@@ -3,8 +3,8 @@
 # Optional controls: TARGET_RATE (messages/second), SOURCE_CPUS and TARGET_CPUS (taskset CPU lists).
 set -euo pipefail
 
-HERE="/root/worktree/zlink-v21-s033/l3868/framework/bench/grpc/cpp"
-TOOLS_DIR="/root/jobs/fx/cx/v21/s033/binding-rebase/tools/cpp"
+HERE="/root/worktree/zlink-v21-s033/l3868-next/framework/bench/grpc/cpp"
+TOOLS_DIR="/root/jobs/fx/cx/v21/s033/l3868-s1/tools"
 # shellcheck source=../runner_common.sh
 source "${TOOLS_DIR}/runner_common.sh"
 bench_init cpp "grpc-cpp,zlink-cpp,zlink-framework-cpp" \
@@ -12,7 +12,7 @@ bench_init cpp "grpc-cpp,zlink-cpp,zlink-framework-cpp" \
 cd "${HERE}"
 
 WARMUP_SEGMENTS=10
-BUILD_DIR="/root/worktree/zlink-v21-s033/l3868/build-l3868"
+BUILD_DIR="/root/worktree/zlink-v21-s033/l3868-next/build-l3868-next"
 
 log() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 
@@ -28,6 +28,8 @@ mkdir -p "${OUTPUT_DIR}"
 a_pid=""
 b_pid=""
 trap cleanup_cell EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
 
 binding_sched_snapshot() {
   local label="$1" root_pid="$2"
@@ -41,6 +43,8 @@ binding_sched_snapshot() {
       [[ -d "$task" ]] || continue
       tid="${task##*/}"
       printf '%s_tid=%s\n' "$label" "$tid" >> "$BINDING_SCHED_FILE"
+      affinity="$(awk '/^Cpus_allowed_list:/ {print $2}' "$task/status" 2>/dev/null || true)"
+      printf '%s_thread_affinity pid=%s tid=%s cpus=%s\n' "$label" "$pid" "$tid" "${affinity:-unavailable}" >> "$BINDING_SCHED_FILE"
       policy="$(chrt -p "$tid" 2>&1 || true)"
       printf '%s\n' "$policy" >> "$BINDING_SCHED_FILE"
       if ! grep -q 'current scheduling policy: SCHED_OTHER' <<<"$policy"; then printf 'scheduling_invalid=%s:%s\n' "$label" "$tid" >> "$BINDING_SCHED_FILE"; fi
@@ -148,6 +152,7 @@ for run in $(seq 1 "${RUNS}"); do
         cell_dir="$(bench_cell_dir "${run}" "${implementation}" "${pattern}" "${payload}")"
         result_file="${cell_dir}/results.json"
         target_stats_file="${cell_dir}/target-stats.json"
+        test ! -e "${result_file}" || { echo "refuse overwrite: $result_file" >&2; exit 1; }
         mkdir -p "${cell_dir}"
         log "cell=${cell_id} run=${run}: start target B then source A"
 
@@ -155,7 +160,7 @@ for run in $(seq 1 "${RUNS}"); do
         if [[ -n "${TARGET_CPUS:-}" ]]; then
           target_process=(taskset -c "${TARGET_CPUS}" "${target_process[@]}")
         fi
-        setsid "${target_process[@]}" >"${cell_dir}/target.log" 2>&1 &
+        setsid chrt --other 0 "${target_process[@]}" >"${cell_dir}/target.log" 2>&1 &
         b_pid=$!
         wait_for_stats "${target_stats_url}" 0
 
@@ -177,7 +182,7 @@ for run in $(seq 1 "${RUNS}"); do
         if [[ -n "${SOURCE_CPUS:-}" ]]; then
           source_process=(taskset -c "${SOURCE_CPUS}" "${source_process[@]}")
         fi
-        setsid "${source_process[@]}" >"${cell_dir}/source.log" 2>&1 &
+        setsid chrt --other 0 "${source_process[@]}" >"${cell_dir}/source.log" 2>&1 &
         a_pid=$!
         BINDING_SCHED_FILE="${cell_dir}/scheduling.txt"
         BINDING_SOURCE_PID="$a_pid"
