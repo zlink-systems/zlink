@@ -1,5 +1,5 @@
 C++|L4 typed codec + L5~L7 묶음 구현(측정 없음)|l3868-impl3
 .NET|L2 응답 envelope 리뷰 수정 + backpressure 테스트 멈춤 원인(측정 없음)|lad-dotnet-l2g
 Java|L2~L5~L7 구현 완료(측정 대기)|lad-java-l2e
-Node|L2 응답 envelope 리뷰 수정(측정 없음)|lad-node-l2f
+Node|L2~L5~L7 구현 완료(측정 대기)|lad-node-l2f
 기반|binding 새 기준(네 언어 6칸, warm run)|binding-rebase

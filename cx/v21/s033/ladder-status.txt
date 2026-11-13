@@ -3,5 +3,5 @@
 C++ 구현: L0·L1 ✓ · L2(요청+응답) fbdcb16e26 ✓ · L3 dd83e75df4 ✓ · L4·L5~L7 구현 중(l3868-impl3) — 측정 대기: L0~L3 (기존 12:05~16:29 결과는 잠정)
 .NET 구현: L0~L1 ✓ · L2 응답 envelope 638211bbd3 → 리뷰 수정 중(lad-dotnet-l2g) · L3 c4bf6449ff · L4 f94b924ebb · L5~L7 a03bf0bfe0 (수정 뒤 다시 쌓음) — 측정 대기: L0~L5~L7 (기존 결과는 잠정)
 Java 구현: L0~L1 ✓ · L2(요청+응답) e8721a0776 ✓ · L3 fea12ea97a ✓ · L4 9d9901eb2c ✓ · L5~L7 f3e3933567 ✓ — 측정 대기: L0~L5~L7 (기존 결과는 잠정)
-Node 구현: L0~L1 ✓ · L2 응답 envelope 696dab596a → 리뷰 수정 중(lad-node-l2f) · L3 d7f9a45a25 · L4 11442781b8 · L5~L7 420196e7a1 (수정 뒤 다시 쌓음) — 측정 대기: L0~L5~L7 (기존 결과는 잠정)
+Node 구현: L0~L1 ✓ · L2(요청+응답) 2bef18aa94 ✓ · L3 20598f57a2 ✓ · L4 ae8a5178b5 ✓ · L5~L7 7d1afa98a9 ✓ — 측정 대기: L0~L5~L7 (기존 결과는 잠정)
 기준: binding 새 기준 측정 중(binding-rebase, 네 언어 6칸, warm run 포함) — 끝나면 언어별 L0부터 측정

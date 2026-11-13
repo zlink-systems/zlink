@@ -8,6 +8,8 @@ RAW=JOB/'raw'/LANG
 DATE=datetime.datetime.now(datetime.timezone.utc).date().isoformat()
 DAILY=Path('/root/jobs/fx/cx/v21/s033/binding-daily')/f'{LANG}-{DATE}.json'
 old={'send-saturation-1024': 505353.6, 'send-saturation-4096': 198901.6, 'request-serial-1024': 11554.0, 'request-serial-4096': 11123.4, 'request-backpressure-1024': 154763.4, 'request-backpressure-4096': 106317.2}
+old_doc=json.loads(Path('/root/jobs/fx/cx/v21/s033/binding-daily/pre-cstate/java-2026-11-13.json').read_text())
+old={key:(value,old_doc['cells'][key]['raw_paths']) for key,value in old.items()}
 if DAILY.exists(): raise SystemExit(f'refusing to overwrite existing daily reference: {DAILY}')
 cells={}
 for pattern in ('send-saturation','request-serial','request-backpressure'):
@@ -20,6 +22,9 @@ for pattern in ('send-saturation','request-serial','request-backpressure'):
   assert r['submitted']==r['completed']==r['target_stats']['received']
   assert all(f'cpu{cpu}.state{state}.disable_at_run_start=1' in txt for cpu in (0,8) for state in (2,3))
   assert 'scheduling_invalid=' not in txt
+  for label,expected in (('source_start','0-5'),('mid_active_source','0-5'),('target_start','8-13'),('mid_active_target','8-13')):
+   vals=[line.rsplit('cpus=',1)[1] for line in txt.splitlines() if line.startswith(label+'_affinity ') and 'cpus=' in line]
+   if vals: assert all(value==expected for value in vals)
   cells[key]={'msg_s':r['throughput_per_second'],'raw':str(raw)}
 value={'language':LANG,'utc_date':DATE,'conditions':'C2·C3 off, SCHED_OTHER, CPU split 0-5/8-13 + housekeeping 6-7,14-15, warm run per cell, guard v7','measured_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'cells':cells}
 DAILY.parent.mkdir(parents=True,exist_ok=True)

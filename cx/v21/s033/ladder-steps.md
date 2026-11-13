@@ -15,4 +15,4 @@
 | C++ | 있음 fbdcb16e26 | 구현 중 l3868-impl3 |
 | .NET | 추가 중 lad-dotnet-l2r | 묶음 de0507ae48 (재적재 예정) |
 | Java | 있음 e8721a0776 | 묶음 f3e3933567 |
-| Node | 추가 중 lad-node-l2r | 묶음 3c50a02908 (재적재 예정) |
+| Node | 있음 2bef18aa94 | 묶음 7d1afa98a9 |

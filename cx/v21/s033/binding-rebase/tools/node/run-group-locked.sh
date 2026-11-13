@@ -90,6 +90,9 @@ for phase in ('source_start','target_start','mid_active_source','mid_active_targ
  assert f'{phase}_tid=' in t, f'missing scheduling snapshot {phase}: {s}'
 policies=[line for line in t.splitlines() if 'current scheduling policy:' in line]
 assert policies and all('current scheduling policy: SCHED_OTHER' in line for line in policies), f'non-OTHER thread: {s}'
+for label,expected in (('source_start','0-5'),('mid_active_source','0-5'),('target_start','8-13'),('mid_active_target','8-13')):
+ affinities=[line.rsplit('cpus=',1)[1] for line in t.splitlines() if line.startswith(label+'_affinity ') and 'cpus=' in line]
+ assert affinities and all(value==expected for value in affinities), f'wrong CPU split for {label}: {affinities}'
 assert 'scheduling_invalid=' not in t
 print(c['throughput_per_second'])
 CHECK
@@ -103,12 +106,5 @@ for pair in 'send-saturation 1024' 'send-saturation 4096' 'request-serial 1024' 
   read -r pattern size <<<"$pair"
   one_run "$pattern" "$size" warm warm
   one_run "$pattern" "$size" counted counted
-  rawpath=$(cat "$RAW/$pattern-$size/counted/valid-result.path")
-  rate=$(python3 - "$rawpath" <<'RATE'
-import json,sys
-print(json.load(open(sys.argv[1]))['cells'][0]['throughput_per_second'])
-RATE
-)
-  printf '%s\n' "  | $LANG | $pattern-$size | $rate | — | [raw]($rawpath) |" >> "$JOB/report.md"
 done
 record_window "$RAW/lock-windows/after.txt"

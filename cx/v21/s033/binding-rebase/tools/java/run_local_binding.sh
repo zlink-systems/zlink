@@ -31,17 +31,25 @@ b_pid=""
 trap cleanup_cell EXIT
 
 binding_sched_snapshot() {
-  local label="$1" pid="$2" tid policy
-  { printf '\n%s_utc=%s\n%s_pid=%s\n' "$label" "$(date -u +%FT%TZ)" "$label" "$pid"
+  local label="$1" root_pid="$2"
+  record_sched_process() {
+    local pid="$1" tid policy child
+    [[ -d /proc/"$pid" ]] || return 0
+    printf '%s_process_pid=%s\n' "$label" "$pid" >> "$BINDING_SCHED_FILE"
+    affinity="$(awk '/^Cpus_allowed_list:/ {print $2}' /proc/"$pid"/status 2>/dev/null || true)"
+    printf '%s_affinity pid=%s cpus=%s\n' "$label" "$pid" "${affinity:-unavailable}" >> "$BINDING_SCHED_FILE"
     for task in /proc/"$pid"/task/*; do
       [[ -d "$task" ]] || continue
       tid="${task##*/}"
-      printf '%s_tid=%s\n' "$label" "$tid"
+      printf '%s_tid=%s\n' "$label" "$tid" >> "$BINDING_SCHED_FILE"
       policy="$(chrt -p "$tid" 2>&1 || true)"
-      printf '%s\n' "$policy"
-      if ! grep -q 'current scheduling policy: SCHED_OTHER' <<<"$policy"; then printf 'scheduling_invalid=%s:%s\n' "$label" "$tid"; fi
+      printf '%s\n' "$policy" >> "$BINDING_SCHED_FILE"
+      if ! grep -q 'current scheduling policy: SCHED_OTHER' <<<"$policy"; then printf 'scheduling_invalid=%s:%s\n' "$label" "$tid" >> "$BINDING_SCHED_FILE"; fi
     done
-  } >> "$BINDING_SCHED_FILE"
+    for child in $(pgrep -P "$pid" 2>/dev/null || true); do record_sched_process "$child"; done
+  }
+  { printf '\n%s_utc=%s\n%s_pid=%s\n' "$label" "$(date -u +%FT%TZ)" "$label" "$root_pid"; } >> "$BINDING_SCHED_FILE"
+  record_sched_process "$root_pid"
 }
 binding_sched_start() {
   local cpu state val

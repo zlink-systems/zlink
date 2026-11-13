@@ -20,6 +20,9 @@ for pattern in ('send-saturation','request-serial','request-backpressure'):
   assert r['submitted']==r['completed']==r['target_stats']['received']
   assert all(f'cpu{cpu}.state{state}.disable_at_run_start=1' in txt for cpu in (0,8) for state in (2,3))
   assert 'scheduling_invalid=' not in txt
+  for label,expected in (('source_start','0-5'),('mid_active_source','0-5'),('target_start','8-13'),('mid_active_target','8-13')):
+   vals=[line.rsplit('cpus=',1)[1] for line in txt.splitlines() if line.startswith(label+'_affinity ') and 'cpus=' in line]
+   if vals: assert all(value==expected for value in vals)
   cells[key]={'msg_s':r['throughput_per_second'],'raw':str(raw)}
 value={'language':LANG,'utc_date':DATE,'conditions':'C2·C3 off, SCHED_OTHER, CPU split 0-5/8-13 + housekeeping 6-7,14-15, warm run per cell, guard v7','measured_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'cells':cells}
 DAILY.parent.mkdir(parents=True,exist_ok=True)
