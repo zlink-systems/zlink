@@ -506,7 +506,7 @@ internal sealed class RawBenchTransport : IBenchTransport
             return new RawRequestSubmission(
                 submission.Result,
                 submission.Admitted,
-                DecodeRawReplyAsync(submission.Reply, header, body)
+                DecodeRawReplyAsync(submission.Reply, header, body, encodeEnvelopeHeaders)
             );
         }
         catch
@@ -592,7 +592,8 @@ internal sealed class RawBenchTransport : IBenchTransport
     private static async Task<BenchPayload> DecodeRawReplyAsync(
         Task<IReadOnlyList<Message>> replyTask,
         Message header,
-        Message body
+        Message body,
+        bool decodeEnvelopeHeader
     )
     {
         IReadOnlyList<Message>? parts = null;
@@ -601,6 +602,10 @@ internal sealed class RawBenchTransport : IBenchTransport
             parts = await replyTask;
             if (parts.Count == 0)
                 throw new InvalidOperationException("Raw request returned no reply parts.");
+#if ZLINK_DOTNET_LADDER_L2
+            if (decodeEnvelopeHeader)
+                _ = ZLinkEnvelopeCodec.DecodeHeader(parts[0]);
+#endif
             return RawWire.Decode(
                 parts.Count == 1 ? parts[0].AsReadOnlySpan() : parts[^1].AsReadOnlySpan()
             );

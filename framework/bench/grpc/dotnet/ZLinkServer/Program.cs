@@ -8,6 +8,8 @@ using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Contracts.Dispatch;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Messaging;
+using Zlink.Framework.Runtime.Channels;
+using Zlink.Framework.Runtime.Codecs;
 
 var endpoint = ArgValue(args, "--endpoint") ?? "tcp://127.0.0.1:5214";
 var metricsUrl = ArgValue(args, "--metrics-url") ?? "http://127.0.0.1:5215";
@@ -54,10 +56,27 @@ var ladderLevel = Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_LEVEL"
 if (ladderLevel is not ("L0" or "L1" or "L2"))
     throw new ArgumentOutOfRangeException(nameof(ladderLevel), ladderLevel, "Unknown ladder level.");
 var decodeEnvelope = ladderLevel == "L2";
+ZLinkEnvelopeHeader? preparedReplyHeader = null;
+#if ZLINK_DOTNET_LADDER_L2
+var replyCodecs = new ZLinkCodecRegistryBuilder();
+replyCodecs.Use(ZLinkProtobufCodec.Default);
+preparedReplyHeader = ZLinkEnvelopeCodec.PrepareResponse(
+    "bench",
+    typeof(BenchPayload),
+    replyCodecs
+);
+#endif
 if (ladderLevel == "L0")
 {
     var receiver = Task.Run(() =>
-        RunL0Owner(router, handler, metrics, decodeEnvelope, app.Lifetime.ApplicationStopping)
+        RunL0Owner(
+            router,
+            handler,
+            metrics,
+            decodeEnvelope,
+            preparedReplyHeader,
+            app.Lifetime.ApplicationStopping
+        )
     );
     try
     {
@@ -86,6 +105,7 @@ else
             metrics,
             queue,
             decodeEnvelope,
+            preparedReplyHeader,
             app.Lifetime.ApplicationStopping
         )
     );
@@ -129,6 +149,7 @@ static void RunL0Owner(
     L0BenchHandler handler,
     BenchServerMetrics metrics,
     bool decodeEnvelope,
+    ZLinkEnvelopeHeader? preparedReplyHeader,
     CancellationToken stopping
 )
 {
@@ -141,8 +162,9 @@ static void RunL0Owner(
                 continue;
 
 #if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2
+            ZLinkEnvelopeHeader? requestHeader = null;
             if (decodeEnvelope)
-                _ = ZLinkEnvelopeCodec.DecodeHeader(received.FirstPart());
+                requestHeader = ZLinkEnvelopeCodec.DecodeHeader(received.FirstPart());
 #endif
 
             using var replyBody = received.ReplyToken is null
@@ -150,6 +172,13 @@ static void RunL0Owner(
                 : handler.HandleRequest(PayloadPart(received));
             if (replyBody is not null)
             {
+#if ZLINK_DOTNET_LADDER_L2
+                if (decodeEnvelope)
+                {
+                    ReplyL2(received, requestHeader!, replyBody, preparedReplyHeader!);
+                    continue;
+                }
+#endif
                 using var header = Message.From(RawEnvelopeHeaders.Response);
                 received.Reply().Message(header).Message(replyBody).Submit();
             }
@@ -184,6 +213,7 @@ static async Task RunL1Owner(
     BenchServerMetrics metrics,
     ZLinkApplicationJobQueue queue,
     bool decodeEnvelope,
+    ZLinkEnvelopeHeader? preparedReplyHeader,
     CancellationToken stopping
 )
 {
@@ -198,14 +228,22 @@ static async Task RunL1Owner(
                 continue;
 
 #if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2
+            ZLinkEnvelopeHeader? requestHeader = null;
             if (decodeEnvelope)
-                _ = ZLinkEnvelopeCodec.DecodeHeader(received.FirstPart());
+                requestHeader = ZLinkEnvelopeCodec.DecodeHeader(received.FirstPart());
 #endif
 
             if (received.ReplyToken is not null)
             {
                 await permit.ReleaseForHandlerStartAsync();
                 using var replyBody = handler.HandleRequest(PayloadPart(received));
+#if ZLINK_DOTNET_LADDER_L2
+                if (decodeEnvelope)
+                {
+                    ReplyL2(received, requestHeader!, replyBody, preparedReplyHeader!);
+                    continue;
+                }
+#endif
                 using var header = Message.From(RawEnvelopeHeaders.Response);
                 received.Reply().Message(header).Message(replyBody).Submit();
             }
@@ -240,6 +278,32 @@ static async Task RunL1Owner(
     }
 }
 
+#endif
+
+#if ZLINK_DOTNET_LADDER_L2
+static void ReplyL2(
+    Received received,
+    ZLinkEnvelopeHeader requestHeader,
+    Message replyBody,
+    ZLinkEnvelopeHeader preparedReplyHeader
+)
+{
+    var replyHeader = ZLinkChannelReplyWriter.CreateReplyHeader(
+        ZLinkMessageKind.Response,
+        requestHeader.ChannelName,
+        requestHeader,
+        preparedReplyHeader
+    );
+    var replyParts = ZLinkEnvelopeCodec.EncodeRawBodyParts(replyHeader, replyBody);
+    try
+    {
+        received.Reply().Messages(replyParts).Submit();
+    }
+    finally
+    {
+        replyParts[0].Dispose();
+    }
+}
 #endif
 
 #if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2
