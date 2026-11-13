@@ -17,7 +17,7 @@ the sample and its verification target one editor version.
 `Packages/manifest.json` pins these packages:
 
 - NuGetForUnity `v4.5.0`
-- `com.zlink.stream-connector.webgl` at `framework-node/v0.32.0`
+- `com.zlink.stream-connector.webgl` at `framework-node/v0.32.1`
 - Unity UI `2.0.0`
 
 `Assets/packages.config` declares `Zlink.Stream.Connector` `0.32.0` for the Editor and native
