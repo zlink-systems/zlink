@@ -247,17 +247,19 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
     }
 
     default void rememberActorAuthority(
-            ZLinkBackendActorRef actor, long authorityOwnerGeneration) {}
-
-    default void rememberActorAuthority(
-            ZLinkBackendActorRef actor, long authorityOwnerGeneration, long ownerLeaseGeneration) {
-        rememberActorAuthority(actor, authorityOwnerGeneration);
-    }
+            ZLinkBackendActorRef actor,
+            long authorityOwnerGeneration,
+            long ownerLeaseGeneration,
+            long targetNodeGeneration) {}
 
     /** Observes a route for outbound use; it does not publish a local native Actor stay. */
     default void observeActorAuthority(
-            ZLinkBackendActorRef actor, long authorityOwnerGeneration, long ownerLeaseGeneration) {
-        rememberActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
+            ZLinkBackendActorRef actor,
+            long authorityOwnerGeneration,
+            long ownerLeaseGeneration,
+            long targetNodeGeneration) {
+        rememberActorAuthority(
+                actor, authorityOwnerGeneration, ownerLeaseGeneration, targetNodeGeneration);
     }
 
     CompletionStage<ZLinkBackendActorJoinResult> joinActor(
@@ -322,7 +324,8 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
             long authorityOwnerGeneration,
             long ownerLeaseGeneration) {
         registerTransferredActor(actor, spotId, membershipEpoch);
-        rememberActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
+        rememberActorAuthority(
+                actor, authorityOwnerGeneration, ownerLeaseGeneration, localNodeGeneration());
     }
 
     boolean sendActorBoundSession(ZLinkBackendActorRef actor, List<Message> parts, SendFlags flags);

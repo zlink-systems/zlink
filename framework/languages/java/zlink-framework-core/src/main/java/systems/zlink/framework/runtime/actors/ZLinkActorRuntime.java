@@ -1220,7 +1220,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                         spotNode.rememberActorAuthority(
                                                 refFor(actor),
                                                 authorityOwnerGeneration,
-                                                spotNode.localAuthorityLeaseGeneration());
+                                                spotNode.localAuthorityLeaseGeneration(),
+                                                spotNode.localNodeGeneration());
                                         ZLinkActorCreateResponse admission = response.get();
                                         return (ZLinkActorCreateResult)
                                                 new ZLinkActorCreateResult.Created(
@@ -2458,13 +2459,18 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                             spotNode.observeActorAuthority(
                                     actor,
                                     route.authorityOwnerGeneration(),
-                                    route.ownerLeaseGeneration());
+                                    route.ownerLeaseGeneration(),
+                                    route.targetNodeGeneration());
                         });
     }
 
     void prepareRelocatedSessionBinding(
-            ZLinkBackendActorRef actor, long authorityOwnerGeneration, long ownerLeaseGeneration) {
-        spotNode.observeActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
+            ZLinkBackendActorRef actor,
+            long authorityOwnerGeneration,
+            long ownerLeaseGeneration,
+            long targetNodeGeneration) {
+        spotNode.observeActorAuthority(
+                actor, authorityOwnerGeneration, ownerLeaseGeneration, targetNodeGeneration);
     }
 
     @Override
@@ -3662,6 +3668,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                 target.targetNodeRid(),
                                 target.spotId(),
                                 target.spotGeneration(),
+                                target.targetNodeGeneration(),
                                 wireParts,
                                 defaultRequestTimeout,
                                 null)
@@ -4959,7 +4966,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                                                                         snapshot
                                                                                                 .authorityOwnerGeneration(),
                                                                                         snapshot
-                                                                                                .ownerLeaseGeneration());
+                                                                                                .ownerLeaseGeneration(),
+                                                                                        spotNode
+                                                                                                .localNodeGeneration());
                                                                         return CompletableFuture
                                                                                 .completedFuture(
                                                                                         null);

@@ -770,7 +770,7 @@ final class ZLinkJavaRawServicePortContractTest {
             var admitted = new java.util.concurrent.CompletableFuture<Void>();
             var caller =
                     node.requestCanonicalRelocationPrepare(
-                                    local, canonicalCommand(40), Duration.ofSeconds(5), admitted)
+                                    local, canonicalCommand(40), Duration.ofSeconds(5), admitted, 0)
                             .toCompletableFuture();
             admitted.get(2, TimeUnit.SECONDS);
             assertEquals(1, calls.get());

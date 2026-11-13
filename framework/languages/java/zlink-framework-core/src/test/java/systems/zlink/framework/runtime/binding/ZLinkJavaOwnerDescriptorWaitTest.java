@@ -11,9 +11,12 @@ import org.junit.jupiter.params.provider.ValueSource;
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.eventing.Poller;
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.Socket;
+import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -24,6 +27,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
@@ -196,6 +200,287 @@ final class ZLinkJavaOwnerDescriptorWaitTest {
                             ? ZLinkFrameworkErrorKind.UNAVAILABLE
                             : ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                     assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void remoteBindUsesAuthorityGeneration(boolean removeExpectation) throws Exception {
+        verifyAuthorityWait("bind", removeExpectation);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void relocationPrepareUsesAuthorityGeneration(boolean removeExpectation) throws Exception {
+        verifyAuthorityWait("prepare", removeExpectation);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void spotRequestUsesAuthorityGeneration(boolean removeExpectation) throws Exception {
+        verifyAuthorityWait("spot", removeExpectation);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void actorRequestUsesAuthorityGeneration(boolean removeExpectation) throws Exception {
+        verifyAuthorityWait("actor", removeExpectation);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void streamBindReadsAuthorityGeneration(boolean removeExpectation) throws Exception {
+        verifyAuthorityWait("stream-bind", removeExpectation);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void exactActorReadsAuthorityGeneration(boolean removeExpectation) throws Exception {
+        verifyAuthorityWait("exact-actor", removeExpectation);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void actorCreateUsesReservationGeneration(boolean removeExpectation) throws Exception {
+        verifyAuthorityWait("actor-create", removeExpectation);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void instanceSpotUsesRouteGeneration(boolean removeExpectation) throws Exception {
+        verifyAuthorityWait("instance-spot", removeExpectation);
+    }
+
+    private void verifyAuthorityWait(String path, boolean removeExpectation) throws Exception {
+        var clock = new AtomicLong(System.nanoTime());
+        try (var fixture = new Fixture(clock::get)) {
+            var old = fixture.admitOtherGeneration();
+            fixture.source
+                    .sourceTransportLane()
+                    .runNowOrQueue(
+                            () -> {
+                                fixture.source.selectedRoutes =
+                                        Map.of(fixture.target.routingId(), 1L);
+                                fixture.source.publishPeerObservation();
+                                return null;
+                            })
+                    .toCompletableFuture()
+                    .join();
+            assertTrue(fixture.source.observePeerRoute(fixture.target.routingId()).ready());
+            var spots = (ZLinkJavaRawSpotNode) fixture.source.spotNode();
+            var actor = new ZLinkBackendActorRef(fixture.target.routingId(), "actor", 3);
+            spots.observeActorAuthority(actor, 9, 11, fixture.target.lifecycleGeneration());
+            spots.rememberSpotAuthority(fixture.target.routingId(), "target-spot", 5, 9, 11);
+            var timeout = Duration.ofSeconds(5);
+            CompletableFuture<?> request;
+            try (var payload = Message.from(new byte[] {'{', '}'})) {
+                request =
+                        switch (path) {
+                            case "bind" ->
+                                    fixture.source
+                                            .bindRemoteStreamSession(
+                                                    fixture.source.routingId(),
+                                                    actor,
+                                                    fixture.target.lifecycleGeneration(),
+                                                    9,
+                                                    7,
+                                                    true,
+                                                    timeout)
+                                            .toCompletableFuture();
+                            case "prepare" ->
+                                    fixture.source
+                                            .requestCanonicalRelocationPrepare(
+                                                    fixture.target.routingId(),
+                                                    prepareCommand(),
+                                                    timeout,
+                                                    null,
+                                                    fixture.target.lifecycleGeneration())
+                                            .toCompletableFuture();
+                            case "spot" ->
+                                    fixture.source
+                                            .requestSpot(
+                                                    "source-spot",
+                                                    fixture.target.routingId(),
+                                                    "target-spot",
+                                                    5,
+                                                    fixture.target.lifecycleGeneration(),
+                                                    null,
+                                                    List.of(payload),
+                                                    timeout,
+                                                    null)
+                                            .toCompletableFuture();
+                            case "actor" ->
+                                    fixture.source
+                                            .requestActor(
+                                                    new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                                            actor,
+                                                            fixture.target.lifecycleGeneration(),
+                                                            9,
+                                                            11),
+                                                    List.of(payload),
+                                                    timeout,
+                                                    null)
+                                            .toCompletableFuture();
+                            case "stream-bind" ->
+                                    spots.bindStreamSession(
+                                                    fixture.source.routingId(),
+                                                    actor,
+                                                    7,
+                                                    1,
+                                                    null,
+                                                    timeout)
+                                            .toCompletableFuture();
+                            case "exact-actor" ->
+                                    spots.requestExactActor(
+                                                    actor,
+                                                    List.of(payload),
+                                                    systems.zlink.contracts.sockets.SendFlags
+                                                            .DONT_WAIT,
+                                                    timeout,
+                                                    null)
+                                            .toCompletableFuture();
+                            case "actor-create" ->
+                                    fixture.source
+                                            .requestActorCreate(
+                                                    fixture.target.routingId(),
+                                                    new ZLinkInternalMeshNode.ActorCreateIntent(
+                                                            "created-actor",
+                                                            "player",
+                                                            new ZLinkServiceM6BWireCodec
+                                                                    .ReservationFence(
+                                                                    "reservation",
+                                                                    "version",
+                                                                    9,
+                                                                    10,
+                                                                    fixture.target.routingId(),
+                                                                    fixture.target
+                                                                            .lifecycleGeneration(),
+                                                                    "owner",
+                                                                    6,
+                                                                    1),
+                                                            18,
+                                                            19,
+                                                            System.currentTimeMillis()
+                                                                    + timeout.toMillis()),
+                                                    timeout)
+                                            .toCompletableFuture();
+                            case "instance-spot" ->
+                                    fixture.source
+                                            .requestInstanceSpot(
+                                                    new ZLinkServiceM6BWireCodec.InstanceRouteFence(
+                                                            fixture.target.routingId(),
+                                                            fixture.target.lifecycleGeneration(),
+                                                            "instance",
+                                                            3,
+                                                            "owner",
+                                                            9,
+                                                            11,
+                                                            "version"),
+                                                    "instance",
+                                                    "source-spot",
+                                                    null,
+                                                    List.of(payload),
+                                                    timeout,
+                                                    null)
+                                            .toCompletableFuture();
+                            default -> throw new AssertionError(path);
+                        };
+            }
+            fixture.source
+                    .sourceTransportLane()
+                    .runNowOrQueue(() -> null)
+                    .toCompletableFuture()
+                    .join();
+            assertFalse(request.isDone());
+            if (path.equals("actor-create"))
+                assertEquals(1, fixture.source.operationRegistry().pendingCount());
+            assertEquals(0, fixture.bindingRequests.get());
+            if (removeExpectation) {
+                fixture.source
+                        .forgetPeerAdmissionExpectation(fixture.target.routingId())
+                        .toCompletableFuture()
+                        .get(3, TimeUnit.SECONDS);
+            } else {
+                clock.addAndGet(Duration.ofSeconds(6).toNanos());
+            }
+            var failure =
+                    assertThrows(ExecutionException.class, () -> request.get(5, TimeUnit.SECONDS));
+            assertEquals(
+                    removeExpectation
+                            ? ZLinkFrameworkErrorKind.UNAVAILABLE
+                            : ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+            assertEquals(old, fixture.admittedDescriptor());
+            assertEquals(0, fixture.bindingRequests.get());
+            assertEquals(0, fixture.received.get());
+        }
+    }
+
+    private static byte[] prepareCommand() throws Exception {
+        for (Path current = Path.of("").toAbsolutePath();
+                current != null;
+                current = current.getParent()) {
+            var file =
+                    current.resolve("framework/runtime/protocol/golden/relocation-control-v1.json");
+            if (!java.nio.file.Files.isRegularFile(file)) continue;
+            for (var entry :
+                    new com.fasterxml.jackson.databind.ObjectMapper()
+                            .readTree(java.nio.file.Files.readString(file))
+                            .path("canonical")) {
+                if (entry.path("command").asInt() == 40)
+                    return java.util.HexFormat.of().parseHex(entry.path("hex").asText());
+            }
+        }
+        throw new IllegalStateException("PREPARE golden missing");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void spotSendChecksAuthorityBeforeRoute(boolean hasAuthority) throws Exception {
+        try (var fixture = new Fixture();
+                var payload = Message.from(new byte[] {1})) {
+            if (hasAuthority)
+                ((ZLinkJavaRawSpotNode) fixture.source.spotNode())
+                        .rememberSpotAuthority(fixture.target.routingId(), "target-spot", 5, 9, 11);
+            var send =
+                    fixture.source
+                            .sendSpot(
+                                    "source-spot",
+                                    fixture.target.routingId(),
+                                    "target-spot",
+                                    5,
+                                    null,
+                                    List.of(payload))
+                            .toCompletableFuture();
+            var failure =
+                    assertThrows(ExecutionException.class, () -> send.get(3, TimeUnit.SECONDS));
+            assertEquals(
+                    hasAuthority ? SubmitResult.NOT_CONNECTED : SubmitResult.NOT_FOUND,
+                    assertInstanceOf(ZlinkSubmitException.class, failure.getCause()).getResult());
+            assertEquals(0, fixture.bindingRequests.get());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void actorSendChecksAuthorityBeforeRoute(boolean hasAuthority) throws Exception {
+        try (var fixture = new Fixture();
+                var payload = Message.from(new byte[] {1})) {
+            var actor = new ZLinkBackendActorRef(fixture.target.routingId(), "actor", 3);
+            if (hasAuthority)
+                ((ZLinkJavaRawSpotNode) fixture.source.spotNode())
+                        .observeActorAuthority(actor, 9, 11, fixture.target.lifecycleGeneration());
+            var send =
+                    fixture.source
+                            .sendBoundActor(
+                                    actor, fixture.source.routingId(), 7, 1, List.of(payload))
+                            .toCompletableFuture();
+            var failure =
+                    assertThrows(ExecutionException.class, () -> send.get(3, TimeUnit.SECONDS));
+            assertEquals(
+                    hasAuthority ? SubmitResult.NOT_CONNECTED : SubmitResult.NOT_FOUND,
+                    assertInstanceOf(ZlinkSubmitException.class, failure.getCause()).getResult());
+            assertEquals(0, fixture.bindingRequests.get());
         }
     }
 

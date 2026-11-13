@@ -171,6 +171,7 @@ final class ZLinkJavaRawSubmissionFailureContractTest {
                                                         targetRid,
                                                         "target-spot",
                                                         1,
+                                                        target.lifecycleGeneration(),
                                                         new byte[0],
                                                         List.of(payload),
                                                         Duration.ofSeconds(5),

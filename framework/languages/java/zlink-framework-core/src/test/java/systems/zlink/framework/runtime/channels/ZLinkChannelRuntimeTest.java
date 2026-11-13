@@ -3085,6 +3085,7 @@ final class ZLinkChannelRuntimeTest {
                 String channelName,
                 RoutingId targetNodeRid,
                 String targetSpotId,
+                long targetNodeGeneration,
                 List<Message> parts,
                 Duration timeout,
                 CompletableFuture<Void> requestAdmission) {
@@ -3541,6 +3542,7 @@ final class ZLinkChannelRuntimeTest {
                 RoutingId targetNodeRid,
                 String spotId,
                 long spotGeneration,
+                long targetNodeGeneration,
                 byte[] metadata,
                 List<Message> parts,
                 Duration timeout,
@@ -3572,6 +3574,7 @@ final class ZLinkChannelRuntimeTest {
                 RoutingId targetNodeRid,
                 String spotId,
                 long spotGeneration,
+                long targetNodeGeneration,
                 byte[] metadata,
                 List<Message> parts,
                 Duration timeout,

@@ -161,6 +161,7 @@ final class ZLinkDefaultSpotOutboundTerminalTest {
                                             probe.address.targetNodeRid(),
                                             probe.address.spotId(),
                                             probe.address.spotGeneration(),
+                                            probe.address.targetNodeGeneration(),
                                             null,
                                             java.util.List.of(payload),
                                             timeout,

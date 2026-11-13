@@ -72,7 +72,8 @@ final class ZLinkSourceRequestOwnerUnavailableTest {
             try (var payload = Message.from("request")) {
                 if (actorRequest) {
                     var actor = new ZLinkBackendActorRef(targetRid, "source-owner-actor", 1);
-                    source.spotNode().rememberActorAuthority(actor, 1, 1);
+                    source.spotNode()
+                            .rememberActorAuthority(actor, 1, 1, target.lifecycleGeneration());
                     CompletableFuture<?> request =
                             source.requestActor(
                                             new ZLinkServiceM6BWireCodec.ActorRouteFence(
@@ -98,6 +99,7 @@ final class ZLinkSourceRequestOwnerUnavailableTest {
                                             targetRid,
                                             "source-owner-spot",
                                             1,
+                                            target.lifecycleGeneration(),
                                             new byte[0],
                                             List.of(payload),
                                             Duration.ofSeconds(5),

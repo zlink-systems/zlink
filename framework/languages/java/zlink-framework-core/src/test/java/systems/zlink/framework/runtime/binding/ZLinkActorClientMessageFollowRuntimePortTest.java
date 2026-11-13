@@ -118,8 +118,10 @@ final class ZLinkActorClientMessageFollowRuntimePortTest {
                 targetActor =
                         target.spotNode().createActor(ACTOR_ID, sourceActor.generation(), create);
             }
-            source.spotNode().rememberActorAuthority(sourceActor, 11, 3);
-            target.spotNode().rememberActorAuthority(targetActor, 12, 5);
+            source.spotNode()
+                    .rememberActorAuthority(sourceActor, 11, 3, source.lifecycleGeneration());
+            target.spotNode()
+                    .rememberActorAuthority(targetActor, 12, 5, target.lifecycleGeneration());
 
             AtomicReference<ZLinkAuthoritySnapshot> authority =
                     new AtomicReference<>(
