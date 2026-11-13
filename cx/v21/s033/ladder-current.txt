@@ -1,4 +1,4 @@
-C++: 현재 L2 · 손실 send1K 12.6 / serial1K 11.2 / bp 14.0·12.3% · 수정: L2는 PM 담당(대기), L4 c4json pre-pr · c4dec 진행
-.NET: 현재 L2 · 손실 serial4K 22.7 / bp 12.5·9.6% · 수정: L2는 PM 담당, L4 d4json — lfx-dotnet가 d4json branch에서 L2 측정 중
+C++: 현재 L2 · 손실 send1K 12.6 / serial1K 11.2 / bp 14.0·12.3% · 수정: L2는 PM(perf/4352-cpp-l2-envelope), L4 c4json pre-pr · c4dec 진행
+.NET: 현재 L2 · 손실 serial4K 22.7 / bp 12.5·9.6% · 수정: d2l2(L2 원인·수정, sol) 진행, L4 d4json — lfx-dotnet가 L2 측정 중
 Java: 현재 L1 확인 → L2 · L2 손실 bp 21.9·16.3% · 수정: #4414(L2)·j4json2(L4) — lad-java-l1c(L1)·lfx-java(L2→L4) 측정 중
 Node: 현재 L2 · 손실 bp 29.1·27.6 / serial4K 8.8% · 수정: #4414(L2)·#4415(L3)·#4416(L4) — lfx-node(L2→L4) 측정 중, n2net 대기
