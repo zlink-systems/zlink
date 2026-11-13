@@ -2,6 +2,7 @@ import {
   createInternalFrameworkException,
   ZLinkFrameworkInternalErrorKind
 } from '../framework-errors-internal';
+import type { ZLinkRawOutboundPart } from '../backend/raw-binding-port';
 import type { ConnectionAttempt } from '@zlink-systems/zlink';
 import { admitServiceRequest } from './durable-service-request';
 import { remainingRequestTimeout, requestTerminalError } from '../messaging/request-deadline';
@@ -62,6 +63,7 @@ import {
   decodeReplyHeader,
   decodeRouteMeshAdmission,
   encodeApplicationPayload,
+  ServiceWireOwnedFrame,
   encodeChannelRequestHeader,
   encodeChannelSendHeader,
   encodeNodeRequestHeader,
@@ -121,7 +123,7 @@ type RawServiceChannelTargetSelection =
     };
 
 /** An M6A application frame already owned by the Framework runtime. */
-type ServiceApplicationPayloadInput = ServiceApplicationPayload | Buffer;
+type ServiceApplicationPayloadInput = ServiceApplicationPayload | Buffer | ServiceWireOwnedFrame;
 
 export interface RawServiceIngressRecord {
   /** Source identity recorded once by the first accepting owner (Location runtime §9.3). */
@@ -677,7 +679,10 @@ export class RawServiceMeshRuntime {
     payload: ServiceApplicationPayloadInput
   ): SubmitResult | Promise<SubmitResult> {
     const selection = this.selectChannelTarget(channelName);
-    if (selection.kind !== 'selected') return selection.submitResult;
+    if (selection.kind !== 'selected') {
+      closeApplicationFrame(payload);
+      return selection.submitResult;
+    }
     const selected = selection.peer;
     const applicationFrame = this.applicationFrame(payload);
     const submitted = this.send(selected.descriptor.nodeRoutingId, [
@@ -751,6 +756,7 @@ export class RawServiceMeshRuntime {
   ): RawServiceObservedRequest {
     const selection = this.selectChannelTarget(channelName);
     if (selection.kind !== 'selected') {
+      closeApplicationFrame(payload);
       const pending = this.registerRequest(timeoutMs, observer, operationKind, requestOperation);
       this.completeRequest(
         pending,
@@ -970,19 +976,23 @@ export class RawServiceMeshRuntime {
     terminalResult = 0,
     failureCode = 0
   ): void {
-    if (request.localReply !== undefined) {
-      request.localReply(
-        terminalResult,
-        failureCode,
-        terminalResult === 0 ? this.applicationPayload(payload) : undefined
-      );
-      return;
+    try {
+      if (request.localReply !== undefined) {
+        request.localReply(
+          terminalResult,
+          failureCode,
+          terminalResult === 0 ? this.applicationPayload(payload) : undefined
+        );
+        return;
+      }
+      if (request.reply === undefined || request.correlation === undefined) {
+        throw new TypeError('Reply requires a request mailbox record.');
+      }
+      const header = encodeReplyHeader(request.correlation, terminalResult, failureCode);
+      request.reply(terminalResult === 0 ? [header, this.applicationFrame(payload)] : [header]);
+    } finally {
+      closeApplicationFrame(payload);
     }
-    if (request.reply === undefined || request.correlation === undefined) {
-      throw new TypeError('Reply requires a request mailbox record.');
-    }
-    const header = encodeReplyHeader(request.correlation, terminalResult, failureCode);
-    request.reply(terminalResult === 0 ? [header, this.applicationFrame(payload)] : [header]);
   }
 
   async pumpOne(
@@ -1723,230 +1733,251 @@ export class RawServiceMeshRuntime {
     operationKind?: number,
     requestOperation?: PendingOperation<unknown>
   ): RawServiceObservedRequest {
-    const correlation = this.nextCorrelation++;
-    const header =
-      channelName === undefined
-        ? encodeNodeRequestHeader(correlation)
-        : encodeChannelRequestHeader(correlation, channelName);
-    let encodedPayload = this.applicationFrame(payload);
-    let selectedTargetNodeRoutingId = targetNodeRoutingId;
-    if (
-      selectedTargetNodeRoutingId !== this.descriptor.nodeRoutingId &&
-      !this.isPeerRouteReady(selectedTargetNodeRoutingId)
-    ) {
-      // Channel selection happens before native admission. If that selection
-      // becomes stale during a peer drain, choose another ready channel peer
-      // while no request has been submitted yet. Reusing the same pending
-      // operation and correlation keeps this recovery pre-admission and
-      // cannot duplicate an application request.
-      if (channelName !== undefined) {
-        const excludedTargets = new Set([selectedTargetNodeRoutingId]);
-        for (;;) {
-          const alternate = this.topology.selectChannel(channelName, (peer) => {
-            const candidate = peer.descriptor.nodeRoutingId;
-            return !excludedTargets.has(candidate) && this.isPeerRouteReady(candidate);
-          });
-          if (alternate === undefined) break;
-          selectedTargetNodeRoutingId = alternate.descriptor.nodeRoutingId;
-          if (this.isPeerRouteReady(selectedTargetNodeRoutingId)) {
-            break;
+    try {
+      const correlation = this.nextCorrelation++;
+      const header =
+        channelName === undefined
+          ? encodeNodeRequestHeader(correlation)
+          : encodeChannelRequestHeader(correlation, channelName);
+      let encodedPayload = this.applicationFrame(payload);
+      let selectedTargetNodeRoutingId = targetNodeRoutingId;
+      if (
+        selectedTargetNodeRoutingId !== this.descriptor.nodeRoutingId &&
+        !this.isPeerRouteReady(selectedTargetNodeRoutingId)
+      ) {
+        // Channel selection happens before native admission. If that selection
+        // becomes stale during a peer drain, choose another ready channel peer
+        // while no request has been submitted yet. Reusing the same pending
+        // operation and correlation keeps this recovery pre-admission and
+        // cannot duplicate an application request.
+        if (channelName !== undefined) {
+          const excludedTargets = new Set([selectedTargetNodeRoutingId]);
+          for (;;) {
+            const alternate = this.topology.selectChannel(channelName, (peer) => {
+              const candidate = peer.descriptor.nodeRoutingId;
+              return !excludedTargets.has(candidate) && this.isPeerRouteReady(candidate);
+            });
+            if (alternate === undefined) break;
+            selectedTargetNodeRoutingId = alternate.descriptor.nodeRoutingId;
+            if (this.isPeerRouteReady(selectedTargetNodeRoutingId)) {
+              break;
+            }
+            excludedTargets.add(selectedTargetNodeRoutingId);
           }
-          excludedTargets.add(selectedTargetNodeRoutingId);
         }
       }
-    }
-    if (selectedTargetNodeRoutingId === this.descriptor.nodeRoutingId) {
-      encodedPayload = copyPayloadBytes(encodedPayload);
-      // The local admission path aborts its capacity wait on the terminal
-      // Promise, so a local request always keeps the Promise entry.
-      const pending =
-        requestOperation === undefined
-          ? this.operations.register(timeoutMs)
-          : (this.registerRequest(
-              timeoutMs,
-              observer,
-              operationKind,
-              requestOperation
-            ) as PendingOperation<RawServiceRequestResult>);
-      const parts = [header, encodedPayload];
-      const capacityStop = new AbortController();
-      void pending.promise.finally(() => capacityStop.abort()).catch(() => undefined);
-      void (async () => {
-        const applicationJobOwner = await this.reserveLocalIngress(capacityStop.signal);
-        try {
-          if (!pending.isPending()) return;
-          const applicationJob = await applicationJobOwner.acquire(
-            'application',
-            capacityStop.signal
-          );
-          if (!pending.isPending()) {
-            applicationJob.close();
-            return;
-          }
-          const accepted = this.mailbox.tryEnqueue({
-            owner: `node:${this.descriptor.nodeRoutingId}`,
-            domain: 'application',
-            parts,
-            sourceRoutingId: this.descriptor.nodeRoutingId,
-            correlation,
-            localReply: (terminalResult, failureCode, reply) =>
+      if (selectedTargetNodeRoutingId === this.descriptor.nodeRoutingId) {
+        encodedPayload =
+          encodedPayload instanceof ServiceWireOwnedFrame
+            ? encodedPayload.takeData()
+            : copyPayloadBytes(encodedPayload);
+        // The local admission path aborts its capacity wait on the terminal
+        // Promise, so a local request always keeps the Promise entry.
+        const pending =
+          requestOperation === undefined
+            ? this.operations.register(timeoutMs)
+            : (this.registerRequest(
+                timeoutMs,
+                observer,
+                operationKind,
+                requestOperation
+              ) as PendingOperation<RawServiceRequestResult>);
+        const parts = [header, encodedPayload];
+        const capacityStop = new AbortController();
+        void pending.promise.finally(() => capacityStop.abort()).catch(() => undefined);
+        void (async () => {
+          const applicationJobOwner = await this.reserveLocalIngress(capacityStop.signal);
+          try {
+            if (!pending.isPending()) return;
+            const applicationJob = await applicationJobOwner.acquire(
+              'application',
+              capacityStop.signal
+            );
+            if (!pending.isPending()) {
+              applicationJob.close();
+              return;
+            }
+            const accepted = this.mailbox.tryEnqueue({
+              owner: `node:${this.descriptor.nodeRoutingId}`,
+              domain: 'application',
+              parts,
+              sourceRoutingId: this.descriptor.nodeRoutingId,
+              correlation,
+              localReply: (terminalResult, failureCode, reply) =>
+                this.completeRequest(
+                  pending,
+                  {
+                    terminalResult,
+                    failureCode,
+                    ...(reply === undefined ? {} : { payload: reply })
+                  },
+                  requestOperation === undefined ? undefined : observer,
+                  operationKind
+                ),
+              applicationJob
+            });
+            if (!accepted) {
+              applicationJob.close();
               this.completeRequest(
                 pending,
                 {
-                  terminalResult,
-                  failureCode,
-                  ...(reply === undefined ? {} : { payload: reply })
+                  terminalResult: RequestResult.NotConnected,
+                  failureCode: 0
                 },
                 requestOperation === undefined ? undefined : observer,
                 operationKind
-              ),
-            applicationJob
-          });
-          if (!accepted) {
-            applicationJob.close();
-            this.completeRequest(
-              pending,
-              {
-                terminalResult: RequestResult.NotConnected,
-                failureCode: 0
-              },
-              requestOperation === undefined ? undefined : observer,
-              operationKind
-            );
-          } else {
-            onAdmitted?.();
+              );
+            } else {
+              onAdmitted?.();
+            }
+          } finally {
+            applicationJobOwner.close();
           }
-        } finally {
-          applicationJobOwner.close();
-        }
-      })().catch((error) =>
-        this.failRequest(
+        })().catch((error) =>
+          this.failRequest(
+            pending,
+            error,
+            requestOperation === undefined ? undefined : observer,
+            operationKind
+          )
+        );
+        return pending;
+      }
+      const pending = this.registerRequest(timeoutMs, observer, operationKind, requestOperation);
+      const selectedPeer = this.topology.readyPeer(selectedTargetNodeRoutingId);
+      if (
+        selectedPeer === undefined &&
+        !this.expectedPeers.has(selectedTargetNodeRoutingId) &&
+        this.topology.peer(selectedTargetNodeRoutingId) === undefined
+      ) {
+        closeApplicationFrame(payload);
+        this.completeRequest(
           pending,
-          error,
+          {
+            terminalResult: RequestResult.NotFound,
+            failureCode: REQUEST_TARGET_NOT_FOUND_FAILURE_CODE
+          },
           requestOperation === undefined ? undefined : observer,
           operationKind
-        )
-      );
-      return pending;
-    }
-    const pending = this.registerRequest(timeoutMs, observer, operationKind, requestOperation);
-    const selectedPeer = this.topology.readyPeer(selectedTargetNodeRoutingId);
-    if (
-      selectedPeer === undefined &&
-      !this.expectedPeers.has(selectedTargetNodeRoutingId) &&
-      this.topology.peer(selectedTargetNodeRoutingId) === undefined
-    ) {
-      this.completeRequest(
-        pending,
-        {
-          terminalResult: RequestResult.NotFound,
-          failureCode: REQUEST_TARGET_NOT_FOUND_FAILURE_CODE
-        },
-        requestOperation === undefined ? undefined : observer,
-        operationKind
-      );
-      return pending;
-    }
-    const parts = [header, encodedPayload];
-    const completed = (replyParts: readonly Buffer[]) => {
-      try {
-        if (replyParts.length < 1 || replyParts.length > 2) {
-          throw new ServiceWireProtocolError('Invalid reply parts.');
-        }
-        const reply = decodeReplyHeader(replyParts[0]!);
-        if (reply.correlation !== correlation)
-          throw new ServiceWireProtocolError('Reply correlation mismatch.');
-        if (reply.tail.byteLength !== 0) {
-          throw new ServiceWireProtocolError(
-            'Generic node/channel reply carries an operation-specific tail.'
+        );
+        return pending;
+      }
+      const parts = [header, encodedPayload];
+      const completed = (replyParts: readonly Buffer[]) => {
+        closeApplicationFrame(payload);
+        try {
+          if (replyParts.length < 1 || replyParts.length > 2) {
+            throw new ServiceWireProtocolError('Invalid reply parts.');
+          }
+          const reply = decodeReplyHeader(replyParts[0]!);
+          if (reply.correlation !== correlation)
+            throw new ServiceWireProtocolError('Reply correlation mismatch.');
+          if (reply.tail.byteLength !== 0) {
+            throw new ServiceWireProtocolError(
+              'Generic node/channel reply carries an operation-specific tail.'
+            );
+          }
+          if (reply.terminalResult === 0 && replyParts.length !== 2) {
+            throw new ServiceWireProtocolError('Successful reply omits its payload.');
+          }
+          if (reply.terminalResult !== 0 && replyParts.length !== 1) {
+            throw new ServiceWireProtocolError('Failed reply carries a payload.');
+          }
+          const result: RawServiceRequestResult = {
+            terminalResult: reply.terminalResult,
+            failureCode: reply.failureCode
+          };
+          const value =
+            reply.terminalResult === 0
+              ? { ...result, payload: decodeApplicationPayloadView(replyParts[1]!) }
+              : result;
+          if (requestOperation !== undefined && observer !== undefined)
+            observer.operationCompleted(pending.id, value, operationKind);
+          else pending.reply(value);
+        } catch (error) {
+          this.failRequest(
+            pending,
+            error,
+            requestOperation === undefined ? undefined : observer,
+            operationKind
           );
         }
-        if (reply.terminalResult === 0 && replyParts.length !== 2) {
-          throw new ServiceWireProtocolError('Successful reply omits its payload.');
-        }
-        if (reply.terminalResult !== 0 && replyParts.length !== 1) {
-          throw new ServiceWireProtocolError('Failed reply carries a payload.');
-        }
-        const result: RawServiceRequestResult = {
-          terminalResult: reply.terminalResult,
-          failureCode: reply.failureCode
-        };
-        const value =
-          reply.terminalResult === 0
-            ? { ...result, payload: decodeApplicationPayloadView(replyParts[1]!) }
-            : result;
-        if (requestOperation !== undefined && observer !== undefined)
-          observer.operationCompleted(pending.id, value, operationKind);
-        else pending.reply(value);
-      } catch (error) {
+      };
+      const failed = (error: unknown) => {
+        closeApplicationFrame(payload);
         this.failRequest(
           pending,
           error,
           requestOperation === undefined ? undefined : observer,
           operationKind
         );
+      };
+      if (selectedPeer !== undefined) {
+        try {
+          this.requireStarted().request(
+            selectedTargetNodeRoutingId,
+            parts,
+            remainingRequestTimeout('Request', pending.deadlineMs)!,
+            completed,
+            failed,
+            selectedPeer.liveness?.recordReceived,
+            onAdmitted,
+            pending
+          );
+        } catch (error) {
+          failed(error);
+        }
+        return pending;
       }
-    };
-    const failed = (error: unknown) =>
-      this.failRequest(
+      admitServiceRequest(
+        this,
+        selectedTargetNodeRoutingId,
         pending,
-        error,
-        requestOperation === undefined ? undefined : observer,
-        operationKind
+        (remaining, finished) => {
+          this.requireStarted().request(
+            selectedTargetNodeRoutingId,
+            parts,
+            remaining,
+            (reply) => {
+              finished();
+              completed(reply);
+            },
+            (error) => {
+              finished();
+              failed(error);
+            },
+            this.topology.admittedPeer(selectedTargetNodeRoutingId)?.liveness?.recordReceived,
+            onAdmitted,
+            pending
+          );
+        },
+        failed,
+        'Request',
+        undefined,
+        () => closeApplicationFrame(payload)
       );
-    if (selectedPeer !== undefined) {
-      try {
-        this.requireStarted().request(
-          selectedTargetNodeRoutingId,
-          parts,
-          remainingRequestTimeout('Request', pending.deadlineMs)!,
-          completed,
-          failed,
-          selectedPeer.liveness?.recordReceived,
-          onAdmitted,
-          pending
-        );
-      } catch (error) {
-        failed(error);
-      }
       return pending;
+    } catch (error) {
+      closeApplicationFrame(payload);
+      throw error;
     }
-    admitServiceRequest(
-      this,
-      selectedTargetNodeRoutingId,
-      pending,
-      (remaining, finished) => {
-        this.requireStarted().request(
-          selectedTargetNodeRoutingId,
-          parts,
-          remaining,
-          (reply) => {
-            finished();
-            completed(reply);
-          },
-          (error) => {
-            finished();
-            failed(error);
-          },
-          this.topology.admittedPeer(selectedTargetNodeRoutingId)?.liveness?.recordReceived,
-          onAdmitted,
-          pending
-        );
-      },
-      failed
-    );
-    return pending;
   }
 
   /**
    * The generic node/channel backend may supply its single owned M6A frame
    * directly. All other callers keep the typed application-payload boundary.
    */
-  private applicationFrame(payload: ServiceApplicationPayloadInput): Buffer {
-    return Buffer.isBuffer(payload) ? payload : encodeApplicationPayload(payload);
+  private applicationFrame(
+    payload: ServiceApplicationPayloadInput
+  ): Buffer | ServiceWireOwnedFrame {
+    return Buffer.isBuffer(payload) || payload instanceof ServiceWireOwnedFrame
+      ? payload
+      : encodeApplicationPayload(payload);
   }
 
   private applicationPayload(payload: ServiceApplicationPayloadInput): ServiceApplicationPayload {
+    if (payload instanceof ServiceWireOwnedFrame)
+      return decodeApplicationPayloadView(payload.takeData());
     return Buffer.isBuffer(payload) ? decodeApplicationPayload(payload) : payload;
   }
 
@@ -2158,10 +2189,10 @@ export class RawServiceMeshRuntime {
 
   private send(
     targetNodeRoutingId: string,
-    parts: readonly Uint8Array[]
+    parts: readonly ZLinkRawOutboundPart[]
   ): boolean | Promise<boolean> {
-    if (!this.isPeerRouteReady(targetNodeRoutingId)) return false;
     try {
+      if (!this.isPeerRouteReady(targetNodeRoutingId)) return false;
       const submission = this.requireStarted().submitSend(targetNodeRoutingId, parts);
       if (submission.result === SubmitResult.Ok) return true;
       return submission.admitted.then(
@@ -2170,6 +2201,10 @@ export class RawServiceMeshRuntime {
       );
     } catch (error) {
       return this.sendFailure(error);
+    } finally {
+      for (const part of parts) {
+        if (part instanceof ServiceWireOwnedFrame) part.close();
+      }
     }
   }
 
@@ -2181,6 +2216,10 @@ export class RawServiceMeshRuntime {
     }
     throw error;
   }
+}
+
+function closeApplicationFrame(payload: ServiceApplicationPayloadInput): void {
+  if (payload instanceof ServiceWireOwnedFrame) payload.close();
 }
 
 function channelSendSubmitResult(accepted: boolean): SubmitResult {

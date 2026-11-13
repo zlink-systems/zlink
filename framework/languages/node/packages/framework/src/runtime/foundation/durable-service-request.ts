@@ -52,7 +52,8 @@ export function admitServiceRequest(
   start: (remainingMs: number, finished: () => void) => void,
   failed: (error: unknown) => void,
   operationKind = 'Request',
-  targetNodeGeneration?: bigint
+  targetNodeGeneration?: bigint,
+  releaseUnsubmitted?: () => void
 ): void {
   let baseline: PeerRouteObservation | undefined;
   let submitted = false;
@@ -66,6 +67,7 @@ export function admitServiceRequest(
     unobserveIntent();
     port.requestStopSignal?.removeEventListener('abort', stopped);
     if (pending.promise === undefined) pending.clearFailureDispatcher(cleanup);
+    if (!submitted) releaseUnsubmitted?.();
   };
   const fail = (error: unknown) => {
     if (disposed) return;

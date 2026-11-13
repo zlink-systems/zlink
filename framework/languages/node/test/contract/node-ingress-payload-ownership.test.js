@@ -24,7 +24,8 @@ const {
   decodeNodeRequestHeader,
   encodeApplicationPayload,
   encodeMultipartApplicationPayload,
-  encodeReplyHeader
+  encodeReplyHeader,
+  ServiceWireOwnedFrame
 } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 const creationPayloadCodec =
   require('../../packages/framework/dist/runtime/messaging/creation-payload-codec');
@@ -166,6 +167,16 @@ test('native received binary payload has one retained view across completion and
 test('generic channel send writes one valid multipart application frame before source close', async () => {
   let replyFrame;
   let sentParts;
+  let nativeFrames = 0;
+  const retainSubmitted = (parts) => {
+    sentParts = parts.map((part) => {
+      if (!(part instanceof ServiceWireOwnedFrame)) return part;
+      const message = part.takeMessage();
+      nativeFrames++;
+      try { return message.data(); }
+      finally { message.close(); }
+    });
+  };
   const router = {
     setRoutingId() {},
     setReceiveFlowState() {},
@@ -180,10 +191,10 @@ test('generic channel send writes one valid multipart application frame before s
     monitor: () => ({ statusReady: () => true, drain: () => 0, close() {} }),
     receive: () => undefined,
     send: async (_target, parts) => {
-      sentParts = parts;
+      retainSubmitted(parts);
     },
     submitSend: (_target, parts) => {
-      sentParts = parts;
+      retainSubmitted(parts);
       return { result: SubmitResult.Ok, admitted: Promise.resolve() };
     },
     request: (_target, parts, _timeout, onReply, onFailed) =>
@@ -225,6 +236,7 @@ test('generic channel send writes one valid multipart application frame before s
   }
   try {
     assert.ok(sentParts);
+    assert.equal(nativeFrames, 1, 'the raw port takes the final native application frame');
     const frame = sentParts[1];
     const application = decodeApplicationPayloadView(frame);
     assert.equal(application.packetName, 'ZLinkFrameworkMultipart');

@@ -1,3 +1,4 @@
+import type { ZLinkRawOutboundPart } from '../backend/raw-binding-port';
 import type { ApplicationJobRecordLease } from '../application-jobs/application-ingress-record-owner';
 import type { ReceiveRecord } from './service-runtime-contracts';
 import type { RawServiceIngressRecord } from './raw-service-mesh-runtime';
@@ -19,7 +20,7 @@ export interface ServiceMailboxRecord {
   readonly requestSource?: import('../locations/request-source-resolver').ZLinkRequestSourceFence;
   readonly sourceRoute?: Uint8Array;
   readonly requestSequence?: bigint;
-  readonly reply?: (parts: readonly (Uint8Array | string)[]) => void;
+  readonly reply?: (parts: readonly ZLinkRawOutboundPart[]) => void;
   readonly correlation?: bigint;
   readonly localReply?: (
     terminalResult: number,

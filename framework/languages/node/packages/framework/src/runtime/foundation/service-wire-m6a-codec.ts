@@ -1,4 +1,5 @@
 import { UINT32_MAX, UINT64_MAX } from '@zlink-systems/stream-wire';
+import { Message } from '@zlink-systems/zlink';
 import { allocatePayloadBytes } from '../../contracts/Common/payload-slab';
 import { normalizeEndpoint } from '../../contracts/Configuration/EndpointNotation';
 import {
@@ -68,6 +69,47 @@ export class ServiceWireProtocolError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'ServiceWireProtocolError';
+  }
+}
+
+/** Owns one outbound native frame until the raw binding port takes it. */
+export class ServiceWireOwnedFrame {
+  private message: Message | undefined;
+
+  private constructor(message: Message) {
+    this.message = message;
+  }
+
+  static allocate(length: number): ServiceWireOwnedFrame {
+    return new ServiceWireOwnedFrame(Message.allocate(length));
+  }
+
+  data(): Buffer {
+    if (this.message === undefined) throw new TypeError('Service frame ownership has ended.');
+    return this.message.data();
+  }
+
+  takeMessage(): Message {
+    if (this.message === undefined) throw new TypeError('Service frame ownership has ended.');
+    const message = this.message;
+    this.message = undefined;
+    return message;
+  }
+
+  /** Binding data Buffers retain their storage after the Message handle closes. */
+  takeData(): Buffer {
+    const message = this.takeMessage();
+    try {
+      return message.data();
+    } finally {
+      message.close();
+    }
+  }
+
+  close(): void {
+    const message = this.message;
+    this.message = undefined;
+    message?.close();
   }
 }
 
@@ -229,6 +271,33 @@ export function encodeMultipartApplicationPayload(
   return result;
 }
 
+// Derive the fixed profile from the ordinary envelope writer; only its lengths vary per record.
+const MULTIPART_APPLICATION_HEADER = encodeOwnedApplicationPayload({
+  packetName: SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
+  contentType: SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
+  payload: Buffer.alloc(0)
+});
+
+/** Writes the schema's fixed Framework multipart profile directly into native storage. */
+export function encodeFrameworkMultipartApplicationMessage(
+  parts: readonly (Uint8Array | string)[]
+): ServiceWireOwnedFrame {
+  const multipartLength = multipartPayloadLength(parts);
+  const result = ServiceWireOwnedFrame.allocate(
+    applicationFrameLength(MULTIPART_APPLICATION_HEADER.byteLength, multipartLength)
+  );
+  try {
+    const bytes = result.data();
+    bytes.set(MULTIPART_APPLICATION_HEADER);
+    writeApplicationFrameLengths(bytes, multipartLength);
+    writeMultipartPayload(bytes, MULTIPART_APPLICATION_HEADER.byteLength, parts);
+    return result;
+  } catch (error) {
+    result.close();
+    throw error;
+  }
+}
+
 /** Encodes bare multipart bytes with the same writer as application frames. */
 export function encodeMultipartPayload(parts: readonly (Uint8Array | string)[]): Buffer {
   const result = Buffer.alloc(multipartPayloadLength(parts));
@@ -289,20 +358,34 @@ function allocateApplicationPayload(
     SERVICE_WIRE_TEXT8_MAX_BYTES,
     fail
   );
-  if (payloadLength > MAX_U32) fail('Application payload exceeds u32.');
-  const frameLength =
-    APPLICATION_PAYLOAD_MINIMUM_FIELD_BYTES + packetNameLength + contentTypeLength + payloadLength;
+  const frameLength = applicationFrameLength(
+    APPLICATION_PAYLOAD_MINIMUM_FIELD_BYTES + packetNameLength + contentTypeLength,
+    payloadLength
+  );
   const prefixLength = 1 + APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES;
-  const bodyLength = frameLength - prefixLength;
-  if (bodyLength > MAX_U32) fail('Application payload body exceeds u32.');
   // Both callers write every payload byte after these header fields.
   const result = allocate(frameLength);
   result[0] = APPLICATION_PAYLOAD_VERSION;
-  result.writeUInt32BE(bodyLength, 1);
-  let offset = writeText8(result, prefixLength, packetName, packetNameLength);
-  offset = writeText8(result, offset, contentType, contentTypeLength);
-  result.writeUInt32BE(payloadLength, offset);
+  const offset = writeText8(result, prefixLength, packetName, packetNameLength);
+  writeText8(result, offset, contentType, contentTypeLength);
+  writeApplicationFrameLengths(result, payloadLength);
   return result;
+}
+
+function applicationFrameLength(headerLength: number, payloadLength: number): number {
+  if (payloadLength > MAX_U32) fail('Application payload exceeds u32.');
+  const frameLength = headerLength + payloadLength;
+  if (frameLength - 1 - APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES > MAX_U32)
+    fail('Application payload body exceeds u32.');
+  return frameLength;
+}
+
+function writeApplicationFrameLengths(bytes: Buffer, payloadLength: number): void {
+  bytes.writeUInt32BE(bytes.byteLength - 1 - APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES, 1);
+  bytes.writeUInt32BE(
+    payloadLength,
+    bytes.byteLength - payloadLength - APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES
+  );
 }
 
 function allocateOwnedPayloadBytes(length: number): Buffer {
