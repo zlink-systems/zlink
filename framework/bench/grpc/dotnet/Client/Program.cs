@@ -172,7 +172,8 @@ internal static class BenchTransport
             ),
 #if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3 || ZLINK_DOTNET_LADDER_L4
             "zlink-framework-dotnet"
-                when Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_CLIENT") == "raw" =>
+                when Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_CLIENT") == "raw"
+                    && Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_LEVEL") is not "L5_7" =>
                 new RawBenchTransport(options, frameworkTarget: true),
 #endif
             "zlink-framework-dotnet" => await FrameworkBenchTransport.CreateAsync(options),
@@ -294,11 +295,13 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
     private static readonly RoutingId Target = RoutingId.From("bench-server");
     private readonly IHost host;
     private readonly IZLinkRouteClient client;
+    private readonly bool typedJson;
 
-    private FrameworkBenchTransport(IHost host, IZLinkRouteClient client)
+    private FrameworkBenchTransport(IHost host, IZLinkRouteClient client, bool typedJson)
     {
         this.host = host;
         this.client = client;
+        this.typedJson = typedJson;
     }
 
     public bool Ready { get; private set; }
@@ -320,6 +323,7 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
 
     public static async Task<FrameworkBenchTransport> CreateAsync(BenchOptions options)
     {
+        var typedJson = Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_LEVEL") == "L5_7";
         var builder = Host.CreateApplicationBuilder(Array.Empty<string>());
         builder.Logging.ClearProviders();
         builder.Logging.AddConsole();
@@ -328,7 +332,8 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
         );
         builder.Services.AddZLinkFramework(framework =>
         {
-            framework.Codecs.Use(ZLinkProtobufCodec.Default);
+            if (!typedJson)
+                framework.Codecs.Use(ZLinkProtobufCodec.Default);
             if (BenchDiagnostics.FlowTraceEnabled)
                 framework.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
             var mesh = framework
@@ -336,12 +341,33 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
                 .Listen("tcp://127.0.0.1:0")
                 .SetRoutingId(RoutingId.From($"bench-source-{Environment.ProcessId}"));
             mesh.PeerConnections.Connect(Target, options.TargetEndpoint);
+            if (typedJson)
+            {
+                mesh.AddRouteRequestHandler<
+                    FrameworkTypedEchoHandler,
+                    BenchTypedPayload,
+                    BenchTypedPayload
+                >(
+                        "BenchTypedPayload"
+                    )
+                    .AddRouteSendHandler<FrameworkTypedCommandHandler, BenchTypedPayload>(
+                        "BenchTypedPayload"
+                    );
+            }
+            else
+            {
+                mesh.AddRouteRequestHandler<FrameworkEchoHandler, BenchPayload, BenchPayload>(
+                        "BenchPayload"
+                    )
+                    .AddRouteSendHandler<FrameworkCommandHandler, BenchPayload>("BenchPayload");
+            }
         });
         var host = builder.Build();
         await host.StartAsync();
         return new FrameworkBenchTransport(
             host,
-            host.Services.GetRequiredService<IZLinkRouteClient>()
+            host.Services.GetRequiredService<IZLinkRouteClient>(),
+            typedJson
         );
     }
 
@@ -354,27 +380,113 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
                 return;
     }
 
-    public Zlink.Framework.Contracts.Channels.ZLinkRequest<BenchPayload> SubmitRequest(
+    public FrameworkRequestSubmission SubmitRequest(
         BenchPayload payload,
         CancellationToken cancellationToken
-    ) => client.RequestToNode("bench", Target, payload).Async<BenchPayload>(cancellationToken);
+    )
+    {
+        if (!typedJson)
+        {
+            var request = client.RequestToNode("bench", Target, payload)
+                .Async<BenchPayload>(cancellationToken);
+            return new FrameworkRequestSubmission(request.AsTask(), request.Admitted.AsTask());
+        }
+
+        var typedRequest = client
+            .RequestToNode("bench", Target, new BenchTypedPayload(payload.Body.ToByteArray()))
+            .Async<BenchTypedPayload>(cancellationToken);
+        return new FrameworkRequestSubmission(
+            ConvertTypedReplyAsync(typedRequest),
+            typedRequest.Admitted.AsTask()
+        );
+    }
+
+    private static async Task<BenchPayload> ConvertTypedReplyAsync(
+        Zlink.Framework.Contracts.Channels.ZLinkRequest<BenchTypedPayload> request
+    )
+    {
+        var reply = await request;
+        return new BenchPayload { Body = ByteString.CopyFrom(reply.Body) };
+    }
 
     public async ValueTask<BenchPayload> RequestAsync(
         int stream,
         BenchPayload payload,
         CancellationToken cancellationToken
-    ) => await SubmitRequest(payload, cancellationToken);
+    ) => await SubmitRequest(payload, cancellationToken).Reply;
 
     public async ValueTask SendAsync(
         int stream,
         BenchPayload payload,
         CancellationToken cancellationToken
-    ) => await client.SendToNode("bench", Target, payload).Async();
+    )
+    {
+        if (typedJson)
+            await client
+                .SendToNode("bench", Target, new BenchTypedPayload(payload.Body.ToByteArray()))
+                .Async();
+        else
+            await client.SendToNode("bench", Target, payload).Async();
+    }
 
     public async ValueTask DisposeAsync()
     {
         await host.StopAsync();
         host.Dispose();
+    }
+}
+
+internal sealed record FrameworkRequestSubmission(Task<BenchPayload> Reply, Task Admitted);
+
+internal sealed class FrameworkEchoHandler
+    : IZLinkRouteRequestHandler<BenchPayload, BenchPayload>
+{
+    public ValueTask<BenchPayload> HandleAsync(
+        BenchPayload request,
+        ZLinkRouteMessageContext context,
+        CancellationToken cancellationToken
+    )
+    {
+        return ValueTask.FromResult(request);
+    }
+}
+
+internal sealed class FrameworkCommandHandler
+    : IZLinkRouteSendHandler<BenchPayload>
+{
+    public ValueTask HandleAsync(
+        BenchPayload message,
+        ZLinkRouteMessageContext context,
+        CancellationToken cancellationToken
+    )
+    {
+        return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class FrameworkTypedEchoHandler
+    : IZLinkRouteRequestHandler<BenchTypedPayload, BenchTypedPayload>
+{
+    public ValueTask<BenchTypedPayload> HandleAsync(
+        BenchTypedPayload request,
+        ZLinkRouteMessageContext context,
+        CancellationToken cancellationToken
+    )
+    {
+        return ValueTask.FromResult(request);
+    }
+}
+
+internal sealed class FrameworkTypedCommandHandler
+    : IZLinkRouteSendHandler<BenchTypedPayload>
+{
+    public ValueTask HandleAsync(
+        BenchTypedPayload message,
+        ZLinkRouteMessageContext context,
+        CancellationToken cancellationToken
+    )
+    {
+        return ValueTask.CompletedTask;
     }
 }
 

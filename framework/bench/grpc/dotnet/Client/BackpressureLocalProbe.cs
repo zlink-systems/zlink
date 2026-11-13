@@ -142,8 +142,8 @@ internal static class BackpressureLocalProbe
             if (transport is FrameworkBenchTransport framework)
             {
                 var request = framework.SubmitRequest(payload, CancellationToken.None);
-                reply = request.AsTask();
-                admission = request.Admitted.AsTask();
+                reply = request.Reply;
+                admission = request.Admitted;
             }
             else
             {

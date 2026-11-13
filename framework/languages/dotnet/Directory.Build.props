@@ -5,6 +5,7 @@
         <DefineConstants Condition="'$(ZLinkDotnetLadderLevel)' == 'L2'">$(DefineConstants);ZLINK_DOTNET_LADDER_L2</DefineConstants>
         <DefineConstants Condition="'$(ZLinkDotnetLadderLevel)' == 'L3'">$(DefineConstants);ZLINK_DOTNET_LADDER_L3</DefineConstants>
         <DefineConstants Condition="'$(ZLinkDotnetLadderLevel)' == 'L4'">$(DefineConstants);ZLINK_DOTNET_LADDER_L4</DefineConstants>
+        <DefineConstants Condition="'$(ZLinkDotnetLadderLevel)' == 'L5_7'">$(DefineConstants);ZLINK_DOTNET_LADDER_L1;ZLINK_DOTNET_LADDER_L2;ZLINK_DOTNET_LADDER_L3;ZLINK_DOTNET_LADDER_L4;ZLINK_DOTNET_LADDER_L5_7</DefineConstants>
         <ZLinkRepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../..'))</ZLinkRepoRoot>
         <ZLinkFrameworkVersionFile>$([System.IO.Path]::Combine('$(MSBuildThisFileDirectory)', 'VERSION'))</ZLinkFrameworkVersionFile>
         <ZLinkUseBindingsSource Condition="'$(ZLinkUseBindingsSource)' == ''">false</ZLinkUseBindingsSource>

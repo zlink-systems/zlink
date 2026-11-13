@@ -282,8 +282,8 @@ internal static class BenchMeasurement
                     else if (transport is FrameworkBenchTransport framework)
                     {
                         var request = framework.SubmitRequest(payload, operationCancellation.Token);
-                        reply = request.AsTask();
-                        admitted = request.Admitted.AsTask();
+                        reply = request.Reply;
+                        admitted = request.Admitted;
                     }
                     else
                     {
