@@ -98,7 +98,7 @@ lines = [
     '',
     '- 측정: 2026-11-13 UTC, tip `29d9fca82b`; warmup 10초, 측정 5초, 셀별 warm 1회 폐기 후 counted 1회. 경계 셀은 총 3회 평균.',
     '- 조건: C2·C3 off, SCHED_OTHER, source 0–5 / target 8–13, guard v8. counted 결과는 errors=0 및 submitted=completed=received, 모든 스레드의 시작/중간 정책·affinity를 확인.',
-    '- L4 send 1K의 최초 warm attempt는 시작 시 source SCHED_IDLE로 무효 폐기하고 재실행. 무효 기록은 [progress](<' + str(JOB / 'progress.md') + '>); 집계에서 제외.',
+    '- L4 send 1K의 최초 warm은 source SCHED_IDLE로 무효 폐기 후 재실행. L0 send 4K 무효 attempt1과 serial 1K 중단 attempt1은 제외했고, send 1K의 추가 유효 attempt2도 요청된 단일 측정표에서 제외했다. 원시 기록은 [progress](<' + str(JOB / 'progress.md') + '>).',
     '',
     '## A. 처리량 (msg/s)',
     '',
@@ -116,7 +116,7 @@ lines += [
     '',
     '## B. 단계별 손실 및 기준 판정',
     '',
-    '- 손실 = `(이전 단계 − 현재 단계) / 이전 단계`; 음수는 처리량 증가. 각 손실 값 뒤의 `p`/`n` 링크는 이전/현재 단계의 원시 results.json이며, 스케줄 sidecar는 A 표에 연결했다.',
+    '- 손실 = `(이전 단계 − 현재 단계) / 이전 단계`; 음수는 처리량 증가. B의 각 셀은 A 표 같은 행의 이전/현재 단계 값을 비교하며, 그 값의 results.json과 scheduling.txt를 A 표에서 연다.',
     '- 기준: L0/binding ≥0.95, L1~L4 손실 ≤7%, L5~L7 손실 ≤21%. 5–9% 경계(L1/L2)와 19–23% 예산 경계(L4/L5~L7)는 각 관련 단계·셀을 3회 실행해 평균.',
     '',
     '| 셀 | L0/binding (≥.95) | L1/L0 (≤7%) | L2/L1 (≤7%) | L3/L2 (≤7%) | L4/L3 (≤7%) | L5~L7/L4 (≤21%) |',
@@ -125,16 +125,12 @@ lines += [
 for cell in CELLS:
     l0ratio = means['L0'][cell] / float(binding[cell]['msg_s'])
     pass_l0 = l0ratio >= 0.95
-    l0raw = values['L0'][cell]
-    braw = binding[cell]['raw']
-    cols = [label[cell], f'{l0ratio:.3f} {"PASS" if pass_l0 else "FAIL"} {pathlink(braw, "binding raw")} {pathlink(l0raw[0][1], "L0 raw")}']
+    cols = [label[cell], f'{l0ratio:.3f} {"PASS" if pass_l0 else "FAIL"}']
     prev = 'L0'
     for level, threshold in [('L1', 7), ('L2', 7), ('L3', 7), ('L4', 7), ('L5_7', 21)]:
         loss = (means[prev][cell] - means[level][cell]) / means[prev][cell] * 100
         verdict = 'PASS' if loss <= threshold else 'FAIL'
-        prev_refs = ' '.join(pathlink(entry[1], f'p{i}') for i, entry in enumerate(values[prev][cell], 1))
-        next_refs = ' '.join(pathlink(entry[1], f'n{i}') for i, entry in enumerate(values[level][cell], 1))
-        cols.append(f'{loss:+.1f}% {verdict} {prev_refs} {next_refs}')
+        cols.append(f'{loss:+.1f}% {verdict}')
         prev = level
     lines.append('| ' + ' | '.join(cols) + ' |')
 lines += [

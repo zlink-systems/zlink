@@ -1,0 +1,17 @@
+Model gpt-6.1-sol, effort high. Earlier job briefs are history, not instructions.
+
+# Task: Java ladder L5~L7 (production owner/worker/scope/registry dispatch) loss vs L4 is 28-52% (budget 21%). Profile it, compare with .NET (the reference), find the cause on the production path and fix it. Report cause + fix proposal first, then implement.
+
+Worktree /root/worktree/zlink-v21-s033/j57, branch perf/4356-java-l57, from origin/main 3bd8756f99. Commit locally only; never push, never open a PR, no GitHub, no sub-agents or other AI tools, never run internal-docs.sh. Never delete raw files. Do NOT take /root/jobs/fx/cx/measure.lock. Never touch other worktrees or their build outputs (lad-java, lad-java-l57p, j4json, l2bp, n3sw, n2net, n4json, c4json, d4json, l3868-next); read code with git show only. Profiling: pin every process you start to CPUs 6-7,14-15 with taskset, each profiled run at most 20 s; compare shapes, not throughput. Builds get SIGSTOPped while a measurement hold is active: that is normal, just wait.
+Read first: /root/jobs/fx/cx/v21/s033/common-rules.md, ladder-steps.md, lad-java-s4/report.md + call-shape.md (numbers, path), jl57bp/report.md + call-shape.md (L5~L7 call path, admission fix), l2bp/report.md (async-profiler 4.6 method that worked: ctimer CPU + wall + alloc, collapsed stacks), lad-dotnet-s1/report.md + call-shape.md.
+Ladder code: exp/4350-java-ladder-l57p cffa8009d3 (L4 = ZLINK_BENCH_LADDER_L4, L5~L7 = ZLINK_BENCH_LADDER_L5_7; both default JSON, no protobuf registration). Build a scratch copy under /root/worktree/zlink-v21-s033/j57-scratch.
+
+## Evidence (lad-java-s4, 0-5/8-13 pinned, errors 0)
+L5~L7 vs L4: send-saturation 1K 191,633 → 91,982 (52.0%), 4K 79,537 → 62,605 (21.3%); request-serial 1K 9,957 → 6,804 (31.7%), 4K 30.6%; request-backpressure 1K 69,786 → 38,955 (44.2%), 4K 27.7%. 1K loses more than 4K → per-message fixed cost, not per-byte.
+.NET on the same step (lad-dotnet-s1): send 1K 233,445 → 147,099 (37.0%), 4K 21.2%, serial 25.0%/26.2%, bp 34.5%/39.4%. .NET also fails, so .NET is a comparison point, not proof of the floor; C++ L5~L7 is FASTER than its L4 on send 4K/bp 4K (l3868-s1/report.md), so check what C++ skips too.
+
+## Do
+1. Profile L4 vs L5~L7 send-saturation 1K and request-backpressure 1K, source and target: CPU, wall and allocation per message, split by owner queue/mailbox, handler activation/scope, DI resolution, operation registry, completion dispatch, typed serializer lookup, thread hops (count hand-offs per message: submit thread → owner → worker → completion).
+2. Write /root/jobs/fx/cx/v21/s033/j57/report.md FIRST: table of each L5~L7 cost with Java file:line, .NET equivalent file:line (framework/languages/dotnet/src/Zlink.Framework/), C++ equivalent file:line (framework/languages/cpp/framework/), and what the others do less; cause with production file:line, profile evidence under j57/raw, production fix proposal (owner layer, spec reference under framework/doc/framework/common/spec/server/, rule count before/after). Stop there if a spec, wire format or public API change would be needed.
+3. Implement in production Java (framework/languages/java/zlink-framework-core), with tests for the touched behaviour (ordering, scope lifetime, completion once); run the Java format check and the framework tests covering the touched files; profile again and report per-message CPU/allocations before/after. No bench-only fixes.
+Time cap 4 h.

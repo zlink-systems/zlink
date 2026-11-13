@@ -1,7 +1,7 @@
-.NET|l4j 완료(L4 기본 JSON 4cbe0b5316) · binding + L0~L5~L7 측정 중|lad-dotnet-s1
-Java|L4·L5~L7 재측정(admission 수정 cffa8009d3 후)|lad-java-s4
 Node|L5~L7 수신 0: main 경로 대조·미처리 dispatch 확인(node-l57f 후속)|node-l57g
 J4json|typed JSON base64 encode·decode 복사·할당 줄이기(Java 수정 + 세 언어 대조)|j4json2
 N4json|Node L4 typed JSON 손실 원인·production 수정|n4json
 C4json|C++ L4 typed JSON 손실 원인·production 수정|c4json
 N2net|Node L2 .NET 대조·수정(손실 29% 후속)|n2net
+D4json|.NET L4 typed JSON 손실 원인·production 수정|d4json
+J57|Java L5~L7 dispatch 손실 원인·수정(.NET·C++ 대조)|j57

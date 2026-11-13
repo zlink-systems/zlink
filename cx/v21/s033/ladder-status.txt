@@ -1,7 +1,7 @@
 측정 조건(11-13 17:41 UTC부터): 측정 중 C2·C3 끔, 측정 프로세스 SCHED_OTHER, CPU 분리(source 0-5 · target 8-13, 그 밖의 프로세스·IRQ 6-7·14-15). 이 조건의 binding으로만 비율을 냅니다.
 단계 정의 표: ladder-steps.md (네 언어 같은 범위인지 확인용)
 C++ 구현: L0·L1 ✓ · L2(요청+응답) fbdcb16e26 ✓ · L3 dd83e75df4 ✓ · L4(기본 JSON) 276b84f248 ✓ · L5~L7 62e766f88d ✓ — l3868-s1 완료: L5~L7 F÷binding send 0.143/0.130 · serial 0.411/0.259 · bp 0.211/0.096 (errors 0); L4 손실 38~93%가 최대
-.NET 구현: L0~L1 ✓ · L2(요청+응답) 69891f4446 ✓ · L3 e8ee8302b0 ✓ · L4(기본 JSON) 4cbe0b5316 ✓ (lad-dotnet-l4j 완료) · L5~L7 29d9fca82b ✓ — 측정 중(lad-dotnet-s1): binding send 388,710·166,007 / serial 9,235·8,873 / bp 72,636·76,589
-Java 구현: L0~L1 ✓ · L2(요청+응답) e8721a0776 ✓ · L3 fea12ea97a ✓ · L4 9d9901eb2c ✓ · L5~L7 f3e3933567 ✓ — 측정 완료(s2 + s3 재측정, 20:3x UTC): F÷binding send 0.18·0.29 / serial 0.56·0.47 / bp 미판정 · L5~L7 backpressure에서 errors(1K 50,160 · 4K 123,625) → jl57bp 원인 조사 · 큰 손실: L4 JSON 52~62%(j4json2), L2 bp 16~22%(l2bp), L5~L7 27~49%
+.NET 구현: L0~L1 ✓ · L2(요청+응답) 69891f4446 ✓ · L3 e8ee8302b0 ✓ · L4(기본 JSON) 4cbe0b5316 ✓ (lad-dotnet-l4j 완료) · L5~L7 29d9fca82b ✓ — s1 완료: L5~L7 F÷binding send 0.378·0.549 / serial 0.578·0.545 / bp 0.514·0.339 · 실패: L0 serial 0.84·0.90(1회), L2 serial4K·bp, L3 send1K, L4 전 셀(d4json), L5~L7 전 셀 21~39%
+Java 구현: L0~L1 ✓ · L2(요청+응답) e8721a0776 ✓ · L3 fea12ea97a ✓ · L4 9d9901eb2c ✓ · L5~L7 f3e3933567 ✓ — s4(admission 수정 cffa8009d3 후, errors 0): L5~L7 F÷binding send 0.175·0.305 / serial 0.525·0.488 / bp 0.299·0.238 · L5~L7 손실 vs L4 52·21.3(3회 필요)·31.7·30.6·44.2·27.7% · 큰 손실: L4 JSON(j4json2), L2 bp(l2bp PR)
 Node 구현: L0~L1 ✓ · L2(요청+응답) 2bef18aa94 ✓ · L3 20598f57a2 ✓ · L4 ae8a5178b5 ✓ · L5~L7 7d1afa98a9 ✓ — 측정 완료(lad-node-s1, L0~L4): L4 손실 44~90%(typed JSON) · L3 16~35%(n3sw) · L2 bp 28~29%(l2bp) · L5~L7 run 무효(target 수신 0, stats 준비 안 됨) → node-l57f
 기준: 11-13 binding-rebase는 CPU 분리 미적용으로 무효(Java·.NET 미측정, C++·Node affinity 미기록) — guard v8로 고친 뒤 Java·Node는 각 단계 측정 job 안에서 binding부터 다시 잼

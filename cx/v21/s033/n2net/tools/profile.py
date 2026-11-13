@@ -46,6 +46,9 @@ else:
                                 '--require=' + str(P / 'tools/event-loop.cjs'), '--require=' + str(P / 'tools/heap-sampling.cjs')]
         cmd += [str(bench / ('client/main.js' if role == 'source' else 'zlink-framework-server/main.js'))]
         return cmd
+subprocess.run(['taskset','-c',CPUS,'python3',str(P/'tools/fingerprint.py'),args.label],check=True)
+with (P/'progress.md').open('a') as f:
+    f.write('\n- profile '+args.label+' '+args.step+' request-backpressure 1024: binding recv zlink-raw-server/main.js:47-53,64-81 ↔ ladder zlink-framework-server/main.js:166-205 (same DontWait drain/metrics; L1 permit). reply raw :82-86 ↔ ladder :206-212/shared/raw-wire.js:114-116 (new protobuf/body, L2 header only). Wait/atomics/body copies unchanged; header allocations report.md. CPU '+CPUS+', ≤19s/child, no measure.lock.\n')
 procs = []
 logs = []
 start = time.monotonic()
@@ -89,12 +92,12 @@ def snapshot(label):
 
 try:
     launch('target', command('target') + ['--endpoint',endpoint,'--metrics-url',target, '--command-endpoint',f'tcp://127.0.0.1:{base+4}'])
-    await_ready(target, False)
     launch('source', command('source') + ['--implementation','zlink-framework-' + args.language,
       '--scenario','request-backpressure','--payload-size','1024','--request-window','100',
       '--submit-concurrency','8','--warmup-seconds',str(args.warmup),
       '--trigger-url',trigger,'--stats-url',stats,'--target-endpoint',endpoint,
       '--target-stats-url',target,'--run-id','l2bp-' + args.label,'--output',str(out),'--report-file','report.txt'])
+    await_ready(target, False)
     await_ready(stats)
     snapshot('start')
     for phase,duration in [('warmup', args.warmup), ('active',args.duration)]:
@@ -105,14 +108,17 @@ try:
         pool = ThreadPoolExecutor(max_workers=1)
         trigger_future = pool.submit(request, trigger + '/bench/start', body)
         halfway = False
+        observed_phase = False
+        phase_start = time.monotonic()
         while True:
             if time.monotonic() - start > 18: raise RuntimeError('profile run deadline')
             val = request(stats + '/bench/stats')
             with (out / 'stats.jsonl').open('a') as f: f.write(json.dumps(dict(phaseRequested=phase, **val)) + '\n')
-            if phase == 'active' and not halfway:
+            observed_phase |= val.get('phase') == phase
+            if phase == 'active' and observed_phase and not halfway and time.monotonic()-phase_start >= duration/2:
                 snapshot('active')
                 halfway = True
-            if val.get('phase') in ('idle','completed') and trigger_future.done(): break
+            if observed_phase and val.get('phase') in ('idle','completed') and trigger_future.done(): break
             time.sleep(.15)
         (out / (phase + '-trigger.json')).write_text(json.dumps(trigger_future.result()))
         pool.shutdown()
@@ -121,9 +127,13 @@ try:
     print(str(out), flush=True)
 finally:
     for role,p,born in reversed(procs):
-        if p.poll() is None: os.killpg(p.pid, signal.SIGTERM)
+        if p.poll() is None:
+            children = Path(f'/proc/{p.pid}/task/{p.pid}/children').read_text().split()
+            for child in children:
+                try: os.kill(int(child), signal.SIGTERM)
+                except ProcessLookupError: pass
     for role,p,born in procs:
-        try: p.wait(timeout=1)
+        try: p.wait(timeout=20)
         except subprocess.TimeoutExpired: os.killpg(p.pid, signal.SIGKILL); p.wait()
     (out / 'lifecycle.json').write_text(json.dumps({'elapsed':time.monotonic()-start, 'startMonotonicUs':start*1e6,
        'processes':[{'role':role,'pid':p.pid,'returncode':p.returncode} for role,p,_ in procs]},indent=2))
