@@ -5,7 +5,7 @@ param(
     [string]$Mode,
 
     [Parameter(Mandatory = $true)]
-    [string]$InputPath,
+    [string[]]$InputPath,
 
     [Parameter(Mandatory = $true)]
     [string]$OutputPath,
