@@ -80,7 +80,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     private final Map<String, ZLinkJavaRawSpot> spots = new ConcurrentHashMap<>();
     final Map<String, NativeActorStay> actors = new ConcurrentHashMap<>();
     private final Map<SpotAuthorityKey, AuthorityFence> spotAuthorities = new ConcurrentHashMap<>();
-    private final Map<ZLinkBackendActorRef, AuthorityFence> actorAuthorities =
+    private final Map<ZLinkBackendActorRef, RemoteActorAuthority> actorAuthorities =
             new ConcurrentHashMap<>();
     private final AtomicLong nextGeneration = new AtomicLong(1);
     private final AtomicLong nextRequestSequence = new AtomicLong(1);
@@ -570,9 +570,9 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             long ownerLeaseGeneration,
             long targetNodeGeneration) {
         requireActorAuthority(actor, authorityOwnerGeneration, ownerLeaseGeneration);
-        AuthorityFence authority =
-                new AuthorityFence(authorityOwnerGeneration, ownerLeaseGeneration);
         if (routingId().equals(actor.nodeRid())) {
+            AuthorityFence authority =
+                    new AuthorityFence(authorityOwnerGeneration, ownerLeaseGeneration);
             actors.computeIfPresent(
                     actor.actorId(),
                     (id, current) ->
@@ -614,14 +614,15 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                 actor,
                 (key, current) ->
                         authorityAdvanced(current, authorityOwnerGeneration)
-                                ? new AuthorityFence(
+                                ? new RemoteActorAuthority(
                                         authorityOwnerGeneration,
                                         ownerLeaseGeneration,
                                         targetNodeGeneration)
                                 : current);
     }
 
-    private static boolean authorityAdvanced(AuthorityFence current, long observedGeneration) {
+    private static boolean authorityAdvanced(
+            RemoteActorAuthority current, long observedGeneration) {
         return current == null || current.authorityOwnerGeneration() < observedGeneration;
     }
 
@@ -1530,7 +1531,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     private CompletionStage<Void> verifyActorLease(
             StreamBinding route,
             ZLinkAutoConnectPeer descriptor,
-            AuthorityFence current,
+            RemoteActorAuthority current,
             ZLinkLocationRepository repository) {
         return repository
                 .read(ZLinkAuthorityKeyCodec.actor(route.actor().actorId()), () -> false)
@@ -1608,11 +1609,13 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                                                                         route
                                                                                                 .actor(),
                                                                                         current,
-                                                                                        new AuthorityFence(
+                                                                                        new RemoteActorAuthority(
                                                                                                 current
                                                                                                         .authorityOwnerGeneration(),
                                                                                                 descriptor
-                                                                                                        .ownerLeaseGeneration()));
+                                                                                                        .ownerLeaseGeneration(),
+                                                                                                current
+                                                                                                        .targetNodeGeneration()));
                                                                     })
                                                             .thenApply(ignored -> (Void) null));
                         });
@@ -1815,23 +1818,23 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
 
     @Override
     public long actorAuthorityOwnerGeneration(ZLinkBackendActorRef actor) {
-        AuthorityFence fence = actorAuthority(actor);
+        ActorAuthority fence = actorAuthority(actor);
         return fence == null ? 0L : fence.authorityOwnerGeneration();
     }
 
     @Override
     public long actorAuthorityOwnerLeaseGeneration(ZLinkBackendActorRef actor) {
-        AuthorityFence fence = actorAuthority(actor);
+        ActorAuthority fence = actorAuthority(actor);
         return fence == null ? 0L : fence.ownerLeaseGeneration();
     }
 
     long actorAuthorityNodeGeneration(ZLinkBackendActorRef actor) {
         if (routingId().equals(actor.nodeRid())) return owner.lifecycleGeneration();
-        var authority = actorAuthority(actor);
+        var authority = actorAuthorities.get(actor);
         return authority == null ? 0 : authority.targetNodeGeneration();
     }
 
-    private AuthorityFence actorAuthority(ZLinkBackendActorRef actor) {
+    private ActorAuthority actorAuthority(ZLinkBackendActorRef actor) {
         if (routingId().equals(actor.nodeRid())) {
             NativeActorStay stay = nativeActor(actor);
             return stay == null ? null : stay.authority();
@@ -4313,12 +4316,18 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         return target;
     }
 
-    private record AuthorityFence(
-            long authorityOwnerGeneration, long ownerLeaseGeneration, long targetNodeGeneration) {
-        AuthorityFence(long authorityOwnerGeneration, long ownerLeaseGeneration) {
-            this(authorityOwnerGeneration, ownerLeaseGeneration, 0);
-        }
+    private sealed interface ActorAuthority permits AuthorityFence, RemoteActorAuthority {
+        long authorityOwnerGeneration();
+
+        long ownerLeaseGeneration();
     }
+
+    private record AuthorityFence(long authorityOwnerGeneration, long ownerLeaseGeneration)
+            implements ActorAuthority {}
+
+    private record RemoteActorAuthority(
+            long authorityOwnerGeneration, long ownerLeaseGeneration, long targetNodeGeneration)
+            implements ActorAuthority {}
 
     record NativeActorStay(
             ZLinkBackendActorRef actor,

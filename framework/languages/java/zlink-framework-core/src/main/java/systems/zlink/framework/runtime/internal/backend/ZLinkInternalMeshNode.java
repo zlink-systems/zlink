@@ -461,31 +461,14 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
      * relocation controls remain one-way.
      */
     default CompletionStage<byte[]> requestCanonicalRelocationPrepare(
-            RoutingId targetNodeRid, byte[] command, Duration timeout) {
-        return CompletableFuture.failedFuture(
-                new UnsupportedOperationException(
-                        "Canonical relocation prepare request is unavailable"));
-    }
-
-    default CompletionStage<byte[]> requestCanonicalRelocationPrepare(
-            RoutingId targetNodeRid,
-            byte[] command,
-            Duration timeout,
-            java.util.concurrent.CompletableFuture<Void> admission) {
-        return requestCanonicalRelocationPrepare(targetNodeRid, command, timeout, admission, 0);
-    }
-
-    default CompletionStage<byte[]> requestCanonicalRelocationPrepare(
             RoutingId targetNodeRid,
             byte[] command,
             Duration timeout,
             java.util.concurrent.CompletableFuture<Void> admission,
             long targetNodeGeneration) {
-        return requestCanonicalRelocationPrepare(targetNodeRid, command, timeout)
-                .whenComplete(
-                        (reply, failure) -> {
-                            if (failure == null) admission.complete(null);
-                        });
+        return CompletableFuture.failedFuture(
+                new UnsupportedOperationException(
+                        "Canonical relocation prepare request is unavailable"));
     }
 
     default void setActorLeftHandler(ActorLeftHandler handler) {

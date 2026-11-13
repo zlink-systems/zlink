@@ -3470,7 +3470,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                 }
 
                                 return submitted;
-                            });
+                            },
+                            route.targetNodeGeneration());
                     return operation.completion();
                 });
     }
@@ -4074,12 +4075,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
     @Override
     public CompletionStage<byte[]> requestCanonicalRelocationPrepare(
-            RoutingId targetNodeRid, byte[] command, Duration timeout) {
-        return requestCanonicalRelocationPrepare(targetNodeRid, command, timeout, null, 0);
-    }
-
-    @Override
-    public CompletionStage<byte[]> requestCanonicalRelocationPrepare(
             RoutingId targetNodeRid,
             byte[] command,
             Duration timeout,
@@ -4618,15 +4613,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         return requestDurable(
                 targetNodeRid,
                 () -> {
-                    Optional<ZLinkServiceTopologyRegistry.Peer> peer =
-                            topology == null
-                                    ? Optional.empty()
-                                    : topology.peerFromOwner(targetNodeRid);
-                    if (peer.isEmpty()
-                            || localDescriptor == null
-                            || !intent.reservation().targetNodeRid().equals(targetNodeRid)
-                            || intent.reservation().targetNodeGeneration()
-                                    != peer.orElseThrow().descriptor().lifecycleGeneration()) {
+                    if (localDescriptor == null
+                            || !intent.reservation().targetNodeRid().equals(targetNodeRid)) {
                         return null;
                     }
                     var command =
@@ -4646,7 +4634,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 frames ->
                         decodeActorCreate(
                                 correlation, frames.stream().map(Message::toByteArray).toList()),
-                null);
+                null,
+                intent.reservation().targetNodeGeneration());
     }
 
     @Override

@@ -227,6 +227,30 @@ final class ZLinkJavaOwnerDescriptorWaitTest {
         verifyAuthorityWait("actor", removeExpectation);
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void streamBindReadsAuthorityGeneration(boolean removeExpectation) throws Exception {
+        verifyAuthorityWait("stream-bind", removeExpectation);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void exactActorReadsAuthorityGeneration(boolean removeExpectation) throws Exception {
+        verifyAuthorityWait("exact-actor", removeExpectation);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void actorCreateUsesReservationGeneration(boolean removeExpectation) throws Exception {
+        verifyAuthorityWait("actor-create", removeExpectation);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void instanceSpotUsesRouteGeneration(boolean removeExpectation) throws Exception {
+        verifyAuthorityWait("instance-spot", removeExpectation);
+    }
+
     private void verifyAuthorityWait(String path, boolean removeExpectation) throws Exception {
         var clock = new AtomicLong(System.nanoTime());
         try (var fixture = new Fixture(clock::get)) {
@@ -297,6 +321,68 @@ final class ZLinkJavaOwnerDescriptorWaitTest {
                                                     timeout,
                                                     null)
                                             .toCompletableFuture();
+                            case "stream-bind" ->
+                                    spots.bindStreamSession(
+                                                    fixture.source.routingId(),
+                                                    actor,
+                                                    7,
+                                                    1,
+                                                    null,
+                                                    timeout)
+                                            .toCompletableFuture();
+                            case "exact-actor" ->
+                                    spots.requestExactActor(
+                                                    actor,
+                                                    List.of(payload),
+                                                    systems.zlink.contracts.sockets.SendFlags
+                                                            .DONT_WAIT,
+                                                    timeout,
+                                                    null)
+                                            .toCompletableFuture();
+                            case "actor-create" ->
+                                    fixture.source
+                                            .requestActorCreate(
+                                                    fixture.target.routingId(),
+                                                    new ZLinkInternalMeshNode.ActorCreateIntent(
+                                                            "created-actor",
+                                                            "player",
+                                                            new ZLinkServiceM6BWireCodec
+                                                                    .ReservationFence(
+                                                                    "reservation",
+                                                                    "version",
+                                                                    9,
+                                                                    10,
+                                                                    fixture.target.routingId(),
+                                                                    fixture.target
+                                                                            .lifecycleGeneration(),
+                                                                    "owner",
+                                                                    6,
+                                                                    1),
+                                                            18,
+                                                            19,
+                                                            System.currentTimeMillis()
+                                                                    + timeout.toMillis()),
+                                                    timeout)
+                                            .toCompletableFuture();
+                            case "instance-spot" ->
+                                    fixture.source
+                                            .requestInstanceSpot(
+                                                    new ZLinkServiceM6BWireCodec.InstanceRouteFence(
+                                                            fixture.target.routingId(),
+                                                            fixture.target.lifecycleGeneration(),
+                                                            "instance",
+                                                            3,
+                                                            "owner",
+                                                            9,
+                                                            11,
+                                                            "version"),
+                                                    "instance",
+                                                    "source-spot",
+                                                    null,
+                                                    List.of(payload),
+                                                    timeout,
+                                                    null)
+                                            .toCompletableFuture();
                             default -> throw new AssertionError(path);
                         };
             }
@@ -306,6 +392,8 @@ final class ZLinkJavaOwnerDescriptorWaitTest {
                     .toCompletableFuture()
                     .join();
             assertFalse(request.isDone());
+            if (path.equals("actor-create"))
+                assertEquals(1, fixture.source.operationRegistry().pendingCount());
             assertEquals(0, fixture.bindingRequests.get());
             if (removeExpectation) {
                 fixture.source

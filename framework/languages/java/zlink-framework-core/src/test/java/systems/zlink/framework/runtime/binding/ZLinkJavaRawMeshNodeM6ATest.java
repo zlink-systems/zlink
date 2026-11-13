@@ -1685,7 +1685,11 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             assertArrayEquals(
                     command30,
                     source.requestCanonicalRelocationPrepare(
-                                    targetRid, command40, Duration.ofSeconds(2))
+                                    targetRid,
+                                    command40,
+                                    Duration.ofSeconds(2),
+                                    null,
+                                    target.lifecycleGeneration())
                             .toCompletableFuture()
                             .get(2, TimeUnit.SECONDS));
         }
