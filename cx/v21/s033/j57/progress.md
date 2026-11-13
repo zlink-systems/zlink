@@ -46,3 +46,5 @@
 - 동일 JVM owner control: caller CPU 9.90–14.02us/turn·76.28–81.31B/turn, result 1.40–1.49us/turn·6.03–9.29B/turn. Throughput gate 판정 미실행.
 
 - profile c1-L4-send-policy-confirmed: 3bd8756f993ee1f003321f46b68ad21d82ea5dec, dirty=True, scratch cffa8009d3, CPU 6-7,14-15; JAR hash /root/jobs/fx/cx/v21/s033/j57/raw/c1-L4-send-policy-confirmed/fingerprint.json. receive/reply와 추가 비용: call-shape.md.
+
+- 최종 scheduling 감사: 초기 baseline-c1-L4-send(SCHED_IDLE)은 최종 표에서 제외하고 c1-L4-send-policy-confirmed로 교체. 최종 선택 6 run의 source/target start·active 전체 thread는 SCHED_OTHER, CPU 6-7,14-15, 모든 count 일치·errors 0·각 run 20초 미만. raw/final-precommit-verification-v2.json.

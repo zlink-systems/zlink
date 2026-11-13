@@ -5,3 +5,5 @@ C++ 구현: L0·L1 ✓ · L2(요청+응답) fbdcb16e26 ✓ · L3 dd83e75df4 ✓ 
 Java 구현: L0~L1 ✓ · L2(요청+응답) e8721a0776 ✓ · L3 fea12ea97a ✓ · L4 9d9901eb2c ✓ · L5~L7 f3e3933567 ✓ — s4(admission 수정 cffa8009d3 후, errors 0): L5~L7 F÷binding send 0.175·0.305 / serial 0.525·0.488 / bp 0.299·0.238 · L5~L7 손실 vs L4 52·21.3(3회 필요)·31.7·30.6·44.2·27.7% · 큰 손실: L4 JSON(j4json2), L2 bp(l2bp PR)
 Node 구현: L0~L1 ✓ · L2(요청+응답) 2bef18aa94 ✓ · L3 20598f57a2 ✓ · L4 ae8a5178b5 ✓ · L5~L7 7d1afa98a9 ✓ — 측정 완료(lad-node-s1, L0~L4): L4 손실 44~90%(typed JSON) · L3 16~35%(n3sw) · L2 bp 28~29%(l2bp) · L5~L7(DI 수정 c019495a82 후, lad-node-s2): F÷binding send 0.134·0.069 / serial 0.458·0.336 / bp 0.289·0.172 · L5~L7 손실 vs L4 전 셀 통과(+7.4~-30.6%) → Node 손실은 L4(n4json2)·L3(n3sw)·L2(n2net)
 기준: 11-13 binding-rebase는 CPU 분리 미적용으로 무효(Java·.NET 미측정, C++·Node affinity 미기록) — guard v8로 고친 뒤 Java·Node는 각 단계 측정 job 안에서 binding부터 다시 잼
+[23:22Z PM] #4416 머지 뒤 Node L3→L4 6칸 재측정 → 손실 >7%면 수치 + 'byte 값은 toJSON hook 없이 base64' 스펙 변경안을 PM에게(실장님 결정). n4w-scratch 결정까지 보존.
+[23:01Z PM] #4414 머지 뒤 Java·Node L1→L2 6칸 1회 재측정.

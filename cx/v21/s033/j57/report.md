@@ -29,14 +29,14 @@ C++ `62e766f88d`의 L7은 protobuf codec을 끄고 typed JSON DTO를 production 
 
 ## 메시지당 profile
 
-모든 source/target process와 시작한 보조 process는 CPU `6-7,14-15`에 고정했다. async-profiler 4.6 `ctimer=1ms`, `wall=10ms`, `alloc=256KiB`를 사용했다. 아래 네 셀은 `-XX:TieredStopAtLevel=1`, warmup 1초·active 2초이며 source/target의 errors=0, submitted=completed=received다. Run마다 process 수명은 `lifecycle.json`, thread affinity/policy 원본은 `start.json`, `active.json`에 있다. 19초 timeout과 18초 runner 상한을 사용한다.
+모든 source/target process와 시작한 보조 process는 CPU `6-7,14-15`에 고정했다. async-profiler 4.6 `ctimer=1ms`, `wall=10ms`, `alloc=256KiB`를 사용했다. 아래 최종 선택 네 셀은 시작/active thread 관측에서 모두 SCHED_OTHER였다. `-XX:TieredStopAtLevel=1`, warmup 1초·active 2초이며 source/target의 errors=0, submitted=completed=received다. Run마다 process 수명은 `lifecycle.json`, thread affinity/policy 원본은 `start.json`, `active.json`에 있다. 19초 timeout과 18초 runner 상한을 사용한다.
 
 CPU는 compiler/GC/VM thread 표본을 제외한 추정 µs/message다. Allocation은 phase당 고정 SourceMetrics/latency 배열을 제외한 sampled B/message다. Wall은 Framework/bench/binding 호출 stack에서 관측한 thread 시간을 합산한 µs/message이며 왕복 latency가 아니다. 변환 구간은 active 시작부터 source 종료·target drain을 확인한 snapshot까지다. 짧은 JVM 실행과 동시 머신 부하의 영향을 받으므로 모양과 제거되는 비용을 비교한다.
 
 | 패턴·단계(1K) | 역할 | 메시지 수 | CPU µs/msg | 할당 B/msg | wall µs/msg | 근거 |
 |---|---|---:|---:|---:|---:|---|
-| send · L4 | source | 50,294 | 29.98 | 4803 | 350.34 | [raw](raw/baseline-c1-L4-send/costs-full.json) |
-| send · L4 | target | 50,294 | 39.41 | 12385 | 43.35 | [raw](raw/baseline-c1-L4-send/costs-full.json) |
+| send · L4 | source | 35,174 | 39.38 | 4725 | 494.11 | [raw](raw/c1-L4-send-policy-confirmed/costs-symmetric.json) |
+| send · L4 | target | 35,174 | 62.03 | 12685 | 71.08 | [raw](raw/c1-L4-send-policy-confirmed/costs-symmetric.json) |
 | send · L5~L7 | source | 30,214 | 46.37 | 4885 | 590.12 | [raw](raw/c1-before-L57-send/costs-full.json) |
 | send · L5~L7 | target | 30,214 | 92.94 | 15383 | 127.42 | [raw](raw/c1-before-L57-send/costs-full.json) |
 | backpressure · L4 | source | 18,333 | 108.11 | 18203 | 1468.94 | [raw](raw/c1-before-L4-bp/costs-full.json) |
@@ -174,3 +174,5 @@ Framework가 추가하는 실행 자원 전환을 message의 호출 경로에서
 - 리팩토링 점검: source protocol 분리 1건을 수정하고 ResultWork enqueue 중복을 기존 코드 이동으로 방지했다. 넘긴 결함 0, 추가 execution-gate 동기화 0.
 
 남은 항목은 공식 동일 조건에서의 L4/L5~L7 21% budget 재판정이다. 이번 작업에서는 지시대로 measure.lock을 사용하지 않았고 처리량 판정을 하지 않았다. Target generic queue bookkeeping, Spring handler 초기화와 JSON 비용은 profile에 보존했다. 이 비용을 scope 공유·serializer 등록·timeout 증가로 우회하지 않았다. Core unit test와 format의 남은 실패는 없다.
+
+최종 scheduling 감사에서 초기 L4 send 진단 `baseline-c1-L4-send`의 관측 정책이 SCHED_IDLE임을 확인했다. 그 자료는 raw에 보존하고 최종 L4 표에서 제외했다. 같은 호출·JAR·CPU 조건의 `c1-L4-send-policy-confirmed`를 새로 실행해 count 일치·errors 0·시작/active 전체 thread SCHED_OTHER를 확인했다. L5~L7 전후 네 실행도 두 snapshot에서 모두 SCHED_OTHER였다. 정책을 강제로 바꾸거나 measure.lock을 취득하지 않았다.

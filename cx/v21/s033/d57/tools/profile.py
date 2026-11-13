@@ -88,8 +88,8 @@ try:
     manifest['active_stop_utc']=time.time()
     after={role:counters(p) for role,p in [('source',source),('target',target)]}
     (out/'process-counters.json').write_text(json.dumps(dict(before=before,after=after),indent=2))
-    for p in traces: p.wait(timeout=max(.1,18-(time.monotonic()-started)))
     for role,port in [('source',15206),('target',15215)]: (out/(role+'-stats.json')).write_text(json.dumps(request(port),indent=2))
+    for p in traces: p.wait(timeout=max(.1,18-(time.monotonic()-started)))
     for role,p in [('source',source),('target',target)]:
         for prefix,suffix in [('perf-','.map'),('perfinfo-','.map'),('jit-','.dump')]:
             f=pathlib.Path('/tmp')/(prefix+str(p.pid)+suffix)
