@@ -65,8 +65,7 @@ final class StartupFailureTest {
     @Test
     void successfulRefreshWaitsForRuntimeStartup() {
         try (var context =
-                context(
-                        new ZLinkInMemoryProviderLocationStore(), "inproc://startup-ready", null)) {
+                context(new ZLinkInMemoryProviderLocationStore(), "inproc://startup-ready", null)) {
             context.refresh();
             assertTrue(context.getBean(ZLinkFrameworkRuntime.class).isReady());
         }
