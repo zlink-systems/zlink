@@ -14,14 +14,16 @@ class ladder_driver_t final : public driver_t
             _owner->ablation_start ();
             _socket = &_owner->ablation_socket ();
         } else {
-            _raw_socket = std::make_unique<zlink::router_socket_t> (_context);
+            _context = std::make_unique<zlink::context_t> ();
+            _poller = std::make_unique<zlink::poller_t> ();
+            _raw_socket = std::make_unique<zlink::router_socket_t> (*_context);
             _socket = _raw_socket.get ();
             _socket->set_routing_id (rid);
             _socket->bind ("tcp://127.0.0.1:0");
-            _poller.add (*_socket, zlink::poll_event_flag_t::pollin
+            _poller->add (*_socket, zlink::poll_event_flag_t::pollin
                                  | zlink::poll_event_flag_t::pollcompletion, 1);
+            _local = ladder::descriptor (rid, _socket->options ().last_endpoint ());
         }
-        _local = ladder::descriptor (rid, _socket->options ().last_endpoint ());
         _socket->connect (options.framework_endpoint);
         prepare_streams (stream_count ());
         std::fprintf (stderr, "#4350 source L%d: %s\n", level,
@@ -31,13 +33,13 @@ class ladder_driver_t final : public driver_t
             pthread_setname_np (pthread_self (), "ladder-binding");
             try {
                 if (_owner) {
-                    _owner->ablation_receive (_stop, [] (void *state, zlink::received_t &received) {
-                        static_cast<ladder_driver_t *> (state)->receive_control (received);
-                    }, this);
+                    zlink::poll_event_t event{};
+                    while (!_stop)
+                        _owner->ablation_poller ().wait (&event, 1, std::chrono::milliseconds (50));
                 } else {
                     while (!_stop) {
                         zlink::poll_event_t event{};
-                        if (!_poller.wait (&event, 1, std::chrono::milliseconds (50)))
+                        if (!_poller->wait (&event, 1, std::chrono::milliseconds (50)))
                             continue;
                         zlink::received_t received;
                         while (_socket->recv (received, zlink::recv_flags_t::dontwait) == 0)
@@ -102,31 +104,29 @@ class ladder_driver_t final : public driver_t
     void prepare_streams (int count) override
     {
         _encoders.clear ();
+        if (_level == 0)
+            return;
         for (int i = 0; i < count; ++i)
             _encoders.emplace_back (std::make_unique<ladder::encoder_t> (_level));
     }
     void submit (std::shared_ptr<stream_t> stream, int index, uint64_t seq) override
     {
+        if (_level == 0) {
+            submit_raw (*_socket, _target, std::move (stream), seq);
+            return;
+        }
         auto parts = _encoders[index]->encode (stream->size, stream->run_id, stream->phase, seq, _command);
         if (_command) {
-            auto submission = [&] {
-                if (_owner)
-                    return _owner->ablation_send (_target, parts);
-                return _socket->send (_target).message (parts[0]).message (parts[1]).async ();
-            } ();
+            auto submission = _socket->send (_target).message (parts[0]).message (parts[1]).async ();
             observe_binding (std::move (submission.admitted),
               [stream, seq] { stream->finish (0, nullptr, seq); stream->admit (); },
               [stream, seq] (const auto &error) {
                   stream->finish (0, nullptr, seq, &error); stream->admit (false);
               });
         } else {
-            auto submission = [&] {
-                const auto timeout = std::chrono::milliseconds (_options.request_timeout_ms);
-                if (_owner)
-                    return _owner->ablation_request (_target, parts, timeout);
-                return _socket->request (_target).message (parts[0]).message (parts[1])
-                  .timeout (timeout).async ();
-            } ();
+            const auto timeout = std::chrono::milliseconds (_options.request_timeout_ms);
+            auto submission = _socket->request (_target).message (parts[0]).message (parts[1])
+              .timeout (timeout).async ();
             const auto level = _level;
             observe_binding (std::move (submission.reply),
               [stream, seq, level] (const auto &reply) {
@@ -165,13 +165,13 @@ class ladder_driver_t final : public driver_t
         }
     }
     int _level;
-    zlink::context_t _context;
+    std::unique_ptr<zlink::context_t> _context;
     std::unique_ptr<ladder::fw::runtime::mesh::raw_mesh_node_owner_t> _owner;
     std::unique_ptr<zlink::router_socket_t> _raw_socket;
     zlink::router_socket_t *_socket = nullptr;
     zlink::routing_id_t _target;
     ladder::fw::runtime::mesh::service_node_descriptor_t _local;
-    zlink::poller_t _poller;
+    std::unique_ptr<zlink::poller_t> _poller;
     std::atomic<bool> _stop{false}, _admitted{false}, _failed{false};
     std::thread _completion_thread;
     std::vector<std::unique_ptr<ladder::encoder_t>> _encoders;

@@ -515,53 +515,25 @@ raw_mesh_node_owner_t::~raw_mesh_node_owner_t () noexcept
 void raw_mesh_node_owner_t::ablation_start ()
 {
     start ();
-    // No writable/route rotation in L0..L4. Binding drains its completions
-    // from this same poller; the Framework port and wake timer remain idle.
-    _ingress_poller->modify (*_router, zlink::poll_event_flag_t::pollin
-                                      | zlink::poll_event_flag_t::pollcompletion);
+    // L0 source waits for binding completions, exactly like the raw client.
+    // The target receives directly from the socket, exactly like the raw server.
+    _ingress_poller->modify (*_router, zlink::poll_event_flag_t::pollcompletion);
 }
 
 zlink::router_socket_t &raw_mesh_node_owner_t::ablation_socket () { return *_router; }
-
-zlink::send_submission_t raw_mesh_node_owner_t::ablation_send (
-  const zlink::routing_id_t &target, std::span<zlink::message_t> parts)
-{
-    auto operation = _router->send (target).message (parts[0]);
-    for (std::size_t i = 1; i < parts.size (); ++i)
-        std::move (operation).message (parts[i]);
-    return std::move (operation).async ();
-}
-
-zlink::request_submission_t raw_mesh_node_owner_t::ablation_request (
-  const zlink::routing_id_t &target, std::span<zlink::message_t> parts,
-  std::chrono::milliseconds timeout)
-{
-    auto operation = _router->request (target).message (parts[0]);
-    for (std::size_t i = 1; i < parts.size (); ++i)
-        std::move (operation).message (parts[i]);
-    return std::move (operation).timeout (timeout).async ();
-}
+zlink::poller_t &raw_mesh_node_owner_t::ablation_poller () { return *_ingress_poller; }
 
 void raw_mesh_node_owner_t::ablation_receive (
   std::atomic<bool> &stop, void (*handler) (void *, zlink::received_t &), void *state)
 {
     zlink::received_t received;
-    while (!stop.load (std::memory_order_relaxed)) {
-        zlink::poll_event_t event{};
-        if (!_ingress_poller->wait (&event, 1, std::chrono::milliseconds (50)))
+    while (!stop.load ()) {
+        const int rc = _router->recv (received, zlink::recv_flags_t::none);
+        if (rc != 0) {
+            std::this_thread::sleep_for (std::chrono::microseconds (50));
             continue;
-        if ((static_cast<short> (event.revents)
-             & static_cast<short> (zlink::poll_event_flag_t::pollin)) == 0)
-            continue;
-        while (true) {
-            const int rc = _router->recv (received, zlink::recv_flags_t::dontwait);
-            if (rc == static_cast<int> (zlink::recv_result_t::no_data)
-                || (rc == -1 && errno == EAGAIN))
-                break;
-            if (rc != 0)
-                throw std::runtime_error ("L0 owner receive failed: " + std::to_string (rc));
-            handler (state, received);
         }
+        handler (state, received);
     }
 }
 #endif

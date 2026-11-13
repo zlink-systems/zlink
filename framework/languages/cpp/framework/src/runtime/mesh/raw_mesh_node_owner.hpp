@@ -158,11 +158,7 @@ class raw_mesh_node_owner_t
     // L5 restores the standard lane/mailbox/worker entry points instead.
     void ablation_start ();
     zlink::router_socket_t &ablation_socket ();
-    zlink::send_submission_t ablation_send (const zlink::routing_id_t &target,
-                                           std::span<zlink::message_t> parts);
-    zlink::request_submission_t ablation_request (const zlink::routing_id_t &target,
-                                                 std::span<zlink::message_t> parts,
-                                                 std::chrono::milliseconds timeout);
+    zlink::poller_t &ablation_poller ();
     void ablation_receive (std::atomic<bool> &stop,
                            void (*handler) (void *, zlink::received_t &), void *state);
 #endif

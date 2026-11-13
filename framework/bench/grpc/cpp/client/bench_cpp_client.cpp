@@ -451,6 +451,39 @@ class driver_t
         stamp_payload (payload.mutable_body ()->data (), size, _run_id, phase, sequence);
         return payload;
     }
+    // Raw and L0 use one payload/Message lifetime and binding submission path.
+    void submit_raw (zlink::router_socket_t &socket, const zlink::routing_id_t &target,
+                     std::shared_ptr<stream_t> stream, uint64_t seq)
+    {
+        const char *envelope = request_envelope ();
+        auto header = zlink::message_t::from (std::as_bytes (
+          std::span<const char> (envelope, std::strlen (envelope))));
+        const auto encoded = encode_bench_payload (make_payload (stream->size, stream->phase, seq));
+        auto body = zlink::message_t::from (std::as_bytes (
+          std::span<const char> (encoded.data (), encoded.size ())));
+        if (_command) {
+            auto submission = socket.send (target).message (header).message (body).async ();
+            observe_binding (std::move (submission.admitted),
+              [stream, seq] { stream->finish (0, nullptr, seq); stream->admit (); },
+              [stream, seq] (const auto &error) { stream->finish (0, nullptr, seq, &error); stream->admit (false); });
+        } else {
+            auto submission = socket.request (target).message (header).message (body)
+              .timeout (std::chrono::milliseconds (_options.request_timeout_ms)).async ();
+            observe_binding (std::move (submission.reply),
+              [stream, seq] (const auto &parts) {
+                  payload_t reply;
+                  if (parts.empty () || !reply.ParseFromArray (parts.back ().data (), static_cast<int> (parts.back ().size ()))) {
+                      const std::runtime_error error ("invalid raw reply protobuf");
+                      stream->finish (0, nullptr, seq, &error);
+                  } else
+                      stream->finish (0, &reply, seq);
+              },
+              [stream, seq] (const auto &error) { stream->finish (0, nullptr, seq, &error); });
+            observe_binding (std::move (submission.admitted),
+              [stream] { stream->admit (); },
+              [stream] (const auto &) { stream->admit (false); });
+        }
+    }
     virtual void prepare_streams (int) {}
     virtual void submit (std::shared_ptr<stream_t> stream, int index, uint64_t seq) = 0;
     const options_t &_options;
@@ -617,34 +650,7 @@ class zlink_raw_driver_t final : public driver_t
   private:
     void submit (std::shared_ptr<stream_t> stream, int, uint64_t seq) override
     {
-        const char *envelope = request_envelope ();
-        auto header = zlink::message_t::from (std::as_bytes (
-          std::span<const char> (envelope, std::strlen (envelope))));
-        const auto encoded = encode_bench_payload (make_payload (stream->size, stream->phase, seq));
-        auto body = zlink::message_t::from (std::as_bytes (
-          std::span<const char> (encoded.data (), encoded.size ())));
-        if (_command) {
-            auto submission = _socket.send (_target).message (header).message (body).async ();
-            observe_binding (std::move (submission.admitted),
-              [stream, seq] { stream->finish (0, nullptr, seq); stream->admit (); },
-              [stream, seq] (const auto &error) { stream->finish (0, nullptr, seq, &error); stream->admit (false); });
-        } else {
-            auto submission = _socket.request (_target).message (header).message (body)
-              .timeout (std::chrono::milliseconds (_options.request_timeout_ms)).async ();
-            observe_binding (std::move (submission.reply),
-              [stream, seq] (const auto &parts) {
-                  payload_t reply;
-                  if (parts.empty () || !reply.ParseFromArray (parts.back ().data (), static_cast<int> (parts.back ().size ()))) {
-                      const std::runtime_error error ("invalid raw reply protobuf");
-                      stream->finish (0, nullptr, seq, &error);
-                  } else
-                      stream->finish (0, &reply, seq);
-              },
-              [stream, seq] (const auto &error) { stream->finish (0, nullptr, seq, &error); });
-            observe_binding (std::move (submission.admitted),
-              [stream] { stream->admit (); },
-              [stream] (const auto &) { stream->admit (false); });
-        }
+        submit_raw (_socket, _target, std::move (stream), seq);
     }
     zlink::context_t _context;
     zlink::router_socket_t _socket;
