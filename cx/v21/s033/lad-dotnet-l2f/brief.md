@@ -1,0 +1,14 @@
+Model gpt-6-luna, effort high. Earlier job briefs are history, not instructions.
+
+# Task: .NET ladder L2 reply envelope — review fixes + unexplained test stall. IMPLEMENTATION/TESTS ONLY, NO MEASUREMENT. EXPERIMENT BRANCH ONLY.
+
+Worktree /root/worktree/zlink-v21-s033/lad-dotnet, branch exp/4350-dotnet-ladder, tip a03bf0bfe0. New L2 reply commit 638211bbd3 (lad-dotnet-l2r/report.md). Commit locally only; never push, never open a PR, no GitHub, no sub-agents or other AI tools, never run internal-docs.sh. Do NOT take /root/jobs/fx/cx/measure.lock, run no benchmark or load. Never delete raw files. Read /root/jobs/fx/cx/v21/s033/common-rules.md and ladder-steps.md first.
+
+## Review findings on 638211bbd3 (ReplyL2 in framework/bench/grpc/dotnet/ZLinkServer/Program.cs)
+1. Production (ZLinkChannelRequestDispatchPipeline.cs:132-143) calls CreateReplyHeader(Response, channelName, header, endpoint.ReplyHeader): a PREPARED reply header built once per endpoint, then one `prepared with { ChannelName, CorrelationId }` per reply. The bench passes no prepared header and then does a second `with { ContentType = ... }`, i.e. two header records per reply that production does not make. Build the prepared reply header once at server start the way production builds endpoint.ReplyHeader (trace where ReplyHeader is created, file:line, and use the same constructor/content type), and pass it as `prepared`.
+2. The channel name is the literal "bench"; production uses the request's channel name. Use the request header's channel name (as production's channelName), so the encoded bytes match production.
+3. The report says the L2 BoundaryTests request-backpressure case stalled for over 2 minutes and was killed, and the tip run lists only serial/window/send-saturation. This is unexplained. Find the cause: run request-backpressure at L1 (2590b2a030's parent build config), L2 and the tip with a time limit, collect a stack dump of the stalled process (dotnet-stack or dotnet-dump if available, else createdump) before stopping it, and compare. If the L2 reply path causes it (e.g. reply parts or correlation the client rejects under backpressure, or an exception path that drops a reply), fix it in the L2 commit. If it also stalls at L1/L0, report that with evidence and do not change behaviour beyond L2.
+Apply fixes 1-2 (and 3 if it is in L2) as a fixup into the L2 commit and replay L3/L4/L5~L7 on top (git rebase non-interactive; autosquash via GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash is fine). Build Release at L2 and at the tip; run WireTests and ALL BoundaryTests cases (including request-backpressure) at L2 and at the tip.
+
+## Output
+/root/jobs/fx/cx/v21/s033/lad-dotnet-l2f/report.md (Korean, short): prepared reply header source file:line, bench file:line, stall cause with stack evidence (raw/), old→new commit map, build/test evidence. Time cap 2 h.

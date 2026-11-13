@@ -57,7 +57,7 @@ one_run() {
     mkdir -p "$out"
     snapshot
     meta="$BUILD_META"
-    printf -- '- %s %s-%s %s built{%s}; receive{binding=zlink-raw-server/main.js:61-119,132-142 DontWait batch pump; L0=zlink-framework-server/main.js:63-155,228-242} reply{binding=zlink-raw-server/main.js:77-86; L0=zlink-framework-server/main.js:107-120}; costs{binding path retains one native receive pattern, existing completion, metrics, allocations and copies; no Framework permit}; raw=%s\n' "$LANG" "$pattern" "$size" "$kind" "$meta" "$out" >> "$PROGRESS"
+    printf -- '- %s %s-%s %s built{%s}; receive{binding=zlink-raw-server/main.js:61-119,132-142 DontWait batch pump; L0=zlink-framework-server/main.js:63-155,228-242} reply{binding=zlink-raw-server/main.js:77-86; L0=zlink-framework-server/main.js:107-120}; costs{per message binding/L0: reused Received, DontWait batch pump up to 256 + setImmediate, request operation/completion promise, new envelope/body and reply operation/body; JS atomics 0; L1 alone adds queue permit wait}; raw=%s\n' "$LANG" "$pattern" "$size" "$kind" "$meta" "$out" >> "$PROGRESS"
     RUN_STAMP="4350-binding-${LANG}-${pattern}-${size}-${stage}-$(date -u +%Y%m%dT%H%M%SZ)"
     "$TOOLS/run-one-binding.sh" "$pattern" "$size" "$out" "$RUN_STAMP" "$WARMUP"
     result="$out/run1/${IMPL}-${pattern}-${size}/results.json"
@@ -75,7 +75,9 @@ assert all(c.get(k,0)==0 for k in ('errors','server_errors')) and c['target_stat
 assert c['submitted']==c['completed']==c['target_stats']['received']
 assert all(f'cpu{cpu}.state{state}.disable_at_run_start=1' in t for cpu in (0,8) for state in (2,3))
 for phase in ('source_start','target_start','mid_active_source','mid_active_target'):
- assert f'{phase}_current scheduling policy: SCHED_OTHER' in t, f'missing/non-OTHER {phase}: {s}'
+ assert f'{phase}_tid=' in t, f'missing scheduling snapshot {phase}: {s}'
+policies=[line for line in t.splitlines() if 'current scheduling policy:' in line]
+assert policies and all('current scheduling policy: SCHED_OTHER' in line for line in policies), f'non-OTHER thread: {s}'
 assert 'scheduling_invalid=' not in t
 print(c['throughput_per_second'])
 CHECK

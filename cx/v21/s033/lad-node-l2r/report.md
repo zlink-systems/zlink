@@ -1,4 +1,4 @@
-# Node ladder L2R
+# Node ladder L2 reply 복원
 
 - Production reply encode: `channel-dispatchers.ts:409-412` → `channel-envelope.ts:217-237`; completion header parse: `channel-outbound-operations.ts:244-248,519-523` → `decodeChannelReply()` `channel-envelope.ts:321-330` → `decodeChannelHeader()` `:889-897`.
 - Bench target reply: `zlink-framework-server/main.js:197-212`, codec adapter `shared/raw-wire.js:103-119`; source parse once: L2 commit `client/main.js:259-271`, parser adapter `shared/raw-wire.js:99-100`.

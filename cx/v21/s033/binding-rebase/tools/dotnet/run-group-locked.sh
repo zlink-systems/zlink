@@ -57,7 +57,7 @@ one_run() {
     mkdir -p "$out"
     snapshot
     meta="$BUILD_META"
-    printf -- '- %s %s-%s %s built{%s}; receive{binding=ZLinkRawServer/Program.cs:64-76,119-137 Recv(None); L0=ZLinkServer/Program.cs:140-159} reply{binding=ZLinkRawServer/Program.cs:74-85,103-109; L0=ZLinkServer/Program.cs:148-159}; costs{binding path retains one native receive pattern, existing completion, metrics, allocations and copies; no Framework permit}; raw=%s\n' "$LANG" "$pattern" "$size" "$kind" "$meta" "$out" >> "$PROGRESS"
+    printf -- '- %s %s-%s %s built{%s}; receive{binding=ZLinkRawServer/Program.cs:64-76,119-137 Recv(None); L0=ZLinkServer/Program.cs:140-159} reply{binding=ZLinkRawServer/Program.cs:74-85,103-109; L0=ZLinkServer/Program.cs:148-159}; costs{per message binding: source admission/completion wait + 1 blocking Recv, source header/body Messages, target payload/reply body/header, protobuf request/reply writes, existing metrics; L0 adds permit acquire/lease allocation and one Interlocked.Exchange}; raw=%s\n' "$LANG" "$pattern" "$size" "$kind" "$meta" "$out" >> "$PROGRESS"
     RUN_STAMP="4350-binding-${LANG}-${pattern}-${size}-${stage}-$(date -u +%Y%m%dT%H%M%SZ)"
     "$TOOLS/run-one-binding.sh" "$pattern" "$size" "$out" "$RUN_STAMP" "$WARMUP"
     result="$out/run1/${IMPL}-${pattern}-${size}/results.json"
@@ -75,7 +75,9 @@ assert all(c.get(k,0)==0 for k in ('errors','server_errors')) and c['target_stat
 assert c['submitted']==c['completed']==c['target_stats']['received']
 assert all(f'cpu{cpu}.state{state}.disable_at_run_start=1' in t for cpu in (0,8) for state in (2,3))
 for phase in ('source_start','target_start','mid_active_source','mid_active_target'):
- assert f'{phase}_current scheduling policy: SCHED_OTHER' in t, f'missing/non-OTHER {phase}: {s}'
+ assert f'{phase}_tid=' in t, f'missing scheduling snapshot {phase}: {s}'
+policies=[line for line in t.splitlines() if 'current scheduling policy:' in line]
+assert policies and all('current scheduling policy: SCHED_OTHER' in line for line in policies), f'non-OTHER thread: {s}'
 assert 'scheduling_invalid=' not in t
 print(c['throughput_per_second'])
 CHECK

@@ -28,7 +28,11 @@ report=JOB/'report.md'
 with report.open('a') as f:
  for key,item in cells.items():
   old_value=old.get(key)
-  old_text='—' if old_value is None else str(old_value)
+  if old_value is None: old_text='—'
+  else:
+   value,paths=old_value
+   citations=' '.join(f'[raw{i+1}]({path})' for i,path in enumerate(paths))
+   old_text=f'{value} ({citations})'
   f.write(f"  | {LANG} | {key} | {item['msg_s']} | {old_text} | [raw]({item['raw']}) |\n")
  f.write('\n')
 print(DAILY)
