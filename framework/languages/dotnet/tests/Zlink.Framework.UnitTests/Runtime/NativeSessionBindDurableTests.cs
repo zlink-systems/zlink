@@ -13,6 +13,203 @@ namespace Zlink.Framework.UnitTests;
 public sealed partial class StatefulServiceRuntimeTests
 {
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ApplicationRequest_OtherGenerationAdmittedPeerPreservesTerminalWithoutSubmission(
+        bool actorRequest,
+        bool authorityChanged
+    )
+    {
+        var time = new ControllableTimeProvider();
+        await using var native = Systems.Zlink.Zlink.CreateContext();
+        var context = new MeshNodeShutdownSealTests.CanonicalRequestContext(native);
+        await using var source = new ZLinkManagedMeshNode(
+            context,
+            "mesh",
+            deadlineTimeProvider: time,
+            receivePollerFactory: () =>
+                new MeshNodeShutdownSealTests.CanonicalRequestPoller(
+                    Systems.Zlink.Zlink.CreatePoller()
+                )
+        );
+        source.SetRoutingId(RoutingId.From("application-authority-source"));
+        var target = RoutingId.From("application-authority-target");
+        var endpoint = $"inproc://application-authority-{Guid.NewGuid():N}";
+        const ulong olderGeneration = 7;
+        const ulong targetGeneration = 11;
+        var actor = new ActorRef("authority-actor", 1, "mesh", target);
+        source.ObserveActorAuthority(actor, targetGeneration, 1, 1);
+        source.ObserveSpotAuthority(target, "authority-spot", 1, targetGeneration, 1, 1);
+        source.SetPeerExpectation(
+            target,
+            endpoint,
+            ZLinkServiceSecurityIdentity.Plaintext,
+            targetGeneration
+        );
+        var completed = new TaskCompletionSource<MeshReceiveRecord>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        source.SetCompletionHandlerCore(
+            (record, parts) =>
+            {
+                Assert.Empty(parts);
+                completed.TrySetResult(record);
+                return true;
+            }
+        );
+        source.Start();
+        await source._lane.RunAsync(() =>
+            source._peersByRid.Add(
+                target,
+                new ZLinkMeshPeer(1)
+                {
+                    RoutingId = target,
+                    LifecycleGeneration = olderGeneration,
+                    Admitted = true,
+                    State = MeshPeerState.Admitted,
+                }
+            )
+        );
+        using var payload = Message.From(new byte[] { 1 });
+        var timeout = TimeSpan.FromSeconds(2);
+        MeshOperationId operation;
+        var submitted = actorRequest
+            ? source.RequestToActor(actor, [payload], out operation, timeout)
+            : source.RequestToSpot(
+                "source-spot",
+                target,
+                "authority-spot",
+                1,
+                [payload],
+                out operation,
+                timeout,
+                SendFlags.None,
+                default
+            );
+        Assert.Equal(SubmitResult.Ok, submitted);
+        Assert.False(completed.Task.IsCompleted);
+        Assert.Equal(0, context.NativeRequests);
+        Assert.Empty(context.Submissions);
+        Assert.Equal(1, source.PendingOperationCount);
+        if (authorityChanged)
+            source.RemovePeerExpectation(target, endpoint);
+        else
+            time.AdvanceMonotonic(timeout);
+        var completion = await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(operation, completion.OperationId);
+        Assert.Equal(
+            (int)(authorityChanged ? RequestResult.NotConnected : RequestResult.TimedOut),
+            completion.TerminalResult
+        );
+        Assert.Equal(0, context.NativeRequests);
+        Assert.Empty(context.Submissions);
+        Assert.Equal(0, source.PendingOperationCount);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ActorSend_AuthorityPrecedesRoute(bool hasAuthority, bool olderPeer)
+    {
+        await using var native = Systems.Zlink.Zlink.CreateContext();
+        await using var source = NewNode(native, "actor-send-authority-source");
+        var target = RoutingId.From("actor-send-authority-target");
+        var actor = new ActorRef("authority-actor", 1, "mesh", target);
+        if (hasAuthority)
+            source.ObserveActorAuthority(actor, 11, 1, 1);
+        source.Start();
+        if (olderPeer)
+            await source._lane.RunAsync(() =>
+                source._peersByRid.Add(
+                    target,
+                    new ZLinkMeshPeer(1)
+                    {
+                        RoutingId = target,
+                        LifecycleGeneration = 7,
+                        Admitted = true,
+                        State = MeshPeerState.Admitted,
+                    }
+                )
+            );
+        using var payload = Message.From(new byte[] { 1 });
+        Assert.Equal(
+            hasAuthority ? SubmitResult.NotConnected : SubmitResult.NotFound,
+            source.SendToActor(actor, [payload])
+        );
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(true, true, true)]
+    public async Task DirectSend_AuthorityPrecedesRoute(
+        bool actorSend,
+        bool hasAuthority,
+        bool olderPeer
+    )
+    {
+        await using var native = Systems.Zlink.Zlink.CreateContext();
+        await using var source = NewNode(native, "actor-send-authority-source");
+        var target = RoutingId.From("actor-send-authority-target");
+        var actor = new ActorRef("authority-actor", 1, "mesh", target);
+        if (hasAuthority)
+        {
+            source.ObserveActorAuthority(actor, 11, 1, 1);
+            source.ObserveSpotAuthority(target, "authority-spot", 1, 11, 1, 1);
+        }
+        source.Start();
+        if (olderPeer)
+            await source._lane.RunAsync(() =>
+                source._peersByRid.Add(
+                    target,
+                    new ZLinkMeshPeer(1)
+                    {
+                        RoutingId = target,
+                        LifecycleGeneration = 7,
+                        Admitted = true,
+                        State = MeshPeerState.Admitted,
+                    }
+                )
+            );
+        using var payload = Message.From(new byte[] { 1 });
+        var error = await Assert.ThrowsAsync<ZlinkSubmitException>(() =>
+            actorSend
+                ? source
+                    .SendToActorDirectAsync(
+                        actor,
+                        [payload],
+                        SendFlags.None,
+                        CancellationToken.None
+                    )
+                    .AsTask()
+                : source
+                    .SendToSpotDirectAsync(
+                        "source-spot",
+                        target,
+                        "authority-spot",
+                        1,
+                        [payload],
+                        SendFlags.None,
+                        default,
+                        CancellationToken.None
+                    )
+                    .AsTask()
+        );
+        Assert.Equal(
+            hasAuthority
+                ? ZlinkSubmitException.ErrorCode.NotConnected
+                : ZlinkSubmitException.ErrorCode.NotFound,
+            error.Result
+        );
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task InfrastructureAdmission_WaitsForAuthorityLifecycleDescriptor(bool olderPeer)
