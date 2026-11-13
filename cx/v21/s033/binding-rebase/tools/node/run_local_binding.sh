@@ -48,9 +48,29 @@ binding_sched_snapshot() {
   { printf '\n%s_utc=%s\n%s_pid=%s\n' "$label" "$(date -u +%FT%TZ)" "$label" "$root_pid"; } >> "$BINDING_SCHED_FILE"
   record_sched_process "$root_pid"
 }
+binding_process_split_ok() {
+  local pid="$1" expected="$2" tid actual child
+  [[ -r /proc/"$pid"/status ]] || return 0
+  for task in /proc/"$pid"/task/*; do
+    [[ -d "$task" ]] || continue
+    tid="${task##*/}"
+    actual="$(awk '/^Cpus_allowed_list:/ {print $2}' "$task/status" 2>/dev/null || true)"
+    [[ "$actual" == "$expected" ]] || return 1
+  done
+  for child in $(pgrep -P "$pid" 2>/dev/null || true); do binding_process_split_ok "$child" "$expected" || return 1; done
+}
+binding_wait_for_cpu_split() {
+  local ready=0
+  for _ in $(seq 1 120); do
+    if binding_process_split_ok "$BINDING_SOURCE_PID" '0-5' && binding_process_split_ok "$BINDING_TARGET_PID" '8-13'; then ready=1; break; fi
+    sleep 0.25
+  done
+  [[ "$ready" == 1 ]] || { echo 'quiet guard did not narrow source/target CPU affinity to 0-5 / 8-13 before warmup' >&2; return 1; }
+}
 binding_sched_start() {
   local cpu state val
   : > "$BINDING_SCHED_FILE"
+  binding_wait_for_cpu_split
   printf 'run_start_utc=%s\n' "$(date -u +%FT%TZ)" >> "$BINDING_SCHED_FILE"
   for cpu in 0 8; do for state in 2 3; do
     val="$(cat "/sys/devices/system/cpu/cpu${cpu}/cpuidle/state${state}/disable" 2>/dev/null || echo unavailable)"

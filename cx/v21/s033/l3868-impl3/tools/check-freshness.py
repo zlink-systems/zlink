@@ -1,13 +1,32 @@
-import datetime, hashlib, json, pathlib, subprocess, sys
+import datetime, hashlib, json, pathlib, shlex, subprocess, sys
 root = pathlib.Path('/root/worktree/zlink-v21-s033/l3868-next')
 build = root / 'build-l3868-next'
 # Ninja records every transitive source/header input of each compiled object.
 records = []
+recorded = {}
+current = None
+for line in subprocess.check_output(['ninja', '-C', str(build), '-t', 'deps'], text=True).splitlines():
+    if ': #deps ' in line:
+        current = line.split(': #deps ', 1)[0]
+        recorded[current] = []
+    elif line.startswith('    ') and current:
+        recorded[current].append(line.strip())
 for binary in ('bench_cpp_client', 'bench_cpp_zlink_server', 'bench_cpp_framework_server',
                'bench_cpp_grpc_server', 'bench_cpp_ladder_contract_test'):
     deps = subprocess.check_output(['ninja', '-C', str(build), '-t', 'inputs', binary], text=True)
-    inputs = sorted({(build / line.strip()).resolve() for line in deps.splitlines() if line.strip()})
-    inputs = [path for path in inputs if path.is_file()]
+    inputs = {(build / line.strip()).resolve() for line in deps.splitlines() if line.strip()}
+    commands = subprocess.check_output(['ninja', '-C', str(build), '-t', 'commands', binary], text=True)
+    objects = set()
+    for command in commands.splitlines():
+        arguments = shlex.split(command)
+        for index, argument in enumerate(arguments[:-1]):
+            if argument == '-o' and arguments[index + 1].endswith('.o'):
+                objects.add(arguments[index + 1])
+    assert objects, binary
+    for obj in objects:
+        assert obj in recorded, f'missing header dependency record: {obj}'
+        inputs.update((build / header).resolve() for header in recorded[obj])
+    inputs = [path for path in sorted(inputs) if path.is_file()]
     newest = max(inputs, key=lambda path: path.stat().st_mtime_ns)
     artifact = build / binary
     record = dict(binary=str(artifact), sha256=hashlib.sha256(artifact.read_bytes()).hexdigest(),
