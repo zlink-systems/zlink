@@ -4,6 +4,7 @@ ROOT = pathlib.Path('/root/worktree/zlink-v21-s033/n3sw-scratch')
 JOB = pathlib.Path('/root/jobs/fx/cx/v21/s033/n3sw')
 BENCH = ROOT / 'framework/bench/grpc/node'
 CPUS = '6-7,14-15'
+NATIVE = os.environ.get('N3SW_NATIVE') == '1'
 level, pattern, size, label = sys.argv[1:]
 size = int(size)
 out = JOB / 'raw' / label
@@ -17,10 +18,10 @@ for a in artifacts[:2]:
 def git(*args): return subprocess.check_output(['git',*args],cwd=ROOT,text=True).strip()
 metadata = dict(head=git('rev-parse','HEAD'),base=git('merge-base','HEAD','origin/main'),
                 dirty=git('status','--short'),artifacts={str(a):hashlib.sha256(a.read_bytes()).hexdigest() for a in artifacts},
-                cpus=CPUS,method='profiling only; no measure.lock; durations <=20s; absolute numbers noisy')
+                cpus=CPUS,native_service_writer=NATIVE,method='profiling only; no measure.lock; durations <=20s; absolute numbers noisy')
 (out/'build.json').write_text(json.dumps(metadata,indent=2)+'\n')
 with (JOB/'progress.md').open('a') as progress:
-    progress.write(f"\n- 프로파일 {label}: HEAD={metadata['head']}, base={metadata['base']}, dirty={metadata['dirty']!r}; artifact 경로·SHA256·freshness: `raw/{label}/build.json`. Receive raw `zlink-raw-server/main.js:47-53,64-75` ↔ ladder `zlink-framework-server/main.js:209-239` (DontWait/NoData/batch); reply raw `:82-86` ↔ ladder `:109-123` (새 protobuf/body, envelope/service framing 외 동일). Wait·metrics atomic 추가 0; L3 encode part당 copy 1 + binding frame copy 1, decode byte copy 0, final view/wrapper 각각 2. `call-shape.md` 기준.\n")
+    progress.write(f"\n- 프로파일 {label}: HEAD={metadata['head']}, base={metadata['base']}, dirty={metadata['dirty']!r}; artifact 경로·SHA256·freshness: `raw/{label}/build.json`. Receive raw `zlink-raw-server/main.js:47-53,64-75` ↔ ladder `zlink-framework-server/main.js:209-239` (DontWait/NoData/batch); reply raw `:82-86` ↔ ladder `:109-123` (새 protobuf/body, envelope/service framing 외 동일). Wait·metrics atomic 추가 0; L3 encode part당 copy 1 + binding frame copy {'0(native)' if NATIVE else '1(Buffer)'}, decode byte copy 0, final view/wrapper 각각 2. `call-shape.md` 기준.\n")
 ports = []
 for _ in range(5):
     with socket.socket() as s:
@@ -47,7 +48,7 @@ def spawn(role, args):
     p = subprocess.Popen(['taskset', '-c', CPUS, 'node', '--cpu-prof', '--cpu-prof-interval=1000',
         f'--cpu-prof-dir={out}', f'--cpu-prof-name={role}.cpuprofile', '--heap-prof',
         '--heap-prof-interval=16384', f'--heap-prof-dir={out}', f'--heap-prof-name={role}.heapprofile',
-        *args], cwd=BENCH, env=env, stdout=log, stderr=subprocess.STDOUT)
+        *(['--require',str(JOB/'tools/native-framing-preload.cjs')] if NATIVE else []), *args], cwd=BENCH, env=env, stdout=log, stderr=subprocess.STDOUT)
     procs.append((role,p,time.monotonic()))
     # This watchdog applies even if a bench process was stopped by the quiet guard.
     timer = threading.Timer(19, lambda: p.kill() if p.poll() is None else None)

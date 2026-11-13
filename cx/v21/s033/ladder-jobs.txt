@@ -1,8 +1,8 @@
 C++|빌드 + binding 새 기준 + L0~L5~L7 단계 측정(6칸)|l3868-s1
-.NET|binding 새 기준 + L0~L5~L7 단계 측정(L4 기본 JSON 4cbe0b5316)|lad-dotnet-s1
-Java|L0~L5~L7 단계 측정(binding은 s1)|lad-java-s2
-Java2|L4·L5~L7 다시 측정(protobuf 등록 끈 빌드 ee7e5c3343)|lad-java-s3
-Node|binding 새 기준 + L0~L5~L7 단계 측정|lad-node-s1
+.NET|l4j 완료(L4 기본 JSON 4cbe0b5316) · binding + L0~L5~L7 측정 중|lad-dotnet-s1
+Java|L5~L7 backpressure errors 원인(결함 여부)|jl57bp
+Node|L5~L7 bench 무효(target 수신 0) 원인·수정|node-l57f
 L2bp|L2 backpressure 손실 원인·production 수정(Java·Node)|l2bp
 N3sw|Node L3 service wire 손실 원인·production 수정|n3sw
-J4json|Java L4 typed JSON 손실: 스펙 대조 + 원인·production 수정|j4json
+J4json|typed JSON base64 encode·decode 복사·할당 줄이기(Java 수정 + 세 언어 대조)|j4json2
+N4json|Node L4 typed JSON 손실 원인·production 수정|n4json

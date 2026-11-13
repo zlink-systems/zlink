@@ -53,7 +53,7 @@ framework_art="$ROOT/framework/languages/node/packages/framework/dist/runtime/ch
 framework_sha=$(sha256sum "$framework_art" | awk '{print $1}')
 {
   printf '\n- %s %s %s phase=%s: HEAD=%s dirty=%s merge_base=%s; addon=%s sha256=%s; framework_artifact=%s sha256=%s. ' "$(date -u +%FT%TZ)" "$variant" "$pattern-$size" "$phase" "$commit" "$dirty" "$base" "$addon" "$addon_sha" "$framework_art" "$framework_sha"
-  printf 'call-shape=call-shape.md; receive binding `zlink-raw-server/main.js:47-53,64-75` vs L0 `zlink-framework-server/main.js:142-155` (DontWait/NoData/batch); reply binding `zlink-raw-server/main.js:77-86` vs L-step `zlink-framework-server/main.js:116-133,168-176` (L0 new body; L2 envelope; L3 service wire; L4 typed codec; L5~L7 operation path).\n'
+  printf 'call-shape=call-shape.md#per-message-costs; costs-by-step recorded there; receive binding `zlink-raw-server/main.js:47-53,64-75` vs L0 `zlink-framework-server/main.js:142-155` (DontWait/NoData/batch); reply binding `zlink-raw-server/main.js:77-86` vs L-step `zlink-framework-server/main.js:116-133,168-176` (L0 new body; L2 envelope; L3 service wire; L4 typed codec; L5~L7 operation path).\n'
 } >> "$JOB/progress.md"
 if [[ "$variant" == binding ]]; then
   args=(IMPLEMENTATIONS=zlink-node BENCH_TARGET_SERVER=zlink-node)

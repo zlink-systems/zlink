@@ -36,14 +36,18 @@ binding_sched_snapshot() {
     [[ -d /proc/"$pid" ]] || return 0
     printf '%s_process_pid=%s\n' "$label" "$pid" >> "$BINDING_SCHED_FILE"
     for task in /proc/"$pid"/task/*; do
-      [[ -d "$task" ]] || continue
+      [[ -r "$task/status" ]] || continue
       tid="${task##*/}"
-      printf '%s_tid=%s\n' "$label" "$tid" >> "$BINDING_SCHED_FILE"
       affinity="$(awk '/^Cpus_allowed_list:/ {print $2}' "$task/status" 2>/dev/null || true)"
+      policy="$(chrt -p "$tid" 2>&1 || true)"
+      if [[ ! -d /proc/$tid ]]; then
+        printf '%s_thread_exited_during_snapshot tid=%s\n' "$label" "$tid" >> "$BINDING_SCHED_FILE"
+        continue
+      fi
+      printf '%s_tid=%s\n' "$label" "$tid" >> "$BINDING_SCHED_FILE"
       printf '%s_affinity tid=%s cpus=%s\n' "$label" "$tid" "${affinity:-unavailable}" >> "$BINDING_SCHED_FILE"
       if [[ "$label" == source_start || "$label" == mid_active_source ]]; then expected=0-5; else expected=8-13; fi
       binding_cpu_list_allowed "$affinity" "$expected" || printf 'affinity_invalid=%s:%s:%s\n' "$label" "$tid" "${affinity:-unavailable}" >> "$BINDING_SCHED_FILE"
-      policy="$(chrt -p "$tid" 2>&1 || true)"
       printf '%s\n' "$policy" >> "$BINDING_SCHED_FILE"
       if ! grep -q 'current scheduling policy: SCHED_OTHER' <<<"$policy"; then printf 'scheduling_invalid=%s:%s\n' "$label" "$tid" >> "$BINDING_SCHED_FILE"; fi
     done

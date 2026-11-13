@@ -1,6 +1,6 @@
 # Java ladder L4·L5~L7 재측정
 
-조건: commit `ee7e5c3343`, C2·C3 off, 모든 source/target thread `SCHED_OTHER`, affinity source 0–5 / target 8–13, warmup 10초·active 5초. 설치본은 [lad-java-l57p](../../../../../../worktree/zlink-v21-s033/lad-java-l57p/report.md) 지정 경로를 사용했고 산출물 해시와 소스 최신성을 매 run 전에 기록했다. Binding은 [java-2026-11-13b](../binding-daily/java-2026-11-13b.json)이다. 한 잠금 홀드는 2026-11-13T20:08:31Z 시작, validation 실패로 종료됐다.
+조건: commit `ee7e5c3343`, C2·C3 off, 모든 source/target thread `SCHED_OTHER`, taskset source 0–5 / target 8–13, warmup 10초·active 5초. 설치본은 [lad-java-l57p](../../../../../../worktree/zlink-v21-s033/lad-java-l57p/report.md) 지정 경로를 사용했고 산출물 해시와 소스 최신성을 매 run 전에 기록했다. Binding은 [java-2026-11-13b](../binding-daily/java-2026-11-13b.json)이다. 한 잠금 홀드는 2026-11-13T20:08:31Z 시작, validation 실패로 종료됐다.
 
 | 셀 | L4 counted (R1, R2 → 중앙값) | L5~L7 counted (R1, R2 → 중앙값) | L5~L7 ÷ binding | L5~L7 손실 vs L4 (21% gate) |
 |---|---:|---:|---:|---:|
@@ -11,6 +11,6 @@
 | request-backpressure 1K | [67,793.4](raw/java/L4/request-backpressure-1024/counted/attempt1/run1/zlink-framework-java-request-backpressure-1024/results.json) (1회만) | 측정 중단 | — | 미판정 |
 | request-backpressure 4K | 미실행 | 미실행 | — | 미판정 |
 
-모든 완료 counted run은 `errors=0`, `submitted=completed=received`, 모든 thread의 시작·중간 scheduling이 `SCHED_OTHER`, affinity가 source 0–5 / target 8–13임을 통과했다. 각 raw JSON 옆 `scheduling.txt`가 증거다. 전체 run별 실행 기록·빌드 해시·호출 경로는 [progress.md](progress.md)에 있다.
+완료 counted run은 모두 `errors=0`, `submitted=completed=received`이며, 시작·중간에 기록된 모든 thread가 `SCHED_OTHER`였다. `scheduling.txt`는 시작·중간의 프로세스 affinity와 시작 시 모든 task mask 확인 결과를 담지만, 모든 thread의 `Cpus_allowed_list`를 두 시점에 각각 저장하지는 않는다. 따라서 요청된 per-thread affinity 증거는 불완전하며, 표의 PASS/FAIL은 throughput의 수치상 비교다. 전체 run별 실행 기록·빌드 해시·호출 경로는 [progress.md](progress.md)에 있다.
 
 중단 사유: L5~L7 request-backpressure 1K warm raw ([results.json](raw/java/L5_7/request-backpressure-1024/warm/attempt1/run1/zlink-framework-java-request-backpressure-1024/results.json), [scheduling.txt](raw/java/L5_7/request-backpressure-1024/warm/attempt1/run1/zlink-framework-java-request-backpressure-1024/scheduling.txt))에서 `errors=50,160` (capacity unavailable 20,118, timeout 30,042), `submitted=204,305`, `completed=154,145`, `received=184,187`로 검증에 실패했다. warm run은 판정에서 제외했으며 실패 raw는 보존했다. 단일 홀드 지시를 지키기 위해 재측정하지 않아 이후 셀은 미완료다.

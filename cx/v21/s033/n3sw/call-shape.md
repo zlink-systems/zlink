@@ -21,3 +21,7 @@ Scratch `20598f57a2`, `B=framework/bench/grpc/node`, `R=framework/languages/node
 | source completion | binding completion + body decode | response header 1회 parse | receive와 같은 service framing decode; correlation validation |
 
 Framework production receive는 `R/backend/node/node-raw-mesh-backend.ts:2635`의 direct `decodeMultipartApplicationParts`를 사용하므로 bench보다 intermediate view/profile object가 각각 1개 적다. Production outbound는 `:2951-2958` → `R/foundation/service-wire-m6a-codec.ts:216-229`. Native submit/receive의 복사는 binding 비용으로 별도 계수한다.
+
+## 운영 native writer 대조 프로파일
+
+`N3SW_NATIVE=1`은 [native-framing-preload.cjs](tools/native-framing-preload.cjs)에서 기존 ladder의 pack 호출만 운영 `encodeMultipartApplicationMessage(...).takeMessage()`에 연결한다. Bench 파일 수정은 없다. Request·send·reply의 public builder는 native Message를 그대로 받는다. L1/L2, 2-part submit, receive loop, fresh protobuf body, metrics, completion, decoder는 동일하다. 운영 backend의 native frame encode → raw port `takeMessage` → public submit과 같은 L3 storage 경로이며 owner queue/registry를 앞당기지 않는다. Inner part당 pack copy 1회는 유지하고 binding Buffer→native 완성 frame copy를 1→0으로 바꾼다. 이 adapter는 진단용이며 commit 범위 밖이다.

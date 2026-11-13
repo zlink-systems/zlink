@@ -133,6 +133,12 @@ report='''# Node ladder 측정 (현재 조건, quick method)
 
 '''+header_b+'\n'+sep_b+'\n'+'\n'.join(rows_b)+'''
 
+## L5~L7 미완료 cell
+
+- send-saturation-1K warm은 제출·완료 75,055건, target 수신 0으로 무효 처리했다. [raw 결과](/root/jobs/fx/cx/v21/s033/lad-node-s1/raw/node/L5_7/send-saturation-1024/warm/attempt1/run1/zlink-framework-node-send-saturation-1024/results.json) · [affinity/scheduling](/root/jobs/fx/cx/v21/s033/lad-node-s1/raw/node/L5_7/send-saturation-1024/warm/attempt1/run1/zlink-framework-node-send-saturation-1024/scheduling.txt)
+- request-serial-1K warm은 두 번 모두 source stats endpoint가 30초 안에 준비되지 않아 active 전에 끝났다. [시도 1 log](/root/jobs/fx/cx/v21/s033/lad-node-s1/raw/node/L5_7/request-serial-1024/warm/attempt1/driver.log) · [시도 2 log](/root/jobs/fx/cx/v21/s033/lad-node-s1/raw/node/L5_7/request-serial-1024/warm/attempt2/driver.log)
+- L5~L7의 유효 counted 결과는 없다. 나머지 cell은 warm 실패 뒤 시작하지 않아 표에 N/A로 표시했다. Framework 코드 변경은 하지 않았다.
+
 ## 측정 기록
 
 [Progress / affinity·scheduling evidence per run](/root/jobs/fx/cx/v21/s033/lad-node-s1/progress.md) · [call-shape](/root/jobs/fx/cx/v21/s033/lad-node-s1/call-shape.md). 모든 warm raw도 보존했으며 판정에는 사용하지 않음.

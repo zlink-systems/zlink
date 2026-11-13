@@ -1,7 +1,7 @@
 측정 조건(11-13 17:41 UTC부터): 측정 중 C2·C3 끔, 측정 프로세스 SCHED_OTHER, CPU 분리(source 0-5 · target 8-13, 그 밖의 프로세스·IRQ 6-7·14-15). 이 조건의 binding으로만 비율을 냅니다.
 단계 정의 표: ladder-steps.md (네 언어 같은 범위인지 확인용)
 C++ 구현: L0·L1 ✓ · L2(요청+응답) fbdcb16e26 ✓ · L3 dd83e75df4 ✓ · L4(기본 JSON) 276b84f248 ✓ · L5~L7 62e766f88d ✓ — 측정 중(l3868-s1: binding부터)
-.NET 구현: L0~L1 ✓ · L2(요청+응답) 69891f4446 ✓ · L3 e8ee8302b0 ✓ · L4 1bcaebde9e → protobuf 등록이라 기본 JSON으로 수정 중(lad-dotnet-l4j) · L5~L7 2b6da5af64 (수정 뒤 다시 쌓음)
-Java 구현: L0~L1 ✓ · L2(요청+응답) e8721a0776 ✓ · L3 fea12ea97a ✓ · L4 9d9901eb2c ✓ · L5~L7 f3e3933567 ✓ — lad-java-s2 완료(20:08 UTC): L5~L7÷binding send 0.18·0.32 / serial 0.56·0.53 / bp 0.31·폐기(errors 123,625) · 손실 큰 단계: L4 typed JSON send 52%·62%, bp 26%·57% → j4json 조사 · L2 bp 22%·16% → l2bp · L3 send 1K 25% · L5~L7 27~47% (protobuf 등록 끈 빌드로 lad-java-s3 재측정 중)
-Node 구현: L0~L1 ✓ · L2(요청+응답) 2bef18aa94 ✓ · L3 20598f57a2 ✓ · L4 ae8a5178b5 ✓ · L5~L7 7d1afa98a9 ✓ — 측정 중(lad-node-s1, 19:30 UTC 기준): L0÷binding send 0.86·1.00 / serial 0.92·0.99 / bp 1.01·1.00 · L1 손실 모두 ≤3%(통과) · L2 손실 bp 29%·25%, 나머지 ≤5% · L3 손실(1회) send 31%·35%, serial 16%·14%, bp 19%·19% · L4·L5~L7 측정 대기
+.NET 구현: L0~L1 ✓ · L2(요청+응답) 69891f4446 ✓ · L3 e8ee8302b0 ✓ · L4(기본 JSON) 4cbe0b5316 ✓ (lad-dotnet-l4j 완료) · L5~L7 29d9fca82b ✓ — 측정 중(lad-dotnet-s1): binding send 388,710·166,007 / serial 9,235·8,873 / bp 72,636·76,589
+Java 구현: L0~L1 ✓ · L2(요청+응답) e8721a0776 ✓ · L3 fea12ea97a ✓ · L4 9d9901eb2c ✓ · L5~L7 f3e3933567 ✓ — 측정 완료(s2 + s3 재측정, 20:3x UTC): F÷binding send 0.18·0.29 / serial 0.56·0.47 / bp 미판정 · L5~L7 backpressure에서 errors(1K 50,160 · 4K 123,625) → jl57bp 원인 조사 · 큰 손실: L4 JSON 52~62%(j4json2), L2 bp 16~22%(l2bp), L5~L7 27~49%
+Node 구현: L0~L1 ✓ · L2(요청+응답) 2bef18aa94 ✓ · L3 20598f57a2 ✓ · L4 ae8a5178b5 ✓ · L5~L7 7d1afa98a9 ✓ — 측정 완료(lad-node-s1, L0~L4): L4 손실 44~90%(typed JSON) · L3 16~35%(n3sw) · L2 bp 28~29%(l2bp) · L5~L7 run 무효(target 수신 0, stats 준비 안 됨) → node-l57f
 기준: 11-13 binding-rebase는 CPU 분리 미적용으로 무효(Java·.NET 미측정, C++·Node affinity 미기록) — guard v8로 고친 뒤 Java·Node는 각 단계 측정 job 안에서 binding부터 다시 잼

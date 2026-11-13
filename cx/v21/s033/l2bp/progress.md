@@ -24,3 +24,5 @@
 - 원인·결정 소유 표·production 수정안을 `report.md`에 먼저 기록했다. 원본 사본 `raw/report-before-implementation.md`. 이제 B 범위의 private codec 최적화와 회귀 검사를 시작한다. public API·spec·binding 변경 없음.
 
 - Java main 최초 회귀 실행은 test 시작 전에 single-use Gradle daemon 종료로 실패했다(`raw/java-regression-before.log`). main 변경 전의 codec과 동일한 scratch 빌드에 새 회귀 test만 복사해 전 상태를 검사한다. production 파일은 아직 수정하지 않았다.
+
+- Node 새 string 경계 test는 전후 모두 4/4 통과(동작은 유지하는 비용 수정). `raw/node-strings-before.log`, `raw/node-strings-after.log`. 최초 codec-after 진단은 formatter의 source mtime이 compile보다 늦어 fresh 판정에서 제외하고, formatted source를 다시 compile한 뒤 확인한다. raw는 보존.

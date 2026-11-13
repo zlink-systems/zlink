@@ -1,0 +1,39 @@
+{
+  "language": "dotnet",
+  "utc_date": "2026-11-13",
+  "conditions": "C2·C3 off, SCHED_OTHER, source taskset 0-5 / target taskset 8-13, quiet guard v8; one discarded warm run per cell",
+  "measured_utc": "2026-11-13T20:30:34.604236+00:00",
+  "cells": {
+    "send-saturation-1024": {
+      "msg_s": 388709.6,
+      "raw": "/root/jobs/fx/cx/v21/s033/lad-dotnet-s1/raw/binding/send-saturation-1024/counted/attempt1/run1/zlink-dotnet-send-saturation-1024/results.json",
+      "scheduling": "/root/jobs/fx/cx/v21/s033/lad-dotnet-s1/raw/binding/send-saturation-1024/counted/attempt1/run1/zlink-dotnet-send-saturation-1024/scheduling.txt"
+    },
+    "send-saturation-4096": {
+      "msg_s": 166006.6,
+      "raw": "/root/jobs/fx/cx/v21/s033/lad-dotnet-s1/raw/binding/send-saturation-4096/counted/attempt1/run1/zlink-dotnet-send-saturation-4096/results.json",
+      "scheduling": "/root/jobs/fx/cx/v21/s033/lad-dotnet-s1/raw/binding/send-saturation-4096/counted/attempt1/run1/zlink-dotnet-send-saturation-4096/scheduling.txt"
+    },
+    "request-serial-1024": {
+      "msg_s": 9235,
+      "raw": "/root/jobs/fx/cx/v21/s033/lad-dotnet-s1/raw/binding/request-serial-1024/counted/attempt1/run1/zlink-dotnet-request-serial-1024/results.json",
+      "scheduling": "/root/jobs/fx/cx/v21/s033/lad-dotnet-s1/raw/binding/request-serial-1024/counted/attempt1/run1/zlink-dotnet-request-serial-1024/scheduling.txt"
+    },
+    "request-serial-4096": {
+      "msg_s": 8873.4,
+      "raw": "/root/jobs/fx/cx/v21/s033/lad-dotnet-s1/raw/binding/request-serial-4096/counted/attempt1/run1/zlink-dotnet-request-serial-4096/results.json",
+      "scheduling": "/root/jobs/fx/cx/v21/s033/lad-dotnet-s1/raw/binding/request-serial-4096/counted/attempt1/run1/zlink-dotnet-request-serial-4096/scheduling.txt"
+    },
+    "request-backpressure-1024": {
+      "msg_s": 72635.8,
+      "raw": "/root/jobs/fx/cx/v21/s033/lad-dotnet-s1/raw/binding/request-backpressure-1024/counted/attempt1/run1/zlink-dotnet-request-backpressure-1024/results.json",
+      "scheduling": "/root/jobs/fx/cx/v21/s033/lad-dotnet-s1/raw/binding/request-backpressure-1024/counted/attempt1/run1/zlink-dotnet-request-backpressure-1024/scheduling.txt"
+    },
+    "request-backpressure-4096": {
+      "msg_s": 76588.8,
+      "raw": "/root/jobs/fx/cx/v21/s033/lad-dotnet-s1/raw/binding/request-backpressure-4096/counted/attempt1/run1/zlink-dotnet-request-backpressure-4096/results.json",
+      "scheduling": "/root/jobs/fx/cx/v21/s033/lad-dotnet-s1/raw/binding/request-backpressure-4096/counted/attempt1/run1/zlink-dotnet-request-backpressure-4096/scheduling.txt"
+    }
+  },
+  "affinity_verified": true
+}

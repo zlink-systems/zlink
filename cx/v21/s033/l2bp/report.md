@@ -59,3 +59,13 @@ Java L2 active allocation sample에서 source `char[]` 39,059,456B, target 37,74
 | Node | canonical 문자열 경계 탐색은 native `Buffer.indexOf`, raw control/ASCII 판정은 native RegExp로 처리한다. escape의 의미 검사는 JSON.parse 하나가 맡고 canonical 인식 실패는 기존 strict reader로 보낸다. UTF-8·duplicate·flow-off·correlation 계약과 객체 shape는 유지한다. | JSON.parse로 header 전체를 읽으면 duplicate 정책과 기존 무복사 계약이 달라진다. 필드/헤더 cache는 dynamic correlation에 miss와 보유 상태를 만든다. 기존 reader 안에서 byte loop를 대체하면 별도 정책이 없다. | escape 유효성 판정 위치 2(수동 switch+JSON.parse)→1(JSON.parse). header validation 소유 1→1. 새 cache/queue/flag/lock 없음. |
 
 분류는 두 언어 모두 **B: 기존 내부 codec의 중복 작업/임시 allocation 비용 수정**이다. API·wire·오류 의미와 completion/admission 소유를 바꾸지 않는다. Java는 heap/direct/read-only 비교 allocation 회귀 검사와 golden/canonical/malformed/cache 테스트를 수행한다. Node는 escaped quote/backslash/control/UTF-8/truncation/duplicate/flow-off 및 envelope 비용·reply 관련 contract test를 수행한다. allocation/CPU 관찰은 실제 빌드 산출물로 전후를 비교하며, 새로 발견된 실패는 재실행 통과로 무시하지 않는다. 두 언어 format check와 관련 framework gate를 실행하고 언어별로 로컬 commit한다.
+
+## Node 수정안 갱신 — 첫 문자열 후보 기각
+
+2026-11-13 20:32 UTC. 최초 native Buffer.indexOf + UTF-8 slice 후보는 `raw/node/codec-after`의 CPU shape에서 UTF-8 slice·RegExp·GC 비용이 늘어 기각한다. formatter 이후 fresh 조건을 만족한 정식 benchmark 결과로는 사용하지 않는다. 원본 후보를 `raw/node-envelope-native-rejected.ts`에 보존한다. 원본 reader를 유지하며 다음 B 수정안을 적용한다.
+
+- `channel-envelope.ts:1727-1732`의 correlation ASCII 검사를 native RegExp의 고정 범위 검사로 바꾼다. `newChannelCorrelationId`가 생성한 hex ID를 outbound selector가 다시 byte별로 검증하지 않는다. caller가 준 ID와 수신 ID의 검증은 기존 한 함수가 계속 소유한다. L2 source CPU의 `validateCorrelationValue`/`isValidChannelCorrelationId` stack이 근거다(`raw/node/baseline-L2/cpu-summary.json`).
+- `preparedChannelHeader:679-684`의 `hasDeadline` Map 단계를 제거한다. fast-path 조건이 이미 request=deadline 존재, command/response=deadline 없음으로 고정하므로 `kind`와 deadline presence가 같은 사실을 별도 key로 유지하고 있었다. kind별 flow template만 둔다. 요청·응답 encode 모두에 적용한다.
+- 규칙 수: 생성한 ID의 형식 보장 판정 2(생성+재검증)→1(생성), prepared deadline presence 인덱스 2(kind+boolean)→1(kind). 외부 correlation 검증 소유 1→1. 새 state/lock/queue 없음; boolean Map 계층을 제거한다. JSON reader·wire·API·error 계약은 그대로다.
+
+이 수정도 전체 L2 손실 제거를 보장하지 않는다. codec 단독·실제 scratch L2 profile과 기존 비용/contract 검사로 유효한 감소를 확인한 것만 commit한다.
