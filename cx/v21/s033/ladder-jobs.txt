@@ -1,4 +1,4 @@
-C++|L4 typed codec + L5~L7 묶음 구현(측정 없음)|l3868-impl3
-.NET|L2 응답 envelope 리뷰 수정 + backpressure 테스트 멈춤 원인(측정 없음)|lad-dotnet-l2g
+C++|빌드 + binding 새 기준 + L0~L5~L7 단계 측정(6칸)|l3868-s1
+.NET|L4를 기본 typed JSON serializer로 수정 + L5~L7 다시 쌓기(측정 없음)|lad-dotnet-l4j
 Java|binding 새 기준 + L0~L5~L7 단계 측정(6칸, warm run, 0-5/8-13 고정)|lad-java-s1
 Node|binding 새 기준 + L0~L5~L7 단계 측정(6칸, warm run, 0-5/8-13 고정)|lad-node-s1

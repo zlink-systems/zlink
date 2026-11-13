@@ -20,7 +20,10 @@ if [[ "$variant" != binding ]]; then
     *) echo "unknown variant $variant" >&2; exit 2 ;;
   esac
 fi
-out="$JOB/raw/node/$variant/$pattern-$size/$phase/attempt1"
+stage_root="$JOB/raw/node/$variant/$pattern-$size/$phase"
+attempt=1
+while [[ -e "$stage_root/attempt$attempt" ]]; do attempt=$((attempt+1)); done
+out="$stage_root/attempt$attempt"
 mkdir -p "$out"
 # Record the exact state and the required parity excerpts before every warm or counted run.
 commit=$(git -C "$ROOT" rev-parse HEAD)
@@ -64,6 +67,6 @@ for phase,expected in [('source_start','0-5'),('target_start','8-13'),('mid_acti
     tidlines=[line for line in t.splitlines() if line.startswith(phase+'_tid=')]
     assert len(tidlines)==len(lines), f'thread affinity count mismatch {phase}: {sched}'
 for phase in ('source_start','target_start','mid_active_source','mid_active_target'):
-    assert any(line == 'current scheduling policy: SCHED_OTHER' for line in t.splitlines()), f'missing SCHED_OTHER evidence: {sched}'
+    assert any('current scheduling policy: SCHED_OTHER' in line for line in t.splitlines()), f'missing SCHED_OTHER evidence: {sched}'
 print(c['throughput_per_second'])
 PY
