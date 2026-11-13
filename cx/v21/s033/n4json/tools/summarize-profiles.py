@@ -26,7 +26,7 @@ for out in sorted((job/"raw").glob(tag+"-L*-*")):
         stack.append(nodes[index]["callFrame"]["functionName"])
         if index not in parents: break
         index=parents[index]
-      for name in ("encodeBase64","btoa","toJSON","frameworkJsonV1Replacer","stringifyFrameworkJsonV1", "nodeJsonReplacer", "parseFrameworkJsonV1","scan", "decodeChannelPayload","encodePayload","(garbage collector)"):
+      for name in ("encodeBase64","btoa","toJSON","frameworkJsonV1Replacer","stringifyFrameworkJsonV1", "nodeJsonReplacer", "encodeNodeBase64", "parseFrameworkJsonV1","scan", "decodeChannelPayload","encodePayload","(garbage collector)"):
         if name in stack: groups[name]+=1;groups_samples[name]+=1
     allocfile=out/f"alloc-{pid}.json"; total_alloc=0; allocown=collections.Counter(); allocgroups=collections.Counter()
     if allocfile.exists():
@@ -36,7 +36,7 @@ for out in sorted((job/"raw").glob(tag+"-L*-*")):
         cf=node["callFrame"]; size=node.get("selfSize",0);total_alloc+=size
         name=cf["functionName"];stack=stack+[name]
         allocown[f'{name} {cf["url"]}:{cf["lineNumber"]+1}']+=size
-        for group in ("encodeBase64","btoa","toJSON","frameworkJsonV1Replacer","stringifyFrameworkJsonV1", "nodeJsonReplacer", "parseFrameworkJsonV1", "decodeChannelPayload", "encodePayload"):
+        for group in ("encodeBase64","btoa","toJSON","frameworkJsonV1Replacer","stringifyFrameworkJsonV1", "nodeJsonReplacer", "encodeNodeBase64", "parseFrameworkJsonV1", "decodeChannelPayload", "encodePayload"):
           if group in stack: allocgroups[group]+=size
         for child in node.get("children",[]):walk(child,stack)
       if "head" in alloc: walk(alloc["head"],[])

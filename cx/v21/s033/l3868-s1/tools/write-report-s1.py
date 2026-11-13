@@ -21,7 +21,8 @@ for p,s in cells:
 reps=[]
 for k,x in S.items():
     if x['n']>=3:
-        reps.append(f'| {k} | {x["g5"]*100:.2f}% | '+', '.join(f'[run{i+1}]({rel(p)})' for i,p in enumerate(x['raw_paths']))+' |')
+        lev,pattern,size=k.split('|'); label=('L5~L7' if lev=='7' else 'L'+lev)+' '+pattern+' '+str(int(size)//1024)+'K'
+        reps.append(f'| {label} | {x["g5"]*100:.2f}% | '+', '.join(f'[run{i+1}]({rel(p)})' for i,p in enumerate(x['raw_paths']))+' |')
 runs=[json.loads(s) for s in (J/'raw/runs.jsonl').read_text().splitlines()]; counted=[r for r in runs if r['kind'].startswith('counted')]
 holds=[]
 for p in sorted((J/'raw/holds').glob('*/duration.json')):
@@ -61,10 +62,11 @@ L0는 binding 대비 ≥95%, L1~L4는 이전 단계 대비 손실 ≤7%, L5~L7�
 - [빌드 종료 코드](raw/build-success.json), [바이너리 전체 freshness·SHA256](raw/freshness.json), [동일 tree의 source binding/Release 근거](raw/binding-build-source.json), [실제 Core 1.25.0 연결](raw/linkage.json). 지정 impl3 configure script를 cpp-build-slot.sh로 실행했다(Release, source binding ON, Core 1.25.0, -j3, ≤25 GiB). 빌드와 freshness가 모두 rc=0인 뒤 측정했다.
 - [configure](/root/jobs/fx/cx/v21/s033/l3868-impl3/raw/configure-s1-20261113T1856.log), [build](/root/jobs/fx/cx/v21/s033/l3868-impl3/raw/build-s1-20261113T1856.log). 코드 변경이 없어 추가 unit/E2E는 실행하지 않았다.
 - [검증기 정상·거부 시험](raw/validator-check/checks.json): 정상 수락, SCHED_IDLE·잘못된 affinity·mid-active 누락·count 불일치 거부.
-- [무효 실행](raw/invalid-runs.json) {len(invalid)}회는 판정에서 제외하고 원시 파일을 보존했다.
+- [무효 실행](raw/invalid-runs.json) {len(invalid)}회는 판정에서 제외하고 원시 파일을 보존했다. L5~L7 request-serial 4K 첫 실행에서 chrt 조회 시 TID 32072가 사라져 정책을 확인하지 못했다. 같은 셀을 재실행했고 유효한 두 번째 실행만 사용했다. [원인·교체 경로](raw/invalid-diagnosis.json).
 - 유효 counted {len(counted)}회 모두 errors=0, submitted=completed=received. 각 results.json 옆 scheduling.txt에 source/target 모든 thread의 시작·mid-active chrt 정책과 Cpus_allowed_list를 기록했다. 원시 목록의 scheduling 필드로 연결한다. [첫 counted 기록 요약](raw/first-counted-evidence.json).
 - [guard v8 파일·SHA256](raw/guard-evidence.json).
 - 락 보유 시간: {', '.join(holds)}. 각 hold의 before/after.json에 governor와 16 CPU C2/C3 상태를 보존했다. 빌드·집계는 락 밖에서 수행했다.
+- [최종 검증](raw/final-audit.json): 42셀·36비교·유효 counted 46회, 경계 반복·스케줄링·affinity·hold 시간·바이너리 SHA256·clean tree 확인.
 - `build-l3868-next` 및 기존·이번 원시 파일을 유지한다. commit·push·GitHub·sub-agent·internal-docs 실행 없음.
 '''
 if reps:

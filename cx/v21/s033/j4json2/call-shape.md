@@ -1,6 +1,6 @@
 # Java L3/L4 profile 호출 비교
 
-기준 `9d9901eb2c`, scratch 전용 build. CPU·allocation shape만 비교한다. throughput 판정·측정 lock 사용 없음. bench DTO, 10 s warmup·5 s active, window 100·submit concurrency 8은 유지한다. JVM별 수명 상한은 timeout 19 s + kill grace 0.3 s다. affinity는 모든 process와 thread에 6-7,14-15다.
+기준 `9d9901eb2c`, scratch 전용 build. CPU·allocation shape만 비교한다. throughput 판정·측정 lock 사용 없음. bench DTO, 10 s warmup·5 s active, window 100·submit concurrency 8은 유지한다. JVM별 수명 상한은 timeout 19.6 s + kill grace 0.3 s다. affinity는 모든 process와 thread에 6-7,14-15다.
 
 경로의 전체 prefix는 `framework/bench/grpc/java/`이며 원문은 raw의 `RawStack.txt`, `ZLinkRawBenchServer.txt`, `ZLinkFrameworkBenchServer.txt`에 보존한다.
 

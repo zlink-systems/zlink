@@ -48,7 +48,7 @@ writer/generator는 per-call이지만 ObjectWriter wrapper 생성이나 per-call
 
 ## Profile 증거
 
-실행 전 기록이다. scratch build 후 L3/L4 send-saturation 4096, request-serial 1024를 CPU+allocation JFR로 확인하고 이 절을 갱신한다. [호출 비교](call-shape.md), [profile 설정](raw/profile.jfc), [실행 script](raw/profile-bench.py). 모든 실행은 taskset 6-7,14-15를 상속한다. profile process 수명은 각각 20 s 미만이며 throughput 수치는 개선 판정에 사용하지 않는다.
+실행 전 기록이다. scratch build 후 L3/L4 send-saturation 4096, request-serial 1024를 CPU+allocation JFR로 확인하고 이 절을 갱신한다. [호출 비교](call-shape.md), [profile 설정](raw/profile.jfc), [실행 script](raw/profile-bench.py). 모든 실행은 taskset 6-7,14-15를 상속한다. profile process 수명은 timeout 19.6 s + kill grace 0.3 s로 각각 20 s 미만이며 throughput 수치는 개선 판정에 사용하지 않는다.
 
 ## 교차언어 비교
 

@@ -44,6 +44,8 @@ Java 최초 3s warmup에서는 compiler/native yield 경합으로 throughput 방
 
 Java wall은 futex/admission·epoll·native yield가 지배하고 envelope 아래 별도 wait는 없다. Node GC self는 L1 source/target 3.06%/5.89%, L2 3.69%/4.08%; runMicrotasks는 3.35%→3.65%다. 새 hop/GC 급증보다 동기 codec 작업 추가가 설명력이 높다. correlation lookup의 in-flight 비례 탐색·reply 크기 임계치 결함은 확인하지 못했다.
 
+backpressure에서만 차이가 큰 이유는 호출 빈도와 header의 반복 가능성이다. Java의 repeatable command header는 기존 단순-header cache를 사용할 수 있고, Node의 correlation/flow가 없는 command는 prepared bytes를 그대로 반환한다(`ZLinkChannelEnvelope.java:523`, `channel-envelope.ts:711`). request/reply는 correlation이 매번 달라 새 header bytes와 decoded String이 필요하다. serial에서는 왕복 대기가 이 CPU 비용을 가리고, uncapped backpressure에서는 이미 바쁜 source/target 처리율과 queue 체류 시간에 추가 비용이 반영된다. 이는 in-flight 개수에 비례하는 correlation 탐색이나 미반납 slot 상태를 추가할 이유가 아니다.
+
 ## 결정 소유와 수정안
 
 | 결정 | spec | C++ | .NET | Java | Node |

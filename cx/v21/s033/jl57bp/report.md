@@ -94,7 +94,7 @@ var request = route.requestToNode(meshName, serverRid, typedPayload)
 return request.thenAccept(this::validateReply).toCompletableFuture();
 ```
 
-원본 설치는 [baseline-installs.tar](raw/baseline-installs.tar)와 해당 [SHA-256](raw/baseline-installs.tar.sha256)에 보존한다. 최종 수정 뒤 초기 실패를 다시 실행할 때는 이 archive를 별도 디렉터리에 풀고 복사본 runner의 `BENCH_HOME_OVERRIDE`를 그 디렉터리로 지정한다. Archive에는 원래의 client/server 설치와 의존 JAR가 들어 있으며 production 소스를 되돌릴 필요가 없다. 기존 raw 출력 디렉터리는 runner가 재사용하지 않으므로 새 `OUTPUT_DIR`과 `RUN_STAMP`를 지정한다.
+원본 설치는 [baseline-installs.tar](raw/baseline-installs.tar)와 해당 [SHA-256](raw/baseline-installs.tar.sha256)에 보존한다. 최종 수정 뒤 초기 실패를 다시 실행할 때는 이 archive를 별도 디렉터리에 풀고 복사본 runner의 `BENCH_HOME_OVERRIDE`를 그 디렉터리로 지정한다. Archive에는 원래의 client/server 설치와 의존 JAR가 들어 있으며 production 소스를 되돌릴 필요가 없다. [archive 검증](raw/baseline-archive-validation.json)의 client/server JAR hash는 초기 counted `artifacts.txt`와 일치한다. 기존 raw 출력 디렉터리는 runner가 재사용하지 않으므로 새 `OUTPUT_DIR`과 `RUN_STAMP`를 지정한다.
 
 수정 뒤에도 원본 binary로 재현하려면 다음 명령을 사용한다. `REPRO`는 현재 worktree 안의 별도 설치 경로다. 이 명령은 설명용이며 이 작업에서는 위 초기 commit 명령으로 재현했다. `OUTPUT_DIR`은 매번 새 이름이어야 한다.
 
@@ -104,6 +104,8 @@ JOB=/root/jobs/fx/cx/v21/s033/jl57bp
 REPRO="$ROOT/.jl57bp-original-installs"
 mkdir -p "$REPRO"
 tar -xf "$JOB/raw/baseline-installs.tar" -C "$REPRO"
+unset ZLINK_BENCH_LADDER_L0 ZLINK_BENCH_LADDER_L1 ZLINK_BENCH_LADDER_L2
+unset ZLINK_BENCH_LADDER_L3 ZLINK_BENCH_LADDER_L4 ZLINK_BENCH_LADDER_L5_7 BENCH_FLOW_TRACE
 for size in 1024 4096; do
   for kind in warm counted; do
     stamp="repro-$size-$kind-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -120,3 +122,14 @@ done
 ```
 
 Main 원본 대조에서는 위 환경의 `ZLINK_BENCH_LADDER_L5_7`을 제거하고 ladder 환경 변수도 모두 unset한다. 설치 archive는 동일하며 main의 public `requestToNode` 경로를 실행한다.
+
+## Bench 변경과 최종 검증
+
+변경 파일은 `framework/bench/grpc/java/client/src/main/java/systems/zlink/bench/withgrpc/client/FrameworkStack.java:177,191-192`다. `ladderFrameworkRequest()`가 기존 `BenchRequestOperation`으로 `Submission(admitted, reply)`를 반환한다. `BenchDrivers.java:610-621`의 기존 admission 대기를 main과 동일하게 사용한다. [변경 diff](raw/bench-fix.diff)와 [수정 source SHA-256](raw/fixed-source.sha256)을 보존했다.
+
+- 변경 분류: B — 기존 bench 호출 형태 결함. Production runtime 변경은 없다.
+- 소유 결정: Core의 slot/WRITABLE과 Framework의 deadline·완료 처리를 유지하고, bench driver가 public admission을 기다린다.
+- 수정 전/후 규칙 수: bench admission 대기 판정 위치 **1 → 1**(`BenchDrivers.runBackpressure`). Admission을 driver에 전달하지 않던 ladder adapter 경로를 바로잡았다. 새 state·flag·queue·lock·timer·retry는 없다.
+- 관련 호출 경로 점검: 발견 1건(admission 전달 누락), 수정 1건, 별도 이관 0건이다. 새 helper·중복 DTO·매핑표를 추가하지 않았다.
+
+<!-- FINAL_VALIDATION -->

@@ -32,3 +32,7 @@
 - Artifact 내용 검사에서 main Node dist가 이전 native parser 후보임을 확인했다. 앞선 185개 통과는 최종 correlation/cache 수정의 검증으로 쓰지 않는다. `--force` 빌드 후 source/compiled signature와 mtime을 검사하고 최종 focused test를 다시 실행한다. scratch도 최종 production source를 복사해 별도로 다시 compile한다.
 
 - Java post-fix L2 profile 직전: main commit ddc13b0615, 테스트 완료한 core JAR(source보다 최신, private stringScratch 확인)을 classpath 첫 항목으로 둔다. fingerprint `raw/java-fixed-core-fingerprint.json`; bench/binding은 최초 fresh scratch 산출물 `raw/java-build-fingerprint.json` 그대로다. receive/reply shape `call-shape.md` 동일. native string 필드별 char[] 대신 reader-local byte scratch, 추가 wait·hop 없음.
+
+- Java post-fix JFR: CanonicalReader.string의 char[] sample source/target 모두 0(전 39,059,456/37,748,736B). 228,958건 count 일치·오류 0, process 전체 16.79초. 관련 permit/lane/multipart/ID/flow helper class parity는 `raw/java-profile-dependency-parity.json`.
+
+- Node 강제 compile 완료. source보다 최신인 dist에서 NON_ASCII_CORRELATION_ID 존재, 기각한 CANONICAL_STRING_SPECIAL/boolean deadline Map 부재, 생성 ID 직접 반환을 확인했다. `raw/node-final-fingerprint.json`. 이 artifact로 codec profile과 최종 185개 focused test를 실행한다.
