@@ -13,6 +13,7 @@ import org.springframework.context.annotation.Bean;
 import systems.zlink.bench.withgrpc.proto.BenchPayload;
 import systems.zlink.bench.withgrpc.shared.BenchContract;
 import systems.zlink.bench.withgrpc.shared.BenchMetricHeader;
+import systems.zlink.bench.withgrpc.shared.BenchTypedPayload;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec;
@@ -60,7 +61,7 @@ public final class FrameworkStack implements AutoCloseable {
     }
 
     public static FrameworkStack create(BenchOptions options) {
-        if (ladderMode()) {
+        if (ladderMode() && !ladderL5To7()) {
             var bindingContext = systems.zlink.contracts.core.Zlink.createContext();
             var binding = RawStack.create(
                     bindingContext,
@@ -130,6 +131,12 @@ public final class FrameworkStack implements AutoCloseable {
 
     /** Exposes the binding-shaped L0 operation to the existing raw benchmark driver. */
     public BenchOperation ladderOperation(boolean send) {
+        if (ladderL5To7()) {
+            if (route == null) {
+                throw new IllegalStateException("L5_7 requires the Framework route client");
+            }
+            return send ? ladderFrameworkSend() : ladderFrameworkRequest();
+        }
         if (ladderBinding == null) {
             throw new IllegalStateException("L0 operation requested outside ladder mode");
         }
@@ -155,6 +162,39 @@ public final class FrameworkStack implements AutoCloseable {
                             ZLinkChannelEnvelope.KIND_REQUEST, FrameworkStack::envelopeParts);
         }
         return send ? ladderBinding.send() : ladderBinding.request();
+    }
+
+    private BenchOperation ladderFrameworkSend() {
+        return (payloadSize, phase, sequence) -> {
+            BenchTypedPayload message = typedPayload(payloadSize, phase, sequence);
+            return route.sendToNode(BenchContract.MESH_NAME, SERVER, message)
+                    .submit()
+                    .toCompletableFuture()
+                    .thenApply(ignored -> (Void) null);
+        };
+    }
+
+    private BenchOperation ladderFrameworkRequest() {
+        return (payloadSize, phase, sequence) -> {
+            BenchTypedPayload message = typedPayload(payloadSize, phase, sequence);
+            var submitted = route.requestToNode(BenchContract.MESH_NAME, SERVER, message)
+                    .timeout(timeout)
+                    .submit(BenchTypedPayload.class);
+            var completion = submitted.thenAccept(reply -> {
+                BenchMetricHeader.Decoded decoded = reply == null || reply.body() == null
+                        ? null
+                        : BenchMetricHeader.decode(java.nio.ByteBuffer.wrap(reply.body()));
+                if (!BenchMetricHeader.isExpected(decoded, runId, phase, payloadSize, sequence)) {
+                    throw new IllegalStateException("L5_7 Framework reply header mismatch");
+                }
+            });
+            return completion.toCompletableFuture();
+        };
+    }
+
+    private BenchTypedPayload typedPayload(int payloadSize, byte phase, long sequence) {
+        return new BenchTypedPayload(
+                BenchMetricHeader.createPayload(payloadSize, runId, phase, sequence));
     }
 
     private static java.util.List<systems.zlink.contracts.messaging.Message> envelopeParts(
@@ -201,6 +241,10 @@ public final class FrameworkStack implements AutoCloseable {
                 || System.getenv("ZLINK_BENCH_LADDER_L2") != null
                 || System.getenv("ZLINK_BENCH_LADDER_L3") != null
                 || System.getenv("ZLINK_BENCH_LADDER_L4") != null;
+    }
+
+    private static boolean ladderL5To7() {
+        return System.getenv("ZLINK_BENCH_LADDER_L5_7") != null;
     }
 
     private static String ladderMessageName() {

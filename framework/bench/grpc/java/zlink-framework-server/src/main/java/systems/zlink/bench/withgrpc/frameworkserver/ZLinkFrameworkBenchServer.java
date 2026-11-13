@@ -465,6 +465,14 @@ public class ZLinkFrameworkBenchServer {
                 .addRouteSendHandler(
                     BenchCommandHandler.class,
                     systems.zlink.bench.withgrpc.proto.BenchPayload.class);
+            if (System.getenv("ZLINK_BENCH_LADDER_L5_7") != null) {
+                mesh.addRouteRequestHandler(
+                                BenchTypedEchoHandler.class,
+                                BenchTypedPayload.class,
+                                BenchTypedPayload.class)
+                        .addRouteSendHandler(
+                                BenchTypedCommandHandler.class, BenchTypedPayload.class);
+            }
             // Kotlin reuses this server and still addresses the channel. Both public
             // namespaces use the same handlers, codec and metrics.
             mesh.channelName(BenchContract.CHANNEL_NAME).server()
@@ -491,5 +499,15 @@ public class ZLinkFrameworkBenchServer {
     @Bean
     BenchCommandHandler benchCommandHandler(BenchServerMetrics metrics) {
         return new BenchCommandHandler(metrics);
+    }
+
+    @Bean
+    BenchTypedEchoHandler benchTypedEchoHandler(BenchServerMetrics metrics) {
+        return new BenchTypedEchoHandler(metrics);
+    }
+
+    @Bean
+    BenchTypedCommandHandler benchTypedCommandHandler(BenchServerMetrics metrics) {
+        return new BenchTypedCommandHandler(metrics);
     }
 }
