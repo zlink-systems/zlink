@@ -14,8 +14,8 @@ import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceSendHeaderAllocationTest;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
+import systems.zlink.framework.testsupport.ChildJvm;
 
 import java.lang.management.ManagementFactory;
 import java.nio.file.Files;
@@ -37,7 +37,7 @@ public final class ZLinkSendFrameContainerAllocationTest {
 
     @Test
     void sendOwnsOnlyItsFinalImmutableFrameList() throws Exception {
-        ZLinkServiceSendHeaderAllocationTest.runInAllocationJvm(getClass());
+        ChildJvm.runInAllocationJvm(getClass());
     }
 
     public static void main(String[] args) throws Exception {

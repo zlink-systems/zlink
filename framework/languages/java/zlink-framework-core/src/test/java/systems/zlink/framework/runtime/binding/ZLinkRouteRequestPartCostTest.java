@@ -16,7 +16,7 @@ import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceSendHeaderAllocationTest;
+import systems.zlink.framework.testsupport.ChildJvm;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -43,7 +43,7 @@ public final class ZLinkRouteRequestPartCostTest {
 
     @Test
     void requestAndReplyPartsUseOnlyTheirWireFrames() throws Exception {
-        ZLinkServiceSendHeaderAllocationTest.runInJvm(
+        ChildJvm.runInJvm(
                 getClass(),
                 List.of(
                         "-Djava.io.tmpdir=" + System.getProperty("java.io.tmpdir"),

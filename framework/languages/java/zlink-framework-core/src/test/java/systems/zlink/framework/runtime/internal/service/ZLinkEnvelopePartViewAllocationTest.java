@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
+import systems.zlink.framework.testsupport.ChildJvm;
 
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
@@ -34,7 +35,7 @@ public final class ZLinkEnvelopePartViewAllocationTest {
 
     @Test
     void outboundHeadersDoNotRetainOrDuplicateHeapViews() throws Exception {
-        ZLinkServiceSendHeaderAllocationTest.runInAllocationJvm(getClass());
+        ChildJvm.runInAllocationJvm(getClass());
     }
 
     @Test
