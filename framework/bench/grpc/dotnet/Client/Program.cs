@@ -164,7 +164,7 @@ internal static class BenchTransport
                 frameworkTarget: Environment.GetEnvironmentVariable("ZLINK_DOTNET_RAW_TARGET")
                     == "framework"
             ),
-#if ZLINK_DOTNET_LADDER_L0
+#if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2
             "zlink-framework-dotnet"
                 when Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_CLIENT") == "raw" =>
                 new RawBenchTransport(options, frameworkTarget: true),
@@ -377,7 +377,6 @@ internal sealed class RawBenchTransport : IBenchTransport
     private readonly IContext context;
     private readonly RawBenchSocket? request;
     private readonly RawBenchSocket[] commands;
-    private readonly byte[] sendHeader;
     private readonly bool frameworkTarget;
     private readonly CancellationTokenSource completionStopping = new();
     private Thread? completionThread;
@@ -386,9 +385,6 @@ internal sealed class RawBenchTransport : IBenchTransport
     {
         context = Systems.Zlink.Zlink.CreateContext();
         this.frameworkTarget = frameworkTarget;
-        sendHeader = frameworkTarget
-            ? RawEnvelopeHeaders.FrameworkRequest
-            : RawEnvelopeHeaders.Command;
         if (options.Scenario == "send-saturation")
         {
             // 서버 간 연결은 하나다. `SubmitConcurrency`는 stream 수이지 연결 수가 아니다.
@@ -427,6 +423,11 @@ internal sealed class RawBenchTransport : IBenchTransport
     public bool Ready { get; private set; }
 
     public void MarkReady() => Ready = true;
+
+    private Message CreateSendHeader(bool isRequest)
+    {
+        return Message.From(isRequest ? RawEnvelopeHeaders.Request : RawEnvelopeHeaders.Command);
+    }
 
     public void StartCompletionPump()
     {
@@ -476,11 +477,7 @@ internal sealed class RawBenchTransport : IBenchTransport
         Message? body = null;
         try
         {
-            header = Message.From(
-                frameworkTarget
-                    ? RawEnvelopeHeaders.FrameworkRequest
-                    : RawEnvelopeHeaders.Request
-            );
+            header = CreateSendHeader(isRequest: true);
             body = EncodeRawPayload(payload);
             RequestSubmission submission = request!.SubmitRequest(header, body, cancellationToken);
             return new RawRequestSubmission(
@@ -520,7 +517,7 @@ internal sealed class RawBenchTransport : IBenchTransport
         Message? body = null;
         try
         {
-            header = Message.From(sendHeader);
+            header = CreateSendHeader(isRequest: false);
             body = EncodeRawPayload(payload);
             await commands[stream % commands.Length]
                 .SubmitSendAsync(header, body, cancellationToken);
