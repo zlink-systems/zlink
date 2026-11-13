@@ -17,8 +17,8 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkMeshApplicationRece
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceSendHeaderAllocationTest;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
+import systems.zlink.framework.testsupport.ChildJvm;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -45,7 +45,7 @@ public final class ZLinkJavaIngressAllocationTest {
     }
 
     static void runIsolated(Class<?> mainClass) throws Exception {
-        ZLinkServiceSendHeaderAllocationTest.runInJvm(
+        ChildJvm.runInJvm(
                 mainClass,
                 List.of(
                         "-XX:-UseTLAB",

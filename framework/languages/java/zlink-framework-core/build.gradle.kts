@@ -2,8 +2,14 @@ import java.io.File
 
 plugins {
     `java-library`
+    `java-test-fixtures`
     `maven-publish`
 }
+
+// Test fixtures are shared by this repository's test source sets only, not published.
+val javaComponent = components["java"] as AdhocComponentWithVariants
+javaComponent.withVariantsFromConfiguration(configurations["testFixturesApiElements"]) { skip() }
+javaComponent.withVariantsFromConfiguration(configurations["testFixturesRuntimeElements"]) { skip() }
 
 description = "ZLink Framework Java core contracts, runtime, handler scanner, and backend adapter"
 
@@ -28,58 +34,6 @@ sourceSets {
     named("integrationTest") {
         compileClasspath += sourceSets.test.get().output
     }
-
-    val m5Foundation by creating {
-        java.setSrcDirs(listOf(
-            "src/main/java",
-            "../../../runtime/protocol/generated/jvm"
-        ))
-        java.include(
-            "systems/zlink/framework/runtime/binding/ZLinkJavaRawServicePort.java",
-            "systems/zlink/framework/runtime/internal/service/**",
-            "ServiceWireConstants.java"
-        )
-        // This source set intentionally compiles only the isolated service
-        // foundation, so the main module descriptor would export packages
-        // that are outside this partial compilation.
-        java.exclude("module-info.java")
-        compileClasspath += main.output + configurations.compileClasspath.get()
-        runtimeClasspath += output + compileClasspath + configurations.runtimeClasspath.get()
-    }
-
-    val m5FoundationTest by creating {
-        java.setSrcDirs(listOf("src/test/java"))
-        java.include(
-            "systems/zlink/framework/runtime/binding/ZLinkJavaRawServicePortContractTest.java",
-            "systems/zlink/framework/runtime/internal/service/**"
-        )
-        compileClasspath += m5Foundation.output + main.output +
-            configurations.testCompileClasspath.get()
-        runtimeClasspath += output + compileClasspath +
-            configurations.testRuntimeClasspath.get()
-    }
-
-    configurations.named(m5FoundationTest.implementationConfigurationName) {
-        extendsFrom(configurations.testImplementation.get())
-    }
-    configurations.named(m5FoundationTest.runtimeOnlyConfigurationName) {
-        extendsFrom(configurations.testRuntimeOnly.get())
-    }
-
-tasks.register<Test>("m5FoundationTest") {
-        description = "Runs the isolated RouteMesh v11 JVM M5 foundation contract."
-        group = LifecycleBasePlugin.VERIFICATION_GROUP
-        testClassesDirs = m5FoundationTest.output.classesDirs
-        classpath = m5FoundationTest.runtimeClasspath
-        useJUnitPlatform()
-    }
-}
-
-tasks.named<JavaCompile>("compileM5FoundationJava") {
-    // Gradle otherwise auto-adds the main descriptor even when the partial
-    // source set excludes it.
-    modularity.inferModulePath.set(false)
-    exclude("module-info.java")
 }
 
 val verifyPublicContractModuleBoundary by tasks.registering {

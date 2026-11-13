@@ -13,7 +13,7 @@ import jdk.jfr.consumer.RecordingFile;
 
 import org.junit.jupiter.api.Test;
 
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceSendHeaderAllocationTest;
+import systems.zlink.framework.testsupport.ChildJvm;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -65,7 +65,7 @@ public final class ZLinkSerialTurnAllocationTest {
     }
 
     private String runProbe(boolean addObject) throws Exception {
-        return ZLinkServiceSendHeaderAllocationTest.runInJvm(
+        return ChildJvm.runInJvm(
                 getClass(),
                 List.of("-Xint", "-XX:-UseTLAB", "-XX:FlightRecorderOptions=stackdepth=128"),
                 Boolean.toString(addObject));
