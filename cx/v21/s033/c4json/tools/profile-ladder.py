@@ -7,7 +7,7 @@ out=job/'raw'/f'{stage}-L{level}-{pattern}-{size}'
 out.mkdir(exist_ok=False)
 procs=[]
 files=[]
-start=time.monotonic()
+metadata_start=time.monotonic()
 scratch=build.parent.with_name('c4json-scratch')
 source_time=max(p.stat().st_mtime for top in ['framework/bench/grpc/cpp','framework/languages/cpp','bindings/cpp'] for p in (scratch/top).rglob('*') if p.is_file() and p.suffix in ['.hpp','.cpp','.h'])
 artifacts={str(build/n):{'sha256':hashlib.sha256((build/n).read_bytes()).hexdigest(),'newer_than_sources':(build/n).stat().st_mtime>source_time} for n in ['bench_cpp_client','bench_cpp_framework_server']}
@@ -15,12 +15,14 @@ assert all(v['newer_than_sources'] for v in artifacts.values()),artifacts
 with (job/'progress.md').open('a') as f:
  f.write('\n- BEFORE '+str(out)+': scratch commit 62e766f88d, production base df42a4df40; profile only, call-shape.md; artifacts='+json.dumps(artifacts)+'\n')
 (out/'before.json').write_text(json.dumps({'artifacts':artifacts,'scratch_commit':'62e766f88d','worktree_base':'df42a4df40','call_shape':'call-shape.md','cpus':'6-7,14-15'},indent=2))
+start=time.monotonic()
+events=[]
 def expired(*args):raise TimeoutError('19 second profile run limit')
 signal.signal(signal.SIGALRM,expired);signal.alarm(19)
 def spawn(args,name,env=None):
  f=(out/(name+'.log')).open('w');files.append(f)
  p=subprocess.Popen(['taskset','-c','6-7,14-15']+args,stdout=f,stderr=subprocess.STDOUT,env=env)
- procs.append(p);return p
+ procs.append(p);events.append({'event':'spawn '+name,'seconds':time.monotonic()-start,'pid':p.pid});return p
 def http(port,path,data=None):
  req=urllib.request.Request(f'http://127.0.0.1:{port}{path}',data=None if data is None else json.dumps(data).encode(),headers={'Content-Type':'application/json'})
  with urllib.request.urlopen(req,timeout=.5) as r:return json.load(r)
@@ -28,7 +30,8 @@ def wait_ready(port):
  while True:
   try:
    r=http(port,'/ready')
-   if r.get('ready'):return r
+   if r.get('ready'):
+    events.append({'event':'ready '+str(port),'seconds':time.monotonic()-start});return r
   except (OSError,ValueError):pass
   if time.monotonic()-start>7:raise TimeoutError('startup >7 s')
   time.sleep(.04)
@@ -70,6 +73,7 @@ try:
  (out/'metadata.json').write_text(json.dumps({'stage':stage,'commit':'62e766f88dc6d1feefdff76e6132185019db0bb6','profile_only':True,'elapsed_seconds':time.monotonic()-start,'affinity':sorted(os.sched_getaffinity(0)),'binaries':{str(build/n):hashlib.sha256((build/n).read_bytes()).hexdigest() for n in ['bench_cpp_client','bench_cpp_framework_server']}},indent=2))
  print(out)
 finally:
+ (out/'startup-events.json').write_text(json.dumps({'metadata_seconds':start-metadata_start,'events':events,'seconds':time.monotonic()-start,'statuses':[(p.pid,p.poll()) for p in procs]},indent=2))
  signal.alarm(0)
  for p in reversed(procs):
   if p.poll() is None:p.terminate()

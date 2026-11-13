@@ -63,7 +63,7 @@ fi
 stamp="lad-node-s2-${variant}-${pattern}-${size}-${phase}-$(date -u +%H%M%S)"
 env -u ZLINK_LADDER_L0R -u ZLINK_LADDER_L2R_ENVELOPE -u ZLINK_LADDER_L3R_SERVICE_WIRE \
   "${env_args[@]}" "${args[@]}" PATTERNS="$pattern" PAYLOAD_SIZES="$size" RUNS=1 SKIP_BUILD=1 \
-  WARMUP_SECONDS=3 DURATION_SECONDS=5 SOURCE_CPUS=0-5 TARGET_CPUS=8-13 \
+  WARMUP_SECONDS=10 DURATION_SECONDS=5 SOURCE_CPUS=0-5 TARGET_CPUS=8-13 \
   SCHEDULING_RECORD=1 OUTPUT_DIR="$out" RUN_STAMP="$stamp" \
   bash "$runner" >"$out/driver.log" 2>&1 || { printf '\n- INVALID %s %s-%s phase=%s: runner failed; raw=%s\n' "$(date -u +%FT%TZ)" "$variant" "$pattern" "$size" "$phase" "$out" >> "$JOB/progress.md"; exit 0; }
 result="$out/run1/$impl-$pattern-$size/results.json"

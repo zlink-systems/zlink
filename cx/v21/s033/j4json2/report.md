@@ -127,4 +127,5 @@ C++의 동적 storage 수는 allocator/container 구현에 의존한다. 이 소
 - 규칙 수: Base64 유효성 판정 위치 **2→1**(JDK decode + roundtrip verifier → 검증하며 decode하는 profile owner). 추가 state/flag/queue/lock/mapping 없음.
 - 리팩토링 점검: 성능·POSDDD·불필요 코드 기준으로 수정 모듈과 호출 경로를 점검. 중복 변환 1건 발견·1건 수정·넘긴 결함 0. 기존 native snapshot/frame copy는 비용으로 기록하고 유지.
 - 남은 실패: 없음. 수정 전 의도한 regression failure와 초기 profile 준비 실패 raw는 최종 실패에 포함하지 않는다.
-- local commit 및 scratch 정리: 최종 기록을 아래에 추가한다. push/PR/GitHub 작업 없음.
+- local commit: `80958e1be4a6899ff80f2a06feea54f63b63d5b4` (`perf/4354-java-typed-json`), parent `df42a4df40`. 두 Java 파일만 commit했고 worktree는 clean이다. [기록](raw/local-commit.json). push/PR/GitHub 작업 없음.
+- scratch 정리: 검증 산출물을 보존한 뒤 임시 worktree와 분석 tool을 정리한다. raw는 삭제하지 않는다.

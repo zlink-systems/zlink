@@ -10,6 +10,7 @@ for f in paths:
     assert f.exists(), f
     assert f.stat().st_mtime > max(x.stat().st_mtime for x in f.parents[4].rglob('*.cs') if '/obj/' not in str(x) and '/bin/' not in str(x)), f
 manifest = dict(commit='29d9fca82b', scratch_archive=True, production_dirty=bool(subprocess.check_output(['git','status','--porcelain'],text=True).strip()), base=subprocess.check_output(['git','merge-base','HEAD','origin/main'],text=True).strip(), pinned='6-7,14-15', max_process_seconds=20, throughput_verdict=False, artifacts={str(f):hashlib.sha256(f.read_bytes()).hexdigest() for f in paths + [paths[0].parent/'Zlink.Framework.dll']})
+manifest['serializer_sources'] = {str(f.relative_to(scratch)):hashlib.sha256(f.read_bytes()).hexdigest() for f in [scratch/'framework/languages/dotnet/src/Shared/ZLinkJsonSerializerOptions.cs',scratch/'framework/languages/dotnet/src/Zlink.Framework/Runtime/Messaging/ZLinkFrameworkJsonPayloadCodec.cs',scratch/'framework/languages/dotnet/src/Zlink.Framework/Runtime/Messaging/ZLinkEnvelopeCodec.cs']}
 (out/'manifest.json').write_text(json.dumps(manifest,indent=2))
 with (job/'progress.md').open('a') as f: f.write('\n- profile '+str(out.relative_to(job))+': '+json.dumps(manifest)+'\n')
 env = os.environ.copy()

@@ -13,6 +13,8 @@ a.add_argument('--profile', action='store_true')
 a.add_argument('--scenario', default='request-backpressure', choices=['request-backpressure','send-saturation'])
 a.add_argument('--core')
 a.add_argument('--c1', action='store_true')
+a.add_argument('--delayed', action='store_true')
+a.add_argument('--startup-dump', action='store_true')
 args = a.parse_args()
 root = Path('/root/worktree/zlink-v21-s033/j57-scratch')
 bench = root / 'framework/bench/grpc' / args.language
@@ -35,11 +37,15 @@ if args.language == 'java':
             ('zlink-framework-server','bench-zlink-framework-server','systems.zlink.bench.withgrpc.frameworkserver.ZLinkFrameworkBenchServer'))
         cmd = [java, '--enable-native-access=ALL-UNNAMED', '-Xms256m', '-Xmx1g']
         if args.c1: cmd += ['-XX:TieredStopAtLevel=1']
-        if args.profile:
+        if args.profile and not args.delayed:
             cmd += [f'-agentpath:/root/jobs/fx/cx/v21/s033/l2bp/tools/libasyncProfiler.so=start,event=ctimer,interval=1ms,wall=10ms,alloc=256k,jfr,file={out}/{role}.jfr']
         classpath = str(bench / project / 'build/install' / app / 'lib/*')
         if args.core: classpath = args.core + os.pathsep + classpath
-        cmd += ['-cp', classpath, main]
+        if args.profile and args.delayed:
+            classpath = str(P/'tools') + os.pathsep + '/root/jobs/fx/cx/v21/s033/l2bp/tools/async-profiler-4.6-linux-x64.jar' + os.pathsep + classpath
+            cmd += ['-cp',classpath,'ProfileLauncher',main,stats if role=='source' else target,str(out/f'{role}.jfr')]
+        else:
+            cmd += ['-cp', classpath, main]
         return cmd
 else:
     env.update(ZLINK_LADDER_L0_SERVER='1', ZLINK_LADDER_L0_CLIENT='1', ZLINK_LADDER_L1_PERMIT='1')
@@ -68,11 +74,20 @@ def request(url, body=None):
         return json.load(r)
 
 def await_ready(url, require=True):
-    while time.monotonic() - start < 12:
+    dumped=False
+    while time.monotonic() - start < 15:
         try:
             val = request(url + '/bench/stats')
             if not require or val.get('ready'): return val
         except (OSError,ValueError): pass
+        if args.startup_dump and not dumped and time.monotonic()-start > 7:
+            dumped=True
+            for role,p,_ in procs:
+                children=Path(f'/proc/{p.pid}/task/{p.pid}/children').read_text().split()
+                for child in children:
+                    with (out/f'{role}-startup-threads.txt').open('w') as f:
+                        try: subprocess.run(['taskset','-c',CPUS,'/usr/lib/jvm/java-25-openjdk-amd64/bin/jcmd',child,'Thread.print'],stdout=f,stderr=subprocess.STDOUT,timeout=2)
+                        except subprocess.TimeoutExpired: pass
         if any(p.poll() is not None for _,p,_ in procs): raise RuntimeError('process exited during startup')
         time.sleep(.04)
     raise RuntimeError('startup deadline')
@@ -85,9 +100,11 @@ def snapshot(label):
         threads = []
         for child in children:
             for t in Path(f'/proc/{child}/task').glob('*'):
-                status = t.joinpath('status').read_text()
-                affinity = next(s.split(':',1)[1].strip() for s in status.splitlines() if s.startswith('Cpus_allowed_list:'))
-                threads.append({'tid':t.name,'affinity':affinity,'stat':t.joinpath('stat').read_text(),'wchan':t.joinpath('wchan').read_text()})
+                try:
+                    status = t.joinpath('status').read_text()
+                    affinity = next(s.split(':',1)[1].strip() for s in status.splitlines() if s.startswith('Cpus_allowed_list:'))
+                    threads.append({'tid':t.name,'affinity':affinity,'stat':t.joinpath('stat').read_text(),'wchan':t.joinpath('wchan').read_text()})
+                except FileNotFoundError: pass
         result['processes'][role] = {'threads':threads, 'processes': {child: {'stat':Path(f'/proc/{child}/stat').read_text(), 'status':Path(f'/proc/{child}/status').read_text()} for child in children}}
     (out / (label + '.json')).write_text(json.dumps(result,indent=2))
 
@@ -143,6 +160,9 @@ finally:
     for role,p,born in procs:
         try: p.wait(timeout=1)
         except subprocess.TimeoutExpired: os.killpg(p.pid, signal.SIGKILL); p.wait()
+    for role,p,born in procs:
+        try: os.killpg(p.pid,signal.SIGKILL)
+        except ProcessLookupError: pass
     (out / 'lifecycle.json').write_text(json.dumps({'elapsed':time.monotonic()-start, 'startMonotonicUs':start*1e6,
        'processes':[{'role':role,'pid':p.pid,'returncode':p.returncode} for role,p,_ in procs]},indent=2))
     for f in logs: f.close()
