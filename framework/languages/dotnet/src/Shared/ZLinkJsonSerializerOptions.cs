@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Buffers.Text;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -40,6 +42,7 @@ internal static class ZLinkJsonSerializerOptions
         options.Converters.Add(new FrameworkSigned64JsonConverter());
         options.Converters.Add(new FrameworkUnsigned64JsonConverter());
         options.Converters.Add(new FrameworkSingleJsonConverter());
+        options.Converters.Add(new FrameworkByteArrayJsonConverter());
         options.Converters.Add(new FrameworkEnumJsonConverterFactory());
         options.Converters.Add(new UnsupportedImplicitTypeJsonConverterFactory());
 #if ZLINK_FRAMEWORK
@@ -276,6 +279,51 @@ internal static class ZLinkJsonSerializerOptions
             writer.WriteStringValue(
                 value.ToString(System.Globalization.CultureInfo.InvariantCulture)
             );
+    }
+
+    private sealed class FrameworkByteArrayJsonConverter : JsonConverter<byte[]>
+    {
+        public override byte[] Read(
+            ref Utf8JsonReader reader,
+            Type typeToConvert,
+            JsonSerializerOptions options
+        )
+        {
+            if (
+                reader.TokenType == JsonTokenType.String
+                && !reader.HasValueSequence
+                && !reader.ValueIsEscaped
+                && (reader.ValueSpan.Length & 3) == 0
+            )
+            {
+                var encoded = reader.ValueSpan;
+                var length = Base64.GetMaxDecodedFromUtf8Length(encoded.Length);
+                if (!encoded.IsEmpty && encoded[encoded.Length - 1] == '=')
+                {
+                    length--;
+                    if (encoded[encoded.Length - 2] == '=')
+                        length--;
+                }
+                var decoded = length == 0 ? Array.Empty<byte>() : new byte[length];
+                if (
+                    Base64.DecodeFromUtf8(encoded, decoded, out var consumed, out var written)
+                        == OperationStatus.Done
+                    && consumed == encoded.Length
+                    && written == decoded.Length
+                )
+                    return decoded;
+            }
+
+            // Keep the reader's existing handling of escaped, segmented and
+            // noncanonical input without an intermediate string conversion.
+            return reader.GetBytesFromBase64();
+        }
+
+        public override void Write(
+            Utf8JsonWriter writer,
+            byte[] value,
+            JsonSerializerOptions options
+        ) => writer.WriteBase64StringValue(value);
     }
 
     private sealed class FrameworkSingleJsonConverter : JsonConverter<float>
