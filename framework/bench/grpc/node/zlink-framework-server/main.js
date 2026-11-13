@@ -47,6 +47,8 @@ if (process.env.ZLINK_LADDER_L0_SERVER === '1') {
     || process.env.ZLINK_CROSS_FRAMEWORK_WIRE === '1';
   const echoHandler = new EchoHandler(metrics);
   const commandHandler = new CommandHandler(metrics);
+  const IDLE_SPIN_LIMIT = 20000;
+  let idleSpins = 0;
 
   function frameworkResponseHeader(bytes) {
     const header = JSON.parse(bytes.subarray(1).toString('utf8'));
@@ -87,7 +89,19 @@ if (process.env.ZLINK_LADDER_L0_SERVER === '1') {
         console.error(`ladder L0 handler failed: ${error.message}`);
       }
     }
-    setImmediate(pump);
+    return handled;
+  }
+
+  function schedulePump() {
+    const handled = pump();
+    if (handled > 0) {
+      idleSpins = 0;
+      setImmediate(schedulePump);
+      return;
+    }
+    idleSpins += 1;
+    if (idleSpins < IDLE_SPIN_LIMIT) setImmediate(schedulePump);
+    else setTimeout(schedulePump, 1);
   }
 
   process.stderr.write(`[framework-server-l0] endpoint=${endpoint} stats=${metricsUrl}\n`);
@@ -96,7 +110,7 @@ if (process.env.ZLINK_LADDER_L0_SERVER === '1') {
     ctx.close();
     process.exit(0);
   });
-  setImmediate(pump);
+  setImmediate(schedulePump);
 } else {
 
 class BenchServerModule {}
