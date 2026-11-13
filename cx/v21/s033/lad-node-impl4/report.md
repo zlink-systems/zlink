@@ -1,7 +1,8 @@
-# Node ladder L4 구현
+# Node ladder L4 및 L5~L7 구현
 
-측정은 실행하지 않았다. 실험 브랜치에 L4를 로컬 커밋으로 기록한다.
+측정은 실행하지 않았다. L4와 L5~L7 그룹을 실험 브랜치에 별도 로컬 커밋으로 기록한다.
 
 | 단계 | 복원 기능 및 production 경로 | Bench 코드 | 커밋 | 빌드·검증 | 호출 형태 및 재개 후 측정 |
 |---|---|---|---|---|---|
 | L4 (#4354) | 기본 typed JSON payload encode/decode. 송신 `channel-outbound-operations.ts:79-90,213-224` → `channel-envelope.ts:471-532`; 수신 `channel-dispatch-pipeline.ts:349-356` → `channel-envelope.ts:413-436`; reply encode/decode `channel-dispatchers.ts:243`, `channel-outbound-operations.ts:243-249` → `channel-envelope.ts:217-237,321-356`. | L4 client/server switch `ZLINK_LADDER_L4_CLIENT` / `ZLINK_LADDER_L4_SERVER`; `client/main.js:263-330`, `zlink-framework-server/main.js:98-128,150-164,250-269`, `shared/raw-wire.js:96-136`; production channel envelope의 기본 JSON 경로 사용. channel envelope 모듈은 L2부터 로드되므로 별도 L4R은 추가하지 않음. | `33b6c9b030` | `framework/bench/grpc/node/build.sh` 성공; `npm test` 21/21; `node --check` 3개 JS 성공; dist의 `channel-envelope.js`가 TS source보다 최신; L4 server dry start `/ready` 및 `/bench/stats` 응답, errors=0/received=0. 측정·measure.lock 미사용. | [L4 call-shape](call-shape-L4.md): source send·target receive·target reply·source completion의 의도된 차이는 L4 JSON payload codec이며, L1-L3는 이전 단계. 측정 재개 시 **L3 대 L4**, send-saturation/request-serial/request-backpressure 각 1K·4K의 6 cells. |
+| L5~L7 (#4355~4357) | Owner mailbox/worker dispatch, per-dispatch handler activation·DI scope, operation registry·completion을 함께 복원. Production 경로는 [L5~L7 call-shape](call-shape-L5-7.md)에 기록. | 단일 그룹 스위치 `ZLINK_LADDER_L5_7_CLIENT` / `ZLINK_LADDER_L5_7_SERVER`; `client/framework-transport.js:23-75`, `zlink-framework-server/main.js:332-378`; public Nest/Framework client/server 사용, protobuf codec은 비활성화하여 L4 JSON 유지. | `3c50a02908` | `framework/bench/grpc/node/build.sh` 성공; `npm test` 21/21; 4개 JS `node --check` 통과; full Framework server dry start `/ready` 및 `/bench/stats` 응답, errors=0/received=0. 측정·measure.lock 미사용. | Node owner queue 진입이 activation과 completion에 이어져 한 그룹으로 묶음. 측정 재개 시 **L4 대 L5~L7**, send-saturation/request-serial/request-backpressure 각 1K·4K의 6 cells; 예산 21%. |

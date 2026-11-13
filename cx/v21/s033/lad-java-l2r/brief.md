@@ -1,18 +1,17 @@
 Model gpt-6-luna, effort high. Earlier job briefs are history, not instructions.
 
-# Task: #4352 Java L2 request-backpressure 1K — 5 more runs (verdict on hold). MEASUREMENT ONLY.
+# Task: Java ladder L2 — add the REPLY envelope (encode at target reply, completion header parse at source), then replay the later steps on top. IMPLEMENTATION ONLY, NO MEASUREMENT. EXPERIMENT BRANCH ONLY.
 
-Worktree /root/worktree/zlink-v21-s033/lad-java-l2r, detached at bf83275257 (L2, production envelope encode path). Do not commit, push or open a PR. No code changes.
-Read first: /root/jobs/fx/cx/v21/s033/common-rules.md and /root/jobs/fx/cx/v21/s033/lad-java-l2b/report.md.
+Worktree /root/worktree/zlink-v21-s033/lad-java, branch exp/4350-java-ladder. Current L2 commit: bf83275257. Branch tip: TIP. Commit locally only; never push, never open a PR, no GitHub, no sub-agents or other AI tools, never run internal-docs.sh. Do NOT take /root/jobs/fx/cx/measure.lock and do NOT run any benchmark; builds and unit/contract tests only.
+Read first: /root/jobs/fx/cx/v21/s033/common-rules.md, /root/jobs/fx/cx/v21/s033/ladder-status.txt (step definition table), the C++ L2 reference: l3868-impl2/report.md and git show fbdcb16e26 in /root/worktree/zlink-v21-s033/l3868-next (C++ L2 restores request AND reply envelope: reply via production route_packet_dispatcher.cpp:444, completion header parse once). Previous Java L2: commits 5d74ddac1e, e32f4ff127, bf83275257 (lad-java-l2b/report.md). Use the LAST of those three (bf83275257) as the L2 commit to build on, i.e. replace  above with bf83275257 in every command. Later steps: parity 6b77f3b04d, L3 23be466e71 (on top of WIP c20022b27e), L4 18a25db605, L5~L7 from lad-java-impl5.
 
-## Why
-lad-java-l2b measured L2 request-backpressure 1K 5 runs: L2 [142,235.4, 134,050.8, 136,888.0, 136,130.6, 112,731.0], G5 spread 17.2% (fail). Per the rule this cell is on hold; PM asked for 5 more runs.
+## Why (PM 11-13 18:05)
+L2 = envelope header on BOTH request and reply, as production does. Java L2 restored only the request side; the reply-side envelope must be added so all four languages measure the same step.
 
 ## Do
-1. Build in THIS worktree with framework/bench/grpc/java/build.sh; verify JARs newer than sources. Never use other worktrees' builds.
-2. Copy /root/jobs/fx/cx/v21/s033/lad-java-l2b/tools to lad-java-l2r/tools, change only JOB/raw/worktree paths. Progress line before measuring.
-3. One lock session: request-backpressure 1K, binding and L2, 5 runs. G5 spread = largest |run − median| ÷ median.
-4. Report the new 5 runs alone, and all 10 L2 runs together (median, spread). Step loss = 1 − (L2÷binding)/1.007 (L1 ratio). Verdict: pass only if the new 5-run set passes G5 and loss ≤ 7%; if G5 fails again, say "판정 불가" and list the outlier runs with their timestamps.
+1. Create the fix on top of the L2 commit: git switch -c tmp-l2-reply bf83275257. Add the production reply envelope encode on the target reply path and the production completion header parse (once) on the source, under the same L2 run-time switch. Trace production file:line for both. Build + tests; commit "bench(Java): restore reply envelope in ladder L2 (#4352)".
+2. Replay the later steps: git rebase --onto tmp-l2-reply bf83275257 exp/4350-java-ladder (non-interactive). Resolve conflicts so each later step keeps its own feature; where a later step already uses the full production path (e.g. L5~L7 through the public Framework route), keep that. After the rebase, build and run the bench unit/contract tests at the tip; if a middle commit no longer builds, fix it in that commit (git rebase -x "<build cmd>" is fine). Delete tmp-l2-reply after.
+3. Update call-shape: append the reply-side rows (target reply, source completion) with file:line to the L2 call-shape file of this language, and note in report.md the old→new commit ids of every replayed step.
 
 ## Output
-/root/jobs/fx/cx/v21/s033/lad-java-l2r/report.md (Korean, short table, numbers cite raw files). Time cap 2 h.
+/root/jobs/fx/cx/v21/s033/lad-java-l2r/report.md (Korean, short): reply envelope production path file:line, bench file:line, new L2 commit, old→new commit map, build/test evidence. Time cap 3 h.
