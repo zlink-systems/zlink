@@ -1,6 +1,6 @@
 # Java typed JSON byte[] 비용 조사·수정
 
-**wire는 유지한다.** Java decode의 `getText → Base64.decode(String) → encodeToString → equals`가 byte[] field마다 전체 길이의 중간 buffer를 만든다. encode는 이미 Jackson UTF-8 streaming 경로다. 수정 대상은 shared JVM profile의 bytes decoder이며 application DTO·bench·spec·public API는 바꾸지 않는다.
+**wire를 유지하면서 native 입력 decode 할당을 1K 62.62%, 4K 67.61% 줄였다.** [고정 횟수 대조](raw/allocation-comparison.json). Java decode의 `getText → Base64.decode(String) → encodeToString → equals`가 byte[] field마다 전체 길이의 중간 buffer를 만든다. encode는 이미 Jackson UTF-8 streaming 경로다. 수정 대상은 shared JVM profile의 bytes decoder이며 application DTO·bench·spec·public API는 바꾸지 않는다.
 
 ## 구현 전 원인·소유 판정
 
@@ -25,7 +25,7 @@
 | 대안 | 비용·판정 |
 |---|---|
 | JDK decode 유지 + 재encode 비교만 padding bit 검사로 교체 | 기존 intrinsic decoder를 유지하지만 token String과 String→Latin-1 copy가 남는다 |
-| parser의 char range에서 기존 Jackson Base64 alphabet을 사용해 검증과 decode를 한 번에 수행 | decoded byte[] 하나를 정확한 크기로 할당한다. 정상 경로의 token String·Latin-1 input·재encode 결과를 제거한다. 선택안. 잘못된 입력의 기존 error category/message를 보존한다 |
+| parser의 char range에서 기존 Jackson Base64 alphabet을 사용해 검증과 decode를 한 번에 수행 | decoded byte[] 하나를 정확한 크기로 할당한다. 정상 경로의 token String·Latin-1 input·재encode 결과를 제거한다. 선택·구현안. 잘못된 입력의 기존 error category/message를 보존한다 |
 
 규칙 수는 Base64 유효성을 결정하는 algorithm 위치를 센다. **수정 전 2(JDK decode + roundtrip 비교) → 후 1(검증하며 decode)**. 길이·alphabet·마지막 quartet의 padding 및 zero pad bits는 같은 RFC 4648 규칙을 이 owner 한 곳에서 확인한다. 새 flag·queue·lock·runtime cache 없음. 별도의 Base64 alphabet mapping도 추가하지 않고 Jackson의 기존 mapping을 재사용한다.
 
@@ -42,7 +42,7 @@ N은 byte[] field의 길이, B=4×ceil(N/3), J는 `{\"body\":\"…\"}`의 UTF-8 
 | borrowed decode input | native/partial ByteBuffer이면 heap byte[J] 1개와 J copy 1회. 전체 heap array이면 이 copy 0. public `deserialize(ZLinkEncodedPayload)`는 `.bytes()` snapshot J copy 1회 | `ZLinkJsonMessageSerializer.java:89,102-116`; `ZLinkEncodedPayload.java:35-36` |
 | JSON parser | UTF-8→token char buffer 변환, parser/context/duplicate detector/property buffer/record 생성. tree model 0. metadata lookup은 cache를 쓰지만 record constructor/accessor의 reflective invocation 자체는 남는다 | `ZLinkJsonMessageSerializer.java:39-46,116,128-133`; Jackson mapper/parser와 record binding |
 | bytes decode (수정 전) | 결과 byte[N] + byte[B] 4개 + String 2개. 여러 token segment면 StringBuilder와 backing byte[B] 추가. bytes→Base64 재encode 1회 포함 | shared profile :362-369; `TextBuffer.java:461-505`; JDK bytecode raw |
-| bytes decode (제안) | 결과 byte[N] 1개. contiguous token char buffer borrow; 여러 segment면 char[B] coalesce 1개. String·Latin-1 copy·재encode 없음 | 구현 전 제안. profile과 unit test 뒤 확인 |
+| bytes decode (수정 후) | 결과 byte[N] 1개. contiguous token char buffer borrow; 여러 segment면 char[B] coalesce 1개. String·Latin-1 copy·재encode 없음 | `ZLinkFrameworkJsonProfile.java:367-416`; 수정 후 JFR와 63개 test로 확인 |
 
 L4 bench 출입 경계도 별도로 센다. source와 reply encode는 retained payload를 바로 native service frame에 쓰므로 generator→builder, builder→exact heap byte[], heap→native frame의 **J copy 총 3회**이며 Base64 transform은 1회다. 이 경로에서 body를 별도 Message로 먼저 materialize하는 copy를 추가로 계산하지 않는다. 반면 receive의 `parts.getLast().dataBuffer()`(target `ZLinkFrameworkBenchServer.java:315-317`, source `RawStack.java:469-477`)는 `ZLinkFrameworkMultipartView.get:32-43`에서 native part snapshot J copy 1회를 먼저 만든다. 이후 serializer의 native→heap J snapshot 1회가 별도다. 앞의 part materialization은 service framing/caller 비용이고 allocation probe의 deserializeBorrowed 범위 밖이다. 이 호출 조건과 bench source는 바꾸지 않았다. 관련 production 네 파일은 `df42a4df40`와 `9d9901eb2c`에서 동일함을 확인해 raw의 `ZLinkPayloadEncoding.java.txt`, `ZLinkChannelEnvelope.java.txt`, `ZLinkFrameworkMultipartView.java.txt`, `ZLinkServiceM6AWireCodec.java.txt`에 보존했다.
 
@@ -90,7 +90,7 @@ C++의 동적 storage 수는 allocator/container 구현에 의존한다. 이 소
 **Node ladder의 Buffer Base64 경로:** `7d1afa98a9:framework/bench/grpc/node/shared/raw-wire.js:119-138`은 production channel encoder가 만든 JSON String을 `Buffer.from(...,'utf8')`로 바꿔 Message.from에 넘긴다(J encode 1회 + native J copy 1회). :141-148은 먼저 `Buffer.from(encoded)`로 whole JSON J copy 1회, production decode에서 UTF-8→JSON String 변환 1회 후, schema가 없는 body String을 **`Buffer.from(payload.body,'base64')`로 N bytes에 직접 decode**한다. reply도 :151-154에서 같은 Buffer Base64 decode를 쓴다. 이 decode의 payload 크기 storage는 JSON String(J), parsed Base64 String(B), output Buffer(N)이며 binary String(N)이나 재encode 검증은 없다. runtime `buffer.js:451-481,623-631,684-689`가 padded 길이를 계산하고 base64Write를 output storage에 직접 수행한다. Buffer의 slab allocation과 wrapper/view 수는 runtime pool 상태에 따라 다르며 매 message 독립 heap backing N개라고 세지 않는다. 이 bench helper는 production schema의 atob→Uint8Array typed bytes path와 다르다. wire 표현이 같아도 Java bytes deserializer와 allocation shape가 동일하지 않다. 원문은 [Node bench](raw/node-bench-raw-wire.txt)에 보존했다.
 
 
-.NET library `file:line`은 **설치된 .NET 8.0.31 assembly의 정적 decompile 결과** `raw/dotnet8/`를 기준으로 했다. [provenance](raw/dotnet8/provenance.json)에 assembly SHA-256과 tool version을 보존했다. repository 기본 target은 `Directory.Build.props:3`의 net8.0이며 Framework core는 System.Text.Json PackageReference를 추가하지 않는다. 중앙의 8.0.5 pin은 Stream Connector의 netstandard2.1 조건용이다(`Directory.Packages.props:31`, `src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj:24`). upstream source.dot.net snapshot은 참고 자료로만 보존했다. 실제 .NET 8 writer의 pooled Base64 scratch와 B copy를 확인했으며, direct writer span이라고 계산하지 않는다. .NET code·build·test·profile은 변경하거나 실행하지 않았다.
+.NET library `file:line`은 **설치된 .NET 8.0.31 assembly의 정적 decompile 결과** `raw/dotnet8/`를 기준으로 했다. [provenance](raw/dotnet8/provenance.json)에 assembly SHA-256과 tool version을 보존했다. repository 기본 target은 `Directory.Build.props:3`의 net8.0이며 Framework core는 System.Text.Json PackageReference를 추가하지 않는다. 중앙의 8.0.5 pin은 Stream Connector의 netstandard2.1 조건용이다(`Directory.Packages.props:31`, `src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj:24`). upstream source.dot.net snapshot은 참고 자료로만 보존했다. 실제 .NET 8 writer의 pooled Base64 scratch와 B copy를 확인했으며, direct writer span이라고 계산하지 않는다. .NET Framework 구현 수정·build·test·profile은 하지 않았다(assembly 정적 검사만 수행).
 
 ## 구현·검증 결과
 

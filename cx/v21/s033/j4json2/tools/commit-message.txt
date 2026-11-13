@@ -1,0 +1,19 @@
+perf(java): decode typed JSON bytes without Base64 roundtrips
+
+Decode canonical padded Base64 from the parser character range into one
+owned byte array. Reuse Jackson's alphabet map and check unused padding
+bits while decoding, preserving JSON bytes and error categories.
+
+Cover sizes 0, 1, 2, 3, 127, 128, 1024 and 4096, invalid padding and
+alphabet characters, escaped values, character offsets and owned storage.
+The new String-materialization guards fail before the change and pass
+after it.
+
+Validation: 63 focused framework tests, public contract module boundary,
+and Java/Kotlin format check pass. Allocation and CPU profiles use the
+unchanged L4 DTO and wire; no throughput comparison.
+
+Owner: Framework shared JVM JSON profile.
+Spec: message model section 5, padded RFC 4648 Base64 (line 153).
+Cross-language: C++, .NET 8 and Node have no decode/re-encode verifier.
+Classification: B. Base64 validation owners 2 -> 1; no added state or map.

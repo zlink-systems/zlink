@@ -47,3 +47,17 @@
 - profile before-L2-final L2 request-backpressure 1024: binding recv zlink-raw-server/main.js:47-53,64-81 ↔ ladder zlink-framework-server/main.js:166-205 (same DontWait drain/metrics; L1 permit). reply raw :82-86 ↔ ladder :206-212/shared/raw-wire.js:114-116 (new protobuf/body, L2 header only). Wait/atomics/body copies unchanged; header allocations report.md. CPU 6-7,14-15, ≤19s/child, no measure.lock.
 
 - 유효 수정 전 profile: raw/node/before-L1-final, before-L2-final; 각 앞 discarded warm run 보존. source/target exit0, lifecycle<12s. CPU raw/cpu-summary.json, per-op allocations raw/alloc-before/allocation-summary.json에 기록.
+
+- focused 검사 중 message-flow 파일이 stream-connector dist/package.json 미생성 때문에 CommonJS exports를 ESM으로 해석해 import 단계 실패. 공식 prepare_browser_build.mjs가 쓰는 동일한 own dist/package.json을 생성함. 구현/expectation 수정 없음. 이 파일만 재실행할 예정.
+
+- build/검증 fingerprint: warm-after-L1-final 5f3a59bff64a7044373f9625d2e6041a130c26b4 dirty=True merge-base=df42a4df4098d543be8dc0b84510cf6d961576d8; raw/warm-after-L1-final-fingerprint.json (source/output fresh, own worktree paths·sha256).
+
+- profile warm-after-L1-final L1 request-backpressure 1024: binding recv zlink-raw-server/main.js:47-53,64-81 ↔ ladder zlink-framework-server/main.js:166-205 (same DontWait drain/metrics; L1 permit). reply raw :82-86 ↔ ladder :206-212/shared/raw-wire.js:114-116 (new protobuf/body, L2 header only). Wait/atomics/body copies unchanged; header allocations report.md. CPU 6-7,14-15, ≤19s/child, no measure.lock.
+
+- build/검증 fingerprint: after-L1-final 5f3a59bff64a7044373f9625d2e6041a130c26b4 dirty=True merge-base=df42a4df4098d543be8dc0b84510cf6d961576d8; raw/after-L1-final-fingerprint.json (source/output fresh, own worktree paths·sha256).
+
+- profile after-L1-final L1 request-backpressure 1024: binding recv zlink-raw-server/main.js:47-53,64-81 ↔ ladder zlink-framework-server/main.js:166-205 (same DontWait drain/metrics; L1 permit). reply raw :82-86 ↔ ladder :206-212/shared/raw-wire.js:114-116 (new protobuf/body, L2 header only). Wait/atomics/body copies unchanged; header allocations report.md. CPU 6-7,14-15, ≤19s/child, no measure.lock.
+
+- build/검증 fingerprint: warm-after-L2-final 5f3a59bff64a7044373f9625d2e6041a130c26b4 dirty=True merge-base=df42a4df4098d543be8dc0b84510cf6d961576d8; raw/warm-after-L2-final-fingerprint.json (source/output fresh, own worktree paths·sha256).
+
+- profile warm-after-L2-final L2 request-backpressure 1024: binding recv zlink-raw-server/main.js:47-53,64-81 ↔ ladder zlink-framework-server/main.js:166-205 (same DontWait drain/metrics; L1 permit). reply raw :82-86 ↔ ladder :206-212/shared/raw-wire.js:114-116 (new protobuf/body, L2 header only). Wait/atomics/body copies unchanged; header allocations report.md. CPU 6-7,14-15, ≤19s/child, no measure.lock.

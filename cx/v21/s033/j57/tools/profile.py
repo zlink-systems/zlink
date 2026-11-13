@@ -12,6 +12,7 @@ a.add_argument('--warmup', type=float, default=3)
 a.add_argument('--profile', action='store_true')
 a.add_argument('--scenario', default='request-backpressure', choices=['request-backpressure','send-saturation'])
 a.add_argument('--core')
+a.add_argument('--c1', action='store_true')
 args = a.parse_args()
 root = Path('/root/worktree/zlink-v21-s033/j57-scratch')
 bench = root / 'framework/bench/grpc' / args.language
@@ -33,6 +34,7 @@ if args.language == 'java':
         project, app, main = (('client','bench-client','systems.zlink.bench.withgrpc.client.BenchClient') if role == 'source' else
             ('zlink-framework-server','bench-zlink-framework-server','systems.zlink.bench.withgrpc.frameworkserver.ZLinkFrameworkBenchServer'))
         cmd = [java, '--enable-native-access=ALL-UNNAMED', '-Xms256m', '-Xmx1g']
+        if args.c1: cmd += ['-XX:TieredStopAtLevel=1']
         if args.profile:
             cmd += [f'-agentpath:/root/jobs/fx/cx/v21/s033/l2bp/tools/libasyncProfiler.so=start,event=ctimer,interval=1ms,wall=10ms,alloc=256k,jfr,file={out}/{role}.jfr']
         classpath = str(bench / project / 'build/install' / app / 'lib/*')
@@ -89,7 +91,7 @@ def snapshot(label):
         result['processes'][role] = {'threads':threads, 'processes': {child: {'stat':Path(f'/proc/{child}/stat').read_text(), 'status':Path(f'/proc/{child}/status').read_text()} for child in children}}
     (out / (label + '.json')).write_text(json.dumps(result,indent=2))
 
-fingerprint = {'scratchCommit':'cffa8009d3','mainHead':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(), 'mainDirty':subprocess.check_output(['git','status','--short'],text=True), 'cpus':CPUS, 'jars':{}}
+fingerprint = {'config':vars(args),'scratchCommit':'cffa8009d3','mainHead':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(), 'mainDirty':subprocess.check_output(['git','status','--short'],text=True), 'cpus':CPUS, 'jars':{}}
 for project, app in [('client','bench-client'),('zlink-framework-server','bench-zlink-framework-server')]:
     jars=list((bench/project/'build/install'/app/'lib').glob('*.jar'))
     if not jars: raise RuntimeError('missing fresh build')
