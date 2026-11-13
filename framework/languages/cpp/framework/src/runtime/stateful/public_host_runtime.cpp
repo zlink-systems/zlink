@@ -3195,11 +3195,7 @@ task_t<zlink::submit_result_t> public_host_runtime_t::send_to_actor (
           target, record_kind_t::actor_send, parts, nullptr, std::move (bound_session_source), {},
           authority_owner_generation, owner_lease_generation);
     }
-    const auto peer = _transport->topology ().peer (target_routing_id.to_bytes ());
-    if (!peer) {
-        co_return zlink::submit_result_t::not_connected;
-    }
-    const auto node_generation = peer->descriptor.lifecycle_generation;
+    // Submit/completion §5: a missing Actor authority is NotFound before any route check.
     const auto object = co_await _objects.find_async (stateful::object_kind_t::actor,
                                                       std::string (target.actor_id ().value ()));
     const auto authority_generation = authority_owner_generation != 0 ? authority_owner_generation
@@ -3210,6 +3206,11 @@ task_t<zlink::submit_result_t> public_host_runtime_t::send_to_actor (
       authority_generation, owner_lease_generation, _options.owner_lease_fencing_margin);
     if (!route_fence || route_fence->fence.authority_owner_generation != authority_generation)
         co_return zlink::submit_result_t::not_found;
+    const auto peer = _transport->topology ().peer (target_routing_id.to_bytes ());
+    if (!peer) {
+        co_return zlink::submit_result_t::not_connected;
+    }
+    const auto node_generation = peer->descriptor.lifecycle_generation;
     co_return co_await _transport->send_to_actor_result (
       zlink::routing_id_t::from (std::string (target.node_rid ().value ())).to_bytes (),
       std::nullopt,
@@ -3252,7 +3253,8 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
   std::span<const std::uint8_t> metadata,
   std::uint64_t authority_owner_generation,
   std::uint64_t owner_lease_generation,
-  std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source)
+  std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source,
+  std::uint64_t node_generation)
 {
     const auto target_routing_id =
       zlink::routing_id_t::from (std::string (target.node_rid ().value ()));
@@ -3264,11 +3266,6 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
     }
     operation.prepare_for_registration ();
     operation.id = next_operation ();
-    const auto peer = _transport->topology ().peer (target_routing_id.to_bytes ());
-    if (!peer) {
-        co_return zlink::submit_result_t::not_connected;
-    }
-    const auto node_generation = peer->descriptor.lifecycle_generation;
     const auto object = co_await _objects.find_async (stateful::object_kind_t::actor,
                                                       std::string (target.actor_id ().value ()));
     const auto authority_generation = authority_owner_generation != 0 ? authority_owner_generation
@@ -3277,7 +3274,8 @@ task_t<zlink::submit_result_t> public_host_runtime_t::request_to_actor (
     const auto route_fence = co_await read_route_owner_fence (
       _user_spot_store, '1', std::string (target.actor_id ().value ()), target.object_generation (),
       authority_generation, owner_lease_generation, _options.owner_lease_fencing_margin);
-    if (!route_fence || route_fence->fence.authority_owner_generation != authority_generation) {
+    if (!route_fence || route_fence->fence.authority_owner_generation != authority_generation
+        || node_generation == 0) {
         co_return zlink::submit_result_t::not_found;
     }
     const auto host = shared_from_this ();
