@@ -89,14 +89,17 @@ export function parseFrameworkJsonV1(
   text: string,
   options: FrameworkJsonParseOptions = {},
   schema?: ZLinkJsonSchema,
-  reviver?: (this: unknown, key: string, value: unknown) => unknown
+  reviver?: (this: unknown, key: string, value: unknown) => unknown,
+  decodeBytes: (value: string) => Uint8Array = decodeBase64
 ): unknown {
   if (text.charCodeAt(0) === 0xfeff) {
     throw new SyntaxError('framework-json-v1 does not allow a UTF-8 BOM.');
   }
   new JsonPropertyScanner(text, options).scan();
   const parsed = JSON.parse(text, reviver);
-  return schema === undefined ? parsed : validateFrameworkJsonV1Value(parsed, schema, '$', true);
+  return schema === undefined
+    ? parsed
+    : validateFrameworkJsonV1Value(parsed, schema, '$', true, decodeBytes);
 }
 
 //  Sticky pattern shared across scans; matching happens synchronously so the
@@ -112,7 +115,8 @@ function validateFrameworkJsonV1Value(
   value: unknown,
   schema: ZLinkJsonSchema,
   path: string,
-  decode: boolean
+  decode: boolean,
+  decodeBytes: (value: string) => Uint8Array = decodeBase64
 ): unknown {
   switch (schema.type) {
     case 'boolean':
@@ -149,8 +153,8 @@ function validateFrameworkJsonV1Value(
       }
       if (!hasCanonicalBase64Padding(value as string))
         schemaFailure(path, 'canonical padded RFC 4648 base64');
-      // decodeBase64 returns fresh storage owned by this value.
-      return decode ? decodeBase64(value as string) : value;
+      // The selected decoder returns fresh storage owned by this value.
+      return decode ? decodeBytes(value as string) : value;
     }
     case 'enum':
       if (typeof value !== 'string' || !schema.names.includes(value)) {
@@ -160,17 +164,23 @@ function validateFrameworkJsonV1Value(
     case 'nullable':
       return value === null
         ? null
-        : validateFrameworkJsonV1Value(value, schema.value, path, decode);
+        : validateFrameworkJsonV1Value(value, schema.value, path, decode, decodeBytes);
     case 'array':
       if (!Array.isArray(value)) schemaFailure(path, 'an array');
       return (value as unknown[]).map((item, index) =>
-        validateFrameworkJsonV1Value(item, schema.items, `${path}[${index}]`, decode)
+        validateFrameworkJsonV1Value(item, schema.items, `${path}[${index}]`, decode, decodeBytes)
       );
     case 'record': {
       if (!isJsonObject(value)) schemaFailure(path, 'an object');
       const result: Record<string, unknown> = {};
       for (const [name, item] of Object.entries(value as Record<string, unknown>)) {
-        result[name] = validateFrameworkJsonV1Value(item, schema.values, `${path}.${name}`, decode);
+        result[name] = validateFrameworkJsonV1Value(
+          item,
+          schema.values,
+          `${path}.${name}`,
+          decode,
+          decodeBytes
+        );
       }
       return decode ? result : value;
     }
@@ -195,7 +205,8 @@ function validateFrameworkJsonV1Value(
           item,
           propertySchema as ZLinkJsonSchema,
           `${path}.${name}`,
-          decode
+          decode,
+          decodeBytes
         );
       }
       return decode ? result : value;
