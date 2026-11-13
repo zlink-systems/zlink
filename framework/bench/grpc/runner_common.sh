@@ -330,6 +330,55 @@ with open(path, "w", encoding="utf-8") as handle:
 PY
 }
 
+bench_record_scheduling() {
+  local result_file="$1" snapshot="$2" role root pid comm cmdline tid policy role_found found=0 invalid=0
+  [[ "${SCHEDULING_RECORD:-0}" == 1 ]] || return 0
+  local record_file="${result_file}.scheduling.txt"
+  {
+    printf 'timestamp=%s phase=%s\n' "$(date -u +%FT%TZ)" "$snapshot"
+    for role in source target; do
+      role_found=0
+      if [[ "$role" == source ]]; then root="${a_pid:-}"; else root="${b_pid:-}"; fi
+      if [[ ! "$root" =~ ^[0-9]+$ || ! -d "/proc/$root" ]]; then
+        printf 'discovery-failed role=%s root=%s\n' "$role" "$root"
+        invalid=1
+        continue
+      fi
+      local pending=("$root") seen=()
+      while ((${#pending[@]})); do
+        pid="${pending[0]}"
+        pending=("${pending[@]:1}")
+        [[ " ${seen[*]} " == *" $pid "* ]] && continue
+        seen+=("$pid")
+        comm="$(cat "/proc/$pid/comm" 2>/dev/null || true)"
+        cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+        if { [[ "$role" == source && ( "$cmdline" == *WithGrpcBench.Client* || "$comm" == WithGrpcBench.Client* ) ]]; } \
+          || { [[ "$role" == target && ( "$cmdline" == *WithGrpcBench.ZLinkServer* || "$cmdline" == *WithGrpcBench.ZLinkRawServer* || "$comm" == WithGrpcBench.ZLink* ) ]]; }; then
+          role_found=1
+          found=$((found + 1))
+          for task in /proc/"$pid"/task/*; do
+            [[ -d "$task" ]] || continue
+            tid="${task##*/}"
+            policy="$(chrt -p "$tid" 2>&1 || true)"
+            printf 'role=%s pid=%s tid=%s %s\n' "$role" "$pid" "$tid" "$policy"
+            [[ "$policy" == *SCHED_OTHER* ]] || invalid=1
+          done
+        fi
+        while IFS= read -r child; do
+          [[ -n "$child" ]] && pending+=("$child")
+        done < <(pgrep -P "$pid" 2>/dev/null || true)
+      done
+      ((role_found)) || invalid=1
+    done
+  } >>"$record_file"
+  if ((found < 2)); then invalid=1; fi
+  if ((invalid)); then
+    printf '%s\n' "$snapshot" >"${result_file}.scheduling-invalid"
+    return 1
+  fi
+  return 0
+}
+
 # One server-driven cell, from warmup through the B snapshot. The optional reset
 # endpoint is for B implementations whose warmup counters need an explicit reset.
 bench_run_cell() {
@@ -337,6 +386,11 @@ bench_run_cell() {
   local implementation="$6" pattern="$7" payload="$8" warmup_ms="$9"
   local result_file="${10}" target_file="${11}" reset_url="${12:-}"
   local remaining_drain_ms source_bound_hit drain_state warmup_abandoned
+  if ! bench_record_scheduling "${result_file}" process-start; then
+    bench_record_contaminated_cell "${result_file}" "${implementation}" "${pattern}" "${payload}" \
+      "non-SCHED_OTHER policy at process start"
+    return 0
+  fi
   trigger_phase "${trigger_url}" "${run_id}" "${cell_id}" "${pattern}" "${payload}" warmup "${warmup_ms}"
   wait_for_idle "${source_url}"
   warmup_abandoned="$(curl --silent --show-error --fail --max-time 5 "${source_url}/bench/stats" | python3 -c 'import json,sys; a=json.load(sys.stdin); print(a.get("currentInFlight", a.get("inFlight", 0)))')"
@@ -356,6 +410,10 @@ bench_run_cell() {
     curl --silent --show-error --fail --max-time 5 -X POST "${reset_url}/bench/reset" >/dev/null
   fi
   trigger_phase "${trigger_url}" "${run_id}" "${cell_id}" "${pattern}" "${payload}" active "$((DURATION_SECONDS * 1000))"
+  if [[ "${SCHEDULING_RECORD:-0}" == 1 ]]; then
+    sleep 2.5
+    bench_record_scheduling "${result_file}" mid-active || true
+  fi
   wait_for_idle "${source_url}"
   [[ -s "${result_file}" ]] || { echo "missing source result: ${result_file}" >&2; return 1; }
   drain_state="$(python3 - "${result_file}" "${DRAIN_BOUND_MS}" <<'PY'
