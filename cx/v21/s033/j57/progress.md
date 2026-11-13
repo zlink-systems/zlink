@@ -7,3 +7,9 @@
 - profile before-L4-send: 3bd8756f993ee1f003321f46b68ad21d82ea5dec, dirty=False, scratch cffa8009d3, CPU 6-7,14-15; JAR hash /root/jobs/fx/cx/v21/s033/j57/raw/before-L4-send/fingerprint.json. receive/reply와 추가 비용: call-shape.md.
 
 - profile before-L57-send: 3bd8756f993ee1f003321f46b68ad21d82ea5dec, dirty=False, scratch cffa8009d3, CPU 6-7,14-15; JAR hash /root/jobs/fx/cx/v21/s033/j57/raw/before-L57-send/fingerprint.json. receive/reply와 추가 비용: call-shape.md.
+
+- profile baseline-L57-send: 3bd8756f993ee1f003321f46b68ad21d82ea5dec, dirty=False, scratch cffa8009d3, CPU 6-7,14-15; JAR hash /root/jobs/fx/cx/v21/s033/j57/raw/baseline-L57-send/fingerprint.json. receive/reply와 추가 비용: call-shape.md.
+
+- profile baseline-L4-bp: 3bd8756f993ee1f003321f46b68ad21d82ea5dec, dirty=False, scratch cffa8009d3, CPU 6-7,14-15; JAR hash /root/jobs/fx/cx/v21/s033/j57/raw/baseline-L4-bp/fingerprint.json. receive/reply와 추가 비용: call-shape.md.
+
+- profile baseline-L57-bp: 3bd8756f993ee1f003321f46b68ad21d82ea5dec, dirty=False, scratch cffa8009d3, CPU 6-7,14-15; JAR hash /root/jobs/fx/cx/v21/s033/j57/raw/baseline-L57-bp/fingerprint.json. receive/reply와 추가 비용: call-shape.md.

@@ -66,7 +66,7 @@ def request(url, body=None):
         return json.load(r)
 
 def await_ready(url, require=True):
-    while time.monotonic() - start < 9:
+    while time.monotonic() - start < 12:
         try:
             val = request(url + '/bench/stats')
             if not require or val.get('ready'): return val
@@ -103,12 +103,12 @@ with (P/'progress.md').open('a') as f:
     f.write(f'\n- profile {args.label}: {fingerprint["mainHead"]}, dirty={bool(fingerprint["mainDirty"])}, scratch cffa8009d3, CPU {CPUS}; JAR hash {out}/fingerprint.json. receive/reply와 추가 비용: call-shape.md.\n')
 try:
     launch('target', command('target') + ['--endpoint',endpoint,'--metrics-url',target, '--command-endpoint',f'tcp://127.0.0.1:{base+4}'])
-    await_ready(target, False)
     launch('source', command('source') + ['--implementation','zlink-framework-' + args.language,
       '--scenario',args.scenario,'--payload-size','1024','--request-window','100',
       '--submit-concurrency','8','--warmup-seconds',str(args.warmup),
       '--trigger-url',trigger,'--stats-url',stats,'--target-endpoint',endpoint,
       '--target-stats-url',target,'--run-id','j57-' + args.label,'--output',str(out),'--report-file','report.txt'])
+    await_ready(target, False)
     await_ready(stats)
     snapshot('start')
     for phase,duration in [('warmup', args.warmup), ('active',args.duration)]:

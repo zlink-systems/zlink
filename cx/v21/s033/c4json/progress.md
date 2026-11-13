@@ -5,3 +5,10 @@
 - Release/source binding/Core 1.25.0/-j3/25 GiB 제한. Build wrapper 뒤에서 taskset을 다시 적용해 wrapper의 0-11 설정을 제한한다. dependency install은 끄고 기존 package를 읽는다.
 
 - 첫 계수: production JSON bulk encode/decode C++ new는 1K 5/32회, 4K 7/38회. raw/baseline-bulk-allocations.txt. Registry의 string owner 및 Core metadata는 이 분리 probe 밖이므로 전체 default serializer probe에서 별도 계수한다. 처리량 판정 없음.
+
+- 구현 완료: common/include/zlink/json_profile.hpp의 direct Base64 writer·derived lookup decoder. CMake fixture define, typed_json/allocations/noexception test, 독립 JSONL fixture(8 sizes). Bench DTO/production framing 변경 0.
+- format 최종 0, common header 별도 format 0, diff check 0(raw/format-final.log, format-common-final.log, diff-check-final.log).
+- 현재 baseline Release build(build-c4json-ladder, scratch immutable code)와 main Release test build(build-c4json-unit)를 별도 slot에서 진행. 측정 guard가 build를 정지/재개한다.
+- 다음: baseline 완료 → tools/build-allocation-probe.sh(cpp-build-slot) → baseline registry/new/malloc+goldens, tools/profile-ladder.py baseline 3/4 send-saturation 4096 및 request-serial 1024. 각 profile ≤19초, CPUs 6-7,14-15, lock 없음.
+- main 완료 → CTest typed_json runtime suite(compile_fail 제외), tools/build-fixed-probe.sh(cpp-build-slot: registry probe+serializer registry test), tools/build-fixed-bulk.sh(cpp-build-slot: 동일 bulk probe의 header만 main으로 전환). 원래 bulk binary는 raw/artifacts/baseline-bulk에 보존.
+- 전체 profile/counter/golden 대조, 의도적 wire fixture 변경 거부·복원 통과, 최종 report·local commit 후 이 worktree의 build dirs만 정리. raw는 전부 보존.
