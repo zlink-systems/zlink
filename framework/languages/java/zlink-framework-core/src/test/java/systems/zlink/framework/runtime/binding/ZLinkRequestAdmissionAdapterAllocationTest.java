@@ -8,7 +8,7 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.RequestSubmission;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.runtime.channels.ZLinkRequestCallerAllocationTest;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceSendHeaderAllocationTest;
+import systems.zlink.framework.testsupport.ChildJvm;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -43,7 +43,7 @@ public final class ZLinkRequestAdmissionAdapterAllocationTest {
 
     @Test
     void admissionGetterDoesNotNeedAnAdapterAllocation() throws Exception {
-        ZLinkServiceSendHeaderAllocationTest.runInAllocationJvm(getClass());
+        ChildJvm.runInAllocationJvm(getClass());
     }
 
     private static Supplier<CompletionStage<Void>> capturedAccessor(Submission submission) {

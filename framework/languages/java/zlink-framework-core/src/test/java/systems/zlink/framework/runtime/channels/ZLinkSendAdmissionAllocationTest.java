@@ -21,7 +21,7 @@ import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceSendHeaderAllocationTest;
+import systems.zlink.framework.testsupport.ChildJvm;
 
 import java.lang.management.ManagementFactory;
 import java.lang.reflect.Proxy;
@@ -44,7 +44,7 @@ public final class ZLinkSendAdmissionAllocationTest {
 
     @Test
     void immediateSendHasNoCompletionGraphAllocations() throws Exception {
-        ZLinkServiceSendHeaderAllocationTest.runInAllocationJvm(getClass());
+        ChildJvm.runInAllocationJvm(getClass());
     }
 
     @Test
