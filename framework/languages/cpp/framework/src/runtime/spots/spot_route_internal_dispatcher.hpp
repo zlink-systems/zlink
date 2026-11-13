@@ -9,6 +9,14 @@ namespace zlink::framework::detail
 {
 
 struct spot_actor_commit_route_request_t;
+enum class spot_route_packet_class_t
+{
+    application,
+    send,
+    request,
+    send_and_request,
+    node_terminal
+};
 
 class spot_route_internal_dispatcher_t final : public route_internal_packet_dispatcher_t
 {
@@ -17,6 +25,12 @@ class spot_route_internal_dispatcher_t final : public route_internal_packet_disp
                                       actor_gateway_runtime_t actor_gateway,
                                       route_client_t route_client,
                                       serializer_registry_t &serializers);
+
+    static constexpr std::string_view handoff_terminal_packet = "__zlink.actorHandoffTerminal";
+    using packet_class_t = spot_route_packet_class_t;
+    static packet_class_t classify (std::string_view packet_name);
+    static bool handles_send (packet_class_t kind) noexcept;
+    static bool handles_request (packet_class_t kind) noexcept;
 
     bool can_handle_send (std::string_view packet_name) const override;
     bool can_handle_request (std::string_view packet_name) const override;

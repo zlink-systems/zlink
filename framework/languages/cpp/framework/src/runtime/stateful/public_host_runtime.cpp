@@ -765,6 +765,7 @@ struct application_claim_batch_t
               mesh::service_mailbox_t::transfer_locked (*claim->records[index]));
     }
 
+    mesh::service_mailbox_claim_t owned_claim;
     std::array<entry_t, dispatch_limits::receive_batch_messages> storage;
     std::span<entry_t> entries;
     std::shared_ptr<mesh::service_mailbox_claim_t> claim;
@@ -796,6 +797,7 @@ struct application_claim_batch_t
         for (auto &entry : entries) {
             if (!entry.original)
                 continue;
+            entry.original->transferred = {};
             if (entry.original->application)
                 entry.original.reset ();
             else
@@ -810,26 +812,17 @@ struct application_claim_batch_t
 
 namespace
 {
-std::shared_ptr<application_claim_batch_t> &application_claim_storage ()
-{
-    static thread_local std::shared_ptr<application_claim_batch_t> storage;
-    return storage;
-}
-
 std::shared_ptr<application_claim_batch_t> acquire_application_claim_batch (std::size_t size)
 {
     assert (size <= dispatch_limits::receive_batch_messages);
-    auto &storage = application_claim_storage ();
-    // Aliased originals and suspended handlers keep their existing batch alive.
-    if (!storage || storage.use_count () != 1)
-        storage = std::make_shared<application_claim_batch_t> ();
+    auto storage = runtime::acquire_dispatch_storage<application_claim_batch_t> ();
     storage->reset (size);
     return storage;
 }
 
 void recycle_application_claim_batch (const std::shared_ptr<application_claim_batch_t> &batch)
 {
-    auto &storage = application_claim_storage ();
+    auto &storage = runtime::dispatch_storage<application_claim_batch_t> ();
     // A nested dispatch may have replaced this worker's current storage.
     if (storage != batch)
         return;
@@ -7545,20 +7538,20 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready_impl (
     // reports none or the budget ends (08-messaging-hot-path I2).
     const auto readiness = _transport->begin_receive_turn (waited);
     if (readiness
-        && (static_cast<short> (*readiness)
+        && (static_cast<short> (readiness->events)
             & static_cast<short> (zlink::poll_event_flag_t::pollcompletion))
              != 0)
         ++count;
-    const bool receive_ready =
-      readiness && accept_application_receive
-      && (static_cast<short> (*readiness) & static_cast<short> (zlink::poll_event_flag_t::pollin))
-           != 0;
+    const bool receive_ready = readiness && accept_application_receive
+                               && (static_cast<short> (readiness->events)
+                                   & static_cast<short> (zlink::poll_event_flag_t::pollin))
+                                    != 0;
     while (budget.can_receive ()) {
-        const auto pumped =
-          !readiness ? mesh::raw_mesh_pump_result_t::protocol_error
-          : receive_ready
-            ? _transport->receive_next (mesh::service_liveness_registry_t::clock_t::now ())
-            : mesh::raw_mesh_pump_result_t::no_data;
+        const auto pumped = !readiness ? mesh::raw_mesh_pump_result_t::protocol_error
+                            : receive_ready
+                              ? _transport->receive_next (
+                                  *readiness, mesh::service_liveness_registry_t::clock_t::now ())
+                              : mesh::raw_mesh_pump_result_t::no_data;
         budget.account (_transport->last_pump_bytes ());
         trace_mesh_host ("pump", std::string ("result=") + pump_result_name (pumped) + " pending="
                                    + std::to_string (_transport->mailbox ().pending_messages (
@@ -7620,15 +7613,18 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready_impl (
         }
 
         while (accept_application_receive && !application_dispatch_started && standalone) {
-            std::shared_ptr<application_claim_batch_t> batch;
+            auto batch = acquire_application_claim_batch (0);
             auto claim = _transport->mailbox ().try_claim (
               mesh::service_mailbox_domain_t::application, 1, dispatch_limits::receive_batch_bytes,
               [&] (const auto &claimed) {
-                  batch = acquire_application_claim_batch (claimed->claimed_messages);
+                  batch->reset (claimed->claimed_messages);
                   batch->take_ordinary (claimed, static_cast<bool> (_stateful_dispatch));
-              });
-            if (!claim)
+              },
+              std::shared_ptr<mesh::service_mailbox_claim_t> (batch, &batch->owned_claim));
+            if (!claim) {
+                recycle_application_claim_batch (batch);
                 break;
+            }
             batch->claim = std::move (claim);
             batch->dispatch = dispatch;
             auto result = dispatch_application_claim (batch);
@@ -8039,7 +8035,7 @@ task_t<bool> public_host_runtime_t::dispatch_native_spot (
         }
         record.spot_route = header.target;
         record.before_application_handler = std::move (before);
-        record.transferred_owner_byte_cost = slot.claim->record_bytes[slot.index];
+        record.transferred_owner_byte_cost = slot.claim->records[slot.index]->retained_byte_cost;
         auto accepted = std::make_shared<runtime::serial_application_record_t> ();
         accepted->target = std::move (target);
         accepted->admission.jobs = _options.mesh.application_jobs;
@@ -8161,10 +8157,11 @@ public_host_runtime_t::dispatch_application_claim (
                             return kept_t{kept_local_t{original.application.retain (),
                                                        original.source_original}};
                         }
-                        const auto kind =
-                          record_kind (protocol::decode_header (
-                                         protocol::message_bytes (original.parts.front ()))
-                                         .kind);
+                        const auto wire = original.service_wire_header
+                                            ? *original.service_wire_header
+                                            : protocol::decode_header (
+                                                protocol::message_bytes (original.parts.front ()));
+                        const auto kind = record_kind (wire.kind);
                         if (!kind || !is_stateful_application (*kind))
                             return std::nullopt;
                         return kept_t{
@@ -8321,7 +8318,8 @@ public_host_runtime_t::dispatch_application_claim (
                   mailbox_record.before_application_handler;
                 application.record.release_mailbox_reservation = release_mailbox_reservation;
                 application.record.retain_mailbox_reservation = retain_mailbox_reservation;
-                application.record.transferred_owner_byte_cost = claim->record_bytes[index];
+                application.record.transferred_owner_byte_cost =
+                  claim->records[index]->retained_byte_cost;
                 batch->handoff (
                   application.owner, application.record, std::move (application.parts),
                   mailbox_record.application_permit ? std::move (*mailbox_record.application_permit)
@@ -8335,7 +8333,9 @@ public_host_runtime_t::dispatch_application_claim (
                 throw protocol::service_wire_error_t (
                   "application wire requires a header and payload");
             const auto wire =
-              protocol::decode_header (protocol::message_bytes (mailbox_record.parts.at (0)));
+              mailbox_record.service_wire_header
+                ? *mailbox_record.service_wire_header
+                : protocol::decode_header (protocol::message_bytes (mailbox_record.parts.at (0)));
             if (wire.kind == protocol::command::logicalMulticast) {
                 namespace generated = protocol::generated::detail;
                 generated::logicalMulticast_23_t multicast;
@@ -8407,12 +8407,16 @@ public_host_runtime_t::dispatch_application_claim (
             }
             if (kind == record_kind_t::channel_send || kind == record_kind_t::channel_request) {
                 owner.owner_kind = owner_kind_t::channel;
-                owner.channel_name = kind == record_kind_t::channel_send
-                                       ? protocol::decode_channel_send_header (
-                                           protocol::message_bytes (mailbox_record.parts.front ()))
-                                       : protocol::decode_channel_request_header (
-                                           protocol::message_bytes (mailbox_record.parts.front ()))
-                                           .channel_name;
+                owner.channel_name =
+                  mailbox_record.service_wire_header
+                    ? mailbox_record.owner.substr (
+                        mesh::service_mailbox_t::application_owner (owner_kind_t::channel).size ())
+                  : kind == record_kind_t::channel_send
+                    ? protocol::decode_channel_send_header (
+                        protocol::message_bytes (mailbox_record.parts.front ()))
+                    : protocol::decode_channel_request_header (
+                        protocol::message_bytes (mailbox_record.parts.front ()))
+                        .channel_name;
                 record.channel_name = owner.channel_name;
             } else if (kind == record_kind_t::spot_send || kind == record_kind_t::spot_request) {
                 owner.owner_kind = owner_kind_t::spot;
@@ -8459,7 +8463,7 @@ public_host_runtime_t::dispatch_application_claim (
                 + " parts=" + std::to_string (mailbox_record.parts.size ()));
             record.release_mailbox_reservation = release_mailbox_reservation;
             record.retain_mailbox_reservation = retain_mailbox_reservation;
-            record.transferred_owner_byte_cost = claim->record_bytes[index];
+            record.transferred_owner_byte_cost = claim->records[index]->retained_byte_cost;
             batch->handoff (owner, record, std::move (parts),
                             mailbox_record.application_permit
                               ? std::move (*mailbox_record.application_permit)
@@ -8566,20 +8570,26 @@ public_host_runtime_t::dispatch_application_owner (
         claimed = claim->claimed_messages;
         for (std::size_t index = 0; index < claimed; ++index)
             started ();
-        batch = acquire_application_claim_batch (claimed);
+        batch->reset (claimed);
         batch->claim = claim;
         batch->dispatch = std::move (dispatch);
         batch->rejected = std::move (rejected);
         batch->take_ordinary (claim, static_cast<bool> (_stateful_dispatch));
     };
     try {
+        batch = acquire_application_claim_batch (0);
         // Account the accepted claim even if its consumer storage cannot be allocated.
         auto claim = _transport->mailbox ().try_claim_owner (
           mesh::service_mailbox_domain_t::application, owner,
           dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes,
-          std::ref (transfer));
-        if (!claim)
+          std::ref (transfer),
+          std::shared_ptr<mesh::service_mailbox_claim_t> (batch, &batch->owned_claim));
+        if (!claim) {
+            recycle_application_claim_batch (batch);
             return false;
+        }
+        // The batch owns the accepted claim; release this temporary alias before recycling.
+        claim.reset ();
         auto result = dispatch_application_claim (batch);
         if (std::holds_alternative<std::size_t> (result)) {
             recycle_application_claim_batch (batch);
@@ -8592,7 +8602,7 @@ public_host_runtime_t::dispatch_application_owner (
         }(std::get<task_t<std::size_t>> (std::move (result)));
     }
     catch (...) {
-        if (batch) {
+        if (batch && batch->claim) {
             batch->finish ();
             recycle_application_claim_batch (batch);
         } else
@@ -9224,8 +9234,11 @@ public_host_runtime_t::cut_relocation_source (
         if (original.parts.size () != 2)
             return false;
         try {
-            const auto kind = record_kind (
-              protocol::decode_header (protocol::message_bytes (original.parts.front ())).kind);
+            const auto wire =
+              original.service_wire_header
+                ? *original.service_wire_header
+                : protocol::decode_header (protocol::message_bytes (original.parts.front ()));
+            const auto kind = record_kind (wire.kind);
             return kind && is_stateful_application (*kind);
         }
         catch (...) {

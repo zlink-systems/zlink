@@ -509,7 +509,20 @@ void verify_binding_completion_bypasses_handler_executor ()
         received = target_port.receive_if_ready (
           target_port.poll (10ms).value_or (zlink::poll_event_flag_t::none));
     assert (received && received->reply_token);
-    assert (target_port.reply (*received, request_parts ()));
+    const auto &received_parts = received->parts;
+    const auto *native_header = received_parts.front ().data ();
+    std::size_t bytes = 0;
+    for (const auto &part : received->parts)
+        bytes += part.size ();
+    assert (received->byte_size == bytes);
+    assert (received->header_bytes.data () == native_header);
+    assert (received->header_bytes.size () == received->parts.front ().size ());
+    auto transferred = std::move (*received);
+    received.reset ();
+    const auto &transferred_parts = transferred.parts;
+    assert (transferred.header_bytes.data () == transferred_parts.front ().data ());
+    assert (transferred.byte_size == bytes);
+    assert (target_port.reply (transferred, request_parts ()));
     assert (!target_port.receive_if_ready (
       target_port.poll (0ms).value_or (zlink::poll_event_flag_t::none)));
     const auto completion_deadline = std::chrono::steady_clock::now () + 2s;

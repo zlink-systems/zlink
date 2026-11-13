@@ -54,12 +54,6 @@ handler_dispatch_kind_t dispatch_kind_for (handler_kind_t kind)
     return handler_dispatch_kind_t::channel_send;
 }
 
-bool is_request_dispatch (handler_dispatch_kind_t kind)
-{
-    return kind == handler_dispatch_kind_t::node_direct_request
-           || kind == handler_dispatch_kind_t::channel_request;
-}
-
 struct filter_next_state_t
 {
     runtime::state_lane_t lane;
@@ -69,7 +63,15 @@ struct filter_next_state_t
 };
 
 using filter_list_t = std::vector<handler_registry_t::filter_invoker_t>;
-using filter_terminal_t = std::function<task_t<zlink::message_t> ()>;
+struct filter_terminal_t
+{
+    std::variant<std::function<task_t<zlink::message_t> ()>, detail::prepared_filter_terminal_t>
+      target;
+    task_t<zlink::message_t> operator() () const
+    {
+        return std::visit ([] (const auto &terminal) { return terminal (); }, target);
+    }
+};
 
 task_t<zlink::message_t> invoke_filter_level (std::shared_ptr<const filter_list_t> filters,
                                               std::size_t index,
@@ -144,7 +146,7 @@ task_t<zlink::message_t> invoke_filter_level (std::shared_ptr<const filter_list_
                                          "handler filter next may be invoked at most once");
         }
         if (!next_state->called) {
-            if (is_request_dispatch (context.dispatch_kind)) {
+            if (detail::is_request_dispatch (context.dispatch_kind)) {
                 throw framework_exception_t (
                   framework_error_kind_t::rejected,
                   "handler filter rejected the request without invoking next");
@@ -337,12 +339,12 @@ handler_registry_t &handler_registry_t::add_filter (filter_invoker_t filter)
     return *this;
 }
 
-task_t<zlink::message_t>
-handler_registry_t::invoke_filters_async (handler_dispatch_kind_t dispatch_kind,
-                                          service_provider_t &services,
-                                          serializer_registry_t &serializers,
-                                          const message_context_t &context,
-                                          terminal_invoker_t terminal) const
+template <typename TTerminal>
+task_t<zlink::message_t> handler_registry_t::invoke_filters (handler_dispatch_kind_t dispatch_kind,
+                                                             service_provider_t &services,
+                                                             serializer_registry_t &serializers,
+                                                             const message_context_t &context,
+                                                             TTerminal terminal) const
 {
     const detail::ambient_context_scope_t invocation (nullptr, this,
                                                       _state->wait_stop.get_token ());
@@ -356,9 +358,30 @@ handler_registry_t::invoke_filters_async (handler_dispatch_kind_t dispatch_kind,
         }
     }
     auto filter_context = handler_filter_context_t{context, dispatch_kind};
-    auto owned_terminal = std::make_shared<filter_terminal_t> (std::move (terminal));
+    auto owned_terminal =
+      std::make_shared<filter_terminal_t> (filter_terminal_t{std::move (terminal)});
     return invoke_filter_level (filters, 0, &services, &serializers, std::move (filter_context),
                                 owned_terminal);
+}
+
+task_t<zlink::message_t>
+handler_registry_t::invoke_filters_async (handler_dispatch_kind_t kind,
+                                          service_provider_t &services,
+                                          serializer_registry_t &serializers,
+                                          const message_context_t &context,
+                                          terminal_invoker_t terminal) const
+{
+    return invoke_filters (kind, services, serializers, context, std::move (terminal));
+}
+
+task_t<zlink::message_t>
+handler_registry_t::invoke_filters_async (handler_dispatch_kind_t kind,
+                                          service_provider_t &services,
+                                          serializer_registry_t &serializers,
+                                          const message_context_t &context,
+                                          detail::prepared_filter_terminal_t terminal) const
+{
+    return invoke_filters (kind, services, serializers, context, std::move (terminal));
 }
 
 const handler_descriptor_t *handler_registry_t::find (std::string_view channel_name,

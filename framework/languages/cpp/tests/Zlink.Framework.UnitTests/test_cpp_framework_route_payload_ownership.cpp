@@ -6,7 +6,7 @@
 #include <zlink/framework.hpp>
 #include "runtime/channels/route_handler_invoker.hpp"
 #include "runtime/channels/route_packet_dispatcher.hpp"
-#include "runtime/mesh/mesh_record_dispatcher.hpp"
+#include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
@@ -385,7 +385,7 @@ TEST (RouteHandlerBoundary, PendingMeshReplyOwnsNativeStorageAndScopeUntilTermin
                 {
                     auto registration = std::make_shared<int> (7);
                     registration_storage = registration;
-                    detail::mesh_record_dispatcher_t dispatcher (
+                    detail::route_packet_dispatcher_t dispatcher (
                       provider, serializers, handlers, filters, {}, [&] { ++permits; },
                       registration);
                     host::receive_record_t record;
@@ -1438,7 +1438,7 @@ TEST (RoutePayloadOwnership, ApplicationDispatcherConsumesTheDecodedHeader)
     ASSERT_TRUE (decoded.value ());
     // A consumer of the parsed header must never consult its wire frame again.
     parts[0] = zlink::message_t::from (std::string ("invalid header"));
-    detail::mesh_record_dispatcher_t dispatcher (provider, serializers, handlers, filters);
+    detail::route_packet_dispatcher_t dispatcher (provider, serializers, handlers, filters);
     ASSERT_TRUE (
       dispatcher.dispatch (record, std::move (parts), std::move (*decoded.value ())).result ());
     EXPECT_GT (handler.references, 0);
@@ -2243,7 +2243,7 @@ TEST (RouteHandlerBoundary, CsitesLocalTerminalAndInvocationSurviveAllRequestOut
                                                       &terminal));
             EXPECT_FALSE (deferred);
             EXPECT_EQ (settlements.load (), 0);
-            detail::mesh_record_dispatcher_t dispatcher (provider, serializers, handlers, filters);
+            detail::route_packet_dispatcher_t dispatcher (provider, serializers, handlers, filters);
             pending.emplace (dispatcher.dispatch (
               record, std::move (parts), std::move (*decoded.value ()), std::move (terminal)));
             ASSERT_FALSE (pending->await_ready ());

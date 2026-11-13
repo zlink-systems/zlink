@@ -21,7 +21,8 @@
 #include "runtime/channels/route_handler_registry.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
-#include "runtime/mesh/mesh_record_dispatcher.hpp"
+#include "runtime/channels/route_packet_dispatcher.hpp"
+#include "runtime/spots/spot_route_internal_dispatcher.hpp"
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime/mesh/mesh_metadata_codec.hpp"
 #include "runtime/mesh/user_spot_terminal_mapping.hpp"
@@ -114,14 +115,16 @@ dispatch_error_surface_t application_dispatch_surface (host::record_kind_t kind)
 }
 
 template <bool BorrowHeader>
-result_t<std::optional<messaging::envelope_header_t>>
-decode_mesh_record_header_impl (const host::receive_record_t &record,
-                                std::vector<zlink::message_t> &parts,
-                                bool capture_flow,
-                                const dispatch_options_t &dispatch_options)
+result_t<std::optional<messaging::envelope_header_view_t>> decode_mesh_record_header_impl (
+  const host::receive_record_t &record,
+  std::vector<zlink::message_t> &parts,
+  bool capture_flow,
+  const dispatch_options_t &dispatch_options,
+  const detail::route_handler_registry_t *handlers = nullptr,
+  detail::route_handler_registry_t::prepared_header_t *prepared = nullptr)
 {
     using kind_t = host::record_kind_t;
-    using header_result_t = result_t<std::optional<messaging::envelope_header_t>>;
+    using header_result_t = result_t<std::optional<messaging::envelope_header_view_t>>;
     switch (record.kind) {
         case kind_t::spot_send:
         case kind_t::spot_request:
@@ -138,15 +141,32 @@ decode_mesh_record_header_impl (const host::receive_record_t &record,
     messaging::message_parts_t encoded (std::move (parts));
     std::optional<messaging::envelope_header_t> rejected_header;
     const bool actor = record.kind == kind_t::actor_send || record.kind == kind_t::actor_request;
-    auto decoded =
-      actor ? detail::decode_actor_packet_header (encoded,
-                                                  record.kind == kind_t::actor_send
-                                                    ? detail::stream_message_kind_t::send
-                                                    : detail::stream_message_kind_t::request,
-                                                  capture_flow)
-      : BorrowHeader
-        ? messaging::envelope_codec_t{}.decode_header_view (encoded, capture_flow, &rejected_header)
-        : messaging::envelope_codec_t{}.decode_header (encoded, capture_flow, &rejected_header);
+    auto decoded = [&] () -> result_t<messaging::envelope_header_view_t> {
+        if (handlers && prepared && detail::is_node_or_channel_record_kind (record.kind)
+            && encoded.size () != 0) {
+            auto plan = handlers->prepare_header (encoded[0], record.channel_name, capture_flow,
+                                                  &rejected_header);
+            if (!plan)
+                return detail::propagate_failure<messaging::envelope_header_view_t> (
+                  plan, "MeshNode envelope header decode failed");
+            *prepared = std::move (plan.value ());
+            return result_t<messaging::envelope_header_view_t>::success (prepared->take_header ());
+        }
+        auto owned =
+          actor ? detail::decode_actor_packet_header (encoded,
+                                                      record.kind == kind_t::actor_send
+                                                        ? detail::stream_message_kind_t::send
+                                                        : detail::stream_message_kind_t::request,
+                                                      capture_flow)
+          : BorrowHeader
+            ? messaging::envelope_codec_t{}.decode_header_view (encoded, capture_flow,
+                                                                &rejected_header)
+            : messaging::envelope_codec_t{}.decode_header (encoded, capture_flow, &rejected_header);
+        if (!owned)
+            return detail::propagate_failure<messaging::envelope_header_view_t> (
+              owned, "MeshNode envelope header decode failed");
+        return result_t<messaging::envelope_header_view_t>::success (std::move (owned.value ()));
+    }();
     parts = std::move (encoded).take_items ();
     if (decoded)
         return header_result_t::success (std::move (decoded.value ()));
@@ -190,7 +210,7 @@ decode_mesh_record_header_impl (const host::receive_record_t &record,
         }
         return event;
     });
-    return detail::propagate_failure<std::optional<messaging::envelope_header_t>> (
+    return detail::propagate_failure<std::optional<messaging::envelope_header_view_t>> (
       decoded, "MeshNode envelope header decode failed");
 }
 
@@ -232,7 +252,15 @@ decode_mesh_record_header (const host::receive_record_t &record,
                            bool capture_flow,
                            const dispatch_options_t &dispatch_options)
 {
-    return decode_mesh_record_header_impl<false> (record, parts, capture_flow, dispatch_options);
+    auto decoded =
+      decode_mesh_record_header_impl<false> (record, parts, capture_flow, dispatch_options);
+    if (!decoded)
+        return detail::propagate_failure<std::optional<messaging::envelope_header_t>> (
+          decoded, "MeshNode envelope header decode failed");
+    if (!decoded.value ())
+        return result_t<std::optional<messaging::envelope_header_t>>::success (std::nullopt);
+    return result_t<std::optional<messaging::envelope_header_t>>::success (
+      std::move (*decoded.value ()).take ());
 }
 
 result_t<std::optional<messaging::envelope_header_t>>
@@ -241,7 +269,15 @@ decode_mesh_record_header_view (const host::receive_record_t &record,
                                 bool capture_flow,
                                 const dispatch_options_t &dispatch_options)
 {
-    return decode_mesh_record_header_impl<true> (record, parts, capture_flow, dispatch_options);
+    auto decoded =
+      decode_mesh_record_header_impl<true> (record, parts, capture_flow, dispatch_options);
+    if (!decoded)
+        return detail::propagate_failure<std::optional<messaging::envelope_header_t>> (
+          decoded, "MeshNode envelope header decode failed");
+    if (!decoded.value ())
+        return result_t<std::optional<messaging::envelope_header_t>>::success (std::nullopt);
+    return result_t<std::optional<messaging::envelope_header_t>>::success (
+      std::move (*decoded.value ()).take ());
 }
 
 application_dispatch_terminal_owner_t::application_dispatch_terminal_owner_t (
@@ -2339,7 +2375,7 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
                       if (handled || !decoded_header.value ()) {
                           return;
                       }
-                      detail::mesh_record_dispatcher_t dispatcher (
+                      detail::route_packet_dispatcher_t dispatcher (
                         *host._services, *host._serializers, registration->handlers, *host._filters,
                         host._dispatch_options, {}, registration);
                       auto pending = dispatcher.dispatch (accepted_record, std::move (parts),
@@ -3145,7 +3181,10 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
               },
               [weak = std::weak_ptr (node), registration, services = _services,
                serializers = _serializers, filters = _filters, options = _dispatch_options,
-               executor = _application_dispatch.get ()] (
+               executor = _application_dispatch.get (),
+               dispatcher = std::make_shared<detail::route_packet_dispatcher_t> (
+                 *_services, *_serializers, registration->handlers, *_filters, _dispatch_options,
+                 std::function<void ()>{}, registration)] (
                 const host::ready_record_t &owner, const host::receive_record_t &record,
                 std::vector<zlink::message_t> parts, application_job_queue_t::permit_t permit) {
                   const auto node = weak.lock ();
@@ -3155,7 +3194,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   node->application_work_started ();
                   dispatch_application (node, registration, owner, record, std::move (parts), false,
                                         services, serializers, filters, options, {}, executor,
-                                        std::move (permit));
+                                        std::move (permit), dispatcher.get ());
               });
             if (_listener_statuses) {
                 const auto status = node->status ();
@@ -3755,7 +3794,8 @@ void mesh_node_host_service_t::dispatch_application (
   const detail::retained_dispatch_options_t &dispatch_options,
   serial_execution_queue_t::async_completion_t application_completed,
   offload_executor_t *executor,
-  application_job_queue_t::permit_t application_permit)
+  application_job_queue_t::permit_t application_permit,
+  const detail::route_packet_dispatcher_t *configured_dispatcher)
 {
     const bool admitted = static_cast<bool> (application_permit);
     if (record.retain_mailbox_reservation)
@@ -3776,11 +3816,11 @@ void mesh_node_host_service_t::dispatch_application (
                 application_completed ([] {});
             return;
         }
-        detail::spot_node_runtime_t application_spot_runtime (registration->spot_state);
         bool terminal_deferred = false;
-        auto decoded_header = decode_mesh_record_header_view (
+        detail::route_handler_registry_t::prepared_header_t prepared;
+        auto decoded_header = decode_mesh_record_header_impl<true> (
           record, parts, detail::message_flow_tracer_t (dispatch_options).flow_tracing (),
-          dispatch_options);
+          dispatch_options, &registration->handlers, &prepared);
         if (!decoded_header) {
             terminal.settle ();
             if (application_completed)
@@ -3791,9 +3831,34 @@ void mesh_node_host_service_t::dispatch_application (
         if (owner.owner_kind == host::owner_kind_t::spot
             || owner.owner_kind == host::owner_kind_t::actor)
             before = terminal.take_application_entry ();
-        const auto handled = application_spot_runtime.dispatch_mesh_record (
-          owner, record, parts, decoded_header.value (), *services, *serializers, {},
-          &terminal_deferred, std::move (before), application_completed, &terminal);
+        using internal_t = detail::spot_route_internal_dispatcher_t;
+        const bool ordinary_owner = owner.owner_kind == host::owner_kind_t::node
+                                    || owner.owner_kind == host::owner_kind_t::channel;
+        const auto packet_class =
+          !ordinary_owner || !decoded_header.value () ? internal_t::packet_class_t::application
+          : detail::is_node_or_channel_record_kind (record.kind)
+            ? prepared.packet_class
+            : internal_t::classify ((**decoded_header.value ()).message_name);
+        const bool internal_record =
+          ((record.kind == host::record_kind_t::node_send
+            || record.kind == host::record_kind_t::channel_send
+            || record.kind == host::record_kind_t::spot_send)
+           && internal_t::handles_send (packet_class))
+          || ((record.kind == host::record_kind_t::node_request
+               || record.kind == host::record_kind_t::channel_request
+               || record.kind == host::record_kind_t::spot_request)
+              && internal_t::handles_request (packet_class))
+          || (owner.owner_kind == host::owner_kind_t::node
+              && record.kind == host::record_kind_t::node_send
+              && packet_class == internal_t::packet_class_t::node_terminal);
+        bool handled = false;
+        if (!ordinary_owner || internal_record) {
+            detail::spot_node_runtime_t application_spot_runtime (registration->spot_state);
+            handled = application_spot_runtime.dispatch_mesh_record_view (
+              owner, record, parts, decoded_header.value () ? &**decoded_header.value () : nullptr,
+              *services, *serializers, {}, &terminal_deferred, std::move (before),
+              application_completed, &terminal);
+        }
         trace_mesh_application ("framework-dispatch", record, parts.size (),
                                 handled ? "handled" : "not-handled");
         if (!handled && decoded_header.value ()
@@ -3803,14 +3868,17 @@ void mesh_node_host_service_t::dispatch_application (
             // The native claim still owns settlement. Transfer its existing release
             // callback to the bounded pipeline handoff, leaving physical work retained.
             terminal_callback_guard_t prefix (terminal.take_mailbox_reservation ());
-            detail::mesh_record_dispatcher_t dispatcher (*services, *serializers,
-                                                         registration->handlers, *filters,
-                                                         dispatch_options, {}, registration);
+            std::optional<detail::route_packet_dispatcher_t> local_dispatcher;
+            if (!configured_dispatcher) {
+                local_dispatcher.emplace (*services, *serializers, registration->handlers, *filters,
+                                          dispatch_options, std::function<void ()>{}, registration);
+                configured_dispatcher = &*local_dispatcher;
+            }
             auto invocation_terminal = std::move (terminal);
             terminal_deferred = true;
-            auto pending =
-              dispatcher.dispatch (record, std::move (parts), std::move (*decoded_header.value ()),
-                                   std::move (invocation_terminal), executor);
+            auto pending = configured_dispatcher->dispatch (
+              record, std::move (parts), std::move (*decoded_header.value ()),
+              std::move (invocation_terminal), executor, &prepared);
             trace_mesh_application ("route-dispatch", record, 0,
                                     pending.await_ready () ? "ready" : "pending");
         }
@@ -3857,6 +3925,9 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
     auto &mailbox = owned_node->native_node ().transport ().mailbox ();
     if (!mailbox.begin_application_drain (owner))
         co_return;
+    const detail::route_packet_dispatcher_t dispatcher (*services, *serializers,
+                                                        owned_registration->handlers, *filters,
+                                                        dispatch_options, {}, owned_registration);
     const auto deadline = std::chrono::steady_clock::now () + dispatch_limits::owner_time_budget;
     try {
         const mesh::service_mailbox_t::application_dispatch_t dispatch =
@@ -3864,7 +3935,8 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
                std::vector<zlink::message_t> parts, application_job_queue_t::permit_t permit) {
               dispatch_application (owned_node, owned_registration, ready, record,
                                     std::move (parts), reject_only, services, serializers, filters,
-                                    dispatch_options, {}, executor, std::move (permit));
+                                    dispatch_options, {}, executor, std::move (permit),
+                                    &dispatcher);
           };
         const std::function<void ()> started = [&owned_node] {
             owned_node->application_work_started ();

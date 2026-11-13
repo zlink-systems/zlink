@@ -1414,7 +1414,7 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
     try {
         /* Ingress validates the envelope and captures flow fields.
          * The worker consumes its header and the native payload. */
-        auto &request_envelope = record.envelope_header;
+        auto &request_envelope = *record.envelope_header;
         auto message = std::move (record.parts[1]);
         detail::inbound_message_context_t inbound{
           .message = {.received_at = record.received_at.value ()}};
@@ -1560,7 +1560,7 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
     }
     if (pending_reply || pending_failure_reply) {
         detail::message_flow_tracer_t flow (_channel_runtime.dispatch_options_ref ());
-        const auto &header = record.envelope_header;
+        const auto &header = *record.envelope_header;
         if (flow.enabled_for (message_flow_outcome_t::replied)) {
             flow.trace (
               message_flow_outcome_t::replied,

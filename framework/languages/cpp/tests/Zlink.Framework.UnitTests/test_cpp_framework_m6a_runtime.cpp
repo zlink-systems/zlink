@@ -2880,7 +2880,7 @@ void verify_raw_owner_node_send_and_liveness (
         const auto router_input_ready = [&node] {
             const auto readiness = node.begin_receive_turn ();
             return readiness
-                   && (static_cast<short> (*readiness)
+                   && (static_cast<short> (readiness->events)
                        & static_cast<short> (zlink::poll_event_flag_t::pollin))
                         != 0;
         };

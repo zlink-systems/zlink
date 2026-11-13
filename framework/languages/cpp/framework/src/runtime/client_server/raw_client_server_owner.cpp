@@ -519,10 +519,13 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
                   std::move (received->parts), std::move (received->source_routing_id),
                   received->reply_token};
                 if (rejection_context)
-                    rejected.envelope_header = std::move (*rejection_context);
+                    rejected.envelope_header = std::make_unique<messaging::envelope_header_t> (
+                      std::move (*rejection_context));
                 else {
-                    rejected.envelope_header.channel_name = channel_name;
-                    rejected.envelope_header.content_type =
+                    rejected.envelope_header = std::make_unique<messaging::envelope_header_t> (
+                      messaging::envelope_header_t{.content_type = {}});
+                    rejected.envelope_header->channel_name = channel_name;
+                    rejected.envelope_header->content_type =
                       messaging::envelope_codec_t::default_content_type;
                 }
                 (void) co_await reply (rejected, *application_header->error ());
@@ -674,7 +677,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
                                               permit->release_for_handler_entry ();
                                               permit.reset ();
                                           }};
-    record.envelope_header = std::move (envelope);
+    record.envelope_header = std::make_unique<messaging::envelope_header_t> (std::move (envelope));
     received_application_record_t received_record{
       std::move (record), std::move (application_permit), received_at, received.route_generation};
     if (application_records) {
@@ -724,7 +727,7 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
                                  received.permit->mark_queued ();
                              if (dispatch_options) {
                                  detail::message_flow_tracer_t flow (*dispatch_options);
-                                 auto &header = received.record.envelope_header;
+                                 auto &header = *received.record.envelope_header;
                                  auto scope = flow_context_t::enter (
                                    header.flow_id, header.flow_origin, flow.mode (),
                                    flow_origin_t::inbound, std::nullopt);
@@ -871,7 +874,7 @@ task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_reco
     if (request.parts.empty ()) {
         throw std::invalid_argument ("ClientServer reply requires request context");
     }
-    const auto &request_header = request.envelope_header;
+    const auto &request_header = *request.envelope_header;
     const auto port = _port;
     if (!port)
         co_return false;
@@ -899,7 +902,7 @@ task_t<bool> raw_client_server_server_t::reply (const mesh::service_mailbox_reco
     if (request.parts.empty ()) {
         throw std::invalid_argument ("ClientServer reply requires request context");
     }
-    const auto &decoded_header = request.envelope_header;
+    const auto &decoded_header = *request.envelope_header;
     const auto port = _port;
     if (!port)
         co_return false;

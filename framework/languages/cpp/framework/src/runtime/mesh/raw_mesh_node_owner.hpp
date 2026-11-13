@@ -476,13 +476,19 @@ class raw_mesh_node_owner_t
       std::optional<protocol::application_payload_t> application_reply = std::nullopt);
     task_t<raw_mesh_pump_result_t> pump_one (service_liveness_registry_t::clock_t::time_point now,
                                              bool accept_application_receive = true);
+    struct receive_turn_t
+    {
+        std::shared_ptr<detail::backend::raw_route_port_t> port;
+        zlink::poll_event_flag_t events;
+    };
     /* One receive turn polls the ROUTER once: begin_receive_turn observes
      * readiness and applies a ready route snapshot (nullopt when the poll
      * failed), then receive_next reads one record per call until the ROUTER
      * reports none. pump_one is the single-record form of the same turn. */
-    std::optional<zlink::poll_event_flag_t>
+    std::optional<receive_turn_t>
     begin_receive_turn (std::optional<zlink::poll_event_flag_t> readiness = {});
-    raw_mesh_pump_result_t receive_next (service_liveness_registry_t::clock_t::time_point now);
+    raw_mesh_pump_result_t receive_next (const receive_turn_t &turn,
+                                         service_liveness_registry_t::clock_t::time_point now);
     /* Wait for ROUTER input or an already admitted mailbox/control record.
      * This is the blocking wake-up used by the host ingress loop; it avoids
      * turning an idle node into a timed polling loop. */
@@ -680,7 +686,9 @@ class raw_mesh_node_owner_t
     bool reply_infrastructure (const service_mailbox_record_t &request,
                                std::vector<std::uint8_t> header);
     raw_mesh_pump_result_t enqueue_received (service_mailbox_record_t record,
-                                             raw_mesh_pump_result_t accepted_result);
+                                             raw_mesh_pump_result_t accepted_result,
+                                             protocol::service_wire_header_t header,
+                                             std::optional<std::size_t> received_bytes = {});
     raw_mesh_node_options_t _options;
 
     mutable runtime::state_lane_t _lane;

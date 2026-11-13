@@ -35,6 +35,14 @@ class handler_start_callback_ref_t
         }
     }
 
+    template <typename TCallback>
+    handler_start_callback_ref_t (const TCallback &callback,
+                                  std::shared_ptr<void> lifetime) noexcept :
+        handler_start_callback_ref_t (callback)
+    {
+        _lifetime = std::move (lifetime);
+    }
+
     explicit operator bool () const noexcept { return _invoke != nullptr; }
     void operator() () const { _invoke (_target); }
 
@@ -44,6 +52,7 @@ class handler_start_callback_ref_t
         std::invoke (*static_cast<const TCallback *> (target));
     }
 
+    std::shared_ptr<void> _lifetime;
     const void *_target = nullptr;
     void (*_invoke) (const void *) = nullptr;
 };
@@ -94,18 +103,26 @@ task_t<zlink::message_t> serialize_handler_result (TResult &&result,
 }
 
 template <typename TResult, typename TPlan>
+task_t<zlink::message_t> serialize_pending_handler_result (TResult result,
+                                                           serializer_registry_t &serializers,
+                                                           std::shared_ptr<TPlan> codecs)
+{
+    auto value = co_await result;
+    co_return result_t<zlink::message_t>::success (
+      encoded_payload_to_raw (codecs->serialize (serializers, value)));
+}
+
+template <typename TResult, typename TPlan>
 task_t<zlink::message_t> serialize_handler_result (TResult result,
                                                    serializer_registry_t &serializers,
                                                    std::shared_ptr<TPlan> codecs)
 {
-    if constexpr (is_task_v<TResult>) {
-        auto value = co_await result;
-        co_return result_t<zlink::message_t>::success (
-          encoded_payload_to_raw (codecs->serialize (serializers, value)));
-    } else {
-        co_return result_t<zlink::message_t>::success (
-          encoded_payload_to_raw (codecs->serialize (serializers, result)));
-    }
+    if constexpr (is_task_v<TResult>)
+        return serialize_pending_handler_result (std::move (result), serializers,
+                                                 std::move (codecs));
+    else
+        return task_t<zlink::message_t> (result_t<zlink::message_t>::success (
+          encoded_payload_to_raw (codecs->serialize (serializers, result))));
 }
 
 } // namespace zlink::framework::detail

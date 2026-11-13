@@ -6,6 +6,7 @@
 #include "runtime/spots/activation_admission.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <iterator>
 #include <limits>
 #include <stdexcept>
@@ -86,6 +87,7 @@ bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record,
     // A queued original carries no claim credit; take mints it.
     record.transferred = {};
     const auto retained = retained_bytes (record);
+
     std::unique_lock lock (_state->mutex);
     auto &target = domain (record.domain);
     if (_state->closed) {
@@ -99,6 +101,7 @@ bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record,
         _state->application_prepare (record);
     if (admitted)
         admitted ();
+    record.retained_byte_cost = retained;
     queue.records.push_back (std::move (record));
     queue.bytes += retained;
     ++queue.messages;
@@ -119,7 +122,8 @@ std::shared_ptr<service_mailbox_claim_t>
 service_mailbox_t::try_claim (service_mailbox_domain_t domain_value,
                               std::size_t message_budget,
                               std::size_t byte_budget,
-                              const claimed_t &claimed)
+                              const claimed_t &claimed,
+                              std::shared_ptr<service_mailbox_claim_t> storage)
 {
     if (message_budget == 0 || byte_budget == 0) {
         throw std::invalid_argument ("service mailbox claim budgets must be positive");
@@ -135,7 +139,7 @@ service_mailbox_t::try_claim (service_mailbox_domain_t domain_value,
             continue;
         }
         auto claim = claim_owner_locked (source, domain_value, owner, message_budget, byte_budget,
-                                         claimed, lock);
+                                         claimed, lock, storage);
         source.ready.pop_front ();
         return claim;
     }
@@ -147,7 +151,8 @@ service_mailbox_t::try_claim_owner (service_mailbox_domain_t domain_value,
                                     const std::string &owner,
                                     std::size_t message_budget,
                                     std::size_t byte_budget,
-                                    const claimed_t &claimed)
+                                    const claimed_t &claimed,
+                                    std::shared_ptr<service_mailbox_claim_t> storage)
 {
     if (owner.empty () || message_budget == 0 || byte_budget == 0) {
         throw std::invalid_argument ("service mailbox owner claim arguments are invalid");
@@ -159,8 +164,8 @@ service_mailbox_t::try_claim_owner (service_mailbox_domain_t domain_value,
         || found->second.records.empty ()) {
         return nullptr;
     }
-    auto claim =
-      claim_owner_locked (source, domain_value, owner, message_budget, byte_budget, claimed, lock);
+    auto claim = claim_owner_locked (source, domain_value, owner, message_budget, byte_budget,
+                                     claimed, lock, storage);
     if (found->second.phase != owner_phase_t::draining) {
         source.ready.erase (std::remove (source.ready.begin (), source.ready.end (), owner),
                             source.ready.end ());
@@ -175,7 +180,8 @@ service_mailbox_t::claim_owner_locked (domain_t &source,
                                        std::size_t message_budget,
                                        std::size_t byte_budget,
                                        const claimed_t &claimed,
-                                       std::unique_lock<std::mutex> &lock)
+                                       std::unique_lock<std::mutex> &lock,
+                                       const std::shared_ptr<service_mailbox_claim_t> &storage)
 {
     const auto found = source.owners.find (owner);
     if (found == source.owners.end () || found->second.active_messages != 0
@@ -183,12 +189,15 @@ service_mailbox_t::claim_owner_locked (domain_t &source,
         return nullptr;
     }
     auto &queue = found->second;
-    auto claim = std::make_shared<service_mailbox_claim_t> ();
+    auto claim = storage ? storage : std::make_shared<service_mailbox_claim_t> ();
+    claim->records.clear ();
+    claim->claimed_messages = claim->claimed_bytes = 0;
     claim->owner = owner;
     claim->domain = domain_value;
     const auto limit = std::min (message_budget, queue.records.size ());
-    claim->records.reserve (limit);
-    claim->record_bytes.reserve (limit);
+    // Reserve the receive batch before either vector uses the shared inline buffer.
+    claim->records.reserve (std::max (limit, dispatch_limits::receive_batch_messages));
+    claim->_settled.assign (limit / 64 + (limit % 64 != 0), 0);
     // The claim stays the front prefix of the FIFO; list references survive push_back.
     for (auto &slot : queue.records) {
         if (claim->records.size () == limit)
@@ -203,13 +212,12 @@ service_mailbox_t::claim_owner_locked (domain_t &source,
             break;
         }
         claim->claimed_bytes += next_bytes;
-        claim->record_bytes.push_back (next_bytes);
         claim->records.push_back (&slot);
     }
     claim->claimed_messages = claim->records.size ();
+    claim->_settled.resize (claim->claimed_messages / 64 + (claim->claimed_messages % 64 != 0));
     claim->_mailbox = _state;
-    claim->_settled = std::make_unique<std::atomic_bool[]> (claim->claimed_messages);
-    claim->_remaining.store (claim->claimed_messages, std::memory_order_relaxed);
+    claim->_unsettled_words.store (claim->_settled.size (), std::memory_order_relaxed);
     // Each slot holds its own credit; whichever take moves the original out holds it.
     for (std::size_t index = 0; index != claim->claimed_messages; ++index)
         claim->records[index]->transferred = service_mailbox_settlement_t (claim, index);
@@ -245,7 +253,7 @@ service_mailbox_t::claim_owner_locked (domain_t &source,
 service_mailbox_record_t *service_mailbox_t::slot_locked (const claim_handle_t &handle)
 {
     // A claim whose credits all settled has left the FIFO; its view is not read.
-    if (!handle.claim || handle.claim->_remaining.load (std::memory_order_acquire) == 0
+    if (!handle.claim || handle.claim->_unsettled_words.load (std::memory_order_acquire) == 0
         || handle.index >= handle.claim->records.size ())
         return nullptr;
     auto *slot = handle.claim->records[handle.index];
@@ -266,6 +274,7 @@ service_mailbox_record_t service_mailbox_t::transfer_locked (service_mailbox_rec
     // Moving out leaves the slot without parts or application: the taken mark. The
     // slot's claim credit moves with the original.
     auto transferred = std::move (slot);
+    transferred.retained_byte_cost = 0;
     slot.application.reset ();
     return transferred;
 }
@@ -329,12 +338,15 @@ std::optional<service_mailbox_record_t> service_mailbox_t::take (const claim_han
 
 std::size_t service_mailbox_t::retained_bytes (const service_mailbox_record_t &record)
 {
+    if (record.retained_byte_cost != 0)
+        return record.retained_byte_cost;
     std::size_t result = dispatch_limits::fixed_work_byte_cost;
     const auto add = [&] (const auto &parts) {
         for (const auto &part : parts) {
-            if (part.size () > std::numeric_limits<std::size_t>::max () - result)
+            const auto bytes = part.size ();
+            if (bytes > std::numeric_limits<std::size_t>::max () - result)
                 return false;
-            result += part.size ();
+            result += bytes;
         }
         return true;
     };
@@ -348,18 +360,24 @@ bool service_mailbox_t::release (service_mailbox_claim_t &claim)
     std::vector<service_mailbox_record_t> discarded;
     std::unique_lock lock (_state->mutex);
     std::size_t settled = 0;
-    for (std::size_t index = 0; index < claim.claimed_messages; ++index) {
-        if (!settle_once (claim, index))
-            continue;
-        ++settled;
-        auto &slot = *claim.records[index];
-        if (has_original (slot))
-            discarded.push_back (transfer_locked (slot));
+    bool last = false;
+    for (std::size_t word = 0; word * 64 < claim.claimed_messages; ++word) {
+        const auto count = std::min<std::size_t> (64, claim.claimed_messages - word * 64);
+        const auto mask = count == 64 ? ~std::uint64_t{} : (std::uint64_t{1} << count) - 1;
+        auto pending = settle_once (claim, word, mask, last);
+        settled += std::popcount (pending);
+        while (pending != 0) {
+            const auto index = word * 64 + std::countr_zero (pending);
+            pending &= pending - 1;
+            auto &slot = *claim.records[index];
+            if (has_original (slot))
+                discarded.push_back (transfer_locked (slot));
+        }
     }
     if (settled == 0)
         return false;
     bool notify = false;
-    if (settles_last (claim, settled))
+    if (last)
         notify = finish_locked (*_state, claim);
     lock.unlock ();
     // Supply delivery may reenter the mailbox, so return admission outside its lock.
@@ -369,24 +387,40 @@ bool service_mailbox_t::release (service_mailbox_claim_t &claim)
     return true;
 }
 
-bool service_mailbox_t::settle_once (service_mailbox_claim_t &claim, std::size_t index) noexcept
+std::size_t service_mailbox_claim_t::outstanding () const noexcept
 {
-    // The single settlement decision: each slot credit settles once.
-    return !claim._settled[index].exchange (true, std::memory_order_acq_rel);
+    std::size_t settled = 0;
+    for (const auto &word : _settled)
+        settled += std::popcount (
+          std::atomic_ref<const std::uint64_t> (word).load (std::memory_order_acquire));
+    return claimed_messages - settled;
 }
 
-bool service_mailbox_t::settles_last (service_mailbox_claim_t &claim, std::size_t count) noexcept
+std::uint64_t service_mailbox_t::settle_once (service_mailbox_claim_t &claim,
+                                              std::size_t word,
+                                              std::uint64_t mask,
+                                              bool &last) noexcept
 {
-    return claim._remaining.fetch_sub (count, std::memory_order_acq_rel) == count;
+    // Each bit owns one credit. Only a completed word updates the count.
+    const auto previous =
+      std::atomic_ref (claim._settled[word]).fetch_or (mask, std::memory_order_acq_rel);
+    const auto newly_settled = mask & ~previous;
+    const auto count = std::min<std::size_t> (64, claim.claimed_messages - word * 64);
+    const auto complete = count == 64 ? ~std::uint64_t{} : (std::uint64_t{1} << count) - 1;
+    if (newly_settled != 0 && (previous | mask) == complete)
+        last = claim._unsettled_words.fetch_sub (1, std::memory_order_acq_rel) == 1;
+    return newly_settled;
 }
 
 bool service_mailbox_t::settle (const service_mailbox_settlement_t &settlement)
 {
     // The last credit returns the claim to its owner FIFO under one lock.
     auto &claim = *settlement._claim;
-    if (!settle_once (claim, settlement._index))
+    bool last = false;
+    if (!settle_once (claim, settlement._index / 64, std::uint64_t{1} << (settlement._index % 64),
+                      last))
         return false;
-    if (!settles_last (claim, 1))
+    if (!last)
         return true;
     const auto state = claim._mailbox.lock ();
     if (!state)

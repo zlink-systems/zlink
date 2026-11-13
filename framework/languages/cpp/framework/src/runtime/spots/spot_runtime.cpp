@@ -544,7 +544,8 @@ std::optional<std::uint64_t> handoff_u64 (const std::map<std::string, std::strin
 std::optional<zlink::routing_id_t>
 handoff_routing_id (const std::map<std::string, std::string> &metadata, std::string_view key);
 
-inline constexpr std::string_view actor_handoff_terminal_packet = "__zlink.actorHandoffTerminal";
+inline constexpr auto actor_handoff_terminal_packet =
+  detail::spot_route_internal_dispatcher_t::handoff_terminal_packet;
 inline constexpr std::string_view actor_handoff_terminal_success_key =
   "__zlink.actorHandoffTerminalSuccess";
 inline constexpr std::string_view actor_handoff_terminal_error_kind_key =
@@ -15705,6 +15706,25 @@ bool spot_node_runtime_t::dispatch_mesh_record (
   const service::receive_record_t &record,
   std::vector<zlink::message_t> &parts,
   const std::optional<runtime::messaging::envelope_header_t> &decoded_header,
+  service_provider_t &services,
+  serializer_registry_t &serializers,
+  std::function<void ()> deferred_terminal,
+  bool *terminal_deferred,
+  runtime::handler_entry_t before_application_handler,
+  runtime::serial_execution_queue_t::async_completion_t application_completed,
+  runtime::application_dispatch_terminal_owner_t *local_terminal)
+{
+    return dispatch_mesh_record_view (
+      owner, record, parts, decoded_header ? &*decoded_header : nullptr, services, serializers,
+      std::move (deferred_terminal), terminal_deferred, std::move (before_application_handler),
+      std::move (application_completed), local_terminal);
+}
+
+bool spot_node_runtime_t::dispatch_mesh_record_view (
+  const service::ready_record_t &owner,
+  const service::receive_record_t &record,
+  std::vector<zlink::message_t> &parts,
+  const runtime::messaging::envelope_header_t *decoded_header,
   service_provider_t &services,
   serializer_registry_t &serializers,
   std::function<void ()> deferred_terminal,

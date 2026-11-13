@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/backend/raw_route_port.hpp"
+#include <limits>
 #include "runtime/backend/raw_binding_adapter.hpp"
 
 #include <zlink/Contracts/Messaging/operation_contracts.hpp>
@@ -497,8 +498,22 @@ std::optional<raw_received_t> raw_route_port_t::receive_if_ready (zlink::poll_ev
     const auto route_generation = _received.route_generation ();
     auto parts = std::move (_received.parts ());
     _received.close ();
-    return raw_received_t{std::move (source_routing_id), std::move (reply_token), std::move (parts),
-                          route_generation};
+    raw_received_t received{std::move (source_routing_id), std::move (reply_token),
+                            std::move (parts), route_generation};
+    if (!received.parts.empty ()) {
+        const auto &header = received.parts.front ();
+        received.header_bytes = header.bytes ();
+        received.byte_size = received.header_bytes.size ();
+        for (std::size_t index = 1; index < received.parts.size (); ++index) {
+            const auto size = received.parts[index].size ();
+            if (size > std::numeric_limits<std::size_t>::max () - received.byte_size) {
+                received.byte_size = std::numeric_limits<std::size_t>::max ();
+                break;
+            }
+            received.byte_size += size;
+        }
+    }
+    return std::optional<raw_received_t> (std::move (received));
 }
 
 std::optional<raw_received_t> raw_route_port_t::try_receive ()

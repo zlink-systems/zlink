@@ -103,20 +103,41 @@ spot_route_internal_dispatcher_t::spot_route_internal_dispatcher_t (
 {
 }
 
-bool spot_route_internal_dispatcher_t::can_handle_send (std::string_view packet_name) const
+spot_route_internal_dispatcher_t::packet_class_t
+spot_route_internal_dispatcher_t::classify (std::string_view name)
 {
-    return packet_name == actor_bound_session_route_request_t::packet_name
-           || packet_name == spot_actor_commit_route_request_t::packet_name
-           || packet_name == spot_actor_leave_route_command_t::packet_name;
+    if (name == handoff_terminal_packet)
+        return packet_class_t::node_terminal;
+    if (name == actor_bound_session_route_request_t::packet_name
+        || name == spot_actor_commit_route_request_t::packet_name)
+        return packet_class_t::send_and_request;
+    if (name == spot_actor_leave_route_command_t::packet_name)
+        return packet_class_t::send;
+    if (name == actor_bound_session_bind_route_request_t::packet_name
+        || name == spot_actor_admission_route_request_t::packet_name
+        || name == spot_actor_packet_route_request_t::packet_name)
+        return packet_class_t::request;
+    return packet_class_t::application;
 }
 
-bool spot_route_internal_dispatcher_t::can_handle_request (std::string_view packet_name) const
+bool spot_route_internal_dispatcher_t::handles_send (packet_class_t kind) noexcept
 {
-    return packet_name == actor_bound_session_bind_route_request_t::packet_name
-           || packet_name == actor_bound_session_route_request_t::packet_name
-           || packet_name == spot_actor_admission_route_request_t::packet_name
-           || packet_name == spot_actor_commit_route_request_t::packet_name
-           || packet_name == spot_actor_packet_route_request_t::packet_name;
+    return kind == packet_class_t::send || kind == packet_class_t::send_and_request;
+}
+
+bool spot_route_internal_dispatcher_t::handles_request (packet_class_t kind) noexcept
+{
+    return kind == packet_class_t::request || kind == packet_class_t::send_and_request;
+}
+
+bool spot_route_internal_dispatcher_t::can_handle_send (std::string_view name) const
+{
+    return handles_send (classify (name));
+}
+
+bool spot_route_internal_dispatcher_t::can_handle_request (std::string_view name) const
+{
+    return handles_request (classify (name));
 }
 
 task_t<result_t<void>> spot_route_internal_dispatcher_t::dispatch_send (

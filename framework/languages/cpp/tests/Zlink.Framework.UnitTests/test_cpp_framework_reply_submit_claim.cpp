@@ -222,7 +222,8 @@ void verify_client_server_claim_releases_after_one_shot_reply_terminal ()
                                      source_routing_id,
                                      std::nullopt,
                                      correlation};
-    request_record.envelope_header = request_header;
+    request_record.envelope_header =
+      std::make_unique<zlink::framework::runtime::messaging::envelope_header_t> (request_header);
     assert (server.mailbox ().try_enqueue (std::move (request_record)));
     assert (server.mailbox ().try_enqueue (mesh::service_mailbox_record_t{
       mailbox_owner, mesh::service_mailbox_domain_t::application,

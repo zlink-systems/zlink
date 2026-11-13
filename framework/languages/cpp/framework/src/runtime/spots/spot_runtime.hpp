@@ -2072,6 +2072,18 @@ class spot_node_runtime_t
       runtime::handler_entry_t before_application_handler = {},
       runtime::serial_execution_queue_t::async_completion_t application_completed = {},
       runtime::application_dispatch_terminal_owner_t *local_terminal = nullptr);
+    bool dispatch_mesh_record_view (
+      const service::ready_record_t &owner,
+      const service::receive_record_t &record,
+      std::vector<zlink::message_t> &parts,
+      const runtime::messaging::envelope_header_t *decoded_header,
+      service_provider_t &services,
+      serializer_registry_t &serializers,
+      std::function<void ()> deferred_terminal = {},
+      bool *terminal_deferred = nullptr,
+      runtime::handler_entry_t before_application_handler = {},
+      runtime::serial_execution_queue_t::async_completion_t application_completed = {},
+      runtime::application_dispatch_terminal_owner_t *local_terminal = nullptr);
     void set_route_client (route_client_t route_client);
     void on_destroy_actor (std::function<task_t<result_t<void>> (actor_ref_t)> destroy_actor);
     void on_actor_ref_updated (std::function<result_t<void> (const actor_ref_t &)> update_actor);

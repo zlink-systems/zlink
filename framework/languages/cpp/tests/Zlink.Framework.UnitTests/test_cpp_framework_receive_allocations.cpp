@@ -394,9 +394,11 @@ TEST (ReceiveAllocations, AutomaticClientServerSendRecordHasFixedAllocationCount
         mesh::service_mailbox_record_t record;
         record.owner = "receive";
         record.domain = mesh::service_mailbox_domain_t::application;
-        record.envelope_header.kind = fw::runtime::messaging::message_kind_t::command;
-        record.envelope_header.message_name = "receive.send";
-        record.envelope_header.content_type = "application/json";
+        record.envelope_header = std::make_unique<fw::runtime::messaging::envelope_header_t> (
+          fw::runtime::messaging::envelope_header_t{.content_type = {}});
+        record.envelope_header->kind = fw::runtime::messaging::message_kind_t::command;
+        record.envelope_header->message_name = "receive.send";
+        record.envelope_header->content_type = "application/json";
         record.parts.push_back (zlink::message_t::from ("header"));
         record.parts.push_back (zlink::message_t::from ("{}"));
         return server->mailbox ().try_enqueue (std::move (record));

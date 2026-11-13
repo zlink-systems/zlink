@@ -731,14 +731,14 @@ template <bool Borrow> class canonical_header_reader_t
         return true;
     }
 
-    bool optional_string (header_scalar_t *value)
+    bool optional_string (header_scalar_t *value, bool retain_text = true)
     {
         if (consume ("null")) {
             if (value)
                 value->set_null ();
             return true;
         }
-        if (!string (value ? &value->string : nullptr))
+        if (!string (value && retain_text ? &value->string : nullptr))
             return false;
         if (value)
             value->type = header_value_t::string;
@@ -849,6 +849,9 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
     }
     bool string (string_t &value) override
     {
+        if (!_capture_flow && _depth == 1
+            && (_member == header_member_t::flow_id || _member == header_member_t::flow_origin))
+            return scalar ([] (header_scalar_t &target) { target.type = header_value_t::string; });
         return scalar (
           [&value] (header_scalar_t &target) { target.set_string (std::move (value)); });
     }
@@ -938,9 +941,8 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
             || !reader.consume (",\"errorCode\":") || !reader.optional_string (&_error_code)
             || !reader.consume (",\"errorMessage\":") || !reader.optional_string (&_error_message)
             || !reader.consume (",\"flowId\":")
-            || !reader.optional_string (_capture_flow ? &_flow_id : nullptr)
-            || !reader.consume (",\"flowOrigin\":")
-            || !reader.number (_capture_flow ? &_flow_origin : nullptr, true)
+            || !reader.optional_string (&_flow_id, _capture_flow)
+            || !reader.consume (",\"flowOrigin\":") || !reader.number (&_flow_origin, true)
             || !reader.consume (",\"formatMarker\":") || !reader.number (&_format_marker)
             || !reader.consume (",\"kind\":") || !reader.number (&_kind)
             || !reader.consume (",\"messageName\":") || !reader.required_string (_message_name)
@@ -1041,6 +1043,16 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
         return result_t<envelope_header_t>::success (std::move (header));
     }
 
+    bool repeatable () const noexcept
+    {
+        // Inspect parsed fields even when the caller does not capture flow.
+        const auto absent = [] (const header_scalar_t &value) {
+            return value.type == header_value_t::missing || value.type == header_value_t::null;
+        };
+        return absent (_correlation_id) && absent (_deadline) && absent (_flow_id)
+               && absent (_flow_origin) && _metadata.empty ();
+    }
+
   private:
     using number_integer_t = nlohmann::json::number_integer_t;
     using number_unsigned_t = nlohmann::json::number_unsigned_t;
@@ -1108,9 +1120,9 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
             case header_member_t::source:
                 return &_source;
             case header_member_t::flow_id:
-                return _capture_flow ? &_flow_id : nullptr;
+                return &_flow_id;
             case header_member_t::flow_origin:
-                return _capture_flow ? &_flow_origin : nullptr;
+                return &_flow_origin;
             case header_member_t::format_marker:
                 return &_format_marker;
             default:
@@ -1231,19 +1243,27 @@ template <bool Borrow>
 result_t<envelope_header_t>
 decode_header_bytes (std::span<const std::byte> bytes,
                      bool capture_flow,
-                     std::optional<envelope_header_t> *rejection_context)
+                     std::optional<envelope_header_t> *rejection_context,
+                     bool *repeatable = nullptr)
 {
+    if (repeatable)
+        *repeatable = false;
     if (rejection_context)
         rejection_context->reset ();
     try {
         {
             header_sax_t canonical (capture_flow);
-            if (canonical.read_canonical<Borrow> (
-                  std::string_view (reinterpret_cast<const char *> (bytes.data ()), bytes.size ())))
+            if (canonical.read_canonical<Borrow> (std::string_view (
+                  reinterpret_cast<const char *> (bytes.data ()), bytes.size ()))) {
+                if (repeatable)
+                    *repeatable = canonical.repeatable ();
                 return canonical.finish (rejection_context);
+            }
         }
         header_sax_t sax (capture_flow);
         (void) nlohmann::json::sax_parse (bytes.begin (), bytes.end (), &sax);
+        if (repeatable)
+            *repeatable = sax.repeatable ();
         return sax.finish (rejection_context);
     }
     catch (const std::exception &ex) {
@@ -1274,9 +1294,11 @@ envelope_codec_t::decode_header (const zlink::message_t &message,
 result_t<envelope_header_t>
 envelope_codec_t::decode_header_view (const zlink::message_t &message,
                                       bool capture_flow,
-                                      std::optional<envelope_header_t> *rejection_context) const
+                                      std::optional<envelope_header_t> *rejection_context,
+                                      bool *repeatable) const
 {
-    return decode_header_bytes<true> (message.bytes (), capture_flow, rejection_context);
+    return decode_header_bytes<true> (message.bytes (), capture_flow, rejection_context,
+                                      repeatable);
 }
 
 result_t<envelope_header_t>

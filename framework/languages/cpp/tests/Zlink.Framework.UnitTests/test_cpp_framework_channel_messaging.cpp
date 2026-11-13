@@ -29,7 +29,6 @@
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
-#include "runtime/mesh/mesh_record_dispatcher.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/spots/spot_route_internal_dispatcher.hpp"
@@ -856,8 +855,8 @@ int main ()
         };
         dispatch_options_t off_options;
         off_options.message_flow (message_flow_log_mode_t::off);
-        detail::mesh_record_dispatcher_t off (provider, serializers, handlers, filters,
-                                              off_options);
+        detail::route_packet_dispatcher_t off (provider, serializers, handlers, filters,
+                                               off_options);
         if (!off
                .dispatch (
                  record, parts (malformed),
@@ -876,7 +875,7 @@ int main ()
               if (event.outcome == message_flow_outcome_t::received)
                   observations->record (event);
           });
-        detail::mesh_record_dispatcher_t on (provider, serializers, handlers, filters, options);
+        detail::route_packet_dispatcher_t on (provider, serializers, handlers, filters, options);
         const auto dispatched =
           on.dispatch (record, parts (wire),
                        codec.decode_header (msg::message_parts_t (parts (wire)), true).value ())

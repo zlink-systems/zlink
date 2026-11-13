@@ -3,6 +3,7 @@
 
 #include "runtime/messaging/envelope_codec.hpp"
 
+
 #include <zlink/Contracts/Core/routing_id.hpp>
 #include <zlink/framework/contracts/channels/channel.hpp>
 #include <zlink/framework/contracts/codecs/serializer.hpp>
@@ -20,6 +21,8 @@
 
 namespace zlink::framework::detail
 {
+
+enum class spot_route_packet_class_t;
 
 struct route_handler_descriptor_t
 {
@@ -47,6 +50,67 @@ class route_handler_registry_t
         invoker_t invoker;
         std::function<void (serializer_registry_t &)> bind_codecs;
     };
+
+    struct cached_header_t
+    {
+        std::string bytes;
+        std::string channel;
+        runtime::messaging::envelope_header_t header;
+        std::shared_ptr<const void> registration;
+        const entry_t *handler = nullptr;
+        spot_route_packet_class_t packet_class;
+    };
+
+    struct prepared_header_t
+    {
+        prepared_header_t () = default;
+        prepared_header_t (runtime::messaging::envelope_header_t header,
+                           const entry_t *entry,
+                           spot_route_packet_class_t kind) :
+            _header (std::move (header)), handler (entry), packet_class (kind)
+        {
+        }
+        explicit prepared_header_t (std::shared_ptr<const cached_header_t> cached) :
+            _header (std::move (cached)),
+            handler (std::get<std::shared_ptr<const cached_header_t>> (_header)->handler),
+            packet_class (std::get<std::shared_ptr<const cached_header_t>> (_header)->packet_class)
+        {
+        }
+        std::shared_ptr<const cached_header_t> cached () const noexcept
+        {
+            const auto *value = std::get_if<std::shared_ptr<const cached_header_t>> (&_header);
+            return value ? *value : nullptr;
+        }
+        const runtime::messaging::envelope_header_t &header () const noexcept
+        {
+            if (const auto *value = std::get_if<std::shared_ptr<const cached_header_t>> (&_header))
+                return (*value)->header;
+            return std::get<runtime::messaging::envelope_header_t> (_header);
+        }
+        runtime::messaging::envelope_header_view_t take_header ()
+        {
+            if (auto *value = std::get_if<std::shared_ptr<const cached_header_t>> (&_header)) {
+                const auto *header = &(*value)->header;
+                return std::shared_ptr<const runtime::messaging::envelope_header_t> (
+                  std::move (*value), header);
+            }
+            return std::move (std::get<runtime::messaging::envelope_header_t> (_header));
+        }
+
+      private:
+        std::variant<std::shared_ptr<const cached_header_t>, runtime::messaging::envelope_header_t>
+          _header;
+
+      public:
+        const entry_t *handler = nullptr;
+        spot_route_packet_class_t packet_class{};
+    };
+
+    result_t<prepared_header_t>
+    prepare_header (const zlink::message_t &message,
+                    std::string_view channel,
+                    bool capture_flow,
+                    std::optional<runtime::messaging::envelope_header_t> *rejection_context) const;
 
     const entry_t *resolve (std::string_view router_channel_id,
                             runtime::messaging::message_kind_t kind,
@@ -248,7 +312,8 @@ class route_handler_registry_t
         }
     };
 
-    std::unordered_map<key_t, entry_t, key_hash_t, key_equal_t> _handlers;
+    using handlers_t = std::unordered_map<key_t, entry_t, key_hash_t, key_equal_t>;
+    std::shared_ptr<handlers_t> _handlers = std::make_shared<handlers_t> ();
 };
 
 } // namespace zlink::framework::detail

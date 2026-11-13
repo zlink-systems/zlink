@@ -3,7 +3,8 @@
 #include <zlink/json.hpp>
 #include "runtime/channels/route_handler_invoker.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
-#include "runtime/mesh/mesh_record_dispatcher.hpp"
+#include "runtime/channels/route_packet_dispatcher.hpp"
+#include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/stateful/accepted_actor_record.hpp"
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime_failure_fixture.hpp"
@@ -176,7 +177,7 @@ class HandlerEntryPermit : public ::testing::Test
               EXPECT_EQ ("peer", received.source_node_rid.to_string ());
               // This is the hosted Node pipeline handoff. Its ordinary prefix
               // credit settles when this callback returns, before filter resume.
-              detail::mesh_record_dispatcher_t dispatcher (
+              detail::route_packet_dispatcher_t dispatcher (
                 *provider, serializers, handlers, filters, {}, received.before_application_handler);
               runtime::application_dispatch_terminal_owner_t terminal ({}, {}, {},
                                                                        std::move (permit));

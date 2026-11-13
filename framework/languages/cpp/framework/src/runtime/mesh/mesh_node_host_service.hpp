@@ -26,6 +26,7 @@
 namespace zlink::framework::detail
 {
 class route_handler_registry_t;
+class route_packet_dispatcher_t;
 }
 
 namespace zlink::framework::runtime
@@ -153,7 +154,8 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
                           const detail::retained_dispatch_options_t &dispatch_options,
                           serial_execution_queue_t::async_completion_t application_completed = {},
                           offload_executor_t *executor = nullptr,
-                          application_job_queue_t::permit_t application_permit = {});
+                          application_job_queue_t::permit_t application_permit = {},
+                          const detail::route_packet_dispatcher_t *dispatcher = nullptr);
     static task_t<void>
     drain_application_owner (std::shared_ptr<detail::mesh_node_runtime_t> node,
                              std::shared_ptr<detail::mesh_node_builder_state_t> registration,

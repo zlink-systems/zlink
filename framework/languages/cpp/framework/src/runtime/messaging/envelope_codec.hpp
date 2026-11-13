@@ -163,6 +163,46 @@ struct envelope_header_t
     envelope_header_storage_t retained_header;
 };
 
+// A miss owns the ordinary decoded header. A hit shares the immutable cached
+// header through the same dispatch and terminal lifetime, without scalar copies.
+class envelope_header_view_t
+{
+  public:
+    envelope_header_view_t () : _header (std::in_place_type<envelope_header_t>) {}
+    envelope_header_view_t (envelope_header_t header) : _header (std::move (header)) {}
+    envelope_header_view_t (std::shared_ptr<const envelope_header_t> header) :
+        _header (std::move (header))
+    {
+    }
+    const envelope_header_t &operator* () const noexcept
+    {
+        if (const auto *shared = std::get_if<std::shared_ptr<const envelope_header_t>> (&_header))
+            return **shared;
+        return std::get<envelope_header_t> (_header);
+    }
+    operator const envelope_header_t & () const noexcept { return **this; }
+    envelope_header_t take () &&
+    {
+        if (auto *owned = std::get_if<envelope_header_t> (&_header))
+            return std::move (*owned);
+        return **this;
+    }
+    std::map<std::string, std::string> take_metadata ()
+    {
+        if (auto *owned = std::get_if<envelope_header_t> (&_header))
+            return std::move (owned->metadata);
+        return (**this).metadata;
+    }
+    void retain (zlink::message_t message)
+    {
+        if (auto *owned = std::get_if<envelope_header_t> (&_header))
+            owned->retained_header.message = std::move (message);
+    }
+
+  private:
+    std::variant<std::shared_ptr<const envelope_header_t>, envelope_header_t> _header;
+};
+
 class message_parts_t
 {
   public:
@@ -240,7 +280,8 @@ class envelope_codec_t
     result_t<envelope_header_t>
     decode_header_view (const zlink::message_t &message,
                         bool capture_flow = true,
-                        std::optional<envelope_header_t> *rejection_context = nullptr) const;
+                        std::optional<envelope_header_t> *rejection_context = nullptr,
+                        bool *repeatable = nullptr) const;
     result_t<envelope_header_t>
     decode_header_view (const message_parts_t &parts,
                         bool capture_flow = true,

@@ -3,6 +3,8 @@
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
 #include <atomic>
+#include <memory_resource>
+#include <array>
 #include <cstddef>
 #include <chrono>
 #include <cstdint>
@@ -20,6 +22,7 @@
 
 #include <zlink/Contracts/Messaging/received.hpp>
 #include "runtime/dispatch/application_record.hpp"
+#include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 
@@ -158,7 +161,10 @@ struct service_mailbox_record_t
     // Admission moves with the original until its handler or terminal takes it.
     std::optional<application_job_queue_t::permit_t> application_permit;
     service_mailbox_application_t application;
-    messaging::envelope_header_t envelope_header{.content_type = {}};
+    std::unique_ptr<messaging::envelope_header_t> envelope_header;
+    // The ingress classification and accepted queue charge travel with the original.
+    std::optional<protocol::service_wire_header_t> service_wire_header;
+    std::size_t retained_byte_cost = 0;
     service_mailbox_settlement_t transferred;
     // Read once by the publication owner before the mailbox accepts the record.
     std::optional<request_source_t> source_original = std::nullopt;
@@ -221,15 +227,19 @@ class service_mailbox_t
     // is released. It must not reenter the mailbox. Relocation originals
     // stay in their slots until their individual producer take.
     using claimed_t = std::function<void (const std::shared_ptr<service_mailbox_claim_t> &)>;
-    std::shared_ptr<service_mailbox_claim_t> try_claim (service_mailbox_domain_t domain,
-                                                        std::size_t message_budget,
-                                                        std::size_t byte_budget,
-                                                        const claimed_t &claimed = {});
-    std::shared_ptr<service_mailbox_claim_t> try_claim_owner (service_mailbox_domain_t domain,
-                                                              const std::string &owner,
-                                                              std::size_t message_budget,
-                                                              std::size_t byte_budget,
-                                                              const claimed_t &claimed = {});
+    std::shared_ptr<service_mailbox_claim_t>
+    try_claim (service_mailbox_domain_t domain,
+               std::size_t message_budget,
+               std::size_t byte_budget,
+               const claimed_t &claimed = {},
+               std::shared_ptr<service_mailbox_claim_t> storage = {});
+    std::shared_ptr<service_mailbox_claim_t>
+    try_claim_owner (service_mailbox_domain_t domain,
+                     const std::string &owner,
+                     std::size_t message_budget,
+                     std::size_t byte_budget,
+                     const claimed_t &claimed = {},
+                     std::shared_ptr<service_mailbox_claim_t> storage = {});
     using claim_handle_t = service_mailbox_slot_t;
     // A missing source belongs to its original. Claims and cut share one lookup; the
     // existing producer mutex transfers its starter, and Store work runs outside it.
@@ -337,7 +347,8 @@ class service_mailbox_t
                         std::size_t message_budget,
                         std::size_t byte_budget,
                         const claimed_t &claimed,
-                        std::unique_lock<std::mutex> &lock);
+                        std::unique_lock<std::mutex> &lock,
+                        const std::shared_ptr<service_mailbox_claim_t> &storage);
     static std::size_t retained_bytes (const service_mailbox_record_t &record);
     static service_mailbox_record_t *slot_locked (const claim_handle_t &handle);
     static bool next_locked (const claim_handle_t &handle);
@@ -357,8 +368,10 @@ class service_mailbox_t
         bool application_receive_turn = false;
     };
     static bool settle (const service_mailbox_settlement_t &settlement);
-    static bool settle_once (service_mailbox_claim_t &claim, std::size_t index) noexcept;
-    static bool settles_last (service_mailbox_claim_t &claim, std::size_t count) noexcept;
+    static std::uint64_t settle_once (service_mailbox_claim_t &claim,
+                                      std::size_t word,
+                                      std::uint64_t mask,
+                                      bool &last) noexcept;
     static bool finish_locked (state_t &state, const service_mailbox_claim_t &claim);
     static void notify_application_ready_owned (const std::shared_ptr<state_t> &state);
     static application_ready_batch_t take_application_ready_locked (state_t &state);
@@ -370,24 +383,28 @@ class service_mailbox_t
 // claim settles; read them only before their take. Each slot credit settles once.
 struct service_mailbox_claim_t
 {
+  private:
+    alignas (std::max_align_t)
+      std::array<std::byte,
+                 dispatch_limits::receive_batch_messages * sizeof (service_mailbox_record_t *)
+                   + sizeof (std::uint64_t)> _inline_storage;
+    std::pmr::monotonic_buffer_resource _storage{_inline_storage.data (), _inline_storage.size ()};
+
+  public:
     std::string owner;
     service_mailbox_domain_t domain;
-    std::vector<service_mailbox_record_t *> records;
-    std::vector<std::size_t> record_bytes;
+    std::pmr::vector<service_mailbox_record_t *> records{&_storage};
     std::size_t claimed_messages = 0;
     std::size_t claimed_bytes = 0;
 
     // Slot credits not yet settled.
-    std::size_t outstanding () const noexcept
-    {
-        return _remaining.load (std::memory_order_acquire);
-    }
+    std::size_t outstanding () const noexcept;
 
   private:
     friend class service_mailbox_t;
     std::weak_ptr<service_mailbox_t::state_t> _mailbox;
-    std::unique_ptr<std::atomic_bool[]> _settled;
-    std::atomic_size_t _remaining{0};
+    std::pmr::vector<std::uint64_t> _settled{&_storage};
+    std::atomic_size_t _unsettled_words{0};
 };
 
 inline std::string service_mailbox_t::application_owner (const host::ready_record_t &owner)

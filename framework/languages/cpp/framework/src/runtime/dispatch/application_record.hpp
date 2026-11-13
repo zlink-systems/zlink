@@ -22,6 +22,23 @@
 namespace zlink::framework::runtime
 {
 struct serial_application_record_t;
+
+// Reuse only storage with no borrowed invocation/claim. It grants no execution rights.
+template <typename T> std::shared_ptr<T> &dispatch_storage ()
+{
+    static thread_local std::shared_ptr<T> storage;
+    return storage;
+}
+
+template <typename T> std::shared_ptr<T> acquire_dispatch_storage ()
+{
+    auto &storage = dispatch_storage<T> ();
+    if (!storage || storage.use_count () != 1)
+        storage = std::make_shared<T> ();
+    else
+        std::atomic_thread_fence (std::memory_order_acquire);
+    return storage;
+}
 }
 
 namespace zlink::framework::runtime::mesh

@@ -73,6 +73,9 @@ struct raw_received_t
     // Opaque nonzero generation of the Core selected route that delivered
     // this record (Core ROUTER §10.1); compared only for equality.
     std::uint64_t route_generation = 0;
+    // Read once while the port still owns the native receive result.
+    std::span<const std::byte> header_bytes;
+    std::size_t byte_size = 0;
 };
 
 enum class raw_request_failure_phase_t

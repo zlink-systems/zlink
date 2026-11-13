@@ -28,6 +28,7 @@ namespace detail
 void cancel_handler_waits (handler_registry_t &) noexcept;
 class handler_registry_state_t;
 class route_handler_invoker_t;
+struct prepared_filter_terminal_t;
 class channel_runtime_t;
 } // namespace detail
 
@@ -395,6 +396,20 @@ class handler_registry_t
                                                    serializer_registry_t &serializers,
                                                    const message_context_t &context,
                                                    terminal_invoker_t terminal) const;
+
+    task_t<zlink::message_t>
+    invoke_filters_async (handler_dispatch_kind_t dispatch_kind,
+                          service_provider_t &services,
+                          serializer_registry_t &serializers,
+                          const message_context_t &context,
+                          detail::prepared_filter_terminal_t terminal) const;
+
+    template <typename TTerminal>
+    task_t<zlink::message_t> invoke_filters (handler_dispatch_kind_t dispatch_kind,
+                                             service_provider_t &services,
+                                             serializer_registry_t &serializers,
+                                             const message_context_t &context,
+                                             TTerminal terminal) const;
 
     task_t<zlink::message_t>
     invoke_async (std::string_view channel_name,
