@@ -23,8 +23,10 @@ import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 
+import java.nio.ByteBuffer;
 import java.util.OptionalLong;
 import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec;
 import systems.zlink.framework.configuration.ZLinkUnhandledDispatchAction;
@@ -43,6 +45,11 @@ import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 @EnableZLinkFramework
 @SpringBootApplication(proxyBeanMethods = false)
 public class ZLinkFrameworkBenchServer {
+    private static final ZLinkChannelEnvelope.PreparedNames CHANNEL_NAMES =
+            new ZLinkChannelEnvelope.PreparedNames(BenchContract.CHANNEL_NAME, null, null);
+    private static final ZLinkChannelEnvelope.PreparedNames MESSAGE_NAMES =
+            new ZLinkChannelEnvelope.PreparedNames(
+                    null, "BenchPayload", "application/x-protobuf");
     // These are handed to the context as @Bean METHODS, not as singletons registered
     // on the bean factory. A registered singleton has an instance but no bean
     // DEFINITION, and the framework's Spring handler factory asks whether each
@@ -197,15 +204,17 @@ public class ZLinkFrameworkBenchServer {
             metrics.recordError();
             return;
         }
+        ZLinkChannelEnvelope.Header requestHeader = null;
         if (System.getenv("ZLINK_BENCH_LADDER_L2") != null) {
-            var header = ZLinkChannelEnvelope.decodeHeader(parts.getFirst().dataBuffer(), false);
+            requestHeader = ZLinkChannelEnvelope.decodeHeader(
+                    parts.getFirst().dataBuffer(), false);
             int expectedKind = received.replyToken().isPresent()
                     ? ZLinkChannelEnvelope.KIND_REQUEST
                     : ZLinkChannelEnvelope.KIND_COMMAND;
-            if (header.kind() != expectedKind
-                    || !BenchContract.CHANNEL_NAME.equals(header.channelName())
-                    || !"BenchPayload".equals(header.messageName())
-                    || !"application/x-protobuf".equals(header.contentType())) {
+            if (requestHeader.kind() != expectedKind
+                    || !BenchContract.CHANNEL_NAME.equals(requestHeader.channelName())
+                    || !"BenchPayload".equals(requestHeader.messageName())
+                    || !"application/x-protobuf".equals(requestHeader.contentType())) {
                 metrics.recordError();
                 return;
             }
@@ -217,10 +226,37 @@ public class ZLinkFrameworkBenchServer {
         }
         metrics.record(body);
         if (received.replyToken().isPresent()) {
-            try (Message header = Message.from(RawWire.RESPONSE_ENVELOPE);
-                    Message replyBody = RawWire.encodeBenchPayloadMessage(body)) {
-                received.reply().message(header).message(replyBody).submit();
+            if (requestHeader != null) {
+                replyLadderL2(received, requestHeader, body);
+            } else {
+                try (Message header = Message.from(RawWire.RESPONSE_ENVELOPE);
+                        Message replyBody = RawWire.encodeBenchPayloadMessage(body)) {
+                    received.reply().message(header).message(replyBody).submit();
+                }
             }
+        }
+    }
+
+    private static void replyLadderL2(
+            Received received, ZLinkChannelEnvelope.Header requestHeader, ByteBuffer body) {
+        var replyBody = ZLinkFrameworkMultipartView.owned(
+                RawWire.encodeBenchPayloadMessage(body));
+        java.util.List<Message> replyParts;
+        try {
+            replyParts = ZLinkChannelEnvelope.encode(
+                    ZLinkChannelEnvelope.reply(requestHeader),
+                    replyBody,
+                    CHANNEL_NAMES,
+                    MESSAGE_NAMES,
+                    MESSAGE_NAMES);
+        } catch (RuntimeException | Error failure) {
+            replyBody.close();
+            throw failure;
+        }
+        try {
+            received.reply().message(replyParts.get(0)).message(replyParts.get(1)).submit();
+        } finally {
+            ZLinkFrameworkMultipartView.closeAll(replyParts);
         }
     }
 

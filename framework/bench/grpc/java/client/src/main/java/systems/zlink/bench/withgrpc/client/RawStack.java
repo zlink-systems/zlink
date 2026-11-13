@@ -117,7 +117,7 @@ public final class RawStack implements AutoCloseable {
                     return new RawSubmission(submission.result(),
                         admitted,
                         submission.reply().toCompletableFuture().thenAccept(
-                            parts -> validate(parts, runId, phase, payloadSize,
+                            parts -> validateEnvelope(parts, runId, phase, payloadSize,
                                 sequence)));
                 } finally {
                     ZLinkFrameworkMultipartView.closeAll(envelope);
@@ -279,6 +279,33 @@ public final class RawStack implements AutoCloseable {
             }
             ByteBuffer body = RawWire.decodeBenchPayloadBody(
                 parts.get(parts.size() - 1).dataBuffer());
+            BenchMetricHeader.Decoded decoded = BenchMetricHeader.decode(body);
+            if (!BenchMetricHeader.isExpected(decoded, runId, phase, payloadSize, sequence)) {
+                throw new IllegalStateException("raw reply header mismatch");
+            }
+        } finally {
+            for (Message part : parts) {
+                part.close();
+            }
+        }
+    }
+
+    private static void validateEnvelope(
+        List<Message> parts, int runId, byte phase, int payloadSize, long sequence) {
+        try {
+            var header = systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
+                .tryDecodeHeader(parts, false);
+            if (header == null
+                    || header.kind()
+                        != systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.KIND_RESPONSE
+                    || !systems.zlink.bench.withgrpc.shared.BenchContract.CHANNEL_NAME
+                        .equals(header.channelName())
+                    || !"BenchPayload".equals(header.messageName())
+                    || !"application/x-protobuf".equals(header.contentType())
+                    || parts.size() != 2) {
+                throw new IllegalStateException("raw request returned an invalid reply envelope");
+            }
+            ByteBuffer body = RawWire.decodeBenchPayloadBody(parts.get(1).dataBuffer());
             BenchMetricHeader.Decoded decoded = BenchMetricHeader.decode(body);
             if (!BenchMetricHeader.isExpected(decoded, runId, phase, payloadSize, sequence)) {
                 throw new IllegalStateException("raw reply header mismatch");
