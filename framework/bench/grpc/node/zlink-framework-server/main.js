@@ -17,6 +17,18 @@ const zlink = require('@zlink-systems/zlink');
 const { EchoHandler, CommandHandler } = require('./bench-handlers');
 const l0Server = process.env.ZLINK_LADDER_L0_SERVER === '1';
 const lazyFramework = l0Server && process.env.ZLINK_LADDER_L0_LAZY_FRAMEWORK !== '0';
+const l0rServer = l0Server && process.env.ZLINK_LADDER_L0R === '1';
+const l1Permit = l0Server && process.env.ZLINK_LADDER_L1_PERMIT === '1';
+let applicationJobQueue;
+if (l0rServer || l1Permit) {
+  require('@zlink-systems/framework');
+}
+if (l1Permit) {
+  const { ApplicationJobQueue, resolveApplicationJobQueueConfiguration } = require(
+    '../../../../languages/node/packages/framework/dist/runtime/host/application-job-queue'
+  );
+  applicationJobQueue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
+}
 let contract;
 let createBenchPayloadSerializer;
 let Module;
@@ -137,7 +149,82 @@ if (l0Server) {
     return handled;
   }
 
+  async function pumpWithPermits(socket, targetReceived, processMessage, label) {
+    let handled = 0;
+    while (handled < batch) {
+      const permit = await applicationJobQueue.acquire(undefined, 'remote');
+      let hasMessage;
+      try {
+        hasMessage = socket.recv(targetReceived, zlink.RecvFlags.DontWait);
+      } catch (error) {
+        permit.releaseUnqueued();
+        if (error instanceof zlink.RecvError && error.result === zlink.RecvResult.NoData) break;
+        metrics.recordError();
+        console.error(`ladder L1 ${label} recv failed: ${error.message}`);
+        break;
+      }
+      if (!hasMessage) {
+        permit.releaseUnqueued();
+        break;
+      }
+      handled += 1;
+      try {
+        processMessage(permit);
+      } catch (error) {
+        permit.releaseAfterInternalProcessing();
+        metrics.recordError();
+        console.error(`ladder L1 ${label} handler failed: ${error.message}`);
+      }
+    }
+    return handled;
+  }
+
+  async function pumpRequestsWithPermits() {
+    return pumpWithPermits(router, received, (permit) => {
+      const parts = received.parts;
+      const payload = decodeBenchPayloadBody(parts[parts.length - 1].data());
+      if (payload === null) throw new Error('invalid benchmark payload');
+      if (received.replyToken !== null) {
+        permit.releaseBeforeHandler();
+        echoHandler.handleL0(payload);
+        received.reply()
+          .message(RESPONSE_ENVELOPE)
+          .message(encodeBenchPayloadMessage(payload))
+          .submit();
+      } else {
+        permit.releaseBeforeHandler();
+        commandHandler.handleL0(payload);
+      }
+    }, 'request');
+  }
+
+  async function pumpCommandsWithPermits() {
+    return pumpWithPermits(commandRouter, commandReceived, (permit) => {
+      const parts = commandReceived.parts;
+      const payload = decodeBenchPayloadBody(parts[parts.length - 1].data());
+      if (payload === null) throw new Error('invalid benchmark payload');
+      permit.releaseBeforeHandler();
+      commandHandler.handleL0(payload);
+    }, 'command');
+  }
+
+  async function schedulePermittedPump() {
+    const handled = await pumpRequestsWithPermits() + await pumpCommandsWithPermits();
+    if (handled > 0) {
+      idleSpins = 0;
+      setImmediate(schedulePump);
+      return;
+    }
+    idleSpins += 1;
+    if (idleSpins < IDLE_SPIN_LIMIT) setImmediate(schedulePump);
+    else setTimeout(schedulePump, 1);
+  }
+
   function schedulePump() {
+    if (l1Permit) {
+      void schedulePermittedPump();
+      return;
+    }
     const handled = twoRouters ? pump() + pumpCommands() : pump();
     if (handled > 0) {
       idleSpins = 0;
