@@ -31,6 +31,7 @@ import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.binding.ZLinkActorIngressProbe;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
@@ -103,6 +104,7 @@ final class ZLinkJoinedActorSendAdmissionTest {
                                         source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "game")
                                                 .endpoint(),
                                         true))) {
+            awaitServing(source, target);
             source.spotManager()
                     .getOrCreate("table-2", "table")
                     .submit()
@@ -210,6 +212,7 @@ final class ZLinkJoinedActorSendAdmissionTest {
                                             executionMode))
                             : source;
             try {
+                awaitServing(source, target);
                 TABLE_CLIENT.set(sendFromSource ? source.actorClient() : target.actorClient());
                 target.spotManager()
                         .getOrCreate("table-1", "table")
@@ -289,6 +292,7 @@ final class ZLinkJoinedActorSendAdmissionTest {
                                                 .endpoint(),
                                         true,
                                         executionMode))) {
+            awaitServing(source, target);
             TABLE_CLIENT.set(source.actorClient());
             target.spotManager()
                     .getOrCreate("table-1", "table")
@@ -440,6 +444,21 @@ final class ZLinkJoinedActorSendAdmissionTest {
 
     private static ZLinkFrameworkRuntime start(DefaultZLinkFrameworkOptions options) {
         return ZLinkFrameworkRuntimeTestAccess.start(options, probe.provider());
+    }
+
+    // Startup can return while a host is still Preparing (a fixed RID waits out the previous
+    // owner lease before its descriptor is published). Placement and request admission only
+    // use Serving hosts, so the cross-node steps start after both hosts serve (#4366).
+    private static void awaitServing(ZLinkFrameworkRuntime... runtimes) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_SECONDS);
+        for (var runtime : runtimes) {
+            while (runtime.status().state() != ZLinkFrameworkRuntimeState.SERVING) {
+                assertTrue(
+                        System.nanoTime() < deadline,
+                        "runtime did not reach Serving: " + runtime.status().state());
+                Thread.sleep(10);
+            }
+        }
     }
 
     private static DefaultZLinkFrameworkOptions options(
