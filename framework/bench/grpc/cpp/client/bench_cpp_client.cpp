@@ -664,6 +664,7 @@ class zlink_raw_driver_t final : public driver_t
 #include "../ladder/ladder_driver.inc"
 #endif
 
+template <typename Payload = payload_t>
 class framework_driver_t final : public driver_t
 {
   public:
@@ -672,7 +673,8 @@ class framework_driver_t final : public driver_t
     {
         auto &app = _host.app ();
         auto &config = app.add_zlink_framework ();
-        config.codecs ().use (zlink::framework_codecs::protobuf ());
+        if constexpr (std::is_same_v<Payload, payload_t>)
+            config.codecs ().use (zlink::framework_codecs::protobuf ());
         auto mesh = config.add_route_mesh ("bench");
         mesh.set_object_role (fw::object_role_t::none).listen ("tcp://127.0.0.1:0")
           .set_routing_id (zlink::routing_id_t::from ("bench-source"));
@@ -685,8 +687,8 @@ class framework_driver_t final : public driver_t
             return false;
         const auto deadline = clock_t_::now () + std::chrono::milliseconds (timeout_ms);
         while (clock_t_::now () < deadline) {
-            auto task = _client->request_to_node ("bench", _target_node, make_payload (1024, phase_warmup, 0))
-              .timeout (std::chrono::milliseconds (500)).async<payload_t> ();
+            auto task = _client->request_to_node ("bench", _target_node, make_request (1024, phase_warmup, 0))
+              .timeout (std::chrono::milliseconds (500)).template async<Payload> ();
             if (task.result ())
                 return true;
             std::this_thread::sleep_for (std::chrono::milliseconds (50));
@@ -708,10 +710,20 @@ class framework_driver_t final : public driver_t
       private:
         fw::route_client_t *&_client;
     };
+    Payload make_request (size_t size, phase_t phase, uint64_t seq)
+    {
+#if defined(ZLINK_CPP_ABLATION_LADDER)
+        if constexpr (std::is_same_v<Payload, ladder::typed_payload_t>)
+            return ladder::make_typed_payload (size, _run_id, phase, seq);
+        else
+#endif
+            return make_payload (size, phase, seq);
+    }
     void submit (std::shared_ptr<stream_t> stream, int, uint64_t seq) override
     {
-        const auto sent = _command ? 0 : now_ns ();
-        auto payload = make_payload (stream->size, stream->phase, seq);
+        // The ladder derives latency from the same in-body stamp as L4.
+        const auto sent = std::is_same_v<Payload, payload_t> && !_command ? now_ns () : 0;
+        auto payload = make_request (stream->size, stream->phase, seq);
         if (_command) {
             auto task = _client->send_to_node ("bench", _target_node, std::move (payload)).async ();
             observe_framework (task, [stream, seq] (const auto &result) {
@@ -720,10 +732,11 @@ class framework_driver_t final : public driver_t
             });
         } else {
             auto task = _client->request_to_node ("bench", _target_node, std::move (payload))
-              .timeout (std::chrono::milliseconds (_options.request_timeout_ms)).async<payload_t> ();
+              .timeout (std::chrono::milliseconds (_options.request_timeout_ms)).template async<Payload> ();
             observe_framework (task, [stream, sent, seq] (const auto &result) {
-                stream->finish (sent, result ? &result.value () : nullptr, seq,
-                                result ? nullptr : result.error ());
+                stream->finish_bytes (sent, result ? result.value ().body ().data () : nullptr,
+                                      result ? result.value ().body ().size () : 0, seq,
+                                      result ? nullptr : result.error ());
             });
             auto admission = task.admitted ();
             observe_framework (admission, [stream] (const auto &result) {
@@ -790,6 +803,10 @@ class source_t
                                  || _options.ladder_raw_mesh))
                     _driver = std::make_unique<ladder_driver_t> (_options, window, command,
                       _options.ladder_raw_mesh ? -1 : fw::detail::ablation::level ());
+                else if (_options.implementation == "zlink-framework-cpp"
+                         && fw::detail::ablation::level () == 7)
+                    _driver = std::make_unique<framework_driver_t<ladder::typed_payload_t>> (
+                      _options, window, command);
                 else
 #endif
                 if (_options.implementation == "grpc-cpp")
@@ -797,7 +814,7 @@ class source_t
                 else if (_options.implementation == "zlink-cpp")
                     _driver = std::make_unique<zlink_raw_driver_t> (_options, window, command);
                 else if (_options.implementation == "zlink-framework-cpp")
-                    _driver = std::make_unique<framework_driver_t> (_options, window, command);
+                    _driver = std::make_unique<framework_driver_t<>> (_options, window, command);
                 else
                     throw std::runtime_error ("unknown implementation: " + _options.implementation);
 

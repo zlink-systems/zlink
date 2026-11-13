@@ -20,10 +20,10 @@ using namespace zlink_cpp_bench;
 namespace fw = zlink::framework;
 using payload_t = zlink::framework::bench::withgrpc::BenchPayload;
 
-struct echo_handler_t
+template <typename Payload = payload_t> struct echo_handler_t
 {
     explicit echo_handler_t (server_metrics_t &metrics) : metrics (metrics) {}
-    payload_t handle (const payload_t &request)
+    Payload handle (const Payload &request)
     {
         metrics.record (request.body ().data (), request.body ().size ());
         return request;
@@ -31,10 +31,10 @@ struct echo_handler_t
     server_metrics_t &metrics;
 };
 
-struct command_handler_t
+template <typename Payload = payload_t> struct command_handler_t
 {
     explicit command_handler_t (server_metrics_t &metrics) : metrics (metrics) {}
-    void handle (const payload_t &request)
+    void handle (const Payload &request)
     {
         metrics.record (request.body ().data (), request.body ().size ());
     }
@@ -78,7 +78,10 @@ int main (int argc, char **argv)
         });
         server.app ().logging ().disable_record_capture ();
         auto &options = server.app ().add_zlink_framework ();
-        options.codecs ().use (zlink::framework_codecs::protobuf ());
+#if defined(ZLINK_CPP_ABLATION_LADDER)
+        if (level != 7)
+#endif
+            options.codecs ().use (zlink::framework_codecs::protobuf ());
         // Metrics outlive the server; handlers get them by constructor injection (#4145).
         options.services ().add_factory<server_metrics_t> (
           [&metrics] (fw::service_provider_t &) {
@@ -89,8 +92,18 @@ int main (int argc, char **argv)
         mesh.set_object_role (fw::object_role_t::none)
           .listen (endpoint)
           .set_routing_id (zlink::routing_id_t::from ("bench-server"));
-        mesh.add_route_request_handler<echo_handler_t, payload_t, payload_t> ("BenchPayload")
-          .add_route_send_handler<command_handler_t, payload_t> ("BenchPayload");
+#if defined(ZLINK_CPP_ABLATION_LADDER)
+        if (level == 7) {
+            mesh.add_route_request_handler<echo_handler_t<ladder::typed_payload_t>,
+                                          ladder::typed_payload_t, ladder::typed_payload_t> ("BenchPayload")
+              .add_route_send_handler<command_handler_t<ladder::typed_payload_t>,
+                                      ladder::typed_payload_t> ("BenchPayload");
+        } else
+#endif
+        {
+            mesh.add_route_request_handler<echo_handler_t<>, payload_t, payload_t> ("BenchPayload")
+              .add_route_send_handler<command_handler_t<>, payload_t> ("BenchPayload");
+        }
         if (!server.start ())
             return 2;
         std::fprintf (stderr, "zlink-framework-cpp target: endpoint=%s stats=%d\n",
