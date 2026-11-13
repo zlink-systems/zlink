@@ -104,3 +104,5 @@ source 완료 대기 일치: POLLCOMPLETION poller.wait(50ms), recv probe 없음
 L1 추가 작업: receive 직전 실제 wait_for_supply_blocking(remote), fixed_handler.handle 직전 release_for_handler_entry. Capacity 여유·waiter 없음·pressure 전이 없음에서는 queue mutex 1회, credits load 2회·fetch_add 1회·fetch_sub 1회다(application_job_queue.hpp:454,903,922,984). Permit 정상 fast path의 새 heap allocation 0·payload copy 0; 추가 counter/metrics atomic 0; 실제 queue의 mutex·credits atomic·shared/weak refcount만 복원한다. Queue가 만드는 비용은 allocation 총계로 추정하지 않는다.
 
 GATE-WAIT 104.6
+
+- 측정 도구·call-shape 로컬 commit 9ac0b397bc; runtime 소스 변경 없음. Python·shell syntax 통과. Validator 양성 수락, completed 불일치·warmup 30초·target error 음성 입력 거부(raw/tool-validation/).

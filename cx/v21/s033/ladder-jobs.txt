@@ -2,4 +2,4 @@ C++|L0·L1 빠른 측정(1회)|l3868-m1
 .NET|L1 permit 측정 + L0 serial 다시(옛 방식, 마무리 중)|lad-dotnet-l1b
 Java|L1·L2·L3 빠른 측정(1회)|lad-java-m1
 Node|L0R 모듈 로드 + L1 빠른 측정(1회)|lad-node-m1
-기반|A/A 서버 흔들림 측정|aa-noise
+기반|A/A 서버 흔들림 측정|aa-noise2

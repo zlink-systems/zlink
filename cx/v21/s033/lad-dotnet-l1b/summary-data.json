@@ -1,0 +1,260 @@
+{
+  "send-saturation-1024": {
+    "n": 3,
+    "median_msg_s": {
+      "binding": 433456.6,
+      "L0": 431231.6,
+      "L1": 421828.6
+    },
+    "spread": {
+      "binding": 0.020910051894468738,
+      "L0": 0.027365805288851745,
+      "L1": 0.02638796895231844
+    },
+    "ratio_l0_binding": 0.9948668448006098,
+    "ratio_l1_binding": 0.9731737848725801,
+    "ratio_spread_l0_binding": 0.04859578781919485,
+    "ratio_spread_l1_binding": 0.03773034582946849,
+    "step_loss": 0.021804988317182694,
+    "valid": true,
+    "verdict_l0": "\ud1b5\uacfc",
+    "verdict_l1": "\ud1b5\uacfc",
+    "raw": {
+      "binding": [
+        "raw/session/binding/run-1/run1/zlink-dotnet-send-saturation-1024/results.json",
+        "raw/session/binding/run-2/run1/zlink-dotnet-send-saturation-1024/results.json",
+        "raw/session/binding/run-3/run1/zlink-dotnet-send-saturation-1024/results.json"
+      ],
+      "L0": [
+        "raw/session/L0/run-1/run1/zlink-dotnet-send-saturation-1024/results.json",
+        "raw/session/L0/run-2/run1/zlink-dotnet-send-saturation-1024/results.json",
+        "raw/session/L0/run-3/run1/zlink-dotnet-send-saturation-1024/results.json"
+      ],
+      "L1": [
+        "raw/session/L1/run-1/run1/zlink-dotnet-send-saturation-1024/results.json",
+        "raw/session/L1/run-2/run1/zlink-dotnet-send-saturation-1024/results.json",
+        "raw/session/L1/run-3/run1/zlink-dotnet-send-saturation-1024/results.json"
+      ]
+    }
+  },
+  "send-saturation-4096": {
+    "n": 5,
+    "median_msg_s": {
+      "binding": 174710.8,
+      "L0": 176210.4,
+      "L1": 179198
+    },
+    "spread": {
+      "binding": 0.1012850951400828,
+      "L0": 0.060448191480185084,
+      "L1": 0.032562863424815076
+    },
+    "ratio_l0_binding": 1.0085833274187972,
+    "ratio_l1_binding": 1.0256835868189031,
+    "ratio_spread_l0_binding": 0.048150183815199,
+    "ratio_spread_l1_binding": 0.10572007867104408,
+    "step_loss": -0.01695473138929393,
+    "valid": true,
+    "verdict_l0": "\ud310\uc815 \ubd88\uac00",
+    "verdict_l1": "\ud310\uc815 \ubd88\uac00",
+    "raw": {
+      "binding": [
+        "raw/session/binding/run-1/run1/zlink-dotnet-send-saturation-4096/results.json",
+        "raw/session/binding/run-2/run1/zlink-dotnet-send-saturation-4096/results.json",
+        "raw/session/binding/run-3/run1/zlink-dotnet-send-saturation-4096/results.json",
+        "raw/session/binding/extra-send-saturation-4096/run-4/run1/zlink-dotnet-send-saturation-4096/results.json",
+        "raw/session/binding/extra-send-saturation-4096/run-5/run1/zlink-dotnet-send-saturation-4096/results.json"
+      ],
+      "L0": [
+        "raw/session/L0/run-1/run1/zlink-dotnet-send-saturation-4096/results.json",
+        "raw/session/L0/run-2/run1/zlink-dotnet-send-saturation-4096/results.json",
+        "raw/session/L0/run-3/run1/zlink-dotnet-send-saturation-4096/results.json",
+        "raw/session/L0/extra-send-saturation-4096/run-4/run1/zlink-dotnet-send-saturation-4096/results.json",
+        "raw/session/L0/extra-send-saturation-4096/run-5/run1/zlink-dotnet-send-saturation-4096/results.json"
+      ],
+      "L1": [
+        "raw/session/L1/run-1/run1/zlink-dotnet-send-saturation-4096/results.json",
+        "raw/session/L1/run-2/run1/zlink-dotnet-send-saturation-4096/results.json",
+        "raw/session/L1/run-3/run1/zlink-dotnet-send-saturation-4096/results.json",
+        "raw/session/L1/extra-send-saturation-4096/run-4/run1/zlink-dotnet-send-saturation-4096/results.json",
+        "raw/session/L1/extra-send-saturation-4096/run-5/run1/zlink-dotnet-send-saturation-4096/results.json"
+      ]
+    }
+  },
+  "request-serial-1024": {
+    "n": 5,
+    "median_msg_s": {
+      "binding": 6953.2,
+      "L0": 8157.2,
+      "L1": 8490.2
+    },
+    "spread": {
+      "binding": 0.218892020939999,
+      "L0": 0.10783111852106109,
+      "L1": 0.29980448045982433
+    },
+    "ratio_l0_binding": 1.173157682793534,
+    "ratio_l1_binding": 1.2210493010412473,
+    "ratio_spread_l0_binding": 0.22086947140653518,
+    "ratio_spread_l1_binding": 0.4028163424592462,
+    "step_loss": -0.04082283136370335,
+    "valid": true,
+    "verdict_l0": "\ud310\uc815 \ubd88\uac00",
+    "verdict_l1": "\ud310\uc815 \ubd88\uac00",
+    "raw": {
+      "binding": [
+        "raw/session/binding/run-1/run1/zlink-dotnet-request-serial-1024/results.json",
+        "raw/session/binding/run-2/run1/zlink-dotnet-request-serial-1024/results.json",
+        "raw/session/binding/run-3/run1/zlink-dotnet-request-serial-1024/results.json",
+        "raw/session/binding/extra-request-serial-1024/run-4/run1/zlink-dotnet-request-serial-1024/results.json",
+        "raw/session/binding/extra-request-serial-1024/run-5/run1/zlink-dotnet-request-serial-1024/results.json"
+      ],
+      "L0": [
+        "raw/session/L0/run-1/run1/zlink-dotnet-request-serial-1024/results.json",
+        "raw/session/L0/run-2/run1/zlink-dotnet-request-serial-1024/results.json",
+        "raw/session/L0/run-3/run1/zlink-dotnet-request-serial-1024/results.json",
+        "raw/session/L0/extra-request-serial-1024/run-4/run1/zlink-dotnet-request-serial-1024/results.json",
+        "raw/session/L0/extra-request-serial-1024/run-5/run1/zlink-dotnet-request-serial-1024/results.json"
+      ],
+      "L1": [
+        "raw/session/L1/run-1/run1/zlink-dotnet-request-serial-1024/results.json",
+        "raw/session/L1/run-2/run1/zlink-dotnet-request-serial-1024/results.json",
+        "raw/session/L1/run-3/run1/zlink-dotnet-request-serial-1024/results.json",
+        "raw/session/L1/extra-request-serial-1024/run-4/run1/zlink-dotnet-request-serial-1024/results.json",
+        "raw/session/L1/extra-request-serial-1024/run-5/run1/zlink-dotnet-request-serial-1024/results.json"
+      ]
+    }
+  },
+  "request-serial-4096": {
+    "n": 5,
+    "median_msg_s": {
+      "binding": 7372,
+      "L0": 7382.2,
+      "L1": 6069
+    },
+    "spread": {
+      "binding": 0.2490504612045578,
+      "L0": 0.08924168946926393,
+      "L1": 0.3594331850387213
+    },
+    "ratio_l0_binding": 1.0013836136733587,
+    "ratio_l1_binding": 0.8232501356483993,
+    "ratio_spread_l0_binding": 0.5446963838027513,
+    "ratio_spread_l1_binding": 0.38643979858688693,
+    "step_loss": 0.17788735065427652,
+    "valid": true,
+    "verdict_l0": "\ud310\uc815 \ubd88\uac00",
+    "verdict_l1": "\ud310\uc815 \ubd88\uac00",
+    "raw": {
+      "binding": [
+        "raw/session/binding/run-1/run1/zlink-dotnet-request-serial-4096/results.json",
+        "raw/session/binding/run-2/run1/zlink-dotnet-request-serial-4096/results.json",
+        "raw/session/binding/run-3/run1/zlink-dotnet-request-serial-4096/results.json",
+        "raw/session/binding/extra-request-serial-4096/run-4/run1/zlink-dotnet-request-serial-4096/results.json",
+        "raw/session/binding/extra-request-serial-4096/run-5/run1/zlink-dotnet-request-serial-4096/results.json"
+      ],
+      "L0": [
+        "raw/session/L0/run-1/run1/zlink-dotnet-request-serial-4096/results.json",
+        "raw/session/L0/run-2/run1/zlink-dotnet-request-serial-4096/results.json",
+        "raw/session/L0/run-3/run1/zlink-dotnet-request-serial-4096/results.json",
+        "raw/session/L0/extra-request-serial-4096/run-4/run1/zlink-dotnet-request-serial-4096/results.json",
+        "raw/session/L0/extra-request-serial-4096/run-5/run1/zlink-dotnet-request-serial-4096/results.json"
+      ],
+      "L1": [
+        "raw/session/L1/run-1/run1/zlink-dotnet-request-serial-4096/results.json",
+        "raw/session/L1/run-2/run1/zlink-dotnet-request-serial-4096/results.json",
+        "raw/session/L1/run-3/run1/zlink-dotnet-request-serial-4096/results.json",
+        "raw/session/L1/extra-request-serial-4096/run-4/run1/zlink-dotnet-request-serial-4096/results.json",
+        "raw/session/L1/extra-request-serial-4096/run-5/run1/zlink-dotnet-request-serial-4096/results.json"
+      ]
+    }
+  },
+  "request-backpressure-1024": {
+    "n": 5,
+    "median_msg_s": {
+      "binding": 130150,
+      "L0": 108876,
+      "L1": 123362.4
+    },
+    "spread": {
+      "binding": 0.5408590088359585,
+      "L0": 0.11634887394834496,
+      "L1": 0.533305123765426
+    },
+    "ratio_l0_binding": 0.8365424510180561,
+    "ratio_l1_binding": 0.9478478678447945,
+    "ratio_spread_l0_binding": 0.9558168028719662,
+    "ratio_spread_l1_binding": 0.43687127076880183,
+    "step_loss": -0.133054116609721,
+    "valid": true,
+    "verdict_l0": "\ud310\uc815 \ubd88\uac00",
+    "verdict_l1": "\ud310\uc815 \ubd88\uac00",
+    "raw": {
+      "binding": [
+        "raw/session/binding/run-1/run1/zlink-dotnet-request-backpressure-1024/results.json",
+        "raw/session/binding/run-2/run1/zlink-dotnet-request-backpressure-1024/results.json",
+        "raw/session/binding/run-3/run1/zlink-dotnet-request-backpressure-1024/results.json",
+        "raw/session/binding/extra-request-backpressure-1024/run-4/run1/zlink-dotnet-request-backpressure-1024/results.json",
+        "raw/session/binding/extra-request-backpressure-1024/run-5/run1/zlink-dotnet-request-backpressure-1024/results.json"
+      ],
+      "L0": [
+        "raw/session/L0/run-1/run1/zlink-dotnet-request-backpressure-1024/results.json",
+        "raw/session/L0/run-2/run1/zlink-dotnet-request-backpressure-1024/results.json",
+        "raw/session/L0/run-3/run1/zlink-dotnet-request-backpressure-1024/results.json",
+        "raw/session/L0/extra-request-backpressure-1024/run-4/run1/zlink-dotnet-request-backpressure-1024/results.json",
+        "raw/session/L0/extra-request-backpressure-1024/run-5/run1/zlink-dotnet-request-backpressure-1024/results.json"
+      ],
+      "L1": [
+        "raw/session/L1/run-1/run1/zlink-dotnet-request-backpressure-1024/results.json",
+        "raw/session/L1/run-2/run1/zlink-dotnet-request-backpressure-1024/results.json",
+        "raw/session/L1/run-3/run1/zlink-dotnet-request-backpressure-1024/results.json",
+        "raw/session/L1/extra-request-backpressure-1024/run-4/run1/zlink-dotnet-request-backpressure-1024/results.json",
+        "raw/session/L1/extra-request-backpressure-1024/run-5/run1/zlink-dotnet-request-backpressure-1024/results.json"
+      ]
+    }
+  },
+  "request-backpressure-4096": {
+    "n": 5,
+    "median_msg_s": {
+      "binding": 84622.8,
+      "L0": 90616.4,
+      "L1": 90486.6
+    },
+    "spread": {
+      "binding": 0.10811270721365876,
+      "L0": 0.12508111114544382,
+      "L1": 0.20575864271615915
+    },
+    "ratio_l0_binding": 1.070827247503037,
+    "ratio_l1_binding": 1.0692933819254387,
+    "ratio_spread_l0_binding": 0.10696743429781214,
+    "ratio_spread_l1_binding": 0.12967082510665554,
+    "step_loss": 0.00143241179300857,
+    "valid": true,
+    "verdict_l0": "\ud310\uc815 \ubd88\uac00",
+    "verdict_l1": "\ud310\uc815 \ubd88\uac00",
+    "raw": {
+      "binding": [
+        "raw/session/binding/run-1/run1/zlink-dotnet-request-backpressure-4096/results.json",
+        "raw/session/binding/run-2/run1/zlink-dotnet-request-backpressure-4096/results.json",
+        "raw/session/binding/run-3/run1/zlink-dotnet-request-backpressure-4096/results.json",
+        "raw/session/binding/extra-request-backpressure-4096/run-4/run1/zlink-dotnet-request-backpressure-4096/results.json",
+        "raw/session/binding/extra-request-backpressure-4096/run-5/run1/zlink-dotnet-request-backpressure-4096/results.json"
+      ],
+      "L0": [
+        "raw/session/L0/run-1/run1/zlink-dotnet-request-backpressure-4096/results.json",
+        "raw/session/L0/run-2/run1/zlink-dotnet-request-backpressure-4096/results.json",
+        "raw/session/L0/run-3/run1/zlink-dotnet-request-backpressure-4096/results.json",
+        "raw/session/L0/extra-request-backpressure-4096/run-4/run1/zlink-dotnet-request-backpressure-4096/results.json",
+        "raw/session/L0/extra-request-backpressure-4096/run-5/run1/zlink-dotnet-request-backpressure-4096/results.json"
+      ],
+      "L1": [
+        "raw/session/L1/run-1/run1/zlink-dotnet-request-backpressure-4096/results.json",
+        "raw/session/L1/run-2/run1/zlink-dotnet-request-backpressure-4096/results.json",
+        "raw/session/L1/run-3/run1/zlink-dotnet-request-backpressure-4096/results.json",
+        "raw/session/L1/extra-request-backpressure-4096/run-4/run1/zlink-dotnet-request-backpressure-4096/results.json",
+        "raw/session/L1/extra-request-backpressure-4096/run-5/run1/zlink-dotnet-request-backpressure-4096/results.json"
+      ]
+    }
+  }
+}
