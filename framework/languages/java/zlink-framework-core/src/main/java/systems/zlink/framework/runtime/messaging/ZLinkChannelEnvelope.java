@@ -1280,6 +1280,7 @@ public final class ZLinkChannelEnvelope {
         private int position;
         private boolean valid = true;
         private boolean wasNull;
+        private byte[] stringScratch;
 
         private CanonicalReader(ByteBuffer bytes) {
             this.bytes = bytes;
@@ -1314,17 +1315,21 @@ public final class ZLinkChannelEnvelope {
                     int length = position - start - 1;
                     if (name) JSON.streamReadConstraints().validateNameLength(length);
                     else JSON.streamReadConstraints().validateStringLength(length);
+                    byte[] text;
+                    int offset;
                     if (bytes.hasArray()) {
-                        return new String(
-                                bytes.array(),
-                                bytes.arrayOffset() + start,
-                                length,
-                                StandardCharsets.ISO_8859_1);
+                        text = bytes.array();
+                        offset = bytes.arrayOffset() + start;
+                    } else {
+                        // Reuse one byte scratch for this header's native/read-only fields.
+                        // String copies it, so later fields cannot change an earlier value.
+                        if (stringScratch == null || stringScratch.length < length)
+                            stringScratch = new byte[Math.max(length, CORRELATION_ID_MAX_BYTES)];
+                        bytes.get(start, stringScratch, 0, length);
+                        text = stringScratch;
+                        offset = 0;
                     }
-                    char[] chars = new char[length];
-                    for (int index = 0; index < chars.length; index++)
-                        chars[index] = (char) bytes.get(start + index);
-                    return new String(chars);
+                    return new String(text, offset, length, StandardCharsets.ISO_8859_1);
                 }
                 if (value < 0x20 || value >= 0x80 || value == '\\') break;
             }
