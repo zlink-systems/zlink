@@ -106,3 +106,5 @@ L1 추가 작업: receive 직전 실제 wait_for_supply_blocking(remote), fixed_
 GATE-WAIT 104.6
 
 - 측정 도구·call-shape 로컬 commit 9ac0b397bc; runtime 소스 변경 없음. Python·shell syntax 통과. Validator 양성 수락, completed 불일치·warmup 30초·target error 음성 입력 거부(raw/tool-validation/).
+
+GATE-WAIT 119.6

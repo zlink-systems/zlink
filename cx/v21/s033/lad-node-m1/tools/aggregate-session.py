@@ -8,14 +8,10 @@ patterns=('send-saturation','request-serial','request-backpressure')
 payloads=(1024,4096)
 def load(v,pattern,payload):
   files=[]
-  for phase in ('one-run','confirm'):
-    directory=base/phase/v
-    count=3 if phase=='confirm' else 1
-    for run in range(1,count+1):
-      p=directory/f'run{run}/{impl[v]}-{pattern}-{payload}/results.json'
-      if p.exists(): files.append(p)
-  if not files:
-    p=base/v/f'run1/{impl[v]}-{pattern}-{payload}/results.json'
+  primary=base/v/f'run1/{impl[v]}-{pattern}-{payload}/results.json'
+  if primary.exists(): files.append(primary)
+  for run in range(1,3):
+    p=base/'confirm'/v/f'run{run}/{impl[v]}-{pattern}-{payload}/results.json'
     if p.exists(): files.append(p)
   if not files: raise SystemExit(f'missing {v} {pattern}-{payload}')
   runs=[]
@@ -28,6 +24,7 @@ def load(v,pattern,payload):
   med=statistics.median(values)
   spread=max(abs(x-med) for x in values)/med
   return {'runs':runs,'run_count':len(runs),'median':med,'spread':spread,'g5':'not-applicable-1-run' if len(runs)==1 else ('pass' if spread<=.10 else '판정 불가')}
+
 rows=[]
 for pattern in patterns:
   for payload in payloads:

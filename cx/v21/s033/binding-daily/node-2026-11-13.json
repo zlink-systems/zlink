@@ -1,0 +1,29 @@
+{
+  "date_utc": "2026-11-13",
+  "cells": {
+    "send-saturation-1024": {
+      "msg_s": 110892.6,
+      "raw": "raw/session/binding/run1/zlink-node-send-saturation-1024/results.json"
+    },
+    "send-saturation-4096": {
+      "msg_s": 87063.2,
+      "raw": "raw/session/binding/run1/zlink-node-send-saturation-4096/results.json"
+    },
+    "request-serial-1024": {
+      "msg_s": 7202,
+      "raw": "raw/session/binding/run1/zlink-node-request-serial-1024/results.json"
+    },
+    "request-serial-4096": {
+      "msg_s": 6995.2,
+      "raw": "raw/session/binding/run1/zlink-node-request-serial-4096/results.json"
+    },
+    "request-backpressure-1024": {
+      "msg_s": 30957.2,
+      "raw": "raw/session/binding/run1/zlink-node-request-backpressure-1024/results.json"
+    },
+    "request-backpressure-4096": {
+      "msg_s": 22793.2,
+      "raw": "raw/session/binding/run1/zlink-node-request-backpressure-4096/results.json"
+    }
+  }
+}
