@@ -129,6 +129,7 @@ import {
   decodeMultipartApplicationParts,
   decodeMultipartParts,
   encodeMultipartApplicationPayload,
+  encodeFrameworkMultipartApplicationMessage,
   encodeMultipartPayload,
   ServiceWireProtocolError,
   type ServiceApplicationPayload
@@ -363,7 +364,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   ): Promise<SubmitResult> {
     const result = await this.requireStateful().sendToMissingInstanceSpotFrame(
       target,
-      encodeMultipartApplicationFrame(parts),
+      encodeMultipartApplicationBytes(parts),
       deadlineUnixMs,
       sourceSpotId,
       metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata)
@@ -383,7 +384,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return this.observeStatefulRequest(OperationKind.InstanceSpotRequest, requestOperation, () =>
       this.requireStateful().requestToMissingInstanceSpotFrame(
         target,
-        encodeMultipartApplicationFrame(parts),
+        encodeMultipartApplicationBytes(parts),
         deadlineUnixMs,
         sourceSpotId,
         metadata === undefined ? undefined : encodeServiceMetadataFrame(metadata),
@@ -2939,23 +2940,31 @@ export function requestFailureResult(error: unknown): RawServiceRequestResult {
 }
 
 function encodeMultipart(parts: MessageLike | readonly MessageLike[]) {
-  const values = Array.isArray(parts) ? parts : [parts];
-  if (values.length === 0) throw new TypeError('Multipart payload must contain at least one part.');
   return {
     packetName: MULTIPART_PACKET_NAME,
     contentType: MULTIPART_CONTENT_TYPE,
-    payload: encodeMultipartPayload(values.map(messagePayloadView))
+    payload: encodeMultipartPayload(multipartPayloadViews(parts))
   };
 }
 
-function encodeMultipartApplicationFrame(parts: MessageLike | readonly MessageLike[]): Buffer {
-  const values = Array.isArray(parts) ? parts : [parts];
-  if (values.length === 0) throw new TypeError('Multipart payload must contain at least one part.');
+function encodeMultipartApplicationFrame(parts: MessageLike | readonly MessageLike[]) {
+  return encodeFrameworkMultipartApplicationMessage(multipartPayloadViews(parts));
+}
+
+function encodeMultipartApplicationBytes(parts: MessageLike | readonly MessageLike[]): Buffer {
   return encodeMultipartApplicationPayload(
-    values.map(messagePayloadView),
+    multipartPayloadViews(parts),
     MULTIPART_PACKET_NAME,
     MULTIPART_CONTENT_TYPE
   );
+}
+
+function multipartPayloadViews(
+  parts: MessageLike | readonly MessageLike[]
+): (Uint8Array | string)[] {
+  const values = Array.isArray(parts) ? parts : [parts];
+  if (values.length === 0) throw new TypeError('Multipart payload must contain at least one part.');
+  return values.map(messagePayloadView);
 }
 
 function decodeMultipart(payload: Uint8Array): FrameworkMessage[] {

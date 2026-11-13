@@ -1,3 +1,4 @@
+import { ServiceWireOwnedFrame } from '../../foundation/service-wire-m6a-codec';
 import { RequestRuntime } from '../../foundation/request-runtime';
 import type { OperationHandle } from '../../foundation/operation-registry';
 import { remainingRequestTimeout } from '../../messaging/request-deadline';
@@ -14,6 +15,7 @@ import {
   type DealerSocket,
   type MonitorEvent,
   type MonitorSocket,
+  type MessageLike,
   type ReplyOperation,
   type ReplyToken,
   type ReplySubmitOperation,
@@ -24,7 +26,7 @@ import {
 } from '@zlink-systems/zlink';
 import {
   translateBindingResultError,
-  submitBindingAsyncSend,
+  sendAdmission,
   submitBindingSend
 } from './node-backend-adapter-support';
 import { disconnectSocketPeer, isEndpointCloseIgnorableError } from './node-socket-backend-adapter';
@@ -33,6 +35,7 @@ import { ZLinkNodeEventLoopPoller } from './node-event-loop-poller';
 import { ZLinkBufferMessage } from '../runtime-message';
 import type {
   ZLinkRawBindingPort,
+  ZLinkRawOutboundPart,
   ZLinkRawDealerPort,
   ZLinkRawHostPort,
   ZLinkRawMonitorPort,
@@ -51,6 +54,7 @@ interface ZLinkNodeRawRouterSocketOptions {
 
 export type {
   ZLinkRawBindingPort,
+  ZLinkRawOutboundPart,
   ZLinkRawDealerPort,
   ZLinkRawHostPort,
   ZLinkRawMonitorPort,
@@ -253,11 +257,13 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
   private readonly replyParts = (
     targetRid: BindingRoutingId,
     replyToken: ReplyToken,
-    parts: readonly (Uint8Array | string)[]
+    parts: readonly ZLinkRawOutboundPart[]
   ) => {
     // The receive record keeps the binding RoutingId it was delivered with,
     // so the reply addresses that route without rebuilding the identity.
-    appendReplyParts(this.socket.reply(targetRid, replyToken), parts).submit();
+    submitNativeParts(parts, (nativeParts) =>
+      appendReplyParts(this.socket.reply(targetRid, replyToken), nativeParts).submit()
+    );
   };
 
   private preparedRoutingId(routingId: string | Uint8Array): BindingRoutingId {
@@ -320,21 +326,27 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     this.connect(endpoint);
   }
 
-  send(targetRid: string, parts: readonly Uint8Array[]): Promise<void> {
+  send(targetRid: string, parts: readonly ZLinkRawOutboundPart[]): Promise<void> {
     this.requireOpen();
     requireParts(parts);
-    return submitBindingAsyncSend(this.socket.send(this.preparedRoutingId(targetRid)), parts);
+    try {
+      return sendAdmission(this.submitSend(targetRid, parts));
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
-  submitSend(targetRid: string, parts: readonly Uint8Array[]) {
+  submitSend(targetRid: string, parts: readonly ZLinkRawOutboundPart[]) {
     this.requireOpen();
     requireParts(parts);
-    return submitBindingSend(this.socket.send(this.preparedRoutingId(targetRid)), parts);
+    return submitNativeParts(parts, (nativeParts) =>
+      submitBindingSend(this.socket.send(this.preparedRoutingId(targetRid)), nativeParts)
+    );
   }
 
   request<T>(
     targetRid: string,
-    parts: readonly Uint8Array[],
+    parts: readonly ZLinkRawOutboundPart[],
     timeoutMs: number,
     onReply: (parts: readonly Buffer[]) => T,
     onFailed: (error: unknown) => T,
@@ -344,9 +356,12 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
   ): Promise<T> {
     if (existing !== undefined) {
       this.requireOpen();
-      const submission = submitRawRequest(
-        appendRequestParts(this.socket.request(this.preparedRoutingId(targetRid)), parts).timeout(
-          remainingRequestTimeout('Request', existing.deadlineMs) ?? timeoutMs
+      const submission = submitNativeParts(parts, (nativeParts) =>
+        submitRawRequest(
+          appendRequestParts(
+            this.socket.request(this.preparedRoutingId(targetRid)),
+            nativeParts
+          ).timeout(remainingRequestTimeout('Request', existing.deadlineMs) ?? timeoutMs)
         )
       );
       return requestReply(submission, 0, onReply, onFailed, recordReceived, onAdmitted);
@@ -355,9 +370,12 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
       timeoutMs,
       (entry, receiver) => {
         this.requireOpen();
-        const submission = submitRawRequest(
-          appendRequestParts(this.socket.request(this.preparedRoutingId(targetRid)), parts).timeout(
-            remainingRequestTimeout('Request', entry.deadlineMs) ?? timeoutMs
+        const submission = submitNativeParts(parts, (nativeParts) =>
+          submitRawRequest(
+            appendRequestParts(
+              this.socket.request(this.preparedRoutingId(targetRid)),
+              nativeParts
+            ).timeout(remainingRequestTimeout('Request', entry.deadlineMs) ?? timeoutMs)
           )
         );
         void requestReply(
@@ -413,14 +431,22 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
     this.socket.setRoutingId(bindingRoutingId(routingId));
   }
 
-  send(parts: readonly Uint8Array[]): Promise<void> {
+  send(parts: readonly ZLinkRawOutboundPart[]): Promise<void> {
     this.requireOpen();
     requireParts(parts);
-    return submitBindingAsyncSend(this.socket.send(), parts);
+    try {
+      return sendAdmission(
+        submitNativeParts(parts, (nativeParts) =>
+          submitBindingSend(this.socket.send(), nativeParts)
+        )
+      );
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
   request(
-    parts: readonly Uint8Array[],
+    parts: readonly ZLinkRawOutboundPart[],
     timeoutMs: number,
     onAdmitted?: () => void
   ): Promise<readonly Buffer[]> {
@@ -428,9 +454,11 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
       timeoutMs,
       (entry, receiver) => {
         this.requireOpen();
-        const submission = submitRawRequest(
-          appendRequestParts(this.socket.request(), parts).timeout(
-            remainingRequestTimeout('Request', entry.deadlineMs) ?? timeoutMs
+        const submission = submitNativeParts(parts, (nativeParts) =>
+          submitRawRequest(
+            appendRequestParts(this.socket.request(), nativeParts).timeout(
+              remainingRequestTimeout('Request', entry.deadlineMs) ?? timeoutMs
+            )
           )
         );
         void requestReply(
@@ -489,9 +517,36 @@ class NodeRawMonitorPort implements ZLinkRawMonitorPort {
   }
 }
 
+/** The binding consumes native Messages; failed synchronous submissions keep caller ownership. */
+function submitNativeParts<T>(
+  parts: readonly ZLinkRawOutboundPart[],
+  submit: (parts: readonly MessageLike[]) => T
+): T {
+  let nativeParts: MessageLike[] | undefined;
+  try {
+    for (let index = 0; index < parts.length; index++) {
+      const part = parts[index]!;
+      if (part instanceof ServiceWireOwnedFrame) {
+        nativeParts ??= parts.slice(0, index) as MessageLike[];
+        nativeParts.push(part.takeMessage());
+      } else {
+        nativeParts?.push(part);
+      }
+    }
+    return submit(nativeParts ?? (parts as readonly MessageLike[]));
+  } catch (error) {
+    if (nativeParts !== undefined) {
+      for (const part of nativeParts) {
+        if (part instanceof Message) part.close();
+      }
+    }
+    throw error;
+  }
+}
+
 function appendRequestParts(
   operation: RequestOperation,
-  parts: readonly Uint8Array[]
+  parts: readonly MessageLike[]
 ): RequestSubmitOperation {
   requireParts(parts);
   let next = operation.message(parts[0]);
@@ -503,7 +558,7 @@ function appendRequestParts(
 
 function appendReplyParts(
   operation: ReplyOperation,
-  parts: readonly (Uint8Array | string)[]
+  parts: readonly MessageLike[]
 ): ReplySubmitOperation {
   requireParts(parts);
   let next = operation.message(parts[0]);
@@ -513,7 +568,7 @@ function appendReplyParts(
   return next;
 }
 
-function requireParts<T extends Uint8Array | string>(parts: readonly T[]): [T, ...T[]] {
+function requireParts<T>(parts: readonly T[]): [T, ...T[]] {
   if (parts.length === 0)
     throw new TypeError('Raw multipart operation requires at least one part.');
   return parts as [T, ...T[]];
@@ -522,7 +577,7 @@ function requireParts<T extends Uint8Array | string>(parts: readonly T[]): [T, .
 type RawReceivedReply = (
   targetRid: BindingRoutingId,
   replyToken: ReplyToken,
-  parts: readonly (Uint8Array | string)[]
+  parts: readonly ZLinkRawOutboundPart[]
 ) => void;
 
 const EMPTY_SOURCE_ROUTE = Buffer.alloc(0);
@@ -537,7 +592,7 @@ class NodeRawReceivedRecord implements ZLinkRawReceivedRecord {
   readonly sourceRoute: Uint8Array;
   readonly routeGeneration: bigint;
   readonly requestSeq?: bigint;
-  readonly reply?: (parts: readonly (Uint8Array | string)[]) => void;
+  readonly reply?: (parts: readonly ZLinkRawOutboundPart[]) => void;
   readonly parts: readonly Buffer[];
 
   constructor(
@@ -554,7 +609,10 @@ class NodeRawReceivedRecord implements ZLinkRawReceivedRecord {
       this.requestSeq = nextRequestSequence?.();
       if (reply === undefined) {
         const operation = received.reply();
-        this.reply = (parts) => appendReplyParts(operation, parts).submit();
+        this.reply = (parts) =>
+          submitNativeParts(parts, (nativeParts) =>
+            appendReplyParts(operation, nativeParts).submit()
+          );
       } else {
         const target = routingId ?? bindingRoutingId(EMPTY_SOURCE_ROUTE);
         this.reply = (parts) => reply(target, replyToken, parts);

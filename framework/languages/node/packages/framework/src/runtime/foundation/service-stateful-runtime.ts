@@ -129,6 +129,7 @@ import {
   decodeApplicationPayload,
   decodeApplicationPayloadView,
   decodeMultipartApplicationParts,
+  ServiceWireOwnedFrame,
   encodeApplicationPayload,
   encodeOwnedApplicationPayload,
   type ServiceApplicationPayload
@@ -4822,7 +4823,17 @@ export class ServiceStatefulRuntime {
   ): Promise<readonly Buffer[]> {
     return new Promise((resolve, reject) => {
       const finish: NonNullable<ServiceMailboxRecord['reply']> = (parts) => {
-        resolve(parts.map((part) => Buffer.from(part)));
+        try {
+          resolve(
+            parts.map((part) =>
+              Buffer.from(part instanceof ServiceWireOwnedFrame ? part.data() : part)
+            )
+          );
+        } finally {
+          for (const part of parts) {
+            if (part instanceof ServiceWireOwnedFrame) part.close();
+          }
+        }
       };
       void (async () => {
         const applicationJobOwner = await this.raw.reserveLocalIngress();
