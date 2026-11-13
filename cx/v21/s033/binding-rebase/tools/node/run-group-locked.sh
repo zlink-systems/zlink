@@ -15,6 +15,17 @@ record_window() { { date -u +%FT%TZ; uptime; for cpu in $(seq 0 15); do printf '
 trap 'setgov powersave' EXIT
 setgov performance
 record_window "$RAW/lock-windows/before.txt"
+ready=0
+for _ in $(seq 1 60); do
+  ready=1
+  for cpu in 0 8; do for state in 2 3; do
+    [[ "$(cat /sys/devices/system/cpu/cpu${cpu}/cpuidle/state${state}/disable 2>/dev/null || echo unavailable)" == 1 ]] || ready=0
+  done; done
+  [[ "$ready" == 1 ]] && break
+  sleep 0.25
+done
+[[ "$ready" == 1 ]] || { echo 'quiet guard did not disable C2/C3 before measurement' >&2; exit 1; }
+printf '%s guard_ready C2/C3 disable=1\n' "$(date -u +%FT%TZ)" > "$RAW/lock-windows/guard-ready.txt"
 IFS='|' read -r -a ARTS <<< '/root/worktree/zlink-v21-s033/lad-node/framework/bench/grpc/node/client/main.js|/root/worktree/zlink-v21-s033/lad-node/framework/bench/grpc/node/zlink-raw-server/main.js'
 IFS='|' read -r -a SRCS <<< '/root/worktree/zlink-v21-s033/lad-node/framework/bench/grpc/node/client/main.js|/root/worktree/zlink-v21-s033/lad-node/framework/bench/grpc/node/zlink-raw-server/main.js'
 previous_signature=''
@@ -52,8 +63,9 @@ one_run() {
   local pattern="$1" size="$2" kind="$3" stage="$4" attempt=1 out result sched rate meta
   while :; do
     (( SECONDS - START < 570 )) || { echo 'nine-minute safety boundary reached; stop this hold' >&2; return 124; }
-    out="$RAW/${pattern}-${size}/${stage}"
-    (( attempt == 1 )) || out+="/attempt${attempt}"
+    stage_root="$RAW/${pattern}-${size}/${stage}"
+    while [[ -e "$stage_root/attempt${attempt}" ]]; do attempt=$((attempt+1)); done
+    out="$stage_root/attempt${attempt}"
     mkdir -p "$out"
     snapshot
     meta="$BUILD_META"
@@ -82,6 +94,7 @@ assert 'scheduling_invalid=' not in t
 print(c['throughput_per_second'])
 CHECK
     rate=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["cells"][0]["throughput_per_second"])' "$result")
+    printf '%s\n' "$result" > "$stage_root/valid-result.path"
     printf -- '- result %s %s-%s %s msg/s=%s raw=%s scheduling=%s\n' "$LANG" "$pattern" "$size" "$kind" "$rate" "$result" "$sched" >> "$PROGRESS"
     break
   done
@@ -90,12 +103,12 @@ for pair in 'send-saturation 1024' 'send-saturation 4096' 'request-serial 1024' 
   read -r pattern size <<<"$pair"
   one_run "$pattern" "$size" warm warm
   one_run "$pattern" "$size" counted counted
-  rate=$(python3 - "$RAW/$pattern-$size/counted/run1/$IMPL-$pattern-$size/results.json" <<'RATE'
+  rawpath=$(cat "$RAW/$pattern-$size/counted/valid-result.path")
+  rate=$(python3 - "$rawpath" <<'RATE'
 import json,sys
 print(json.load(open(sys.argv[1]))['cells'][0]['throughput_per_second'])
 RATE
 )
-  rawpath="$RAW/$pattern-$size/counted/run1/$IMPL-$pattern-$size/results.json"
   printf '%s\n' "  | $LANG | $pattern-$size | $rate | — | [raw]($rawpath) |" >> "$JOB/report.md"
 done
 record_window "$RAW/lock-windows/after.txt"

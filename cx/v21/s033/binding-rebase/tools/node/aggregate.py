@@ -13,7 +13,7 @@ cells={}
 for pattern in ('send-saturation','request-serial','request-backpressure'):
  for size in (1024,4096):
   key=f'{pattern}-{size}'
-  raw=RAW/key/'counted'/'run1'/f'{IMPL}-{pattern}-{size}'/'results.json'
+  raw=Path((RAW/key/'counted'/'valid-result.path').read_text().strip())
   sched=raw.with_name('scheduling.txt')
   r=json.loads(raw.read_text())['cells'][0]; txt=sched.read_text()
   assert r['errors']==r['server_errors']==r['target_stats']['errors']==0

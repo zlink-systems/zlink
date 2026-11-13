@@ -1,7 +1,7 @@
 측정 조건(11-13 17:41 UTC부터): 측정 중 C2·C3 끔, 측정 프로세스 SCHED_OTHER, CPU 분리(source 0-5 · target 8-13, 그 밖의 프로세스·IRQ 6-7·14-15). 이 조건의 binding으로만 비율을 냅니다.
 단계 정의 표: ladder-steps.md (네 언어 같은 범위인지 확인용)
 C++ 구현: L0·L1 ✓ · L2(요청+응답) fbdcb16e26 ✓ · L3 dd83e75df4 ✓ · L4·L5~L7 구현 중(l3868-impl3) — 측정 대기: L0~L3 (기존 12:05~16:29 결과는 잠정)
-.NET 구현: L0~L1 ✓ · L2 응답 envelope 638211bbd3 → 리뷰 수정 중(lad-dotnet-l2f) · L3 c4bf6449ff · L4 f94b924ebb · L5~L7 a03bf0bfe0 (수정 뒤 다시 쌓음) — 측정 대기: L0~L5~L7 (기존 결과는 잠정)
+.NET 구현: L0~L1 ✓ · L2 응답 envelope 638211bbd3 → 리뷰 수정 중(lad-dotnet-l2g) · L3 c4bf6449ff · L4 f94b924ebb · L5~L7 a03bf0bfe0 (수정 뒤 다시 쌓음) — 측정 대기: L0~L5~L7 (기존 결과는 잠정)
 Java 구현: L0~L1 ✓ · L2 응답 envelope 추가 + L3·L4·L5~L7(4bf0f1c4bf) 다시 쌓는 중(lad-java-l2e) — 측정 대기: L0~L5~L7 (기존 결과는 잠정)
-Node 구현: L0~L1 ✓ · L2 응답 envelope 추가 + L3·L4·L5~L7(3c50a02908) 다시 쌓는 중(lad-node-l2r) — 측정 대기: L0~L5~L7 (기존 결과는 잠정)
+Node 구현: L0~L1 ✓ · L2 응답 envelope 696dab596a → 리뷰 수정 중(lad-node-l2f) · L3 d7f9a45a25 · L4 11442781b8 · L5~L7 420196e7a1 (수정 뒤 다시 쌓음) — 측정 대기: L0~L5~L7 (기존 결과는 잠정)
 기준: binding 새 기준 측정 중(binding-rebase, 네 언어 6칸, warm run 포함) — 끝나면 언어별 L0부터 측정
