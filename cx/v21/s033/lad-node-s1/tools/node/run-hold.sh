@@ -4,6 +4,7 @@ JOB=/root/jobs/fx/cx/v21/s033/lad-node-s1
 TOOLS=$JOB/tools/node
 START=$SECONDS
 variants=("$@")
+CELL_FILTER=${CELL_FILTER:-}
 ready=0
 for _ in $(seq 1 60); do
   ready=1
@@ -18,6 +19,7 @@ printf '%s guard_ready C2/C3 disabled, SCHED_OTHER enforcement and 0-5/8-13 isol
 for variant in "${variants[@]}"; do
   for pair in 'send-saturation 1024' 'send-saturation 4096' 'request-serial 1024' 'request-serial 4096' 'request-backpressure 1024' 'request-backpressure 4096'; do
     read -r pattern size <<<"$pair"
+    if [[ -n "$CELL_FILTER" && ",${CELL_FILTER}," != *",${pattern}-${size},"* ]]; then continue; fi
     "$TOOLS/run-cell.sh" "$variant" "$pattern" "$size" warm
     "$TOOLS/run-cell.sh" "$variant" "$pattern" "$size" counted
   done
@@ -33,10 +35,12 @@ if ((${#variants[@]} == 2)); then
       "$TOOLS/run-cell.sh" "$prev" "$pattern" "$size" "$phase"
       "$TOOLS/run-cell.sh" "$next" "$pattern" "$size" "$phase"
     done
-  done < <(python3 - "$JOB/raw/node" "$prev" "$next" "$threshold" <<'PY'
+  done < <(python3 - "$JOB/raw/node" "$prev" "$next" "$threshold" "$CELL_FILTER" <<'PY'
 import json,pathlib,sys
 root=pathlib.Path(sys.argv[1]); prev,nxt,threshold=sys.argv[2],sys.argv[3],float(sys.argv[4])
+cell_filter=set(sys.argv[5].split(',')) if sys.argv[5] else None
 for pattern,size in [('send-saturation',1024),('send-saturation',4096),('request-serial',1024),('request-serial',4096),('request-backpressure',1024),('request-backpressure',4096)]:
+    if cell_filter and f'{pattern}-{size}' not in cell_filter: continue
     values=[]
     for variant in (prev,nxt):
         paths=sorted((root/variant/f'{pattern}-{size}'/'counted').glob(f'attempt*/run1/zlink-framework-node-{pattern}-{size}/results.json'))

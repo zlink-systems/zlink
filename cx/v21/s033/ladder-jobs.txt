@@ -1,5 +1,7 @@
 C++|빌드 + binding 새 기준 + L0~L5~L7 단계 측정(6칸)|l3868-s1
-.NET|L4를 기본 typed JSON serializer로 수정 + L5~L7 다시 쌓기(측정 없음)|lad-dotnet-l4j
-Java|L0~L5~L7 단계 측정(binding은 s1에서 끝남)|lad-java-s2
-Node|binding 새 기준 + L0~L5~L7 단계 측정(6칸, warm run, 0-5/8-13 고정)|lad-node-s1
-Java2|L5~L7 protobuf 등록 끄기(별도 worktree, 측정 없음)|lad-java-l57p
+.NET|binding 새 기준 + L0~L5~L7 단계 측정(L4 기본 JSON 4cbe0b5316)|lad-dotnet-s1
+Java|L0~L5~L7 단계 측정(binding은 s1)|lad-java-s2
+Java2|L4·L5~L7 다시 측정(protobuf 등록 끈 빌드 ee7e5c3343)|lad-java-s3
+Node|binding 새 기준 + L0~L5~L7 단계 측정|lad-node-s1
+L2bp|L2 backpressure 손실 원인·production 수정(Java·Node)|l2bp
+N3sw|Node L3 service wire 손실 원인·production 수정|n3sw
