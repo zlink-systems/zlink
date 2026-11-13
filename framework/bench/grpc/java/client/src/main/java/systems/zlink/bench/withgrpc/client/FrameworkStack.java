@@ -174,7 +174,7 @@ public final class FrameworkStack implements AutoCloseable {
         };
     }
 
-    private BenchOperation ladderFrameworkRequest() {
+    private BenchRequestOperation ladderFrameworkRequest() {
         return (payloadSize, phase, sequence) -> {
             BenchTypedPayload message = typedPayload(payloadSize, phase, sequence);
             var submitted = route.requestToNode(BenchContract.MESH_NAME, SERVER, message)
@@ -188,7 +188,8 @@ public final class FrameworkStack implements AutoCloseable {
                     throw new IllegalStateException("L5_7 Framework reply header mismatch");
                 }
             });
-            return completion.toCompletableFuture();
+            return new BenchRequestOperation.Submission(
+                    submitted.admitted().toCompletableFuture(), completion.toCompletableFuture());
         };
     }
 
