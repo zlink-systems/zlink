@@ -1,5 +1,5 @@
-C++|L0·L1 빠른 측정(1회)|l3868-m1
+C++|멈춤: A/A 통과 대기 (L0·L1 빠른 측정)|l3868-m1
 .NET|L0 header 맞춤 + L1 확인 + L2 envelope 빠른 측정(1회)|lad-dotnet-m1
-Java|L1·L2·L3 빠른 측정(1회)|lad-java-m1
-Node|L1 7% 넘는 칸 3회 확인 + permit 비용 profile|lad-node-m2b
-기반|A/A 짧은 재측정(각 5회)|aa-noise3
+Java|멈춤: A/A 통과 대기 (L0~L3 빠른 측정)|lad-java-m1
+Node|멈춤: A/A 통과 대기 (L1 다시 측정)|lad-node-m2b
+기반|A/A 재측정(C-state 끔, 각 5회)|aa-noise4
