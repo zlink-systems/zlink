@@ -18,17 +18,25 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvi
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
 import systems.zlink.framework.testkit.FakeZLinkBackendAdapterFactory;
 
+import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 
 final class StartupFailureTest {
+    // A fixed RID host waits 3 * ownerLeaseFencingMargin after it first observes the RID
+    // unclaimed, and claims on the next renew tick (MeshNode spec 3.3). Only the conflict test
+    // needs a fixed RID; the other tests use an automatic RID, which is Serving once startup
+    // confirms the lease and the descriptor.
+    private static final RoutingId FIXED_RID = RoutingId.from("startup-conflict");
+
     @Test
     void applicationBeanInjectsPublicRuntimeProviderAndObservesServing() throws Exception {
         try (var context =
                 context(
                         new ZLinkInMemoryProviderLocationStore(),
-                        "inproc://public-runtime-status")) {
+                        "inproc://public-runtime-status",
+                        null)) {
             context.registerBean(PublicRuntimeConsumer.class);
             context.refresh();
             var runtime = context.getBean(PublicRuntimeConsumer.class).runtime().getObject();
@@ -46,8 +54,8 @@ final class StartupFailureTest {
     @Test
     void routingIdConflictFailsContextRefresh() throws Exception {
         ZLinkLocationStore store = new ZLinkInMemoryProviderLocationStore();
-        try (var owner = context(store, "inproc://startup-owner");
-                var conflict = context(store, "inproc://startup-conflict")) {
+        try (var owner = context(store, "inproc://startup-owner", FIXED_RID);
+                var conflict = context(store, "inproc://startup-conflict", FIXED_RID)) {
             owner.refresh();
             awaitReady(owner.getBean(ZLinkFrameworkRuntime.class));
             assertThrows(ApplicationContextException.class, conflict::refresh);
@@ -57,7 +65,7 @@ final class StartupFailureTest {
     @Test
     void successfulRefreshWaitsForRuntimeStartup() {
         try (var context =
-                context(new ZLinkInMemoryProviderLocationStore(), "inproc://startup-ready")) {
+                context(new ZLinkInMemoryProviderLocationStore(), "inproc://startup-ready", null)) {
             context.refresh();
             assertTrue(context.getBean(ZLinkFrameworkRuntime.class).isReady());
         }
@@ -102,7 +110,7 @@ final class StartupFailureTest {
     }
 
     private static AnnotationConfigApplicationContext context(
-            ZLinkLocationStore store, String endpoint) {
+            ZLinkLocationStore store, String endpoint, RoutingId fixedRid) {
         var context = new AnnotationConfigApplicationContext();
         context.registerBean(ZLinkFrameworkEnabled.class, ZLinkFrameworkEnabled::new);
         context.registerBean(ZLinkLocationStore.class, () -> store);
@@ -111,10 +119,15 @@ final class StartupFailureTest {
         context.registerBean(
                 ZLinkFrameworkConfigurer.class,
                 () ->
-                        options ->
-                                options.addRouteMesh("startup")
-                                        .listen(endpoint)
-                                        .setRoutingId(RoutingId.from("startup-conflict")));
+                        options -> {
+                            var mesh = options.addRouteMesh("startup").listen(endpoint);
+                            if (fixedRid == null) return;
+                            mesh.setRoutingId(fixedRid);
+                            options.configureLocations()
+                                    .setOwnerLeaseFencingMargin(Duration.ofNanos(1));
+                            options.configureLocations()
+                                    .setOwnerLeaseRenewInterval(Duration.ofMillis(100));
+                        });
         context.register(ZLinkFrameworkAutoConfiguration.class);
         return context;
     }
