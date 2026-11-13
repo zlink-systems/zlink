@@ -12,8 +12,9 @@ for f in paths:
 manifest = dict(commit='29d9fca82b', scratch_archive=True, production_dirty=bool(subprocess.check_output(['git','status','--porcelain'],text=True).strip()), base=subprocess.check_output(['git','merge-base','HEAD','origin/main'],text=True).strip(), pinned='6-7,14-15', max_process_seconds=20, throughput_verdict=False, artifacts={str(f):hashlib.sha256(f.read_bytes()).hexdigest() for f in paths + [paths[0].parent/'Zlink.Framework.dll']})
 manifest['serializer_sources'] = {str(f.relative_to(scratch)):hashlib.sha256(f.read_bytes()).hexdigest() for f in [scratch/'framework/languages/dotnet/src/Shared/ZLinkJsonSerializerOptions.cs',scratch/'framework/languages/dotnet/src/Zlink.Framework/Runtime/Messaging/ZLinkFrameworkJsonPayloadCodec.cs',scratch/'framework/languages/dotnet/src/Zlink.Framework/Runtime/Messaging/ZLinkEnvelopeCodec.cs']}
 (out/'manifest.json').write_text(json.dumps(manifest,indent=2))
-with (job/'progress.md').open('a') as f: f.write('\n- profile '+str(out.relative_to(job))+': '+json.dumps(manifest)+'\n')
+with (job/'progress.md').open('a') as f: f.write('\n- 수신/응답 대조: raw blocking Recv→unpack→typed JSON→fresh reply; L57 owner receive→worker→fresh handler scope→fresh typed JSON reply. 추가 기능은 call-shape.md의 L5~L7만.\n- profile '+str(out.relative_to(job))+': '+json.dumps(manifest)+'\n')
 env = os.environ.copy()
+env['DOTNET_PerfMapEnabled']='1'
 env['ZLINK_DOTNET_LADDER_LEVEL']=level
 if level=='L4': env.update(ZLINK_DOTNET_LADDER_CLIENT='raw', ZLINK_DOTNET_RAW_TARGET='framework')
 else:
@@ -72,6 +73,8 @@ try:
     request(15205,'/bench/start',trigger); time.sleep(.1); idle()
     for role,p in [('source',source),('target',target)]:
         traces.append(launch([str(scratch/'profile-tools/dotnet-trace'),'collect','--process-id',str(p.pid),'--profile','cpu-sampling','--providers','Microsoft-Windows-DotNETRuntime:0x10001:5','--duration','00:00:06','--buffersize','128','--output',str(out/(role+'.nettrace'))],role+'-trace'))
+    for role,p in [('source',source),('target',target)]:
+        traces.append(launch(['perf','record','--clockid','mono','-e','cpu-clock','-F','199','--call-graph','dwarf,16384','-p',str(p.pid),'-o',str(out/(role+'.perf.data')),'--','taskset','-c','6-7,14-15','sleep','6'],role+'-perf'))
     time.sleep(.8)
     trigger.update(phase='active',durationMs=5000)
     before={role:counters(p) for role,p in [('source',source),('target',target)]}
@@ -85,6 +88,10 @@ try:
     (out/'process-counters.json').write_text(json.dumps(dict(before=before,after=after),indent=2))
     for p in traces: p.wait(timeout=max(.1,18-(time.monotonic()-started)))
     for role,port in [('source',15206),('target',15215)]: (out/(role+'-stats.json')).write_text(json.dumps(request(port),indent=2))
+    for role,p in [('source',source),('target',target)]:
+        for prefix,suffix in [('perf-','.map'),('perfinfo-','.map'),('jit-','.dump')]:
+            f=pathlib.Path('/tmp')/(prefix+str(p.pid)+suffix)
+            if f.exists(): (out/(role+'-'+f.name)).write_bytes(f.read_bytes())
     manifest.update(elapsed_seconds=time.monotonic()-started)
     assert manifest['elapsed_seconds']<20
     (out/'manifest.json').write_text(json.dumps(manifest,indent=2))

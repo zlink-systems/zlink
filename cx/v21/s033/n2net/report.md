@@ -49,7 +49,7 @@ N의 caller 약칭은 같은 `runtime/channels/`, D의 caller 약칭은 같은 `
 
 변경 분류: **B — 기존 내부 비용 수정**. public API·wire format·spec 변경 없음.
 
-규칙 수(판정 위치): correlation 생성 1→1, deadline 값/ISO 결정 1→1, wire/correlation 검증 1→1, prepared-field 길이 판정 2→1(eligibility와 Buffer length 인자→eligibility). 새 queue/lock/flag 없음. Prefix 문자열+Number counter를 byte storage로 합쳤고, 공유 Date scratch는 per-call Date를 대체한다.
+규칙 수(판정 위치): correlation 생성 1→1, deadline 값/ISO 결정 1→1, wire/correlation 검증 1→1, prepared-field 길이 판정 2→1(eligibility와 Buffer length 인자→eligibility). 수정 대상 판정 위치 합계 **5→4**. 새 queue/lock/flag 없음. Prefix 문자열+Number counter를 byte storage로 합쳤고, 공유 Date scratch는 per-call Date를 대체한다.
 
 대안: 직접 Gregorian 계산은 최적화 모드에서 allocation을 줄였지만 interpreter 숫자 boxing이 증가해 기존 allocation gate를 실패했다. 정수 cast도 같아 기각했다(`raw/alloc-after`, `raw/int-probe`). 최종안은 calendar 규칙을 추가하지 않는다. 새 회귀 예산은 final array+element storage(2), interpreter setTime boxed result(1), ISO string(1)이며 **기존 roundtrip assertion은 그대로 유지했다**.
 
@@ -78,7 +78,7 @@ N의 caller 약칭은 같은 `runtime/channels/`, D의 caller 약칭은 같은 `
 | 실제 L2 reply decode | Header record1 + nonempty 값 string3 = **4개**. 빈 messageName은 String.Empty | D:259-274,414-582 |
 | metadata / flow가 있으면 | metadata Dictionary1+storage, key/value string 각1/entry; flow string1. Metadata field가 없으면 Dictionary0 | D:518-537,588-635 |
 
-Node representative wire는 request272B / reply213B이며 전후 같다. Outbound 각각 template full copy1 + native submit copy1, inbound 각각 native→managed header copy1이다. .NET은 native output에 prefix1회 복사하고 dynamic field를 쓰며 decoder span 추가 copy는0이다. 이 계수는 Core TCP/framing의 공통 복사와 body protobuf 복사를 제외한다. Node header copy를 없애기 위해 현재 Message 계약 밖의 native 접근/API를 추가하지 않았다.
+Node representative wire는 request272B / reply213B이며 전후 같다. Outbound 각각 template full copy1 + native submit copy1, inbound 각각 native→managed header copy1이다. .NET은 native output에 prefix1회 복사하고 dynamic field를 쓰며 decoder span 추가 copy는0이다. 이 계수는 Core TCP/framing의 공통 복사와 body protobuf 복사를 제외한다. Source completion의 header copy는 L1에도 있으므로 전부 L2 추가 비용으로 계산하지 않았다. Target는 L2가 header도 읽으면서 기존 all-parts-observed receive mode 선택이 바뀐다. Node header copy를 없애기 위해 현재 Message 계약 밖의 native 접근/API를 추가하지 않았다.
 
 ## 실제 L1/L2 profile
 

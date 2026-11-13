@@ -67,3 +67,5 @@
 - profile after-L2-final L2 request-backpressure 1024: binding recv zlink-raw-server/main.js:47-53,64-81 ↔ ladder zlink-framework-server/main.js:166-205 (same DontWait drain/metrics; L1 permit). reply raw :82-86 ↔ ladder :206-212/shared/raw-wire.js:114-116 (new protobuf/body, L2 header only). Wait/atomics/body copies unchanged; header allocations report.md. CPU 6-7,14-15, ≤19s/child, no measure.lock.
 
 - build/검증 fingerprint: final 5f3a59bff64a7044373f9625d2e6041a130c26b4 dirty=True merge-base=df42a4df4098d543be8dc0b84510cf6d961576d8; raw/final-fingerprint.json (source/output fresh, own worktree paths·sha256).
+
+- 최종 검증: 13 files 273 tests 통과, 실패/skip0. format(JS 포함), lint, typecheck, git diff --check 통과. Baseline 최종 allocation budget 실패(7.002>4.25), final 통과(4/136B). Profile 4 runs count 일치/errors0/CPU·policy·20s cap audit 통과. Source envelope17.400→15.149%, target7.225→9.603%; throughput 개선 판정 안 함. 최종 optimized request10.101/487.5B→5.101/271.5B. report.md 완료, raw 보존.

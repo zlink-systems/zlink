@@ -1,6 +1,6 @@
 import json,collections,sys,re
 from pathlib import Path
-base=Path(sys.argv[1]); duration=int(sys.argv[2]); tag=sys.argv[3] if len(sys.argv)>3 else None; result={}
+base=Path(sys.argv[1]); duration=int(sys.argv[2]); tag=sys.argv[3] if len(sys.argv)>3 else None; out_tag=sys.argv[4] if len(sys.argv)>4 else tag; result={}
 patterns=[
 ('typed_serializer_lookup',('ZLinkCodecRegistration.',)),
 ('typed_json',('ZLinkJsonMessageSerializer.','ZLinkFrameworkJson','com.fasterxml','JsonGenerator.','JsonParser.','UTF8JsonGenerator.','UTF8StreamJsonParser.','ObjectWriter.','ObjectReader.','BeanSerializer.','BeanDeserializer.','ByteArraySerializer.','ByteArrayDeserializer.','Base64Variant.')),
@@ -31,13 +31,13 @@ for role in ['source','target']:
      if any(pat in frame for pat in pats):
       key=category; found=True;break
     if found:break
-   if kind=='wall' and 'ZLinkStateLane.awaitTurn' in stack:key='owner_queue_mailbox'
+   if kind=='wall' and any(x in stack for x in ('ZLinkStateLane.awaitTurn','ZLinkStateLane.awaitResult')):key='owner_queue_mailbox'
    c[key]+=n;total+=n
   unit=1 if kind=='alloc' else 1000 if kind=='cpu' else 10000
   result[role]['costs'][kind]={'totalWeight':total,'backgroundWeight':compilegc,'ownerWaitWeight':awaited,
     'totalPerMessage':total*unit/count if count else None,
     'exclusive':{k:{'weight':v,'perMessage':v*unit/count if count else None,'percent':100*v/total if total else 0} for k,v in c.items()}}
-(base/f'costs-{tag}.json' if tag else base/'costs.json').write_text(json.dumps(result,indent=2))
+(base/f'costs-{out_tag}.json' if out_tag else base/'costs.json').write_text(json.dumps(result,indent=2))
 for role,v in result.items():
  print(role,'messages',v['messages'])
  for kind,c in v['costs'].items():
