@@ -1,0 +1,55 @@
+{
+  "language": "java",
+  "utc_date": "2026-11-13",
+  "source": "lad-java-par fresh L0 binding medians, 3 runs per cell",
+  "cells": {
+    "send-saturation-1024": {
+      "msg_per_second": 505353.6,
+      "raw_paths": [
+        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run1/zlink-java-send-saturation-1024/results.json",
+        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run2/zlink-java-send-saturation-1024/results.json",
+        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run3/zlink-java-send-saturation-1024/results.json"
+      ]
+    },
+    "send-saturation-4096": {
+      "msg_per_second": 198901.6,
+      "raw_paths": [
+        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run1/zlink-java-send-saturation-4096/results.json",
+        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run2/zlink-java-send-saturation-4096/results.json",
+        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run3/zlink-java-send-saturation-4096/results.json"
+      ]
+    },
+    "request-serial-1024": {
+      "msg_per_second": 11554.0,
+      "raw_paths": [
+        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run1/zlink-java-request-serial-1024/results.json",
+        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run2/zlink-java-request-serial-1024/results.json",
+        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run3/zlink-java-request-serial-1024/results.json"
+      ]
+    },
+    "request-serial-4096": {
+      "msg_per_second": 11123.4,
+      "raw_paths": [
+        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run1/zlink-java-request-serial-4096/results.json",
+        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run2/zlink-java-request-serial-4096/results.json",
+        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run3/zlink-java-request-serial-4096/results.json"
+      ]
+    },
+    "request-backpressure-1024": {
+      "msg_per_second": 154763.4,
+      "raw_paths": [
+        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run1/zlink-java-request-backpressure-1024/results.json",
+        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run2/zlink-java-request-backpressure-1024/results.json",
+        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run3/zlink-java-request-backpressure-1024/results.json"
+      ]
+    },
+    "request-backpressure-4096": {
+      "msg_per_second": 106317.2,
+      "raw_paths": [
+        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run1/zlink-java-request-backpressure-4096/results.json",
+        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run2/zlink-java-request-backpressure-4096/results.json",
+        "/root/jobs/fx/cx/v21/s033/lad-java-par/raw/fresh/L0/run3/zlink-java-request-backpressure-4096/results.json"
+      ]
+    }
+  }
+}
