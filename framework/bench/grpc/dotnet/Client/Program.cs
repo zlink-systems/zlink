@@ -16,8 +16,11 @@ using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Contracts.Channels;
 using Zlink.Framework.Contracts.Dispatch;
-#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2
+#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3
 using Zlink.Framework.Runtime.Messaging;
+using Zlink.Framework.Runtime.Service;
+using Zlink.Framework.Runtime.Spots;
+using Systems.Zlink.Framework.Runtime.Protocol;
 #endif
 
 AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
@@ -167,7 +170,7 @@ internal static class BenchTransport
                 frameworkTarget: Environment.GetEnvironmentVariable("ZLINK_DOTNET_RAW_TARGET")
                     == "framework"
             ),
-#if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2
+#if ZLINK_DOTNET_LADDER_L0 || ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3
             "zlink-framework-dotnet"
                 when Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_CLIENT") == "raw" =>
                 new RawBenchTransport(options, frameworkTarget: true),
@@ -382,6 +385,8 @@ internal sealed class RawBenchTransport : IBenchTransport
     private readonly RawBenchSocket[] commands;
     private readonly bool frameworkTarget;
     private readonly bool encodeEnvelopeHeaders;
+    private readonly bool encodeServiceWire;
+    private long nextServiceCorrelation;
     private readonly TimeSpan requestTimeout;
     private readonly CancellationTokenSource completionStopping = new();
     private Thread? completionThread;
@@ -392,7 +397,10 @@ internal sealed class RawBenchTransport : IBenchTransport
         this.frameworkTarget = frameworkTarget;
         encodeEnvelopeHeaders =
             frameworkTarget
-            && Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_LEVEL") == "L2";
+            && Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_LEVEL") is "L2" or "L3";
+        encodeServiceWire =
+            frameworkTarget
+            && Environment.GetEnvironmentVariable("ZLINK_DOTNET_LADDER_LEVEL") == "L3";
         requestTimeout = options.Timeout;
         if (options.Scenario == "send-saturation")
         {
@@ -435,7 +443,7 @@ internal sealed class RawBenchTransport : IBenchTransport
 
     private Message CreateSendHeader(bool isRequest, TimeSpan? timeout = null)
     {
-#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2
+#if ZLINK_DOTNET_LADDER_L1 || ZLINK_DOTNET_LADDER_L2 || ZLINK_DOTNET_LADDER_L3
         if (
             encodeEnvelopeHeaders
         )
@@ -502,11 +510,39 @@ internal sealed class RawBenchTransport : IBenchTransport
         {
             header = CreateSendHeader(isRequest: true, timeout: requestTimeout);
             body = EncodeRawPayload(payload);
+            ulong serviceCorrelation = 0;
+#if ZLINK_DOTNET_LADDER_L3
+            if (encodeServiceWire)
+            {
+                serviceCorrelation = NextServiceCorrelation();
+                var serviceHeader = Message.From(
+                    ZLinkServiceWireCodec.EncodeApplicationMessage(
+                        ServiceWireConstants.Command.ChannelRequest,
+                        serviceCorrelation,
+                        "bench",
+                        hasMetadata: false
+                    )
+                );
+                var servicePayload = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(
+                    [header, body]
+                );
+                header.Dispose();
+                body.Dispose();
+                header = serviceHeader;
+                body = servicePayload;
+            }
+#endif
             RequestSubmission submission = request!.SubmitRequest(header, body, cancellationToken);
             return new RawRequestSubmission(
                 submission.Result,
                 submission.Admitted,
-                DecodeRawReplyAsync(submission.Reply, header, body, encodeEnvelopeHeaders)
+                DecodeRawReplyAsync(
+                    submission.Reply,
+                    header,
+                    body,
+                    encodeEnvelopeHeaders,
+                    serviceCorrelation
+                )
             );
         }
         catch
@@ -542,6 +578,26 @@ internal sealed class RawBenchTransport : IBenchTransport
         {
             header = CreateSendHeader(isRequest: false);
             body = EncodeRawPayload(payload);
+#if ZLINK_DOTNET_LADDER_L3
+            if (encodeServiceWire)
+            {
+                var serviceHeader = Message.From(
+                    ZLinkServiceWireCodec.EncodeApplicationMessage(
+                        ServiceWireConstants.Command.ChannelSend,
+                        0,
+                        "bench",
+                        hasMetadata: false
+                    )
+                );
+                var servicePayload = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(
+                    [header, body]
+                );
+                header.Dispose();
+                body.Dispose();
+                header = serviceHeader;
+                body = servicePayload;
+            }
+#endif
             await commands[stream % commands.Length]
                 .SubmitSendAsync(header, body, cancellationToken);
         }
@@ -593,7 +649,8 @@ internal sealed class RawBenchTransport : IBenchTransport
         Task<IReadOnlyList<Message>> replyTask,
         Message header,
         Message body,
-        bool decodeEnvelopeHeader
+        bool decodeEnvelopeHeader,
+        ulong serviceCorrelation
     )
     {
         IReadOnlyList<Message>? parts = null;
@@ -603,8 +660,40 @@ internal sealed class RawBenchTransport : IBenchTransport
             if (parts.Count == 0)
                 throw new InvalidOperationException("Raw request returned no reply parts.");
 #if ZLINK_DOTNET_LADDER_L2
-            if (decodeEnvelopeHeader)
+            if (decodeEnvelopeHeader && serviceCorrelation == 0)
                 _ = ZLinkEnvelopeCodec.DecodeHeader(parts[0]);
+#endif
+#if ZLINK_DOTNET_LADDER_L3
+            if (serviceCorrelation != 0)
+            {
+                if (
+                    parts.Count != 2
+                    || !ZLinkServiceWireCodec.TryDecodeReply(
+                        parts[0].AsReadOnlySpan(),
+                        out var serviceReply,
+                        out _
+                    )
+                    || serviceReply.Correlation != serviceCorrelation
+                    || serviceReply.TerminalResult != 0
+                    || serviceReply.FailureCode != 0
+                    || !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
+                        parts[1],
+                        out var replyParts
+                    )
+                )
+                    throw new InvalidOperationException("Service wire reply was invalid.");
+                try
+                {
+                    if (replyParts.Length != 2)
+                        throw new InvalidOperationException("Service wire reply payload was invalid.");
+                    return RawWire.Decode(replyParts[^1].AsReadOnlySpan());
+                }
+                finally
+                {
+                    foreach (var replyPart in replyParts)
+                        replyPart.Dispose();
+                }
+            }
 #endif
             return RawWire.Decode(
                 parts.Count == 1 ? parts[0].AsReadOnlySpan() : parts[^1].AsReadOnlySpan()
@@ -619,6 +708,10 @@ internal sealed class RawBenchTransport : IBenchTransport
             header.Dispose();
         }
     }
+
+#if ZLINK_DOTNET_LADDER_L3
+    private ulong NextServiceCorrelation() => checked((ulong)Interlocked.Increment(ref nextServiceCorrelation));
+#endif
 }
 
 internal readonly record struct RawRequestSubmission(
