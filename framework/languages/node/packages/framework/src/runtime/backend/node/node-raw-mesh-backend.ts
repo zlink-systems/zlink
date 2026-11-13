@@ -128,7 +128,6 @@ import {
   decodeMultipartApplicationPayloadView,
   decodeMultipartApplicationParts,
   decodeMultipartParts,
-  encodeMultipartApplicationPayload,
   encodeFrameworkMultipartApplicationMessage,
   encodeMultipartPayload,
   ServiceWireProtocolError,
@@ -2951,12 +2950,9 @@ function encodeMultipartApplicationFrame(parts: MessageLike | readonly MessageLi
   return encodeFrameworkMultipartApplicationMessage(multipartPayloadViews(parts));
 }
 
+/** Stateful activation frames travel inside Buffer part lists; the native frame keeps one writer. */
 function encodeMultipartApplicationBytes(parts: MessageLike | readonly MessageLike[]): Buffer {
-  return encodeMultipartApplicationPayload(
-    multipartPayloadViews(parts),
-    MULTIPART_PACKET_NAME,
-    MULTIPART_CONTENT_TYPE
-  );
+  return encodeMultipartApplicationFrame(parts).takeData();
 }
 
 function multipartPayloadViews(
